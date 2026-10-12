@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# Run a Playwright drive script against the verify instance and keep its
+# evidence. Creates .agents/log/verify/runs/<UTC timestamp>-<label>/, exports the
+# VERIFY_* variables plus VERIFY_EVIDENCE_DIR, runs the script with node, and
+# prints the evidence directory. The script imports ../lib/pw.mjs by absolute
+# path (see SKILL.md). Exit code is the script's.
+# Usage: bin/run <label> <script.mjs>
+set -euo pipefail
+source "$(dirname "$0")/_common.sh"
+[ $# -eq 2 ] || { echo "usage: bin/run <label> <script.mjs>" >&2; exit 2; }
+label="$(printf '%s' "$1" | tr -c 'A-Za-z0-9_-' '-')"
+script="$(cd "$(dirname "$2")" && pwd)/$(basename "$2")"
+evidence="$RUNS_DIR/$(date -u +%Y%m%dT%H%M%SZ)-$label"
+mkdir -p "$evidence"
+cp "$script" "$evidence/drive.mjs"   # the exact script is part of the proof
+eval "$("$(dirname "$0")/env")"
+export VERIFY_EVIDENCE_DIR="$evidence" VERIFY_FRONTEND_DIR="$REPO_ROOT/frontend" \
+  VERIFY_FRONTEND_PORT VERIFY_BACKEND_PORT \
+  PLAYWRIGHT_BROWSERS_PATH="${PLAYWRIGHT_BROWSERS_PATH:-$MAIN_ROOT/.playwright-browsers}"
+set +e
+node "$script" 2>&1 | tee "$evidence/run.log"
+status=${PIPESTATUS[0]}
+set -e
+echo "exit $status" >> "$evidence/run.log"
+echo "evidence: $evidence (exit $status)"
+exit "$status"

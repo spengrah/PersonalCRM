@@ -1,6 +1,6 @@
 # Agent Instructions
 
-Read and follow `.ai/rules/core.md`. If its contents are already loaded into the session, use that context rather than reading it again.
+Read and follow `.agents/rules/core.md`. If its contents are already loaded into the session, use that context rather than reading it again.
 
 ## About This Repo
 
@@ -15,14 +15,14 @@ Run `make help` from project root for the full command reference.
 
 Load as needed, not upfront:
 
-- Architecture decisions: `.ai/guides/architecture.md`
-- Feature development: `.ai/guides/feature-development.md`
-- Code patterns: `.ai/patterns/`
-- Testing rules: `.ai/rules/testing.md`
-- Code review standards: `.ai/rules/code-review.md`
+- Architecture decisions: `.agents/guides/architecture.md`
+- Feature development: `.agents/guides/feature-development.md`
+- Code patterns: `.agents/patterns/`
+- Testing rules: `.agents/rules/testing.md`
+- Code review standards: `.agents/rules/code-review.md`
 - Behavior specs (intended-behavior SSOT): `spec/README.md`
-- Cross-layer change checklist and troubleshooting: `.ai/guides/change-checklist.md`
-- Domain troubleshooting: `.ai/guides/backend-troubleshooting.md`, `.ai/guides/frontend-troubleshooting.md` (read relevant entries only)
+- Cross-layer change checklist and troubleshooting: `.agents/guides/change-checklist.md`
+- Domain troubleshooting: `.agents/guides/backend-troubleshooting.md`, `.agents/guides/frontend-troubleshooting.md` (read relevant entries only)
 
 ## Quick Symbol Searches
 
@@ -48,7 +48,7 @@ Find all instances of a layer:
 
 - Run focused tests appropriate to the change; pre-push runs static checks, and required CI suites gate merging.
 - Read repository code before using methods (names vary, e.g., `SoftDeleteContact` not `DeleteContact`)
-- Fake only what a test cannot run (third-party APIs, the clock) or a failure; see `.ai/rules/testing.md`
+- Fake only what a test cannot run (third-party APIs, the clock) or a failure; see `.agents/rules/testing.md`
 - Use `accelerated.GetCurrentTime()` not `time.Now()`
 - New worktrees link env files but do not install dependencies. For frontend work, run `make worktree-deps` when needed (main checkout: `cd frontend && bun install --frozen-lockfile`). Backend/docs-only work needs no frontend install.
 
@@ -59,4 +59,4 @@ Repo rules get anything another agent or environment needs. Private memory gets 
 ## Privacy
 
 - **Never include PII in code, comments, commit messages, PR descriptions, GitHub issues, plan docs, or any other repo artifact.** PII = real contact full names, email addresses, phone numbers, contact UUIDs, account IDs, prod hostnames, anything that could identify a real person or system. Use placeholders ("contact A", "the affected contact", "two contacts on date X", `<prod-host>`), redact UUIDs, and keep specifics in private notes outside the repo. The repo is the user's own CRM and the data inside it is real — leaking PII into git history is irreversible.
-- `.ai/log/` is gitignored (safe scratch space for plans and raw prod observations).
+- `.agents/log/` is gitignored (safe scratch space for plans and raw prod observations).

@@ -915,7 +915,7 @@ func (r *ContactRepository) TestSeedContactSkipState(ctx context.Context, id uui
 // TestWriteCadenceColumnsWithoutGUCTx deliberately writes cadence columns
 // WITHOUT declaring an owner. It exists solely so the derived-writer trigger's
 // rejection tests can attempt an unauthorized write: raw SQL in Go is banned
-// (.ai/rules/core.md rule 2) and every other path now declares an owner, so
+// (.agents/rules/core.md rule 2) and every other path now declares an owner, so
 // without this there would be no legal way to observe a rejection. It also
 // serves the wrong-owner tests, where the caller declares some OTHER value
 // earlier in the same tx and this call leaves that declaration in force.

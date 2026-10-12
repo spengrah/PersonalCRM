@@ -1,5 +1,5 @@
 -- Meeting Note queries
--- Spec: .ai/spec/mac-daemon-phase-2-anarlog-matching.md
+-- Spec: .agents/spec/mac-daemon-phase-2-anarlog-matching.md
 
 -- name: InsertMeetingNote :one
 -- Inserts a meeting_note staging row. linkage_state must be supplied by the

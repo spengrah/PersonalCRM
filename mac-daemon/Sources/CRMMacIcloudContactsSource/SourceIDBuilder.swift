@@ -1,7 +1,7 @@
 // SourceIDBuilder constructs the IngestEvent source_id strings the
 // Pi uses to dedupe external_contact events.
 //
-// Per spec §3 (source_id discriminator table at .ai/spec/mac-daemon.md
+// Per spec §3 (source_id discriminator table at .agents/spec/mac-daemon.md
 // lines 336-349):
 //   - external_contact.upserted: `<entity_id>@<content_hash_hex>`
 //   - external_contact.deleted:  `<entity_id>@deleted@<prior_content_hash_hex>`

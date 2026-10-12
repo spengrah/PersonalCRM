@@ -1,7 +1,7 @@
 # eventbus
 
 Event bus wiring for the worker-queue migration (see issue #180 and
-`.ai/spec/event-bus-foundation.md`).
+`.agents/spec/event-bus-foundation.md`).
 
 ## Package contents
 
@@ -124,4 +124,4 @@ Local `contact_task` inserts and the `contact.last_contacted` /
 Todoist `item_update` (refresh) and `item_close` (complete) calls run
 in a post-commit closure that falls back to a river-retried job on
 failure. See the "Event Bus and Consumers" section of
-`.ai/guides/architecture.md` for the full table.
+`.agents/guides/architecture.md` for the full table.

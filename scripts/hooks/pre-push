@@ -1,6 +1,6 @@
 #!/bin/bash
 # Fast, path-selected static checks. Required test suites run in PR CI.
-CONFIG_FILE=".ai/pre-push.json"
+CONFIG_FILE=".agents/pre-push.json"
 FILTERS_FILE="path-filters.yml"
 
 file_in_group() {
@@ -78,7 +78,7 @@ pushed_files() {
 check_selected() {
   local files="$1"; shift
   # Changes to check configuration exercise every retained check.
-  if grep -qxF -e '.ai/pre-push.json' -e 'scripts/hooks/pre-push' -e 'path-filters.yml' <<< "$files"; then
+  if grep -qxF -e '.agents/pre-push.json' -e 'scripts/hooks/pre-push' -e 'path-filters.yml' <<< "$files"; then
     return 0
   fi
   [[ "$#" -eq 0 ]] || any_file_in_groups "$files" "$@"

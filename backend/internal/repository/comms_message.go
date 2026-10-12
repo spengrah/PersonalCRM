@@ -629,7 +629,7 @@ func (r *CommsMessageRepository) BackfillParticipantNames(ctx context.Context, i
 // main.go only once an email consumer exists to dispatch through it; until then
 // the adapter is provided but unregistered (the registry is consulted solely by
 // the interaction-recorder consumer, so registering it early would be inert).
-// See .ai/spec/2026-06-01-gmail-integration-design.md §8.
+// See .agents/spec/2026-06-01-gmail-integration-design.md §8.
 type CommsStagingProcessor struct{ repo *CommsMessageRepository }
 
 // NewCommsStagingProcessor builds the email-source staging processor adapter.

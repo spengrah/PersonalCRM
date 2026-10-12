@@ -59,8 +59,8 @@ assert_in_group     "scripts/backup-db.sh" scripts
 assert_not_in_group "scripts/backup-db.sh" backend
 assert_in_group     "infra/backup/install.sh" scripts
 assert_not_in_group "infra/backup/install.sh" backend
-assert_in_group     ".ai/pre-push.json" scripts
-assert_not_in_group ".ai/pre-push.json" backend
+assert_in_group     ".agents/pre-push.json" scripts
+assert_not_in_group ".agents/pre-push.json" backend
 # Scripts the backend lanes execute stay in backend (and in scripts).
 assert_in_group     "scripts/check-ingest-registry.sh" backend
 assert_in_group     "scripts/test-parallelism.sh" backend
@@ -111,8 +111,8 @@ assert_not_in_group "backend/internal/api/handlers/contact.go" migrations
 # --- spec group: the behavior-SSOT corpus (CI spec-lint job selection) ---
 assert_in_group     "spec/contacts.yaml" spec
 assert_in_group     "spec/README.md" spec
-# .ai/spec design docs are NOT the behavior corpus.
-assert_not_in_group ".ai/spec/2026-07-01-behavior-ssot-design.md" spec
+# .agents/spec design docs are NOT the behavior corpus.
+assert_not_in_group ".agents/spec/2026-07-01-behavior-ssot-design.md" spec
 # Orthogonality: spec/** is not in backend/frontend — a spec-only push changes no test selection.
 assert_not_in_group "spec/contacts.yaml" backend
 assert_not_in_group "spec/contacts.yaml" frontend

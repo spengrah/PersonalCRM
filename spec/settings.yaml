@@ -301,7 +301,7 @@ behaviors:
         text: an error outcome shows the failure reason to the user
       - key: one-time-outcome-parameters
         text: the one-time outcome parameters are stripped from the URL so a refresh does not re-trigger the notification
-    provenance: [google-accounts-section.tsx auth-param effect, todoist-accounts-section.tsx, .ai/rules/core.md one-time action gotcha]
+    provenance: [google-accounts-section.tsx auth-param effect, todoist-accounts-section.tsx, .agents/rules/core.md one-time action gotcha]
 
   - id: SET-022
     title: Disconnecting an account requires explicit confirmation

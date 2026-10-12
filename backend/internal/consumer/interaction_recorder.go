@@ -1,6 +1,6 @@
 // Package consumer holds the event-bus consumer services that subscribe
 // to events and perform domain writes. See
-// .ai/spec/event-bus-foundation.md §3.4.
+// .agents/spec/event-bus-foundation.md §3.4.
 //
 // InteractionRecorder is the sole writer of interaction rows for its
 // six input kinds (message.received/sent, calendar.attended,

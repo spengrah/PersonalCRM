@@ -76,7 +76,7 @@ func seedExtSweepFixtures(t *testing.T) *extSweepFixtures {
 	}
 	tomb, err := repo.Upsert(ctx, tombReq)
 	require.NoError(t, err)
-	// Tombstone via SoftDeleteTx. Per .ai/rules/core.md we use the
+	// Tombstone via SoftDeleteTx. Per .agents/rules/core.md we use the
 	// repository's sqlc-backed tx method, not raw SQL.
 	tx, err := database.Pool.Begin(ctx)
 	require.NoError(t, err)

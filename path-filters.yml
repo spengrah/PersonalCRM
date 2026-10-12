@@ -4,7 +4,7 @@
 # honors negation under predicate-quantifier: every, which breaks multi-glob
 # groups, so a markdown file under backend/ still counts as backend).
 #
-# Local check selection is configured in .ai/pre-push.json. Backend and frontend
+# Local check selection is configured in .agents/pre-push.json. Backend and frontend
 # checks are independent; spec checks use backend, frontend, and spec groups.
 # scripts gates the shell-test job (deploy-script + hook suites); the few scripts
 # the backend lanes execute are listed in backend as well. mac_daemon tests run
@@ -35,7 +35,7 @@ scripts:
   - 'infra/**'
   - 'Makefile'
   - 'path-filters.yml'
-  - '.ai/pre-push.json'
+  - '.agents/pre-push.json'
   - '.github/workflows/ci.yml'
 seed:
   - 'backend/internal/synthetic/**'

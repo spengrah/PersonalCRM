@@ -27,7 +27,7 @@ DELETE FROM telegram_message WHERE telegram_message_id = ANY(sqlc.arg(message_id
 -- name: DeleteExternalIdentitiesBySourceID :execrows
 DELETE FROM external_identity WHERE source_id = $1;
 
--- Mac host test helpers — per .ai/rules/core.md rule 2 (no raw SQL in
+-- Mac host test helpers — per .agents/rules/core.md rule 2 (no raw SQL in
 -- Go test fixtures), test setup uses these instead of pool.Exec.
 
 -- name: SeedMacHost :one

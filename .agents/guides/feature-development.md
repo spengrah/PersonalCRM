@@ -1,0 +1,471 @@
+# Feature Development Guide
+
+Complete step-by-step guide for implementing new features in the Personal CRM.
+
+---
+
+## Development Workflow
+
+### Starting Development
+
+```bash
+# First time setup
+make setup                  # Install dependencies and git hooks
+make dev                    # Start all services in dev mode
+```
+
+### Development Cycle
+
+```bash
+# Make code changes, then:
+make dev-restart             # ⚠️ ALWAYS use this after code changes
+
+# NOT just `make build` - that doesn't restart services!
+# NOT just `make dev` - could create port conflicts!
+```
+
+### Quick Reference
+
+| Scenario | Command |
+|----------|---------|
+| Start fresh | `make dev` |
+| Full restart (inc. DB) | `make dev-restart` |
+| Check status | `make status` |
+| Stop everything | `make dev-stop` |
+
+---
+
+## Feature Development Process
+
+Follow this order when implementing new features:
+
+1. Database Schema Changes (if needed)
+2. Add SQL Queries
+3. Create Repository Layer
+4. Add Service Layer (if complex logic)
+5. Create HTTP Handlers
+6. Register Routes
+7. Write Tests
+8. Add Frontend Components
+
+---
+
+## 1. Database Schema Changes
+
+**If adding new tables or fields:**
+
+```bash
+# Create new migration
+cd backend/migrations
+touch 00X_feature_name.up.sql
+touch 00X_feature_name.down.sql
+```
+
+### Migration File Structure
+
+**Up migration:**
+```sql
+-- 00X_feature_name.up.sql
+-- Description of what this migration does
+
+CREATE TABLE new_table (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    field_name TEXT NOT NULL,
+    nullable_field TEXT,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW(),
+    deleted_at TIMESTAMPTZ  -- For soft deletes
+);
+
+CREATE INDEX idx_new_table_field ON new_table(field_name);
+CREATE INDEX idx_new_table_deleted ON new_table(deleted_at);
+```
+
+**Down migration:**
+```sql
+-- 00X_feature_name.down.sql
+DROP TABLE IF EXISTS new_table;
+```
+
+### Schema Design Principles
+
+1. **Use UUIDs for primary keys**
+   ```sql
+   id UUID PRIMARY KEY DEFAULT uuid_generate_v4()
+   ```
+
+2. **Use soft deletes for user data**
+   ```sql
+   deleted_at TIMESTAMPTZ  -- NULL = not deleted
+   ```
+
+3. **Always add timestamps**
+   ```sql
+   created_at TIMESTAMPTZ DEFAULT NOW()
+   updated_at TIMESTAMPTZ DEFAULT NOW()
+   ```
+
+4. **Use CHECK constraints for enums**
+   ```sql
+   cadence TEXT CHECK (cadence IN ('weekly','monthly','quarterly'))
+   ```
+
+5. **Add indexes for foreign keys and common queries**
+   ```sql
+   CREATE INDEX idx_note_contact_id ON note(contact_id);
+   CREATE INDEX idx_note_created_at ON note(created_at DESC);
+   ```
+
+6. **Use TIMESTAMPTZ (not TIMESTAMP)**
+   - Always store in UTC
+   - Convert to local timezone in UI
+
+### Migration Best Practices
+
+1. **One logical change per migration**
+2. **Test both up and down migrations, then discard the transition tests.** Every integration run applies the up migration to the test template. Prove the down migration, data backfills, and refusal guards in a test you run locally and do not commit; record what you ran and the result in the PR body. Commit tests only for schema the code relies on going forward (constraints, indexes, views).
+3. **Never modify existing migrations after merge**
+4. **Consider data migrations separately**
+5. **Add helpful comments**
+
+---
+
+## 2. Add SQL Queries
+
+All queries go in `backend/internal/db/queries/*.sql` and use sqlc for type-safe Go generation.
+
+```sql
+-- backend/internal/db/queries/new_table.sql
+
+-- name: GetNewTable :one
+SELECT * FROM new_table
+WHERE id = $1 AND deleted_at IS NULL
+LIMIT 1;
+
+-- name: ListNewTables :many
+SELECT * FROM new_table
+WHERE deleted_at IS NULL
+ORDER BY created_at DESC
+LIMIT $1 OFFSET $2;
+
+-- name: CreateNewTable :one
+INSERT INTO new_table (
+    field1, field2
+) VALUES (
+    $1, $2
+) RETURNING *;
+
+-- name: UpdateNewTable :one
+UPDATE new_table
+SET
+    field1 = $2,
+    field2 = $3,
+    updated_at = NOW()
+WHERE id = $1 AND deleted_at IS NULL
+RETURNING *;
+
+-- name: SoftDeleteNewTable :exec
+UPDATE new_table
+SET deleted_at = NOW()
+WHERE id = $1 AND deleted_at IS NULL;
+```
+
+**Then regenerate sqlc code:**
+```bash
+make sqlc
+```
+
+---
+
+## 3. Create Repository Layer
+
+The repository layer converts between sqlc-generated DB types and clean domain types.
+
+See `.agents/patterns/backend.md` for the full repository conversion pattern with examples.
+
+---
+
+## 4. Add Service Layer (if complex logic)
+
+**When to create a service:**
+- Orchestrating multiple repositories
+- Complex business logic
+- Scheduled jobs
+- External API calls
+
+**When NOT to create a service:**
+- Simple CRUD operations (just use repository directly from handler)
+- Single repository operations
+- No business logic beyond validation
+
+**Dependencies are required.** New services follow these rules. Convert an existing service when a change already rewrites its construction.
+- Every dependency is a constructor input, and the constructor panics when one is nil. No method checks whether a dependency is set.
+- A feature that can be off gets an explicit disabled implementation, chosen in the composition root. It never gets a nil dependency.
+- Tests supply every dependency. They replace one only to fake what they cannot run or to inject a failure (see `.agents/rules/testing.md`).
+
+```go
+// backend/internal/service/new_feature.go
+package service
+
+import (
+    "context"
+    "fmt"
+    "personal-crm/backend/internal/repository"
+    "github.com/google/uuid"
+)
+
+type NewFeatureService struct {
+    newTableRepo *repository.NewTableRepository
+    contactRepo  *repository.ContactRepository
+}
+
+func NewNewFeatureService(
+    newTableRepo *repository.NewTableRepository,
+    contactRepo *repository.ContactRepository,
+) *NewFeatureService {
+    if newTableRepo == nil || contactRepo == nil {
+        panic("service: NewNewFeatureService requires newTableRepo and contactRepo")
+    }
+    return &NewFeatureService{
+        newTableRepo: newTableRepo,
+        contactRepo:  contactRepo,
+    }
+}
+
+func (s *NewFeatureService) ProcessFeature(ctx context.Context, id uuid.UUID) error {
+    // Complex logic here, possibly calling multiple repositories
+    
+    // Example: Fetch from multiple sources
+    item, err := s.newTableRepo.GetNewTable(ctx, id)
+    if err != nil {
+        return fmt.Errorf("get item: %w", err)
+    }
+    
+    contact, err := s.contactRepo.GetContact(ctx, item.RelatedContactID)
+    if err != nil {
+        return fmt.Errorf("get contact: %w", err)
+    }
+    
+    // Do business logic...
+    
+    return nil
+}
+```
+
+---
+
+## 5. Create HTTP Handlers
+
+Create handler file at `backend/internal/api/handlers/new_table.go`:
+
+```go
+type NewTableHandler struct {
+    repo *repository.NewTableRepository
+}
+
+// Request/Response structs with json tags and validate:"required"
+type CreateNewTableRequest struct { ... }
+type NewTableResponse struct { ... }
+
+// CRUD handlers following this pattern:
+func (h *NewTableHandler) CreateNewTable(c *gin.Context) {
+    // 1. Parse: c.ShouldBindJSON(&req)
+    // 2. Call repo: h.repo.CreateNewTable(c.Request.Context(), ...)
+    // 3. Handle errors: errors.Is(err, db.ErrNotFound) → api.SendNotFound()
+    // 4. Respond: api.SendSuccess(c, http.StatusCreated, response, nil)
+}
+```
+
+**HTTP status codes:**
+- Create: `http.StatusCreated` (201)
+- Get/List/Update: `http.StatusOK` (200)
+- Delete: `http.StatusNoContent` (204)
+
+See [`.agents/patterns/backend.md`](../patterns/backend.md) for full handler and error response patterns.
+
+---
+
+## 6. Register Routes
+
+Routes live in a per-domain `RegisterXRoutes` helper in
+`backend/internal/api/handlers/<domain>_routes.go` (follow the
+`mac_host_routes.go` template). Construction of the handler goes in the
+matching `backend/cmd/crm-api/wire_*.go` file; the gated call site goes in
+`backend/cmd/crm-api/routes.go`. Do NOT inline `v1.Group(...)` route
+registration into `main.go` — `run()` is a lifecycle orchestrator only.
+
+```go
+// backend/internal/api/handlers/new_table_routes.go
+
+// NewTableRouteDeps carries the handlers this domain's routes need.
+type NewTableRouteDeps struct {
+    NewTable *NewTableHandler
+}
+
+// RegisterNewTableRoutes registers the domain's routes on the authenticated
+// v1 group (caller has already applied APIKeyMiddleware).
+func RegisterNewTableRoutes(v1 *gin.RouterGroup, deps NewTableRouteDeps) {
+    newTables := v1.Group("/new-tables")
+    {
+        newTables.POST("", deps.NewTable.CreateNewTable)
+        newTables.GET("/:id", deps.NewTable.GetNewTable)
+        newTables.GET("", deps.NewTable.ListNewTables)
+        newTables.PUT("/:id", deps.NewTable.UpdateNewTable)
+        newTables.DELETE("/:id", deps.NewTable.DeleteNewTable)
+    }
+}
+```
+
+Construct the repository + handler in a `wire_*.go` `build*` function (add a
+field to the matching deps struct returned to `run()`), then call the
+helper from `registerRoutes` in `backend/cmd/crm-api/routes.go`:
+
+```go
+// backend/cmd/crm-api/routes.go — inside registerRoutes, in the v1 group
+handlers.RegisterNewTableRoutes(v1, handlers.NewTableRouteDeps{
+    NewTable: deps.NewTableHandler,
+})
+```
+
+### Current API Routes
+
+The generated Swagger spec (`backend/docs/swagger.yaml`, regenerated by `make api-docs`) is the route inventory. Routes are registered in per-domain `RegisterXRoutes` helpers under `backend/internal/api/handlers/*_routes.go`; their gated call sites live in `registerRoutes` in `backend/cmd/crm-api/routes.go`.
+
+---
+
+## 7. Write Tests
+
+Add tests for new features. See [`.agents/rules/testing.md`](../rules/testing.md) for:
+- Test pyramid (unit vs integration vs E2E)
+- Code templates and patterns
+- E2E parallelism with TestAPI
+- Running test commands
+
+Run focused tests for the affected behavior; the commands below are available for broader local verification. Required suites run in CI, while pre-push runs static checks.
+
+**Quick reference:**
+```bash
+make test-unit         # Backend unit tests
+make test-integration  # Backend DB tests
+make test-e2e-local PLAYWRIGHT_GREP='@area:contacts'   # Focused Playwright E2E by area tag
+```
+
+**New features write their own seeding.** When your feature adds an entity, a sync source, or a downstream record, add the matching coverage to the synthetic-seed toolkit so staging, `make dev-seed`, and the QA harness all carry the new data — and so new tests can build it through the factories rather than hand-rolled fixtures:
+
+- A new **entity** → a factory spec + `(*Generator)` builder in `synthetic/factory/domain.go`.
+- A new **sync source** → a source-payload factory in `synthetic/factory/sources.go` + a `Harness.Replay<Source>` adapter in `synthetic/replay/` that drives the real provider seam (extract a fake-fetcher seam if one doesn't exist), plus any `SyntheticSupportRepository` reads/deletes it needs (sqlc only, no raw SQL).
+- A new **downstream/pending record** → wire it into the relevant profile in `synthetic/profiles.go`, or document it as a deferred coverage gap if no producer exists yet.
+
+See [`.agents/patterns/synthetic-seed-toolkit.md`](../patterns/synthetic-seed-toolkit.md) for the full how-to (factories, replay adapters, profiles, the namespace isolation primitive, and the two-gate Settle + ID-tracked Cleanup).
+
+---
+
+## 8. Add Frontend Components
+
+### UI Design Preview (Optional)
+
+Implement routine UI changes directly in the existing React components and design
+system. A separate HTML prototype is useful when visual direction is uncertain,
+meaningfully different designs need comparison, or the user requests a preview.
+New UI elements do not automatically require a prototype or an approval round.
+
+When a preview helps, put it in the repo's gitignored `temp/` directory, match the
+existing app, and explore only the alternatives needed to resolve the decision.
+Then implement the chosen direction in React.
+
+---
+
+### Frontend Files to Create
+
+**1. API Client** (`frontend/src/lib/new-table-api.ts`):
+```typescript
+export const newTableApi = {
+  create: (data) => apiClient.post<NewTable>('/api/v1/new-tables', data),
+  get: (id) => apiClient.get<NewTable>(`/api/v1/new-tables/${id}`),
+  list: () => apiClient.get<NewTable[]>('/api/v1/new-tables'),
+  update: (id, data) => apiClient.put<NewTable>(`/api/v1/new-tables/${id}`, data),
+  delete: (id) => apiClient.delete(`/api/v1/new-tables/${id}`),
+}
+```
+
+**2. React Query Hooks** (`frontend/src/hooks/use-new-table.ts`):
+- `useNewTables()` / `useNewTable(id)` - query hooks
+- `useCreateNewTable()` / `useUpdateNewTable()` / `useDeleteNewTable()` - mutation hooks
+- Use `invalidateFor('entity:created')` for cache invalidation
+
+**3. React Component** (`frontend/src/components/new-table-form.tsx`):
+- Zod schema + React Hook Form with `zodResolver`
+- Use mutation hooks for submit
+
+See [`.agents/patterns/frontend.md`](../patterns/frontend.md) for full form, mutation, and invalidation patterns.
+
+---
+
+## Performance Considerations
+
+### Backend
+- Connection pool is tuned for Raspberry Pi (5 max connections)
+- Use context timeouts for database queries
+- Avoid N+1 queries (use JOINs or batch fetching)
+- Cache expensive calculations
+- Use indexes on frequently queried fields
+
+### Frontend
+- React Query handles caching automatically
+- Use `staleTime` to reduce unnecessary refetches
+- Lazy load heavy components
+- Optimize images (Next.js does this automatically)
+- Keep bundle size small (check with `bun run build`)
+
+### Database
+- PostgreSQL is tuned for 4-8GB RAM environments
+- Use EXPLAIN ANALYZE to check query performance
+- Full-text search is better than ILIKE for text search
+- pgvector indexes (HNSW) for embeddings (future)
+
+---
+
+## Environment Management
+
+### Environment Files
+
+```
+.env                      # Active environment (gitignored)
+.env.example              # Template with all variables
+.env.example.production   # Real-world timing
+.env.example.staging      # Production cadence durations (staging QA world)
+.env.example.accelerated  # Fast cadences (hours) — make test-cadence-fast
+.env.example.testing      # Ultra-fast (minutes)
+```
+
+### Required Environment Variables
+
+```bash
+# Database (required)
+DATABASE_URL=postgres://user:pass@localhost:5432/dbname?sslmode=disable
+
+# Server
+PORT=8080
+CRM_ENV=development|staging|production
+
+# Logging
+LOG_LEVEL=debug|info|warn|error
+
+# Optional: AI features (future)
+ANTHROPIC_API_KEY=your-key-here
+ENABLE_VECTOR_SEARCH=false
+
+# Optional: Telegram sync
+# TELEGRAM_API_ID=your-api-id
+# TELEGRAM_API_HASH=your-api-hash
+ENABLE_TELEGRAM_SYNC=false
+
+# Optional: WhatsApp sync (no credentials; requires ENABLE_EXTERNAL_SYNC=true)
+ENABLE_WHATSAPP_SYNC=false
+```
+
+---
+
+*For common code patterns, see [`.agents/patterns/`](../patterns/)*
+
+*For architecture rationale, see [`.agents/guides/architecture.md`](./architecture.md)*

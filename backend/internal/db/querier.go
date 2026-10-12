@@ -1149,7 +1149,7 @@ type Querier interface {
 	// metadata column — see the cursor wire contract in the handler.
 	InsertMacHostSyncCursor(ctx context.Context, arg InsertMacHostSyncCursorParams) (*InsertMacHostSyncCursorRow, error)
 	// Meeting Note queries
-	// Spec: .ai/spec/mac-daemon-phase-2-anarlog-matching.md
+	// Spec: .agents/spec/mac-daemon-phase-2-anarlog-matching.md
 	// Inserts a meeting_note staging row. linkage_state must be supplied by the
 	// caller (the ingest tx computes it from the linkage detection algorithm);
 	// no DB-level default exists. input_hash / resolved_set_hash /
@@ -1714,7 +1714,7 @@ type Querier interface {
 	// TEST-ONLY. Calls the live normalize_contact_method_value function so the
 	// C6 parity test can compare the Go mirror against the actual SQL that the
 	// unique index is enforced over. Raw SQL is banned in Go including tests
-	// (.ai/rules/core.md), so this query is the permitted access path.
+	// (.agents/rules/core.md), so this query is the permitted access path.
 	//
 	// Not used by production code. Do not make it one: production reads the
 	// trigger's output from the stored column.
@@ -1890,7 +1890,7 @@ type Querier interface {
 	// Used by scheduler-exclusion tests to plant a push-strategy row whose
 	// next_sync_at is due, then assert ListDueAccounts skips it.
 	SeedExternalSyncState(ctx context.Context, arg SeedExternalSyncStateParams) (*ExternalSyncState, error)
-	// Mac host test helpers — per .ai/rules/core.md rule 2 (no raw SQL in
+	// Mac host test helpers — per .agents/rules/core.md rule 2 (no raw SQL in
 	// Go test fixtures), test setup uses these instead of pool.Exec.
 	// Inserts a host with caller-supplied hostname + bcrypted api_key_hash.
 	// Used by integration tests that need to bypass the pairing flow.

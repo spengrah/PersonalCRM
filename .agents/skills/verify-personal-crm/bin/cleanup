@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+# Tear down the instance bin/launch recorded: stop its two servers (by recorded
+# PID, never by process name), drop its database, remove .agents/log/verify/instance/.
+# Leaves Postgres running (shared with dev and E2E) and never touches
+# .agents/log/verify/runs/, where the evidence lives. Safe after a failed launch.
+set -uo pipefail
+source "$(dirname "$0")/_common.sh"
+
+stop_group() {  # name needle
+  local pidfile="$INSTANCE_DIR/$1.pid" pid
+  [ -f "$pidfile" ] || return 0
+  pid="$(cat "$pidfile")"
+  if pid_is "$pid" "$2"; then
+    # Each server leads its own process group (launch uses job control).
+    kill -TERM -- "-$pid" 2>/dev/null || kill -TERM "$pid" 2>/dev/null
+    for _ in 1 2 3 4 5 6 7 8 9 10; do kill -0 "$pid" 2>/dev/null || break; sleep 0.5; done
+    kill -KILL -- "-$pid" 2>/dev/null || true
+    echo "stopped $1 (pid $pid)"
+  else
+    echo "$1 pid $pid is not running (or is no longer ours); skipped"
+  fi
+}
+stop_group backend "$INSTANCE_DIR/crm-api"
+stop_group frontend "next"
+
+if verify_psql postgres -tAc "SELECT 1" >/dev/null 2>&1; then
+  verify_psql postgres -qc "DROP DATABASE IF EXISTS $VERIFY_DB_NAME WITH (FORCE);" && echo "dropped database $VERIFY_DB_NAME"
+else
+  echo "postgres unreachable; database $VERIFY_DB_NAME not dropped"
+fi
+
+rm -rf "$INSTANCE_DIR"
+for p in "$VERIFY_FRONTEND_PORT" "$VERIFY_BACKEND_PORT"; do
+  [ -z "$(port_pids "$p")" ] || echo "⚠ port $p still held by pid(s) $(port_pids "$p" | tr '\n' ' ')— not ours to kill; investigate"
+done
+echo "evidence kept in $RUNS_DIR"

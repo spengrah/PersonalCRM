@@ -1,7 +1,7 @@
 # consumer
 
 Consumer services that subscribe to events and perform domain writes
-(see issue #180 and `.ai/spec/event-bus-foundation.md`).
+(see issue #180 and `.agents/spec/event-bus-foundation.md`).
 
 ## Consumers
 
@@ -54,5 +54,5 @@ nil check per branch. Unit tests install a closure that appends to a
 slice to assert on classification coverage.
 
 See `backend/internal/eventbus/README.md` for the
-`EVENT_BUS_FOLLOWUP_MODE` operator reference and the `.ai/guides/architecture.md`
+`EVENT_BUS_FOLLOWUP_MODE` operator reference and the `.agents/guides/architecture.md`
 "Event Bus and Consumers" section for the hybrid sync/async contract.

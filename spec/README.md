@@ -2,7 +2,7 @@
 
 This directory is the single source of truth (SSOT) for the application's intended behavior: durable, DOM-free statements of what the system is supposed to do, independent of how any test or UI currently expresses it. Consumers: deterministic tests (which cite behavior IDs — see [Test → behavior citations](#test--behavior-citations)), the traceability/coverage scanner (`make spec-coverage`), and the UX sanity check (`make qa-sanity`). The sanity check reads intents from a verbatim transcription, `frontend/tests/tours/judge/intent-catalog.ts`, which its unit test `intent-catalog.test.ts` holds equal to the corpus, so a PR that adds, edits or retires an intent updates the transcription in the same change. (An MCP server was planned as a further consumer; none reads the corpus today.) Humans read it as the behavior index.
 
-It is deliberately distinct from `.ai/spec/`, which holds design documents. This directory holds product behavior, one YAML file per domain at `spec/<domain>.yaml`. The `.yaml` extension is required — the linter globs `*.yaml` only (this README, subdirectories, and `.yml` files are ignored).
+It is deliberately distinct from `.agents/spec/`, which holds design documents. This directory holds product behavior, one YAML file per domain at `spec/<domain>.yaml`. The `.yaml` extension is required — the linter globs `*.yaml` only (this README, subdirectories, and `.yml` files are ignored).
 
 ## File format
 

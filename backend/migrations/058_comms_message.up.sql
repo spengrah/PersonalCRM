@@ -1,6 +1,6 @@
 -- 058_comms_message.up.sql
 -- Shared cross-source content store for the Gmail integration.
--- See .ai/spec/2026-06-01-gmail-integration-design.md §6.1.
+-- See .agents/spec/2026-06-01-gmail-integration-design.md §6.1.
 -- One row = one message x one qualifying contact (per-participant granularity).
 -- Email uses it now; gchat/telegram/messages migrate onto it later (separate work).
 CREATE TABLE comms_message (

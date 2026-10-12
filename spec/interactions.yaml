@@ -19,7 +19,7 @@ behaviors:
         text: additional pages extend the history without gaps or duplicate rows
       - key: section-replaces-meetings
         text: the unified interaction history takes the place of the separate meetings history
-    provenance: [.ai/spec/contact-interactions-surface.md]
+    provenance: [.agents/spec/contact-interactions-surface.md]
 
   - id: IXN-002
     title: Every interaction row communicates its source and content shape
@@ -47,7 +47,7 @@ behaviors:
         text: a calendar row summarizes its event time, place, attendee size, and link when available
       - key: call-row-details
         text: a call row summarizes its service, answer state, voicemail state, and duration
-    provenance: [.ai/spec/contact-interactions-surface.md]
+    provenance: [.agents/spec/contact-interactions-surface.md]
 
   - id: IXN-003
     title: Venue tags follow constituent content rather than graph pointers
@@ -55,7 +55,7 @@ behaviors:
     status: current
     surface: none
     statement: an interaction's venue tags are derived from the distinct containers of its live constituent content and never from interaction.venue_id, which remains only the graph's primary-container pointer.
-    provenance: [.ai/spec/contact-interactions-surface.md, InteractionContentService]
+    provenance: [.agents/spec/contact-interactions-surface.md, InteractionContentService]
 
   - id: IXN-004
     title: Message evidence expands in place as a complete plaintext thread window
@@ -75,7 +75,7 @@ behaviors:
         text: group evidence includes every speaker represented inside the interaction's thread window
       - key: expand-in-place-no-nav
         text: the evidence opens within the interaction history without navigating away
-    provenance: [.ai/spec/contact-interactions-surface.md]
+    provenance: [.agents/spec/contact-interactions-surface.md]
 
   - id: IXN-005
     title: Meeting-note evidence preserves the linked notes and their provenance
@@ -91,7 +91,7 @@ behaviors:
         text: every live note linked to the interaction is represented
       - key: provenance-footnote
         text: the evidence includes its on-device processing provenance
-    provenance: [.ai/spec/contact-interactions-surface.md]
+    provenance: [.agents/spec/contact-interactions-surface.md]
 
   - id: IXN-006
     title: Upcoming calendar events share the history without becoming interactions
@@ -113,7 +113,7 @@ behaviors:
         text: every event returned by the bounded upcoming read remains reachable
       - key: in-progress-still-upcoming
         text: an event that has started but not ended remains in the upcoming set
-    provenance: [.ai/spec/contact-interactions-surface.md]
+    provenance: [.agents/spec/contact-interactions-surface.md]
 
   - id: IXN-007
     title: Venue filtering follows content-container membership
@@ -127,7 +127,7 @@ behaviors:
         text: the history contains only interactions with live constituent content in the selected venue
       - key: expanded-shows-venue-messages
         text: expanded evidence shows the messages relevant to the selected venue
-    provenance: [.ai/spec/contact-interactions-surface.md]
+    provenance: [.agents/spec/contact-interactions-surface.md]
 
   - id: IXN-008
     title: Date filters bound the history while preserving an all-time view
@@ -147,7 +147,7 @@ behaviors:
         text: the unbounded view includes upcoming events as well as past interactions
       - key: custom-range-bounds-upcoming
         text: custom bounds apply consistently to upcoming events on the shared time axis
-    provenance: [.ai/spec/contact-interactions-surface.md]
+    provenance: [.agents/spec/contact-interactions-surface.md]
 
   - id: IXN-009
     title: The interaction history renders recorded state honestly
@@ -163,7 +163,7 @@ behaviors:
         text: separately recorded interactions remain distinct even when they appear duplicative
       - key: empty-state-explicit
         text: a contact with no recorded interactions receives an explicit empty state
-    provenance: [.ai/spec/contact-interactions-surface.md]
+    provenance: [.agents/spec/contact-interactions-surface.md]
 
   - id: IXN-010
     title: The contact interactions surface is read-only end to end
@@ -171,7 +171,7 @@ behaviors:
     status: current
     surface: api
     statement: the contact interactions surface exposes only reads, adds no mutation endpoint or interaction writer, and leaves interaction creation to the existing recording paths.
-    provenance: [.ai/spec/contact-interactions-surface.md]
+    provenance: [.agents/spec/contact-interactions-surface.md]
 
   - id: IXN-011
     title: Content assembly is reusable outside HTTP delivery
@@ -179,7 +179,7 @@ behaviors:
     status: current
     surface: none
     statement: interaction content assembly is an independently invocable service seam rather than logic embedded in an HTTP handler.
-    provenance: [.ai/spec/contact-interactions-surface.md, InteractionContentService]
+    provenance: [.agents/spec/contact-interactions-surface.md, InteractionContentService]
 
   - id: IXN-012
     title: List enrichment performs no per-row content fan-out
@@ -187,7 +187,7 @@ behaviors:
     status: current
     surface: none
     statement: enriching an interaction page uses batched content reads whose statement count stays constant as the number of rows grows for the same source-family mix.
-    provenance: [.ai/spec/contact-interactions-surface.md, InteractionContentService]
+    provenance: [.agents/spec/contact-interactions-surface.md, InteractionContentService]
 
   - id: IXN-013
     title: The contact interaction list API returns a stable enriched page
@@ -219,7 +219,7 @@ behaviors:
         text: rows order by occurrence time descending and interaction id descending
       - key: soft-deleted-excluded
         text: soft-deleted interactions and content do not contribute rows, enrichment, totals, or venue options
-    provenance: [.ai/spec/contact-interactions-surface.md, InteractionContentService]
+    provenance: [.agents/spec/contact-interactions-surface.md, InteractionContentService]
 
   - id: IXN-014
     title: The per-interaction content API returns bounded, deterministic evidence
@@ -253,4 +253,4 @@ behaviors:
         text: a soft-deleted interaction receives an HTTP 404 response and its content is inaccessible
       - key: empty-arrays-not-null
         text: absent messages or meeting notes are represented by empty arrays rather than null
-    provenance: [.ai/spec/contact-interactions-surface.md, InteractionContentService]
+    provenance: [.agents/spec/contact-interactions-surface.md, InteractionContentService]

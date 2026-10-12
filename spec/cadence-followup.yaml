@@ -30,7 +30,7 @@ behaviors:
       - the base date is last_contacted when set, else created_at
       - the interval is fixed-length per cadence (7, 14, 30, 90, 180, 365 days in production)
       - in production the result is a date (day precision, timezone-safe)
-    provenance: [cadence.CalculateContactBy, cadence.GetCadenceDuration, .ai/guides/architecture.md]
+    provenance: [cadence.CalculateContactBy, cadence.GetCadenceDuration, .agents/guides/architecture.md]
 
   - id: CAD-003
     title: Cadence intervals scale with the environment for accelerated testing
@@ -43,7 +43,7 @@ behaviors:
       - production resolves real-day intervals
       - testing and accelerated environments compress the same cadences to minutes or hours
       - all cadence math reads the app's accelerated clock, never the wall clock
-    provenance: [cadence.GetCadenceConfig, accelerated.GetCurrentTime, .ai/rules/core.md]
+    provenance: [cadence.GetCadenceConfig, accelerated.GetCurrentTime, .agents/rules/core.md]
 
   - id: CAD-004
     title: A contact is overdue only strictly past its next-contact date
@@ -63,7 +63,7 @@ behaviors:
     status: current
     surface: none
     statement: outside contact creation (which seeds last_contacted and contact_by, CON-001), last_contacted, last_interaction_at, last_outreach_at, last_response_at, and contact_by are written only by the cadence engine's apply paths (interaction consumer, merge bulk-apply, cadence override, and delete rollback); contact_by is kept in sync on every write path that changes the cadence or the base timestamps.
-    provenance: [CadenceUpdater, .ai/guides/architecture.md sole-writer map, scripts/ci sole-writer guard, reject_unauthorized_derived_contact_write trigger (migration 079)]
+    provenance: [CadenceUpdater, .agents/guides/architecture.md sole-writer map, scripts/ci sole-writer guard, reject_unauthorized_derived_contact_write trigger (migration 079)]
 
   # --- Direction and write semantics ---
 
@@ -91,7 +91,7 @@ behaviors:
     then:
       - an automated source (synced providers) advances a column only when the incoming value is strictly newer
       - a manual entry writes unconditionally, allowing backdating as user correction
-    provenance: [cadence_branch.go, CadenceUpdater.buildInteractionWrite, .ai/rules/core.md forward-only row]
+    provenance: [cadence_branch.go, CadenceUpdater.buildInteractionWrite, .agents/rules/core.md forward-only row]
 
   - id: CAD-008
     title: Rescheduling gates on cadence and recency
@@ -513,14 +513,14 @@ behaviors:
     type: intent
     status: current
     statement: a contact's detail page answers where things stand with this person — when we last talked in each direction, whether a reply is pending, and what work is queued — without the user digging through raw history
-    provenance: ['.ai/spec/2026-07-10-ssot-intent-layer-and-judged-ux-goals-design.md']
+    provenance: ['.agents/spec/2026-07-10-ssot-intent-layer-and-judged-ux-goals-design.md']
 
   - id: CAD-037
     title: CRM task actions are safe for remote task state
     type: intent
     status: retired
     statement: managing a linked task from the CRM never silently mutates or destroys the user's task in the remote app — remote state changes only where the user expects them to happen
-    provenance: ['.ai/spec/2026-07-10-ssot-intent-layer-and-judged-ux-goals-design.md']
+    provenance: ['.agents/spec/2026-07-10-ssot-intent-layer-and-judged-ux-goals-design.md']
     notes: Superseded by CAD-039 (the backend invariant that unlinking issues no outbound call) and the CAD-033 UI affordance; retired from the judged intent set because the guarantee is deterministic and belongs in tests, not the agentic judge.
 
   - id: CAD-038
@@ -529,7 +529,7 @@ behaviors:
     status: current
     statement: a user who opens the app to find out who they are losing touch with can go from that signal to having acted, in one continuous pass — the contact they are sent to answers where the relationship stands, the action they take is acknowledged where they take it, and the surface that sent them reflects it when they come back; at no point do they lose their place, have to re-derive context the app already showed them, or have to guess whether the action landed
     notes: The app's core value loop, taken end to end as one journey rather than as three independent surfaces. It carries no serving behaviors on purpose; the sanity check's intent transcription (frontend/tests/tours/judge/intent-catalog.ts) records why. Frontend-surface scope only; the integration/sync half of the loop is deliberately out of scope.
-    provenance: ['.ai/spec/2026-07-12-qa-architecture-restructuring.md']
+    provenance: ['.agents/spec/2026-07-12-qa-architecture-restructuring.md']
 
   - id: CAD-040
     title: Awaiting a reply is derived from the contact's own interaction timestamps

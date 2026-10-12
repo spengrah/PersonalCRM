@@ -1,6 +1,6 @@
 # Mac Daemon Rules
 
-Gotchas specific to `mac-daemon/` (Swift). Cross-cutting rules (git practices, code quality, testing policy, safety-critical prohibitions) live in `.ai/rules/core.md` at the repo root — read that first.
+Gotchas specific to `mac-daemon/` (Swift). Cross-cutting rules (git practices, code quality, testing policy, safety-critical prohibitions) live in `.agents/rules/core.md` at the repo root — read that first.
 
 ## Common Gotchas
 
