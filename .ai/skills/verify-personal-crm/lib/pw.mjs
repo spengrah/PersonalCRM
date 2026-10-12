@@ -94,7 +94,10 @@ export async function session({ device } = {}) {
     async shot(label, opts = {}) {
       shots++
       const file = `${String(shots).padStart(2, '0')}-${label.replace(/[^a-z0-9-]+/gi, '-')}.png`
-      await page.screenshot({ path: path.join(EVIDENCE, file), fullPage: true, ...opts })
+      // caret: 'initial' keeps Playwright from writing an inline caret-color
+      // onto every input; a screenshot taken before React hydrates would
+      // otherwise cause a hydration mismatch that fails the run.
+      await page.screenshot({ path: path.join(EVIDENCE, file), fullPage: true, caret: 'initial', ...opts })
       log('steps.jsonl', { time: new Date().toISOString(), shot: file, url: page.url() })
       return file
     },
