@@ -210,13 +210,13 @@ type PhoneCallLinkageReader interface {
 // InteractionWriter is the narrow surface for the re-sync diff path
 // (list session-attributed live interactions, soft-delete obsoletes)
 // and the meeting_note.deleted cascade. Refreshes of existing
-// interactions go through ContactInteractionRecorder.ExtendInteractionTx
-// instead so cadence stays under the sole-writer invariant. Concrete
+// interactions (extends, venue re-links) go through
+// ContactInteractionRecorder instead so cadence stays under the sole-writer
+// invariant and every observation passes the observation step. Concrete
 // is *repository.InteractionRepository.
 type InteractionWriter interface {
 	ListSessionAttributedInteractionsTx(ctx context.Context, tx pgx.Tx, sourceRefPrefix string) ([]repository.Interaction, error)
 	SoftDeleteInteractionTx(ctx context.Context, tx pgx.Tx, id uuid.UUID) error
-	UpdateInteractionVenueTx(ctx context.Context, tx pgx.Tx, id uuid.UUID, venueID *uuid.UUID) error
 }
 
 // AnarlogIdentityLookup is the narrow surface used by the
@@ -238,6 +238,7 @@ type AnarlogIdentityLookup interface {
 type ContactInteractionRecorder interface {
 	RecordInteractionTx(ctx context.Context, tx pgx.Tx, publishesEvent bool, req repository.RecordInteractionRequest) (*RecordInteractionResult, error)
 	ExtendInteractionTx(ctx context.Context, tx pgx.Tx, interactionID, contactID uuid.UUID, direction string, occurredAt time.Time, description *string) error
+	RelinkInteractionVenueTx(ctx context.Context, tx pgx.Tx, existing repository.Interaction, venueID *uuid.UUID) error
 }
 
 // PhoneCallWriter is the narrow surface for the per-event phone_call
@@ -2230,7 +2231,7 @@ func (s *IngestService) handleMeetingNoteRecorded(
 			// gcal event). venue_id is not a cadence column, so this is a plain
 			// update separate from the content refresh below.
 			if !uuidPtrEqual(x.VenueID, sessionVenueID) {
-				if err := s.interactions.UpdateInteractionVenueTx(ctx, tx, x.ID, sessionVenueID); err != nil {
+				if err := s.contactSvc.RelinkInteractionVenueTx(ctx, tx, x, sessionVenueID); err != nil {
 					return nil, nil, &IngestPerEventRejection{
 						Code:    ingestRejectInteractionWriteFailed,
 						Message: fmt.Sprintf("update session interaction venue: %s", err.Error()),

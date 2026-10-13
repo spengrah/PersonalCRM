@@ -94,6 +94,10 @@ type Querier interface {
 	// undo is not the inverse of skip. Affects zero rows when no skip state is
 	// present; the caller has already checked cadence.UndoSkipAvailable.
 	ApplyContactUndoSkip(ctx context.Context, id uuid.UUID) (int64, error)
+	// Gives a row that has no interaction node its node, when a source observes it
+	// again. The IS NULL guard makes an assigned node permanent: this is the only
+	// statement besides the create insert that writes interaction_node_id.
+	AssignInteractionNode(ctx context.Context, arg AssignInteractionNodeParams) error
 	// Retroactive attach: binds a source's remaining unmatched rows for one peer to
 	// a contact. Matches on peer_handle (always present) OR peer_normalized
 	// (present only when the peer's phone was resolvable) so a LID-only peer
@@ -1851,6 +1855,10 @@ type Querier interface {
 	// SyntheticDelete*ByKeyPrefix for its own provisional rows.)
 	ResetSyntheticData(ctx context.Context) error
 	ResetTelegramChatConfigBackfill(ctx context.Context, telegramChatID int64) error
+	// The observation step's resolution: finds or creates the interaction node of
+	// an observation by the per-source identity rule (resolve_interaction_node in
+	// migration 087, the one implementation). A burst source returns no row (no node).
+	ResolveInteractionNode(ctx context.Context, arg ResolveInteractionNodeParams) (uuid.UUID, error)
 	// Sets linked_kind, linked_id, linkage_state='linked',
 	// conflict_candidates=NULL on a row currently in linkage_state =
 	// 'conflict_pending'. Returns pgx.ErrNoRows (caller maps to 409) when
@@ -2782,7 +2790,9 @@ type Querier interface {
 	// Test-only: inserts an interaction with a caller-supplied id, source, and
 	// source_ref and a NULL venue_id, bypassing the recorder. Used by the venue
 	// backfill migration test to stand up pre-existing (venue-less) interactions
-	// that the 069 backfill then populates. Production code MUST NOT call this.
+	// that the 069 backfill then populates. It resolves the interaction node the
+	// way the recorder does, so a fixture row of a correctable source carries its
+	// node. Production code MUST NOT call this.
 	TestInsertInteraction(ctx context.Context, arg TestInsertInteractionParams) (*Interaction, error)
 	// Test-only: inserts a messages_message already linked to an interaction. Used
 	// by the venue backfill test to seed an iMessage chat container row. Production

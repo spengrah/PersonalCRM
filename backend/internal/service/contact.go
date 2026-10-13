@@ -735,6 +735,9 @@ func (s *ContactService) RecordInteractionTx(
 				Str("source", req.Source).
 				Str("sourceRef", *req.SourceRef).
 				Msg("skipping duplicate interaction (same source_ref)")
+			if err := s.observeReplayTx(ctx, tx, req, existing); err != nil {
+				return nil, err
+			}
 			return &RecordInteractionResult{Interaction: existing, IsReplay: true}, nil
 		}
 	} else {
@@ -748,6 +751,9 @@ func (s *ContactService) RecordInteractionTx(
 				Str("existingSource", existing.Source).
 				Str("newSource", req.Source).
 				Msg("skipping duplicate interaction within 30-min window")
+			if err := s.observeReplayTx(ctx, tx, req, existing); err != nil {
+				return nil, err
+			}
 			return &RecordInteractionResult{Interaction: existing, IsReplay: true}, nil
 		}
 	}
@@ -769,8 +775,29 @@ func (s *ContactService) RecordInteractionTx(
 		cadenceAtEmit = &c
 	}
 
-	// 5. Create interaction record in the caller's tx.
-	interaction, err := s.interactionRepo.CreateInteractionTx(ctx, tx, repository.CreateInteractionRequest(req))
+	// 5. Observation step, then create the interaction record, in the caller's
+	// tx. The step runs before the write and before any cadence or follow-up
+	// effect below.
+	nodeID, err := s.interactionRepo.ObserveInteractionTx(ctx, tx, repository.InteractionObservation{
+		ContactID:  req.ContactID,
+		Source:     req.Source,
+		SourceRef:  req.SourceRef,
+		Direction:  req.Direction,
+		OccurredAt: req.OccurredAt,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("observe interaction: %w", err)
+	}
+	interaction, err := s.interactionRepo.CreateInteractionTx(ctx, tx, repository.CreateInteractionRequest{
+		ContactID:         req.ContactID,
+		Source:            req.Source,
+		SourceRef:         req.SourceRef,
+		OccurredAt:        req.OccurredAt,
+		Description:       req.Description,
+		Direction:         req.Direction,
+		VenueID:           req.VenueID,
+		InteractionNodeID: nodeID,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("create interaction: %w", err)
 	}
@@ -847,6 +874,9 @@ func (s *ContactService) PromoteInteractionToMutualTx(
 	if s.cadence == nil {
 		return errors.New("promote interaction: cadence updater not wired (pass cadence to NewContactService)")
 	}
+	if err := s.observeExistingTx(ctx, tx, interactionID, contactID, repository.InteractionDirectionMutual, replyAt); err != nil {
+		return fmt.Errorf("update interaction direction: %w", err)
+	}
 	updated, err := s.updateInteractionDirectionTx(ctx, tx, interactionID, repository.InteractionDirectionMutual, replyAt)
 	if err != nil {
 		return fmt.Errorf("update interaction direction: %w", err)
@@ -886,6 +916,9 @@ func (s *ContactService) ExtendInteractionTx(
 	if s.cadence == nil {
 		return errors.New("extend interaction: cadence updater not wired (pass cadence to NewContactService)")
 	}
+	if err := s.observeExistingTx(ctx, tx, interactionID, contactID, direction, occurredAt); err != nil {
+		return fmt.Errorf("update interaction timestamp: %w", err)
+	}
 	updated, err := s.updateInteractionTimestampTx(ctx, tx, interactionID, occurredAt, description)
 	if err != nil {
 		return fmt.Errorf("update interaction timestamp: %w", err)
@@ -908,6 +941,62 @@ func (s *ContactService) ExtendInteractionTx(
 		return fmt.Errorf("apply extend cadence: %w", err)
 	}
 	return s.applyFollowUpInlineTx(ctx, tx, updated)
+}
+
+// observeReplayTx runs the observation step for a dedup hit, so a live row
+// that has no interaction node gets one, and reflects the result on the row.
+func (s *ContactService) observeReplayTx(ctx context.Context, tx pgx.Tx, req repository.RecordInteractionRequest, existing *repository.Interaction) error {
+	nodeID, err := s.interactionRepo.ObserveInteractionTx(ctx, tx, repository.InteractionObservation{
+		ContactID:  req.ContactID,
+		Source:     req.Source,
+		SourceRef:  req.SourceRef,
+		Direction:  req.Direction,
+		OccurredAt: req.OccurredAt,
+		Existing:   existing,
+	})
+	if err != nil {
+		return fmt.Errorf("observe interaction: %w", err)
+	}
+	existing.InteractionNodeID = nodeID
+	return nil
+}
+
+// observeExistingTx runs the observation step for an extend or promote of the
+// row interactionID, reading the row in the same tx.
+func (s *ContactService) observeExistingTx(
+	ctx context.Context, tx pgx.Tx, interactionID, contactID uuid.UUID, direction string, occurredAt time.Time,
+) error {
+	existing, err := s.interactionRepo.GetInteractionTx(ctx, tx, interactionID)
+	if err != nil {
+		return err
+	}
+	_, err = s.interactionRepo.ObserveInteractionTx(ctx, tx, repository.InteractionObservation{
+		ContactID:  contactID,
+		Source:     existing.Source,
+		SourceRef:  existing.SourceRef,
+		Direction:  direction,
+		OccurredAt: occurredAt,
+		Existing:   existing,
+	})
+	return err
+}
+
+// RelinkInteractionVenueTx moves an existing interaction to a (re-resolved)
+// venue, for example when its Anarlog session was re-linked to a calendar
+// event. The observation step runs first; the row keeps the interaction node
+// it has. Caller owns the tx. A nil venueID clears the venue.
+func (s *ContactService) RelinkInteractionVenueTx(ctx context.Context, tx pgx.Tx, existing repository.Interaction, venueID *uuid.UUID) error {
+	if _, err := s.interactionRepo.ObserveInteractionTx(ctx, tx, repository.InteractionObservation{
+		ContactID:  existing.ContactID,
+		Source:     existing.Source,
+		SourceRef:  existing.SourceRef,
+		Direction:  existing.Direction,
+		OccurredAt: existing.OccurredAt,
+		Existing:   &existing,
+	}); err != nil {
+		return fmt.Errorf("observe interaction: %w", err)
+	}
+	return s.interactionRepo.UpdateInteractionVenueTx(ctx, tx, existing.ID, venueID)
 }
 
 // updateInteractionDirectionTx / updateInteractionTimestampTx are thin

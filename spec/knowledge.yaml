@@ -485,3 +485,24 @@ behaviors:
         text: no age is computed or displayed for it
     provenance: [formatBirthday, isPlaceholderBirthday, birthdays.spec.ts placeholder assertions]
     notes: The placeholder-year sentinel convention and the year-less rendering (formatBirthday drops the year on every surface — contact detail per KNW-034, the birthdays page, etc.) are the knowledge-domain derived-data concern owned here. Because no real year is stored there is no year to derive an age from; the landed CON-045 owns the birthdays-page display of that age-suppression outcome. The two are consistent, not competing — this row does not claim authority over CON-045.
+
+  - id: KNW-036
+    title: Interaction nodes are structural nodes in the registry
+    type: data
+    status: current
+    surface: none
+    given: an observation of a correctable source is recorded
+    when: its interaction node is resolved
+    then:
+      - key: structural-registry-type
+        text: the node is a registry node of type interaction with its own subtype record carrying its source and persisted identity key
+      - key: written-by-recording-path
+        text: the recording path writes the node itself, never through the assertion store, the predicate catalog, or provenance
+      - key: one-node-per-identity
+        text: at most one node exists for a persisted source and identity key, while a node with no key belongs to one observation
+      - key: observation-names-only-interaction-node
+        text: an observation can name only an interaction node, never a person, venue, or entity node
+      - key: merge-alias
+        text: an interaction node merged into another aliases its winner through the registry's merge alias like any other node
+    provenance: [.agents/spec/2026-10-13-interaction-review-readiness.md]
+    notes: Interaction nodes join the structural tier beside venues and entities. Corrections and claims about an interaction attach to the node in later behaviors of this domain.

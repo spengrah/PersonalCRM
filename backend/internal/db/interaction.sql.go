@@ -31,6 +31,26 @@ func (q *Queries) AcquireSourceRefAggregateLock(ctx context.Context, lockKey str
 	return err
 }
 
+const AssignInteractionNode = `-- name: AssignInteractionNode :exec
+UPDATE interaction
+SET interaction_node_id = $1
+WHERE id = $2
+  AND interaction_node_id IS NULL
+`
+
+type AssignInteractionNodeParams struct {
+	InteractionNodeID *uuid.UUID `json:"interaction_node_id"`
+	ID                uuid.UUID  `json:"id"`
+}
+
+// Gives a row that has no interaction node its node, when a source observes it
+// again. The IS NULL guard makes an assigned node permanent: this is the only
+// statement besides the create insert that writes interaction_node_id.
+func (q *Queries) AssignInteractionNode(ctx context.Context, arg AssignInteractionNodeParams) error {
+	_, err := q.db.Exec(ctx, AssignInteractionNode, arg.InteractionNodeID, arg.ID)
+	return err
+}
+
 const CountContactInteractions = `-- name: CountContactInteractions :one
 SELECT COUNT(*) FROM interaction
 WHERE contact_id = $1 AND deleted_at IS NULL
@@ -91,7 +111,7 @@ func (q *Queries) CountContactInteractionsFiltered(ctx context.Context, arg Coun
 }
 
 const CreateInteraction = `-- name: CreateInteraction :one
-INSERT INTO interaction (contact_id, source, source_ref, occurred_at, description, direction, venue_id)
+INSERT INTO interaction (contact_id, source, source_ref, occurred_at, description, direction, venue_id, interaction_node_id)
 VALUES (
     $1,
     $2,
@@ -99,19 +119,21 @@ VALUES (
     $4,
     $5,
     COALESCE($6, 'mutual'),
-    $7
+    $7,
+    $8
 )
-RETURNING id, contact_id, source, source_ref, occurred_at, description, created_at, deleted_at, direction, venue_id
+RETURNING id, contact_id, source, source_ref, occurred_at, description, created_at, deleted_at, direction, venue_id, interaction_node_id
 `
 
 type CreateInteractionParams struct {
-	ContactID   uuid.UUID   `json:"contact_id"`
-	Source      string      `json:"source"`
-	SourceRef   *string     `json:"source_ref"`
-	OccurredAt  time.Time   `json:"occurred_at"`
-	Description *string     `json:"description"`
-	Direction   interface{} `json:"direction"`
-	VenueID     *uuid.UUID  `json:"venue_id"`
+	ContactID         uuid.UUID   `json:"contact_id"`
+	Source            string      `json:"source"`
+	SourceRef         *string     `json:"source_ref"`
+	OccurredAt        time.Time   `json:"occurred_at"`
+	Description       *string     `json:"description"`
+	Direction         interface{} `json:"direction"`
+	VenueID           *uuid.UUID  `json:"venue_id"`
+	InteractionNodeID *uuid.UUID  `json:"interaction_node_id"`
 }
 
 func (q *Queries) CreateInteraction(ctx context.Context, arg CreateInteractionParams) (*Interaction, error) {
@@ -123,6 +145,7 @@ func (q *Queries) CreateInteraction(ctx context.Context, arg CreateInteractionPa
 		arg.Description,
 		arg.Direction,
 		arg.VenueID,
+		arg.InteractionNodeID,
 	)
 	var i Interaction
 	err := row.Scan(
@@ -136,12 +159,13 @@ func (q *Queries) CreateInteraction(ctx context.Context, arg CreateInteractionPa
 		&i.DeletedAt,
 		&i.Direction,
 		&i.VenueID,
+		&i.InteractionNodeID,
 	)
 	return &i, err
 }
 
 const FindInteractionBySourceRef = `-- name: FindInteractionBySourceRef :one
-SELECT id, contact_id, source, source_ref, occurred_at, description, created_at, deleted_at, direction, venue_id FROM interaction
+SELECT id, contact_id, source, source_ref, occurred_at, description, created_at, deleted_at, direction, venue_id, interaction_node_id FROM interaction
 WHERE contact_id = $1 AND source = $2 AND source_ref = $3 AND deleted_at IS NULL
 LIMIT 1
 `
@@ -167,12 +191,13 @@ func (q *Queries) FindInteractionBySourceRef(ctx context.Context, arg FindIntera
 		&i.DeletedAt,
 		&i.Direction,
 		&i.VenueID,
+		&i.InteractionNodeID,
 	)
 	return &i, err
 }
 
 const FindInteractionInWindow = `-- name: FindInteractionInWindow :one
-SELECT id, contact_id, source, source_ref, occurred_at, description, created_at, deleted_at, direction, venue_id FROM interaction
+SELECT id, contact_id, source, source_ref, occurred_at, description, created_at, deleted_at, direction, venue_id, interaction_node_id FROM interaction
 WHERE contact_id = $1
   AND source = $2
   AND direction = $3
@@ -214,12 +239,13 @@ func (q *Queries) FindInteractionInWindow(ctx context.Context, arg FindInteracti
 		&i.DeletedAt,
 		&i.Direction,
 		&i.VenueID,
+		&i.InteractionNodeID,
 	)
 	return &i, err
 }
 
 const FindRecentInteractionBySourceAndDirection = `-- name: FindRecentInteractionBySourceAndDirection :one
-SELECT id, contact_id, source, source_ref, occurred_at, description, created_at, deleted_at, direction, venue_id FROM interaction
+SELECT id, contact_id, source, source_ref, occurred_at, description, created_at, deleted_at, direction, venue_id, interaction_node_id FROM interaction
 WHERE contact_id = $1
   AND source = $2
   AND direction = $3
@@ -278,12 +304,13 @@ func (q *Queries) FindRecentInteractionBySourceAndDirection(ctx context.Context,
 		&i.DeletedAt,
 		&i.Direction,
 		&i.VenueID,
+		&i.InteractionNodeID,
 	)
 	return &i, err
 }
 
 const FindRecentOutboundInteractionBySource = `-- name: FindRecentOutboundInteractionBySource :one
-SELECT id, contact_id, source, source_ref, occurred_at, description, created_at, deleted_at, direction, venue_id FROM interaction
+SELECT id, contact_id, source, source_ref, occurred_at, description, created_at, deleted_at, direction, venue_id, interaction_node_id FROM interaction
 WHERE contact_id = $1
   AND source = $2
   AND direction = 'outbound'
@@ -329,12 +356,13 @@ func (q *Queries) FindRecentOutboundInteractionBySource(ctx context.Context, arg
 		&i.DeletedAt,
 		&i.Direction,
 		&i.VenueID,
+		&i.InteractionNodeID,
 	)
 	return &i, err
 }
 
 const FindRecentOutboundTelegramInteraction = `-- name: FindRecentOutboundTelegramInteraction :one
-SELECT id, contact_id, source, source_ref, occurred_at, description, created_at, deleted_at, direction, venue_id FROM interaction
+SELECT id, contact_id, source, source_ref, occurred_at, description, created_at, deleted_at, direction, venue_id, interaction_node_id FROM interaction
 WHERE contact_id = $1
   AND source = 'telegram'
   AND direction = 'outbound'
@@ -374,12 +402,13 @@ func (q *Queries) FindRecentOutboundTelegramInteraction(ctx context.Context, arg
 		&i.DeletedAt,
 		&i.Direction,
 		&i.VenueID,
+		&i.InteractionNodeID,
 	)
 	return &i, err
 }
 
 const FindRecentTelegramInteraction = `-- name: FindRecentTelegramInteraction :one
-SELECT id, contact_id, source, source_ref, occurred_at, description, created_at, deleted_at, direction, venue_id FROM interaction
+SELECT id, contact_id, source, source_ref, occurred_at, description, created_at, deleted_at, direction, venue_id, interaction_node_id FROM interaction
 WHERE contact_id = $1
   AND source = 'telegram'
   AND direction = $2
@@ -421,13 +450,14 @@ func (q *Queries) FindRecentTelegramInteraction(ctx context.Context, arg FindRec
 		&i.DeletedAt,
 		&i.Direction,
 		&i.VenueID,
+		&i.InteractionNodeID,
 	)
 	return &i, err
 }
 
 const GetInteraction = `-- name: GetInteraction :one
 
-SELECT id, contact_id, source, source_ref, occurred_at, description, created_at, deleted_at, direction, venue_id FROM interaction WHERE id = $1 AND deleted_at IS NULL
+SELECT id, contact_id, source, source_ref, occurred_at, description, created_at, deleted_at, direction, venue_id, interaction_node_id FROM interaction WHERE id = $1 AND deleted_at IS NULL
 `
 
 // Interaction queries
@@ -445,6 +475,7 @@ func (q *Queries) GetInteraction(ctx context.Context, id uuid.UUID) (*Interactio
 		&i.DeletedAt,
 		&i.Direction,
 		&i.VenueID,
+		&i.InteractionNodeID,
 	)
 	return &i, err
 }
@@ -498,7 +529,7 @@ func (q *Queries) HasResponseAfter(ctx context.Context, arg HasResponseAfterPara
 }
 
 const ListContactInteractions = `-- name: ListContactInteractions :many
-SELECT id, contact_id, source, source_ref, occurred_at, description, created_at, deleted_at, direction, venue_id FROM interaction
+SELECT id, contact_id, source, source_ref, occurred_at, description, created_at, deleted_at, direction, venue_id, interaction_node_id FROM interaction
 WHERE contact_id = $1 AND deleted_at IS NULL
 ORDER BY occurred_at DESC
 LIMIT $2 OFFSET $3
@@ -530,6 +561,7 @@ func (q *Queries) ListContactInteractions(ctx context.Context, arg ListContactIn
 			&i.DeletedAt,
 			&i.Direction,
 			&i.VenueID,
+			&i.InteractionNodeID,
 		); err != nil {
 			return nil, err
 		}
@@ -542,7 +574,7 @@ func (q *Queries) ListContactInteractions(ctx context.Context, arg ListContactIn
 }
 
 const ListContactInteractionsFiltered = `-- name: ListContactInteractionsFiltered :many
-SELECT id, contact_id, source, source_ref, occurred_at, description, created_at, deleted_at, direction, venue_id FROM interaction
+SELECT id, contact_id, source, source_ref, occurred_at, description, created_at, deleted_at, direction, venue_id, interaction_node_id FROM interaction
 WHERE contact_id = $1
   AND deleted_at IS NULL
   AND ($2::timestamptz IS NULL OR occurred_at >= $2)
@@ -607,6 +639,7 @@ func (q *Queries) ListContactInteractionsFiltered(ctx context.Context, arg ListC
 			&i.DeletedAt,
 			&i.Direction,
 			&i.VenueID,
+			&i.InteractionNodeID,
 		); err != nil {
 			return nil, err
 		}
@@ -619,7 +652,7 @@ func (q *Queries) ListContactInteractionsFiltered(ctx context.Context, arg ListC
 }
 
 const ListSessionAttributedInteractions = `-- name: ListSessionAttributedInteractions :many
-SELECT id, contact_id, source, source_ref, occurred_at, description, created_at, deleted_at, direction, venue_id FROM interaction
+SELECT id, contact_id, source, source_ref, occurred_at, description, created_at, deleted_at, direction, venue_id, interaction_node_id FROM interaction
 WHERE source = 'anarlog_sessions'
   AND source_ref LIKE $1
   AND deleted_at IS NULL
@@ -651,6 +684,7 @@ func (q *Queries) ListSessionAttributedInteractions(ctx context.Context, sourceR
 			&i.DeletedAt,
 			&i.Direction,
 			&i.VenueID,
+			&i.InteractionNodeID,
 		); err != nil {
 			return nil, err
 		}
@@ -660,6 +694,25 @@ func (q *Queries) ListSessionAttributedInteractions(ctx context.Context, sourceR
 		return nil, err
 	}
 	return items, nil
+}
+
+const ResolveInteractionNode = `-- name: ResolveInteractionNode :one
+SELECT resolve_interaction_node($1::text, $2::text) AS node_id
+`
+
+type ResolveInteractionNodeParams struct {
+	Source    string  `json:"source"`
+	SourceRef *string `json:"source_ref"`
+}
+
+// The observation step's resolution: finds or creates the interaction node of
+// an observation by the per-source identity rule (resolve_interaction_node in
+// migration 087, the one implementation). A burst source returns no row (no node).
+func (q *Queries) ResolveInteractionNode(ctx context.Context, arg ResolveInteractionNodeParams) (uuid.UUID, error) {
+	row := q.db.QueryRow(ctx, ResolveInteractionNode, arg.Source, arg.SourceRef)
+	var node_id uuid.UUID
+	err := row.Scan(&node_id)
+	return node_id, err
 }
 
 const SoftDeleteInteraction = `-- name: SoftDeleteInteraction :exec
@@ -673,7 +726,7 @@ func (q *Queries) SoftDeleteInteraction(ctx context.Context, id uuid.UUID) error
 }
 
 const TestGetInteractionIncludingDeleted = `-- name: TestGetInteractionIncludingDeleted :one
-SELECT id, contact_id, source, source_ref, occurred_at, description, created_at, deleted_at, direction, venue_id FROM interaction
+SELECT id, contact_id, source, source_ref, occurred_at, description, created_at, deleted_at, direction, venue_id, interaction_node_id FROM interaction
 WHERE contact_id = $1
   AND source = $2
   AND source_ref = $3
@@ -702,21 +755,23 @@ func (q *Queries) TestGetInteractionIncludingDeleted(ctx context.Context, arg Te
 		&i.DeletedAt,
 		&i.Direction,
 		&i.VenueID,
+		&i.InteractionNodeID,
 	)
 	return &i, err
 }
 
 const TestInsertInteraction = `-- name: TestInsertInteraction :one
-INSERT INTO interaction (id, contact_id, source, source_ref, occurred_at, direction)
+INSERT INTO interaction (id, contact_id, source, source_ref, occurred_at, direction, interaction_node_id)
 VALUES (
     $1,
     $2,
     $3,
     $4,
     $5,
-    $6
+    $6,
+    (SELECT resolve_interaction_node($3::text, $4::text))
 )
-RETURNING id, contact_id, source, source_ref, occurred_at, description, created_at, deleted_at, direction, venue_id
+RETURNING id, contact_id, source, source_ref, occurred_at, description, created_at, deleted_at, direction, venue_id, interaction_node_id
 `
 
 type TestInsertInteractionParams struct {
@@ -731,7 +786,9 @@ type TestInsertInteractionParams struct {
 // Test-only: inserts an interaction with a caller-supplied id, source, and
 // source_ref and a NULL venue_id, bypassing the recorder. Used by the venue
 // backfill migration test to stand up pre-existing (venue-less) interactions
-// that the 069 backfill then populates. Production code MUST NOT call this.
+// that the 069 backfill then populates. It resolves the interaction node the
+// way the recorder does, so a fixture row of a correctable source carries its
+// node. Production code MUST NOT call this.
 func (q *Queries) TestInsertInteraction(ctx context.Context, arg TestInsertInteractionParams) (*Interaction, error) {
 	row := q.db.QueryRow(ctx, TestInsertInteraction,
 		arg.ID,
@@ -753,6 +810,7 @@ func (q *Queries) TestInsertInteraction(ctx context.Context, arg TestInsertInter
 		&i.DeletedAt,
 		&i.Direction,
 		&i.VenueID,
+		&i.InteractionNodeID,
 	)
 	return &i, err
 }
@@ -763,7 +821,7 @@ SET direction = $1,
     occurred_at = $2
 WHERE id = $3
   AND deleted_at IS NULL
-RETURNING id, contact_id, source, source_ref, occurred_at, description, created_at, deleted_at, direction, venue_id
+RETURNING id, contact_id, source, source_ref, occurred_at, description, created_at, deleted_at, direction, venue_id, interaction_node_id
 `
 
 type UpdateInteractionDirectionParams struct {
@@ -787,6 +845,7 @@ func (q *Queries) UpdateInteractionDirection(ctx context.Context, arg UpdateInte
 		&i.DeletedAt,
 		&i.Direction,
 		&i.VenueID,
+		&i.InteractionNodeID,
 	)
 	return &i, err
 }
@@ -797,7 +856,7 @@ SET occurred_at = $1,
     description = $2
 WHERE id = $3
   AND deleted_at IS NULL
-RETURNING id, contact_id, source, source_ref, occurred_at, description, created_at, deleted_at, direction, venue_id
+RETURNING id, contact_id, source, source_ref, occurred_at, description, created_at, deleted_at, direction, venue_id, interaction_node_id
 `
 
 type UpdateInteractionTimestampParams struct {
@@ -821,6 +880,7 @@ func (q *Queries) UpdateInteractionTimestamp(ctx context.Context, arg UpdateInte
 		&i.DeletedAt,
 		&i.Direction,
 		&i.VenueID,
+		&i.InteractionNodeID,
 	)
 	return &i, err
 }

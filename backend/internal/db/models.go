@@ -334,16 +334,23 @@ type ExternalSyncState struct {
 }
 
 type Interaction struct {
-	ID          uuid.UUID  `json:"id"`
-	ContactID   uuid.UUID  `json:"contact_id"`
-	Source      string     `json:"source"`
-	SourceRef   *string    `json:"source_ref"`
-	OccurredAt  time.Time  `json:"occurred_at"`
-	Description *string    `json:"description"`
-	CreatedAt   *time.Time `json:"created_at"`
-	DeletedAt   *time.Time `json:"deleted_at"`
-	Direction   string     `json:"direction"`
-	VenueID     *uuid.UUID `json:"venue_id"`
+	ID                uuid.UUID  `json:"id"`
+	ContactID         uuid.UUID  `json:"contact_id"`
+	Source            string     `json:"source"`
+	SourceRef         *string    `json:"source_ref"`
+	OccurredAt        time.Time  `json:"occurred_at"`
+	Description       *string    `json:"description"`
+	CreatedAt         *time.Time `json:"created_at"`
+	DeletedAt         *time.Time `json:"deleted_at"`
+	Direction         string     `json:"direction"`
+	VenueID           *uuid.UUID `json:"venue_id"`
+	InteractionNodeID *uuid.UUID `json:"interaction_node_id"`
+}
+
+type InteractionNode struct {
+	NodeID      uuid.UUID `json:"node_id"`
+	Source      string    `json:"source"`
+	IdentityKey *string   `json:"identity_key"`
 }
 
 type JobExecSample struct {

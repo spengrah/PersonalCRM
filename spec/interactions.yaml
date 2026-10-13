@@ -254,3 +254,48 @@ behaviors:
       - key: empty-arrays-not-null
         text: absent messages or meeting notes are represented by empty arrays rather than null
     provenance: [.agents/spec/contact-interactions-surface.md, InteractionContentService]
+
+  - id: IXN-015
+    title: Every correctable interaction resolves to one interaction node, and message bursts resolve to none
+    type: data
+    status: current
+    surface: none
+    given: an observation of a correctable source recorded by any sync, ingest or manual path
+    when: the observation is recorded
+    then:
+      - key: one-node-per-observation
+        text: the observation resolves to exactly one interaction node, fixed when the observation is created
+      - key: shared-per-source-object
+        text: observations of the same calendar event, phone call, task or Anarlog session share one interaction node, whichever contact they belong to and however the participant's observation is keyed
+      - key: email-thread-day
+        text: observations of the same email thread on the same local day share one interaction node whichever contact they belong to, and the same thread on another day has another node
+      - key: manual-own-node
+        text: a manual entry has an interaction node of its own, shared with no other observation
+      - key: overlapping-events-stay-two
+        text: overlapping calendar events with the same attendees remain two interactions with two nodes
+      - key: bursts-have-no-node
+        text: a message burst from Telegram, iMessage, Google Chat or WhatsApp resolves to no interaction node, however it is extended or promoted to mutual
+      - key: assigned-node-kept
+        text: a later write to the observation (extension, promotion to mutual, re-link, soft delete, or the transfer to a surviving contact in a contact merge) leaves its interaction node unchanged
+    provenance: [.agents/spec/2026-10-13-interaction-review-readiness.md]
+    notes: Merging interactions and removing participations act on interaction nodes in later behaviors of this domain; this behavior fixes only which node each observation belongs to.
+
+  - id: IXN-026
+    title: The identity backfill gives every stored live correctable observation its interaction node
+    type: data
+    status: current
+    surface: none
+    given: observations stored before interaction nodes existed
+    when: the identity backfill runs
+    then:
+      - key: live-correctable-get-node
+        text: every live observation of a correctable source receives its interaction node under the same per-source rule that live recording uses
+      - key: shared-per-source-object
+        text: observations of the same source object share one node
+      - key: bursts-and-soft-deleted-untouched
+        text: message bursts and soft-deleted observations are left without a node
+      - key: no-other-column-changes
+        text: no column of any observation other than its interaction node changes
+      - key: idempotent
+        text: running the backfill again changes no observation and creates no node
+    provenance: [.agents/spec/2026-10-13-interaction-review-readiness.md]

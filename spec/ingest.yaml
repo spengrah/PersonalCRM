@@ -515,3 +515,27 @@ behaviors:
         text: an answered inbound call or inbound voicemail records an inbound interaction; a missed inbound call without voicemail records no interaction
     provenance: [decideCallInteraction, handleCall]
     notes: Migration 084 repairs historical connected outbound call rows without replaying events, forward-merges cadence projections, and preserves newer follow-up and skip state. A repaired call that advances last-contacted past a skip supersedes that skip and its undo state.
+
+  - id: ING-045
+    title: Re-processing a source object resolves to the interaction node resolved before
+    type: business-logic
+    status: current
+    surface: none
+    given: a source object whose observations already resolved to an interaction node
+    when: the source object is re-processed
+    then:
+      - key: anarlog-relink-keeps-node
+        text: an Anarlog session re-linked to a different calendar event, by sync or by the user's link resolution, keeps its node
+      - key: anarlog-key-move-keeps-node
+        text: an Anarlog participant whose observation moves between the tagged, title-matched, and walk-in forms, with the old observation dropped and a new one written, resolves to the session's node
+      - key: email-gaining-message-keeps-node
+        text: an email thread gaining a message on the same local day, by extension or by promotion to mutual, keeps its node
+      - key: calendar-rematch-shares-node
+        text: a calendar rematch that adds an attendee to an already recorded event resolves the new attendee to the event's node
+      - key: declined-accepted-again
+        text: a declined calendar event that is accepted again resolves to the node of its earlier observations
+      - key: call-reingest-keeps-node
+        text: a call ingested again keeps its node
+      - key: after-merge-new-row-same-node
+        text: after a contact merge, re-processing that writes a new observation for the surviving contact resolves to the node of the observation moved from the merged contact
+    provenance: [.agents/spec/2026-10-13-interaction-review-readiness.md]

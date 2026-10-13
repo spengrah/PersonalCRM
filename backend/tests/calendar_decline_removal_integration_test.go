@@ -620,9 +620,15 @@ func TestIntegration_CalendarDecline_RecomputeSeesConcurrentInteraction(t *testi
 	}()
 	require.NoError(t, e.contactRepo.LockContactForDateRecomputeTx(ctx, txA, contact.ID))
 	ref := concurrentRef
+	concurrentNode, err := e.interactionRepo.ObserveInteractionTx(ctx, txA, repository.InteractionObservation{
+		ContactID: contact.ID, Source: repository.InteractionSourceGCal, SourceRef: &ref,
+		Direction: repository.InteractionDirectionInbound, OccurredAt: concurrentAt,
+	})
+	require.NoError(t, err)
 	_, err = e.interactionRepo.CreateInteractionTx(ctx, txA, repository.CreateInteractionRequest{
 		ContactID: contact.ID, Source: repository.InteractionSourceGCal, SourceRef: &ref,
 		OccurredAt: concurrentAt, Direction: repository.InteractionDirectionInbound,
+		InteractionNodeID: concurrentNode,
 	})
 	require.NoError(t, err)
 

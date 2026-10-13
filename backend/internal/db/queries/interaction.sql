@@ -10,7 +10,7 @@ ORDER BY occurred_at DESC
 LIMIT $2 OFFSET $3;
 
 -- name: CreateInteraction :one
-INSERT INTO interaction (contact_id, source, source_ref, occurred_at, description, direction, venue_id)
+INSERT INTO interaction (contact_id, source, source_ref, occurred_at, description, direction, venue_id, interaction_node_id)
 VALUES (
     sqlc.arg('contact_id'),
     sqlc.arg('source'),
@@ -18,9 +18,25 @@ VALUES (
     sqlc.arg('occurred_at'),
     sqlc.narg('description'),
     COALESCE(sqlc.narg('direction'), 'mutual'),
-    sqlc.narg('venue_id')
+    sqlc.narg('venue_id'),
+    sqlc.narg('interaction_node_id')
 )
 RETURNING *;
+
+-- name: ResolveInteractionNode :one
+-- The observation step's resolution: finds or creates the interaction node of
+-- an observation by the per-source identity rule (resolve_interaction_node in
+-- migration 087, the one implementation). A burst source returns no row (no node).
+SELECT resolve_interaction_node(sqlc.arg('source')::text, sqlc.narg('source_ref')::text) AS node_id;
+
+-- name: AssignInteractionNode :exec
+-- Gives a row that has no interaction node its node, when a source observes it
+-- again. The IS NULL guard makes an assigned node permanent: this is the only
+-- statement besides the create insert that writes interaction_node_id.
+UPDATE interaction
+SET interaction_node_id = sqlc.arg('interaction_node_id')
+WHERE id = sqlc.arg('id')
+  AND interaction_node_id IS NULL;
 
 -- name: UpdateInteractionDirection :one
 -- Promote an outbound interaction to mutual when a reply arrives (in-place update)
@@ -201,15 +217,18 @@ ORDER BY source_ref;
 -- Test-only: inserts an interaction with a caller-supplied id, source, and
 -- source_ref and a NULL venue_id, bypassing the recorder. Used by the venue
 -- backfill migration test to stand up pre-existing (venue-less) interactions
--- that the 069 backfill then populates. Production code MUST NOT call this.
-INSERT INTO interaction (id, contact_id, source, source_ref, occurred_at, direction)
+-- that the 069 backfill then populates. It resolves the interaction node the
+-- way the recorder does, so a fixture row of a correctable source carries its
+-- node. Production code MUST NOT call this.
+INSERT INTO interaction (id, contact_id, source, source_ref, occurred_at, direction, interaction_node_id)
 VALUES (
     sqlc.arg('id'),
     sqlc.arg('contact_id'),
     sqlc.arg('source'),
     sqlc.narg('source_ref'),
     sqlc.arg('occurred_at'),
-    sqlc.arg('direction')
+    sqlc.arg('direction'),
+    (SELECT resolve_interaction_node(sqlc.arg('source')::text, sqlc.narg('source_ref')::text))
 )
 RETURNING *;
 

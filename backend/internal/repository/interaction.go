@@ -119,20 +119,24 @@ type Interaction struct {
 	Direction   string     `json:"direction"`
 	CreatedAt   time.Time  `json:"created_at"`
 	VenueID     *uuid.UUID `json:"venue_id,omitempty"`
+	// InteractionNodeID is the interaction node every observation of the same
+	// source object shares; nil for a message-burst observation. Assigned once
+	// by the observation step, never rewritten.
+	InteractionNodeID *uuid.UUID `json:"interaction_node_id,omitempty"`
 }
 
 // CreateInteractionRequest represents the request to create an interaction.
-//
-// Field layout MUST stay identical to RecordInteractionRequest — the service
-// constructs it via the direct type conversion CreateInteractionRequest(req).
+// InteractionNodeID is the observation step's result for this observation
+// (ObserveInteractionTx); nil for a message-burst source.
 type CreateInteractionRequest struct {
-	ContactID   uuid.UUID
-	Source      string
-	SourceRef   *string
-	OccurredAt  time.Time
-	Description *string
-	Direction   string
-	VenueID     *uuid.UUID
+	ContactID         uuid.UUID
+	Source            string
+	SourceRef         *string
+	OccurredAt        time.Time
+	Description       *string
+	Direction         string
+	VenueID           *uuid.UUID
+	InteractionNodeID *uuid.UUID
 }
 
 func convertDbInteraction(dbInteraction *db.Interaction) Interaction {
@@ -150,6 +154,7 @@ func convertDbInteraction(dbInteraction *db.Interaction) Interaction {
 	interaction.SourceRef = dbInteraction.SourceRef
 	interaction.Description = dbInteraction.Description
 	interaction.VenueID = dbInteraction.VenueID
+	interaction.InteractionNodeID = dbInteraction.InteractionNodeID
 
 	return interaction
 }
@@ -165,6 +170,19 @@ func interactionDirectionArg(direction string) interface{} {
 		return nil
 	}
 	return direction
+}
+
+// GetInteractionTx is the tx-bound variant of GetInteraction.
+func (r *InteractionRepository) GetInteractionTx(ctx context.Context, tx pgx.Tx, id uuid.UUID) (*Interaction, error) {
+	dbInteraction, err := db.New(tx).GetInteraction(ctx, id)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, db.ErrNotFound
+		}
+		return nil, err
+	}
+	interaction := convertDbInteraction(dbInteraction)
+	return &interaction, nil
 }
 
 // GetInteraction retrieves an interaction by ID
@@ -227,16 +245,25 @@ func (r *InteractionRepository) CountContactInteractionsFiltered(ctx context.Con
 	})
 }
 
-// CreateInteraction creates a new interaction record
+// CreateInteraction creates a new interaction record outside any transaction.
+// It is the fixture entry point: with no transaction to run the observation
+// step in, it resolves the observation's interaction node itself (the same
+// resolution the step makes) and ignores req.InteractionNodeID. Recording paths
+// run ObserveInteractionTx and CreateInteractionTx inside their write's tx.
 func (r *InteractionRepository) CreateInteraction(ctx context.Context, req CreateInteractionRequest) (*Interaction, error) {
+	nodeID, err := resolveInteractionNode(ctx, r.queries, req.Source, req.SourceRef)
+	if err != nil {
+		return nil, err
+	}
 	dbInteraction, err := r.queries.CreateInteraction(ctx, db.CreateInteractionParams{
-		ContactID:   req.ContactID,
-		Source:      req.Source,
-		SourceRef:   req.SourceRef,
-		OccurredAt:  req.OccurredAt,
-		Description: req.Description,
-		Direction:   interactionDirectionArg(req.Direction),
-		VenueID:     req.VenueID,
+		ContactID:         req.ContactID,
+		Source:            req.Source,
+		SourceRef:         req.SourceRef,
+		OccurredAt:        req.OccurredAt,
+		Description:       req.Description,
+		Direction:         interactionDirectionArg(req.Direction),
+		VenueID:           req.VenueID,
+		InteractionNodeID: nodeID,
 	})
 	if err != nil {
 		return nil, err
@@ -506,13 +533,14 @@ func (r *InteractionRepository) UpdateInteractionVenueTx(ctx context.Context, tx
 // with the interaction.recorded event row (spec §3.4.1).
 func (r *InteractionRepository) CreateInteractionTx(ctx context.Context, tx pgx.Tx, req CreateInteractionRequest) (*Interaction, error) {
 	dbInteraction, err := db.New(tx).CreateInteraction(ctx, db.CreateInteractionParams{
-		ContactID:   req.ContactID,
-		Source:      req.Source,
-		SourceRef:   req.SourceRef,
-		OccurredAt:  req.OccurredAt,
-		Description: req.Description,
-		Direction:   interactionDirectionArg(req.Direction),
-		VenueID:     req.VenueID,
+		ContactID:         req.ContactID,
+		Source:            req.Source,
+		SourceRef:         req.SourceRef,
+		OccurredAt:        req.OccurredAt,
+		Description:       req.Description,
+		Direction:         interactionDirectionArg(req.Direction),
+		VenueID:           req.VenueID,
+		InteractionNodeID: req.InteractionNodeID,
 	})
 	if err != nil {
 		return nil, err
