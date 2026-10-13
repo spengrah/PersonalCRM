@@ -451,6 +451,7 @@ type MessagesMessage struct {
 	ClaimedSessionRef *string    `json:"claimed_session_ref"`
 	DeletedAt         *time.Time `json:"deleted_at"`
 	CreatedAt         *time.Time `json:"created_at"`
+	CreditsReply      bool       `json:"credits_reply"`
 }
 
 type Node struct {

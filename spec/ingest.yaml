@@ -591,4 +591,4 @@ behaviors:
       - key: one-to-one-outbound-unchanged
         text: an outbound one-to-one message still names its peer and records its outbound interaction with its outreach effect
     provenance: [GroupBurstPromoter, IngestService.handleRawMessage, InteractionRecorder.HandleEvent, Engine.promoteIfReplied, messages_group_ingest_test.go, .agents/spec/2026-10-13-interaction-review-readiness.md]
-    notes: A group burst credits only the members who spoke in it, so the user's message reaches a member through the burst that member's own message made. A message the re-scan added or cleared (ING-042) is stored processed and is not read as a reply.
+    notes: A group burst credits only the members who spoke in it, so the user's message reaches a member through the burst that member's own message made. Only the user's own group message as ingest stores it credits a reply, recorded on the stored row (migration 086). A message the re-scan added or cleared (ING-042) never does, whatever its processing state, and ingesting an added guid again promotes nothing. The ingest and aggregation promotions read that one marker.

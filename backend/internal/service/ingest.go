@@ -845,8 +845,10 @@ func (s *IngestService) handleRawMessage(
 		ReplyToGuid:      p.ReplyToGuid,
 		MatchedContactID: contactID,
 		MacHostID:        &hostID,
+		CreditsReply:     outboundGroup,
 	}
-	if _, err := s.messages.UpsertMessageTx(ctx, tx, upsertParams); err != nil {
+	stored, err := s.messages.UpsertMessageTx(ctx, tx, upsertParams)
+	if err != nil {
 		return nil, &IngestPerEventRejection{
 			Code:    ingestRejectStagingUpsertFailed,
 			Message: fmt.Sprintf("upsert messages_message: %s", err.Error()),
@@ -854,7 +856,7 @@ func (s *IngestService) handleRawMessage(
 	}
 
 	if outboundGroup {
-		if err := s.groupBursts.PromoteContainingTx(ctx, tx, p.ChatID, p.SentAt); err != nil {
+		if err := s.groupBursts.PromoteContainingTx(ctx, tx, stored); err != nil {
 			return nil, &IngestPerEventRejection{
 				Code:    ingestRejectGroupPromotionFailed,
 				Message: fmt.Sprintf("promote containing group bursts: %s", err.Error()),

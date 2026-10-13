@@ -33,6 +33,7 @@ type MessagesMessage struct {
 	SentAt            time.Time
 	IsOutgoing        bool
 	IsGroupChat       bool
+	CreditsReply      bool
 	ReplyToGuid       *string
 	MatchedContactID  *uuid.UUID
 	InteractionID     *uuid.UUID
@@ -59,6 +60,10 @@ type UpsertMessagesMessageParams struct {
 	ReplyToGuid      *string
 	MatchedContactID *uuid.UUID
 	MacHostID        *uuid.UUID
+	// CreditsReply marks the user's own group message as ingest stores it: the
+	// only kind of row that reads as a reply to a member's inbound burst. A
+	// guid already stored keeps its own value.
+	CreditsReply bool
 }
 
 // MessagesMessageRepository wraps the sqlc-generated messages_message queries.
@@ -223,12 +228,12 @@ func (r *MessagesMessageRepository) ListGroupBurstWindows(ctx context.Context, f
 	return out, nil
 }
 
-// HasUnattributedGroupOutboundBetween reports whether a live outbound
-// group-chat message without member attribution that no pipeline step has
-// processed was sent inside the closed span (the state ingest stores the
-// user's group messages in, which R12 reads as the user's reply).
-func (r *MessagesMessageRepository) HasUnattributedGroupOutboundBetween(ctx context.Context, chatGuid string, from, to time.Time) (bool, error) {
-	return r.queries.ExistsMessagesUnattributedGroupOutbound(ctx, db.ExistsMessagesUnattributedGroupOutboundParams{
+// HasCreditingReplyBetween reports whether a live message that credits a reply
+// (the user's own group message as ingest stored it) was sent inside the closed
+// span of the chat. It is the one reply-eligibility decision, shared by the
+// ingest and aggregation promotion paths.
+func (r *MessagesMessageRepository) HasCreditingReplyBetween(ctx context.Context, chatGuid string, from, to time.Time) (bool, error) {
+	return r.queries.ExistsMessagesCreditingReply(ctx, db.ExistsMessagesCreditingReplyParams{
 		ChatGuid: chatGuid,
 		FromTime: from,
 		ToTime:   to,
@@ -285,6 +290,7 @@ func convertDbMessagesMessage(m *db.MessagesMessage) MessagesMessage {
 		IsOutgoing:  m.IsOutgoing,
 		IsGroupChat: m.IsGroupChat,
 	}
+	msg.CreditsReply = m.CreditsReply
 	msg.ID = m.ID
 	msg.PeerNormalized = m.PeerNormalized
 	msg.Text = m.Text
@@ -344,6 +350,7 @@ func buildUpsertMessagesMessageParams(params UpsertMessagesMessageParams) db.Ups
 		ReplyToGuid:      params.ReplyToGuid,
 		MatchedContactID: params.MatchedContactID,
 		MacHostID:        params.MacHostID,
+		CreditsReply:     params.CreditsReply,
 	}
 }
 

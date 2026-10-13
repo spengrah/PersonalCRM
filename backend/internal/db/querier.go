@@ -602,14 +602,14 @@ type Querier interface {
 	// InsertEventConsumerClaim's rows-inserted signal instead of polling.
 	ExistsEventConsumerClaim(ctx context.Context, arg ExistsEventConsumerClaimParams) (bool, error)
 	ExistsMeetingNote(ctx context.Context, id uuid.UUID) (bool, error)
+	// Whether a live message that credits a reply was sent inside the closed span
+	// of the chat. This is the one reply-eligibility decision: the ingest path
+	// (the stored row's own time) and the aggregation path (a burst's window) both
+	// read it. Only ingest of the user's own group message sets credits_reply, so
+	// a row the enrichment added or cleared is never eligible, whatever its
+	// processing state or attribution.
+	ExistsMessagesCreditingReply(ctx context.Context, arg ExistsMessagesCreditingReplyParams) (bool, error)
 	ExistsMessagesMessage(ctx context.Context, id uuid.UUID) (bool, error)
-	// Whether a live outbound group-chat message with no member attribution that
-	// no pipeline step has processed was sent inside the closed span. Ingest stores
-	// the user's group messages in exactly this state, and it is the state R12
-	// reads as the user's reply. A message the enrichment added is stored
-	// processed, and a cleared message was processed when it was linked to its
-	// burst, so neither reads as a reply.
-	ExistsMessagesUnattributedGroupOutbound(ctx context.Context, arg ExistsMessagesUnattributedGroupOutboundParams) (bool, error)
 	ExistsPhoneCall(ctx context.Context, id uuid.UUID) (bool, error)
 	ExistsTelegramMessage(ctx context.Context, id uuid.UUID) (bool, error)
 	// Sets the body of a stored, non-deleted row that has none. Touches nothing
@@ -1183,8 +1183,9 @@ type Querier interface {
 	InsertMeetingNote(ctx context.Context, arg InsertMeetingNoteParams) (*MeetingNote, error)
 	// Adds a group-chat message as evidence only: stored processed with no
 	// interaction link and no contact match, so no aggregation, sweep, promotion
-	// or rematch picks it up. The caller leaves peer_handle empty for the user's
-	// own message. Returns 0 rows when the guid is already stored.
+	// or rematch picks it up, and credits_reply stays false so it is never read as
+	// a reply. The caller leaves peer_handle empty for the user's own message.
+	// Returns 0 rows when the guid is already stored.
 	InsertMessagesGroupEvidenceMessage(ctx context.Context, arg InsertMessagesGroupEvidenceMessageParams) (int64, error)
 	// Assertion provenance queries (graph foundation).
 	//
@@ -3207,7 +3208,9 @@ type Querier interface {
 	UpsertIdentity(ctx context.Context, arg UpsertIdentityParams) (*ExternalIdentity, error)
 	// Insert with no-op on guid conflict. peer_normalized and matched_contact_id
 	// come from the Pi ingest service identity-match path. mac_host_id is
-	// provenance — multi-host dedup is by guid, not by host.
+	// provenance — multi-host dedup is by guid, not by host. credits_reply is set
+	// only when ingest stores the user's own group message; a conflict keeps the
+	// stored row's value, so the RETURNING row is what reply eligibility reads.
 	UpsertMessagesMessage(ctx context.Context, arg UpsertMessagesMessageParams) (*MessagesMessage, error)
 	// Insert or update an OAuth credential.
 	// refresh_token_nonce is kept in sync with refresh_token_encrypted: when a new

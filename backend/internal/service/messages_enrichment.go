@@ -304,7 +304,9 @@ type MutualPromoterTx interface {
 
 // GroupBurstPromoter applies R12: the user's group messages carry no member
 // attribution, so each member inbound burst whose window contains one becomes
-// mutual. It promotes at the burst's own occurred_at, so the burst keeps its
+// mutual. Whether a message is such a reply is the stored credits_reply marker,
+// read through MessagesMessageRepository.HasCreditingReplyBetween on both the
+// ingest and the aggregation path. It promotes at the burst's own occurred_at, so the burst keeps its
 // linked messages, window and time and its cadence effect is that of the
 // existing promotion to mutual. Windows come from the one derivation,
 // MessagesMessageRepository.ListGroupBurstWindows.
@@ -317,14 +319,25 @@ func NewGroupBurstPromoter(messages *repository.MessagesMessageRepository, promo
 	return &GroupBurstPromoter{messages: messages, promoter: promoter}
 }
 
-// PromoteContainingTx promotes every live inbound burst of the chat whose
-// window contains sentAt, the time of a user's group message just ingested.
-func (p *GroupBurstPromoter) PromoteContainingTx(ctx context.Context, tx pgx.Tx, chatGuid string, sentAt time.Time) error {
+// PromoteContainingTx promotes every live inbound burst of the stored row's
+// chat whose window contains the row's sent time, when the row credits a reply.
+// The row is the one the ingest upsert returned: for a guid already stored it
+// is the stored row, not the incoming payload, so a message the enrichment
+// added never promotes a burst by being ingested again.
+func (p *GroupBurstPromoter) PromoteContainingTx(ctx context.Context, tx pgx.Tx, stored *repository.MessagesMessage) error {
+	messages := p.messages.WithTx(tx)
+	credits, err := messages.HasCreditingReplyBetween(ctx, stored.ChatGuid, stored.SentAt, stored.SentAt)
+	if err != nil {
+		return fmt.Errorf("read reply eligibility: %w", err)
+	}
+	if !credits {
+		return nil
+	}
 	inbound := repository.InteractionDirectionInbound
-	windows, err := p.messages.WithTx(tx).ListGroupBurstWindows(ctx, repository.GroupBurstWindowFilter{
-		ChatGuid:   &chatGuid,
+	windows, err := messages.ListGroupBurstWindows(ctx, repository.GroupBurstWindowFilter{
+		ChatGuid:   &stored.ChatGuid,
 		Direction:  &inbound,
-		ContainsAt: &sentAt,
+		ContainsAt: &stored.SentAt,
 	})
 	if err != nil {
 		return fmt.Errorf("list bursts containing user message: %w", err)
@@ -333,8 +346,8 @@ func (p *GroupBurstPromoter) PromoteContainingTx(ctx context.Context, tx pgx.Tx,
 }
 
 // PromoteIfRepliedTx promotes the interaction when it is a live inbound burst
-// whose window now contains a user's group message. Callers run it after a
-// burst gained messages.
+// whose window now contains a message that credits a reply. Callers run it
+// after a burst gained messages.
 func (p *GroupBurstPromoter) PromoteIfRepliedTx(ctx context.Context, tx pgx.Tx, interactionID uuid.UUID) error {
 	inbound := repository.InteractionDirectionInbound
 	messages := p.messages.WithTx(tx)
@@ -347,9 +360,9 @@ func (p *GroupBurstPromoter) PromoteIfRepliedTx(ctx context.Context, tx pgx.Tx, 
 	}
 	var replied []repository.GroupBurstWindow
 	for _, w := range windows {
-		found, err := messages.HasUnattributedGroupOutboundBetween(ctx, w.ChatGuid, w.Start, w.End)
+		found, err := messages.HasCreditingReplyBetween(ctx, w.ChatGuid, w.Start, w.End)
 		if err != nil {
-			return fmt.Errorf("find user message in burst window: %w", err)
+			return fmt.Errorf("find reply in burst window: %w", err)
 		}
 		if found {
 			replied = append(replied, w)

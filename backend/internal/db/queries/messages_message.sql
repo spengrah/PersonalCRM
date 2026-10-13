@@ -1,15 +1,17 @@
 -- name: UpsertMessagesMessage :one
 -- Insert with no-op on guid conflict. peer_normalized and matched_contact_id
 -- come from the Pi ingest service identity-match path. mac_host_id is
--- provenance — multi-host dedup is by guid, not by host.
+-- provenance — multi-host dedup is by guid, not by host. credits_reply is set
+-- only when ingest stores the user's own group message; a conflict keeps the
+-- stored row's value, so the RETURNING row is what reply eligibility reads.
 INSERT INTO messages_message (
     guid, chat_guid, peer_handle, peer_normalized,
     text, message_type, sent_at, is_outgoing, is_group_chat,
-    reply_to_guid, matched_contact_id, mac_host_id
+    reply_to_guid, matched_contact_id, mac_host_id, credits_reply
 ) VALUES (
     @guid, @chat_guid, @peer_handle, @peer_normalized,
     @text, @message_type, @sent_at, @is_outgoing, @is_group_chat,
-    @reply_to_guid, @matched_contact_id, @mac_host_id
+    @reply_to_guid, @matched_contact_id, @mac_host_id, @credits_reply
 )
 ON CONFLICT (guid) DO UPDATE SET
     -- No-op update so RETURNING reliably returns the existing row. We
@@ -297,22 +299,17 @@ FROM matching
 WHERE chat_rank <= COALESCE(sqlc.narg(chat_limit)::int, 2147483647)
 ORDER BY chat_guid, window_start, window_end, interaction_id;
 
--- name: ExistsMessagesUnattributedGroupOutbound :one
--- Whether a live outbound group-chat message with no member attribution that
--- no pipeline step has processed was sent inside the closed span. Ingest stores
--- the user's group messages in exactly this state, and it is the state R12
--- reads as the user's reply. A message the enrichment added is stored
--- processed, and a cleared message was processed when it was linked to its
--- burst, so neither reads as a reply.
+-- name: ExistsMessagesCreditingReply :one
+-- Whether a live message that credits a reply was sent inside the closed span
+-- of the chat. This is the one reply-eligibility decision: the ingest path
+-- (the stored row's own time) and the aggregation path (a burst's window) both
+-- read it. Only ingest of the user's own group message sets credits_reply, so
+-- a row the enrichment added or cleared is never eligible, whatever its
+-- processing state or attribution.
 SELECT EXISTS (
     SELECT 1 FROM messages_message
     WHERE chat_guid = @chat_guid
-      AND is_group_chat
-      AND is_outgoing
-      AND peer_handle = ''
-      AND peer_normalized IS NULL
-      AND matched_contact_id IS NULL
-      AND processed_at IS NULL
+      AND credits_reply
       AND deleted_at IS NULL
       AND sent_at >= @from_time AND sent_at <= @to_time
 ) AS found;
@@ -324,8 +321,9 @@ SELECT EXISTS (SELECT 1 FROM messages_message WHERE guid = @guid) AS found;
 -- name: InsertMessagesGroupEvidenceMessage :execrows
 -- Adds a group-chat message as evidence only: stored processed with no
 -- interaction link and no contact match, so no aggregation, sweep, promotion
--- or rematch picks it up. The caller leaves peer_handle empty for the user's
--- own message. Returns 0 rows when the guid is already stored.
+-- or rematch picks it up, and credits_reply stays false so it is never read as
+-- a reply. The caller leaves peer_handle empty for the user's own message.
+-- Returns 0 rows when the guid is already stored.
 INSERT INTO messages_message (
     guid, chat_guid, peer_handle, text, message_type, sent_at,
     is_outgoing, is_group_chat, mac_host_id, processed_at
