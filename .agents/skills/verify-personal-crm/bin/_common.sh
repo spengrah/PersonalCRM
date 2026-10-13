@@ -41,7 +41,7 @@ verify_psql() {
   if [ "$mode" = docker ]; then
     docker exec -i crm-postgres psql -v ON_ERROR_STOP=1 -U crm_user -d "$db" "$@"
   elif [ "$mode" = worktree ]; then
-    psql -v ON_ERROR_STOP=1 "$(bash "$REPO_ROOT/scripts/e2e-pg.sh" url "$db")" "$@"
+    "$(bash "$REPO_ROOT/scripts/worktree-test-pg.sh" psql-bin)" -v ON_ERROR_STOP=1 "$(bash "$REPO_ROOT/scripts/e2e-pg.sh" url "$db")" "$@"
   else
     sudo -u postgres psql -v ON_ERROR_STOP=1 -d "$db" "$@"
   fi

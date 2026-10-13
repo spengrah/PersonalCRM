@@ -71,6 +71,7 @@ case "$MODE" in
       echo "Refusing to reset personal_crm_test in this checkout's own cluster: the integration-test harness owns it there. Use personal_crm_test_<suffix> (make e2e-db defaults to personal_crm_test_e2e here)." >&2
       exit 1
     fi
+    PSQL_BIN="$(bash "$SCRIPT_DIR/worktree-test-pg.sh" psql-bin)"
     ADMIN_URL="$(bash "$SCRIPT_DIR/e2e-pg.sh" url postgres)"
     TARGET_URL="$(bash "$SCRIPT_DIR/e2e-pg.sh" url "$DB_NAME")" ;;
   native)
@@ -85,7 +86,7 @@ psql_admin() {
   if [ "$MODE" = docker ]; then
     docker exec crm-postgres psql -v ON_ERROR_STOP=1 -U crm_user -d postgres "$@"
   elif [ "$MODE" = worktree ]; then
-    psql -v ON_ERROR_STOP=1 "$ADMIN_URL" "$@"
+    "$PSQL_BIN" -v ON_ERROR_STOP=1 "$ADMIN_URL" "$@"
   else
     sudo -u postgres psql -v ON_ERROR_STOP=1 "$@"
   fi
@@ -96,7 +97,7 @@ psql_target() {
   if [ "$MODE" = docker ]; then
     docker exec crm-postgres psql -v ON_ERROR_STOP=1 -U crm_user -d "$DB_NAME" "$@"
   elif [ "$MODE" = worktree ]; then
-    psql -v ON_ERROR_STOP=1 "$TARGET_URL" "$@"
+    "$PSQL_BIN" -v ON_ERROR_STOP=1 "$TARGET_URL" "$@"
   else
     sudo -u postgres psql -v ON_ERROR_STOP=1 -d "$DB_NAME" "$@"
   fi

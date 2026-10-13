@@ -33,6 +33,9 @@
 #   reap      Prune instances whose worktree no longer exists.
 #   status    Human-readable state of this worktree's instance.
 #   port      Print this worktree's resolved port (no side effects).
+#   psql-bin  Print the absolute path of the discovered Postgres 16 psql (no
+#             side effects); fails when no toolchain qualifies. Callers that
+#             talk to this cluster use it rather than whatever psql is on PATH.
 #
 # Env knobs:
 #   CRM_WORKTREE_PG       unset|1|auto -> auto + soft fallback (default)
@@ -875,6 +878,11 @@ cmd_port() {
   meta_get "$id" PORT 2>/dev/null || seed_port "$id"
 }
 
+cmd_psql_bin() {
+  local d; d=$(resolve_bindir) || { warn "no Postgres 16 toolchain found"; return 1; }
+  printf '%s/psql\n' "$d"
+}
+
 # ===========================================================================
 # Dispatch
 # ===========================================================================
@@ -896,8 +904,9 @@ main() {
     reap)     cmd_reap ;;
     status)   cmd_status ;;
     port)     cmd_port ;;
+    psql-bin) cmd_psql_bin ;;
     *)
-      echo "usage: worktree-test-pg.sh {url|active|ensure|stop|teardown|reap|status|port}" >&2
+      echo "usage: worktree-test-pg.sh {url|active|ensure|stop|teardown|reap|status|port|psql-bin}" >&2
       return 2
       ;;
   esac
