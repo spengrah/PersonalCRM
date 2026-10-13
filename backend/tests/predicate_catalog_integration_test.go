@@ -74,6 +74,11 @@ var expectedCuratedCatalog = map[string]expectedCuratedPredicate{
 	"traveling":        {"fact", "person", "", "bool", "single", false, "", "bounded", nil, i32p(30), 50, "auto-if-confident", "day"},
 	"occurrence":       {"fact", "person", "", "text", "multi", false, "", "bounded", nil, i32p(7), 80, "always-confirm", "day"},
 	"within":           {"edge", "place", "place", "", "single", false, "", "permanent", nil, nil, 30, "auto-if-confident", "none"},
+
+	// The correction predicates (migration 089).
+	"not_participant_in":   {"edge", "person", "interaction", "", "multi", false, "", "permanent", nil, nil, 50, "auto-if-confident", "none"},
+	"removed_for_everyone": {"fact", "interaction", "", "bool", "single", false, "", "permanent", nil, nil, 50, "auto-if-confident", "none"},
+	"same_interaction_as":  {"edge", "interaction", "interaction", "", "multi", false, "", "permanent", nil, nil, 50, "auto-if-confident", "none"},
 }
 
 // expectedCuratedSubtypes is the exact set of entity_type subtype keys the seed

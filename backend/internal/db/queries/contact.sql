@@ -319,12 +319,15 @@ FOR UPDATE NOWAIT;
 -- concurrent writer that committed while waiting for the contact lock (the
 -- FOR UPDATE retained below re-takes the held lock; the load-bearing
 -- serialization is the prior LockContactForDateRecompute statement).
+-- The aggregate reads effective participation (migration 089), so a
+-- participation a correction removed is never a remaining one, and a merged
+-- participation counts once at its own direction and time.
 WITH agg AS (
   SELECT
     MAX(occurred_at) FILTER (WHERE direction IN ('inbound','mutual'))  AS new_non_outbound,
     MAX(occurred_at) FILTER (WHERE direction IN ('outbound','mutual')) AS new_outreach
-  FROM interaction
-  WHERE contact_id = sqlc.arg(id) AND deleted_at IS NULL
+  FROM effective_participation
+  WHERE contact_id = sqlc.arg(id)
 ),
 locked AS (
   SELECT id, last_contacted, last_interaction_at, last_response_at,

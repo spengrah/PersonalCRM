@@ -249,7 +249,7 @@ behaviors:
     type: invariant
     status: current
     surface: none
-    statement: a node's single tombstone (deleted-at, set by contact deletion or merge) removes it from every live graph read — an assertion is only current/live when its subject node is live and, for an edge, its object node is live — and entity and venue subtype rows carry no tombstone of their own, inheriting liveness from their parent node; assertion rows themselves are retained as history.
+    statement: a node's single tombstone (deleted-at, set by contact deletion or a contact merge) removes it from every live graph read — an assertion is only current/live when its subject node is live and, for an edge, its object node is live — and entity, venue and interaction subtype rows carry no tombstone of their own, inheriting liveness from their parent node; assertion rows themselves are retained as history. An interaction-node merge sets the merged-away node's merge alias without a tombstone and moves no assertion, so the merged-away node and every assertion naming it stay live.
     provenance: [GetCurrentAccepted, ListLiveEdgesForNode, node.deleted_at, entity.sql]
     notes: This is why a deleted or merged-away contact's knowledge never resurfaces (see KNW-026); node soft-deletion itself is contact-domain scope (CON-010, CON-033).
 
@@ -283,7 +283,7 @@ behaviors:
       - repointed live rows announce their move with an event keyed per merge destination, so retrying the same merge is idempotent while a chained merge announces again
       - all implied single-cardinality slot locks are collected up front and acquired in sorted order
     provenance: [MergeAssertionsTx, planRepoint, applyRepoint, emitMergeMoveEvent]
-    notes: The domain boundary is intentional. CON-033 owns the merge-level contract (loser assertions repoint onto the winner node, before the field-selection apply so the user's choices win); this behavior owns the knowledge-side mechanics that bare repointing elides — re-canonicalization, proposition-identity recompute, winner-side collision resolution (accepted always survives), self-loop closure (KNW-022), slot re-competition (KNW-023), and per-destination merge events. When the graph merge runs relative to the field-selection apply is contact-domain scope — CON-033.
+    notes: The domain boundary is intentional. CON-033 owns the merge-level contract (loser assertions repoint onto the winner node, before the field-selection apply so the user's choices win); this behavior owns the knowledge-side mechanics that bare repointing elides — re-canonicalization, proposition-identity recompute, winner-side collision resolution (accepted always survives), self-loop closure (KNW-022), slot re-competition (KNW-023), and per-destination merge events. When the graph merge runs relative to the field-selection apply is contact-domain scope — CON-033. An interaction-node merge never runs this assertion merge; it only aliases the merged-away node, which keeps no tombstone, and every assertion stays on the node it names (KNW-019, KNW-036, KNW-037).
 
   - id: KNW-022
     title: Edges between the merging pair collapse and close
@@ -503,6 +503,31 @@ behaviors:
       - key: observation-names-only-interaction-node
         text: an observation can name only an interaction node, never a person, venue, or entity node
       - key: merge-alias
-        text: an interaction node merged into another aliases its winner through the registry's merge alias like any other node
+        text: an interaction node merged into another aliases its winner through the registry's merge alias, keeps no tombstone, and moves no assertion; an alias, once set, never changes
     provenance: [.agents/spec/2026-10-13-interaction-review-readiness.md]
     notes: Interaction nodes join the structural tier beside venues and entities. Corrections and claims about an interaction attach to the node in later behaviors of this domain.
+
+  - id: KNW-037
+    title: Corrections of interactions are user assertions and interaction-node merges
+    type: business-logic
+    status: current
+    surface: none
+    given: the user corrects interactions, by removing participants or merging interactions
+    when: the correction is recorded
+    then:
+      - key: removal-of-named-attendees-is-edge
+        text: removing a contact from a judged interaction node is an accepted assertion from the contact's person node to that node that the contact did not take part
+      - key: removal-for-everyone-is-fact
+        text: removing everyone from a judged interaction node is an accepted assertion on that node that it is removed for every participant, present and later-observed
+      - key: merge-is-alias-plus-declaration
+        text: merging one interaction into another aliases the merged-away root node to the winning root node and adds an accepted assertion that the merged-away root is the same interaction as the winner
+      - key: user-provenance-per-act
+        text: each correction assertion carries one user provenance locator naming the correction act, shared by every assertion that act writes
+      - key: reason-readable-per-removal
+        text: each removal assertion's provenance records the user's reason (duplicate, did not attend, did not happen) as a value a read can filter by
+      - key: judged-members-and-scope-stay-readable
+        text: the judged nodes, members and scope stay readable after any later merge, because a correction stays bound to the node it judged and a merge never rewrites an alias or an assertion
+      - key: raw-evidence-survives
+        text: no correction changes or removes an observation or a content row
+    provenance: [.agents/spec/2026-10-13-interaction-review-readiness.md]
+    notes: The correction predicates are marked in the predicate catalog, the one source of that set. Effective participation derives from observations, merge aliases and these accepted assertions alone (IXN-016, IXN-017, IXN-018); a proposed, rejected or retracted correction excludes nothing.

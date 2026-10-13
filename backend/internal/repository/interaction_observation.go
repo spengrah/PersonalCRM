@@ -36,7 +36,26 @@ type InteractionObservation struct {
 // once in SQL (resolve_interaction_node); this step holds no key derivation. A
 // row that already has a node keeps it. A live row that has none (a row
 // stored before migration 087's backfill) gets the node assigned here, once.
+//
+// Before it returns, the step takes the correction lock on the node, so the
+// write and its verdict read (ObservationVerdictTx) are serialized with any
+// correction of that node: a concurrent correction either commits first or
+// waits for this write's transaction.
 func (r *InteractionRepository) ObserveInteractionTx(ctx context.Context, tx pgx.Tx, obs InteractionObservation) (*uuid.UUID, error) {
+	q := db.New(tx)
+	nodeID, err := observeInteractionNode(ctx, q, obs)
+	if err != nil || nodeID == nil {
+		return nil, err
+	}
+	if err := acquireCorrectionLocks(ctx, q, []uuid.UUID{*nodeID}); err != nil {
+		return nil, err
+	}
+	return nodeID, nil
+}
+
+// observeInteractionNode resolves the observation's interaction node, assigning
+// it to an existing row that has none; nil for a message-burst source.
+func observeInteractionNode(ctx context.Context, q *db.Queries, obs InteractionObservation) (*uuid.UUID, error) {
 	source, sourceRef := obs.Source, obs.SourceRef
 	if obs.Existing != nil {
 		if obs.Existing.InteractionNodeID != nil {
@@ -44,7 +63,6 @@ func (r *InteractionRepository) ObserveInteractionTx(ctx context.Context, tx pgx
 		}
 		source, sourceRef = obs.Existing.Source, obs.Existing.SourceRef
 	}
-	q := db.New(tx)
 	nodeID, err := resolveInteractionNode(ctx, q, source, sourceRef)
 	if err != nil {
 		return nil, err

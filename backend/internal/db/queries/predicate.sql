@@ -10,7 +10,7 @@ SELECT
     key, kind, subject_type, object_type, value_type, cardinality, "symmetric",
     inverse_predicate, temporal_profile, base_rate_days, typical_duration_days,
     default_salience, default_review_policy, proposition_bucket, status,
-    description, synonyms, created_at
+    description, synonyms, correction, created_at
 FROM predicate WHERE key = $1;
 
 -- name: ListPredicatesByStatus :many
@@ -18,7 +18,7 @@ SELECT
     key, kind, subject_type, object_type, value_type, cardinality, "symmetric",
     inverse_predicate, temporal_profile, base_rate_days, typical_duration_days,
     default_salience, default_review_policy, proposition_bucket, status,
-    description, synonyms, created_at
+    description, synonyms, correction, created_at
 FROM predicate WHERE status = $1 ORDER BY key;
 
 -- name: ListCuratedPredicates :many
@@ -26,7 +26,7 @@ SELECT
     key, kind, subject_type, object_type, value_type, cardinality, "symmetric",
     inverse_predicate, temporal_profile, base_rate_days, typical_duration_days,
     default_salience, default_review_policy, proposition_bucket, status,
-    description, synonyms, created_at
+    description, synonyms, correction, created_at
 FROM predicate WHERE status = 'curated' ORDER BY key;
 
 -- name: CreatePredicate :one
@@ -46,4 +46,14 @@ RETURNING
     key, kind, subject_type, object_type, value_type, cardinality, "symmetric",
     inverse_predicate, temporal_profile, base_rate_days, typical_duration_days,
     default_salience, default_review_policy, proposition_bucket, status,
-    description, synonyms, created_at;
+    description, synonyms, correction, created_at;
+
+-- name: ListCorrectionPredicates :many
+-- The correction predicates (predicate.correction, migration 089): the one
+-- source of the set.
+SELECT
+    key, kind, subject_type, object_type, value_type, cardinality, "symmetric",
+    inverse_predicate, temporal_profile, base_rate_days, typical_duration_days,
+    default_salience, default_review_policy, proposition_bucket, status,
+    description, synonyms, correction, created_at
+FROM predicate WHERE correction ORDER BY key;

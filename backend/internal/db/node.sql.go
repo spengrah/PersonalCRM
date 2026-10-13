@@ -11,6 +11,56 @@ import (
 	"github.com/google/uuid"
 )
 
+const AcquireInteractionCorrectionLocks = `-- name: AcquireInteractionCorrectionLocks :exec
+SELECT pg_advisory_xact_lock(hashtextextended('interaction_correction:' || ids.id::text, 0))
+FROM (SELECT DISTINCT unnest($1::uuid[]) AS id ORDER BY 1) ids
+`
+
+// The correction lock: a transaction-scoped advisory lock keyed by interaction
+// node id, taken in id order so two holders of several never deadlock. The
+// observation step, every assertion write naming an interaction node, and the
+// corrections take it. The key namespace prefix keeps it apart from the other
+// hashtextextended advisory keys; a hash collision only over-serializes.
+func (q *Queries) AcquireInteractionCorrectionLocks(ctx context.Context, nodeIds []uuid.UUID) error {
+	_, err := q.db.Exec(ctx, AcquireInteractionCorrectionLocks, nodeIds)
+	return err
+}
+
+const AliasInteractionNode = `-- name: AliasInteractionNode :execrows
+UPDATE node
+SET merged_into = $1::uuid
+WHERE node.id = $2::uuid
+  AND node.id <> $1::uuid
+  AND node.type = 'interaction'
+  AND node.merged_into IS NULL
+  AND node.deleted_at IS NULL
+  AND EXISTS (
+      SELECT 1 FROM node w
+      WHERE w.id = $1::uuid
+        AND w.type = 'interaction'
+        AND w.merged_into IS NULL
+        AND w.deleted_at IS NULL)
+`
+
+type AliasInteractionNodeParams struct {
+	WinnerID uuid.UUID `json:"winner_id"`
+	LoserID  uuid.UUID `json:"loser_id"`
+}
+
+// The interaction-node merge write: aliases root interaction node loser_id to
+// the distinct root interaction node winner_id, and nothing else. The loser
+// keeps no tombstone (it stays its source object's identity) and no assertion,
+// observation or content row changes. Only a root (merged_into IS NULL) is
+// aliased, so an alias, once written, is never rewritten. Zero rows when the
+// pair is not two distinct live root interaction nodes.
+func (q *Queries) AliasInteractionNode(ctx context.Context, arg AliasInteractionNodeParams) (int64, error) {
+	result, err := q.db.Exec(ctx, AliasInteractionNode, arg.WinnerID, arg.LoserID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const CreateNode = `-- name: CreateNode :one
 
 INSERT INTO node (id, type, canonical_label)

@@ -455,6 +455,34 @@ func (q *Queries) FindRecentTelegramInteraction(ctx context.Context, arg FindRec
 	return &i, err
 }
 
+const GetEffectiveParticipationOfObservation = `-- name: GetEffectiveParticipationOfObservation :one
+SELECT contact_id, interaction_node_id, direction, occurred_at, members FROM effective_participation ep
+WHERE ep.contact_id = $1
+  AND ep.interaction_node_id IS NOT DISTINCT FROM $2::uuid
+  AND ep.members @> jsonb_build_array(jsonb_build_object('observation_id', $3::uuid))
+`
+
+type GetEffectiveParticipationOfObservationParams struct {
+	ContactID     uuid.UUID  `json:"contact_id"`
+	RootNodeID    *uuid.UUID `json:"root_node_id"`
+	ObservationID uuid.UUID  `json:"observation_id"`
+}
+
+// The contact's effective entry that holds the observation as a member. The
+// root qual (NULL for a message burst) narrows the derivation to that entry.
+func (q *Queries) GetEffectiveParticipationOfObservation(ctx context.Context, arg GetEffectiveParticipationOfObservationParams) (*EffectiveParticipation, error) {
+	row := q.db.QueryRow(ctx, GetEffectiveParticipationOfObservation, arg.ContactID, arg.RootNodeID, arg.ObservationID)
+	var i EffectiveParticipation
+	err := row.Scan(
+		&i.ContactID,
+		&i.InteractionNodeID,
+		&i.Direction,
+		&i.OccurredAt,
+		&i.Members,
+	)
+	return &i, err
+}
+
 const GetInteraction = `-- name: GetInteraction :one
 
 SELECT id, contact_id, source, source_ref, occurred_at, description, created_at, deleted_at, direction, venue_id, interaction_node_id FROM interaction WHERE id = $1 AND deleted_at IS NULL
@@ -477,6 +505,30 @@ func (q *Queries) GetInteraction(ctx context.Context, id uuid.UUID) (*Interactio
 		&i.VenueID,
 		&i.InteractionNodeID,
 	)
+	return &i, err
+}
+
+const GetObservationVerdict = `-- name: GetObservationVerdict :one
+SELECT
+    v.contact_id,
+    v.root_node_id,
+    v.excluded
+FROM interaction_observation_verdict v
+WHERE v.observation_id = $1
+`
+
+type GetObservationVerdictRow struct {
+	ContactID  uuid.UUID  `json:"contact_id"`
+	RootNodeID *uuid.UUID `json:"root_node_id"`
+	Excluded   bool       `json:"excluded"`
+}
+
+// Whether a correction excludes the live observation, with the contact and
+// root its effective entry is keyed by.
+func (q *Queries) GetObservationVerdict(ctx context.Context, observationID uuid.UUID) (*GetObservationVerdictRow, error) {
+	row := q.db.QueryRow(ctx, GetObservationVerdict, observationID)
+	var i GetObservationVerdictRow
+	err := row.Scan(&i.ContactID, &i.RootNodeID, &i.Excluded)
 	return &i, err
 }
 
@@ -503,11 +555,10 @@ func (q *Queries) HardDeleteInteractionsBySourceRefPrefix(ctx context.Context, a
 
 const HasResponseAfter = `-- name: HasResponseAfter :one
 SELECT EXISTS (
-    SELECT 1 FROM interaction
+    SELECT 1 FROM effective_participation
     WHERE contact_id = $1
       AND direction IN ('inbound', 'mutual')
-      AND occurred_at > $2
-      AND deleted_at IS NULL
+      AND occurred_at > $2::timestamptz
     LIMIT 1
 ) AS has_response
 `
@@ -517,10 +568,12 @@ type HasResponseAfterParams struct {
 	OutreachAt time.Time `json:"outreach_at"`
 }
 
-// Returns TRUE if any later inbound/mutual interaction exists for the
-// contact after the given outreach time. Used by the FollowUpManager's
+// Returns TRUE if any later inbound/mutual effective participation exists for
+// the contact after the given outreach time. Used by the FollowUpManager's
 // out-of-order guard: an outbound event arriving after a response has
 // already landed must not produce a stale follow-up.
+// Reads effective participation (migration 089), so a response a correction
+// removed is no response, and a merged participation answers as one.
 func (q *Queries) HasResponseAfter(ctx context.Context, arg HasResponseAfterParams) (bool, error) {
 	row := q.db.QueryRow(ctx, HasResponseAfter, arg.ContactID, arg.OutreachAt)
 	var has_response bool
@@ -640,6 +693,121 @@ func (q *Queries) ListContactInteractionsFiltered(ctx context.Context, arg ListC
 			&i.Direction,
 			&i.VenueID,
 			&i.InteractionNodeID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const ListEffectiveParticipationForContact = `-- name: ListEffectiveParticipationForContact :many
+
+SELECT contact_id, interaction_node_id, direction, occurred_at, members FROM effective_participation ep
+WHERE ep.contact_id = $1
+ORDER BY ep.occurred_at DESC, ep.members->0->>'observation_id'
+`
+
+// Effective participation reads (arc seam S4). Each reads the one derivation,
+// the effective_participation and interaction_observation_verdict views of
+// migration 089; none derives participation of its own.
+// One row per effective participation of the contact, latest first.
+func (q *Queries) ListEffectiveParticipationForContact(ctx context.Context, contactID uuid.UUID) ([]*EffectiveParticipation, error) {
+	rows, err := q.db.Query(ctx, ListEffectiveParticipationForContact, contactID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []*EffectiveParticipation{}
+	for rows.Next() {
+		var i EffectiveParticipation
+		if err := rows.Scan(
+			&i.ContactID,
+			&i.InteractionNodeID,
+			&i.Direction,
+			&i.OccurredAt,
+			&i.Members,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const ListInteractionAliasTree = `-- name: ListInteractionAliasTree :many
+SELECT n.id, n.merged_into
+FROM node n
+WHERE n.type = 'interaction'
+  AND n.id IN (
+      SELECT interaction_alias_tree(interaction_node_root($1::uuid)))
+  AND EXISTS (
+      SELECT 1 FROM node q WHERE q.id = $1::uuid AND q.type = 'interaction')
+ORDER BY n.id
+`
+
+type ListInteractionAliasTreeRow struct {
+	ID         uuid.UUID  `json:"id"`
+	MergedInto *uuid.UUID `json:"merged_into"`
+}
+
+// Every node of the alias tree that holds node_id, each with its own alias
+// (NULL for the root). No row when node_id names no interaction node.
+func (q *Queries) ListInteractionAliasTree(ctx context.Context, nodeID uuid.UUID) ([]*ListInteractionAliasTreeRow, error) {
+	rows, err := q.db.Query(ctx, ListInteractionAliasTree, nodeID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []*ListInteractionAliasTreeRow{}
+	for rows.Next() {
+		var i ListInteractionAliasTreeRow
+		if err := rows.Scan(&i.ID, &i.MergedInto); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const ListInteractionParticipants = `-- name: ListInteractionParticipants :many
+SELECT contact_id, interaction_node_id, direction, occurred_at, members FROM effective_participation ep
+WHERE ep.interaction_node_id = interaction_node_root($1::uuid)
+  AND ep.contact_id = ANY(ARRAY(
+      SELECT i.contact_id FROM interaction i
+      WHERE i.interaction_node_id IN (
+          SELECT interaction_alias_tree(interaction_node_root($1::uuid)))
+        AND i.deleted_at IS NULL))
+ORDER BY ep.contact_id
+`
+
+// The effective participants of the interaction whose alias tree holds
+// node_id (the root or any node merged into it), each with its entry for the
+// root. Only the contacts observed on the tree are derived.
+func (q *Queries) ListInteractionParticipants(ctx context.Context, nodeID uuid.UUID) ([]*EffectiveParticipation, error) {
+	rows, err := q.db.Query(ctx, ListInteractionParticipants, nodeID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []*EffectiveParticipation{}
+	for rows.Next() {
+		var i EffectiveParticipation
+		if err := rows.Scan(
+			&i.ContactID,
+			&i.InteractionNodeID,
+			&i.Direction,
+			&i.OccurredAt,
+			&i.Members,
 		); err != nil {
 			return nil, err
 		}

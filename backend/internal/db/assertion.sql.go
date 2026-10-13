@@ -489,6 +489,53 @@ func (q *Queries) InsertAssertion(ctx context.Context, arg InsertAssertionParams
 	return &i, err
 }
 
+const ListAcceptedSlotNodes = `-- name: ListAcceptedSlotNodes :many
+SELECT subject_node_id, object_node_id FROM assertion
+WHERE status = 'accepted'
+  AND knowledge_to IS NULL
+  AND predicate_key = $1
+  AND (
+        subject_node_id = ANY($2::uuid[])
+     OR ($3::bool AND object_node_id = ANY($2::uuid[]))
+      )
+`
+
+type ListAcceptedSlotNodesParams struct {
+	PredicateKey  string      `json:"predicate_key"`
+	Participants  []uuid.UUID `json:"participants"`
+	SymmetricSlot bool        `json:"symmetric_slot"`
+}
+
+type ListAcceptedSlotNodesRow struct {
+	SubjectNodeID uuid.UUID  `json:"subject_node_id"`
+	ObjectNodeID  *uuid.UUID `json:"object_node_id"`
+}
+
+// The nodes the accepted, knowledge-open rows of a single-cardinality slot name,
+// at any valid time and without a row lock: a write takes the correction lock
+// on them before the slot lock and the FindAcceptedForSlot row locks. An
+// asymmetric slot is (subject, predicate); a symmetric slot holds a row where
+// any participant appears in either position.
+func (q *Queries) ListAcceptedSlotNodes(ctx context.Context, arg ListAcceptedSlotNodesParams) ([]*ListAcceptedSlotNodesRow, error) {
+	rows, err := q.db.Query(ctx, ListAcceptedSlotNodes, arg.PredicateKey, arg.Participants, arg.SymmetricSlot)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []*ListAcceptedSlotNodesRow{}
+	for rows.Next() {
+		var i ListAcceptedSlotNodesRow
+		if err := rows.Scan(&i.SubjectNodeID, &i.ObjectNodeID); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const ListAssertionsBySubject = `-- name: ListAssertionsBySubject :many
 SELECT id, subject_node_id, predicate_key, object_node_id, value_text, value_num, value_date, value_bool, valid_from, valid_to, knowledge_from, knowledge_to, confidence, salience, status, closure_reason, superseded_by, trust_tier, proposition_key, created_at FROM assertion
 WHERE subject_node_id = $1
@@ -550,6 +597,60 @@ ORDER BY created_at, id
 // order so the live-row collision/supersession steps run reproducibly.
 func (q *Queries) ListAssertionsTouchingNode(ctx context.Context, subjectNodeID uuid.UUID) ([]*Assertion, error) {
 	rows, err := q.db.Query(ctx, ListAssertionsTouchingNode, subjectNodeID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []*Assertion{}
+	for rows.Next() {
+		var i Assertion
+		if err := rows.Scan(
+			&i.ID,
+			&i.SubjectNodeID,
+			&i.PredicateKey,
+			&i.ObjectNodeID,
+			&i.ValueText,
+			&i.ValueNum,
+			&i.ValueDate,
+			&i.ValueBool,
+			&i.ValidFrom,
+			&i.ValidTo,
+			&i.KnowledgeFrom,
+			&i.KnowledgeTo,
+			&i.Confidence,
+			&i.Salience,
+			&i.Status,
+			&i.ClosureReason,
+			&i.SupersededBy,
+			&i.TrustTier,
+			&i.PropositionKey,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const ListDueBoundedSuccessors = `-- name: ListDueBoundedSuccessors :many
+SELECT id, subject_node_id, predicate_key, object_node_id, value_text, value_num, value_date, value_bool, valid_from, valid_to, knowledge_from, knowledge_to, confidence, salience, status, closure_reason, superseded_by, trust_tier, proposition_key, created_at FROM assertion
+WHERE status = 'accepted'
+  AND knowledge_to IS NULL
+  AND superseded_by IS NOT NULL
+  AND valid_to IS NOT NULL
+  AND valid_to <= $1::timestamptz
+ORDER BY id
+`
+
+// The rollover job's candidates: the rows RolloverDueBoundedSuccessors would
+// terminalize, read without a row lock so the job can take their correction
+// locks before it updates them.
+func (q *Queries) ListDueBoundedSuccessors(ctx context.Context, now time.Time) ([]*Assertion, error) {
+	rows, err := q.db.Query(ctx, ListDueBoundedSuccessors, now)
 	if err != nil {
 		return nil, err
 	}
@@ -704,19 +805,26 @@ WHERE status = 'accepted'
   AND superseded_by IS NOT NULL
   AND valid_to IS NOT NULL
   AND valid_to <= $1
+  AND id = ANY($2::uuid[])
 RETURNING id, subject_node_id, predicate_key, object_node_id, value_text, value_num, value_date, value_bool, valid_from, valid_to, knowledge_from, knowledge_to, confidence, salience, status, closure_reason, superseded_by, trust_tier, proposition_key, created_at
 `
 
+type RolloverDueBoundedSuccessorsParams struct {
+	Now time.Time   `json:"now"`
+	Ids []uuid.UUID `json:"ids"`
+}
+
 // The rollover job: terminalize the bounded-with-pending-successor rows whose
-// bound has been reached. Scoped TIGHT — superseded_by IS NOT NULL excludes
+// bound has been reached, among the candidate ids the job locked (rows that
+// became due since are left for the next run). Scoped TIGHT — superseded_by IS NOT NULL excludes
 // successor-less historical accepted facts (which simply aren't current). Sets
 // status='superseded', closure_reason='superseded'. knowledge_to is
 // GREATEST(now, knowledge_from) so a row whose knowledge_from was set in the
 // future via a KnowledgeFromOverride does not violate the assertion_knowledge_range
 // CHECK and abort the whole sweep. Returns the updated rows so the caller can emit
 // one assertion.superseded event per row.
-func (q *Queries) RolloverDueBoundedSuccessors(ctx context.Context, now time.Time) ([]*Assertion, error) {
-	rows, err := q.db.Query(ctx, RolloverDueBoundedSuccessors, now)
+func (q *Queries) RolloverDueBoundedSuccessors(ctx context.Context, arg RolloverDueBoundedSuccessorsParams) ([]*Assertion, error) {
+	rows, err := q.db.Query(ctx, RolloverDueBoundedSuccessors, arg.Now, arg.Ids)
 	if err != nil {
 		return nil, err
 	}

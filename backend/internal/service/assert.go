@@ -384,18 +384,20 @@ func (s *AssertService) AssertTx(ctx context.Context, tx pgx.Tx, req AssertReque
 	// Determine the landing status (auto-apply vs always-confirm / force-confirm).
 	landingAccepted := predicate.DefaultReviewPolicy == repository.PredicateReviewAutoIfConfident && !req.ForceConfirm
 
-	// GLOBAL lock order — for a single-cardinality write that may land accepted,
-	// acquire the slot advisory lock(s) BEFORE any row read/lock (the dedup lookup
-	// below, the corroborate-upgrade row update, or writeNew's conflict probe). This
-	// keeps advisory-before-row across BOTH the match (corroborate→accept) and
-	// no-match (writeNew) paths, so a concurrent AcceptTx (which also locks advisory
-	// first) cannot deadlock against this tx. Re-acquisition deeper down is
-	// re-entrant (harmless). Multi-cardinality + proposed-landing writes take no slot
-	// lock.
+	// GLOBAL lock order — the correction locks, then, for a single-cardinality
+	// write that may land accepted, the slot advisory lock(s), all BEFORE any row
+	// read/lock (the dedup lookup below, the corroborate-upgrade row update, or
+	// writeNew's conflict probe). This keeps advisory-before-row across BOTH the
+	// match (corroborate→accept) and no-match (writeNew) paths, so a concurrent
+	// AcceptTx (which locks in the same order) cannot deadlock against this tx.
+	// Re-acquisition deeper down is re-entrant (harmless). Multi-cardinality +
+	// proposed-landing writes take no slot lock and close no slot row.
+	var slots []writeSlot
 	if landingAccepted && predicate.Cardinality == repository.PredicateCardinalitySingle {
-		if err := s.acquireSlotLocks(ctx, tx, predicate, canonKey, canonSubject, canonObject); err != nil {
-			return nil, err
-		}
+		slots = []writeSlot{{predicate, canonKey, canonSubject, canonObject}}
+	}
+	if err := s.lockForWrite(ctx, tx, correctionNodes(predicate, canonSubject, canonObject), slots); err != nil {
+		return nil, err
 	}
 
 	// Step 3: resolve proposition identity (dedup).
@@ -473,6 +475,9 @@ func (s *AssertService) validate(ctx context.Context, tx pgx.Tx, req *AssertRequ
 	if err := s.validateLocators(ctx, tx, predicate, req.Locators); err != nil {
 		return nil, "", uuid.Nil, nil, err
 	}
+	if err := validateCorrectionLocators(predicate, req.Locators); err != nil {
+		return nil, "", uuid.Nil, nil, err
+	}
 
 	// Degenerate-range guard (in validation, BEFORE the dedup lookup, so it fires
 	// even when an existing live row would otherwise corroborate): a now/unknown
@@ -522,12 +527,13 @@ func (s *AssertService) validateObjectType(ctx context.Context, tx pgx.Tx, objec
 }
 
 // matchNodeType checks a node against an expected predicate type token. The token
-// is 'person'/'venue' (a node type) OR an entity subtype (e.g. 'place', 'tag',
-// 'organization', 'topic'). For an entity node the subtype is resolved from the
-// entity row.
+// is 'person'/'venue'/'interaction' (a node type) OR an entity subtype (e.g.
+// 'place', 'tag', 'organization', 'topic'). For an entity node the subtype is
+// resolved from the entity row. An interaction node merged into another is not
+// tombstoned, so it validates like any live node.
 func (s *AssertService) matchNodeType(ctx context.Context, tx pgx.Tx, node *repository.Node, expected, role string) error {
 	switch node.Type {
-	case repository.NodeTypePerson, repository.NodeTypeVenue:
+	case repository.NodeTypePerson, repository.NodeTypeVenue, repository.NodeTypeInteraction:
 		if node.Type != expected {
 			return validationError("%s node type %q does not match predicate %s_type %q", role, node.Type, role, expected)
 		}
@@ -623,6 +629,49 @@ func (s *AssertService) validateLocators(ctx context.Context, tx pgx.Tx, predica
 	return nil
 }
 
+// correctionMergePredicate is the correction predicate a merge writes; every
+// other correction predicate is a removal.
+const correctionMergePredicate = "same_interaction_as"
+
+// correctionReasonField is the locator field a removal records its reason in.
+const correctionReasonField = "reason"
+
+// validateCorrectionLocators holds a write under a correction predicate (the
+// catalog's correction marker) to the correction representation (KNW-037): one
+// locator with source kind and producer kind user, whose source id names the
+// correction act, and, for a removal, the reason as field "reason" with quote
+// duplicate, did_not_attend or did_not_happen.
+func validateCorrectionLocators(predicate *repository.Predicate, locators []ProvenanceLocator) error {
+	if !predicate.Correction {
+		return nil
+	}
+	if len(locators) != 1 {
+		return validationError("correction predicate %q requires exactly one provenance locator, got %d", predicate.Key, len(locators))
+	}
+	loc := locators[0]
+	if loc.SourceKind != repository.SourceKindUser || loc.ProducerKind != repository.ProducerKindUser {
+		return validationError("correction predicate %q requires source_kind and producer_kind %q, got %q/%q",
+			predicate.Key, repository.SourceKindUser, loc.SourceKind, loc.ProducerKind)
+	}
+	if predicate.Key == correctionMergePredicate {
+		return nil
+	}
+	if loc.Field == nil || *loc.Field != correctionReasonField || loc.Quote == nil || !isRemovalReason(*loc.Quote) {
+		return validationError("removal predicate %q requires field %q with quote duplicate, did_not_attend or did_not_happen",
+			predicate.Key, correctionReasonField)
+	}
+	return nil
+}
+
+func isRemovalReason(reason string) bool {
+	switch reason {
+	case "duplicate", "did_not_attend", "did_not_happen":
+		return true
+	default:
+		return false
+	}
+}
+
 // hasAnyScalar reports whether any value_* field is set.
 func hasAnyScalar(req *AssertRequest) bool {
 	return scalarCount(req) > 0
@@ -677,7 +726,7 @@ func isValidSourceKind(k string) bool {
 // accepted — runs the step-4 supersession and transitions it to accepted.
 func (s *AssertService) corroborate(ctx context.Context, tx pgx.Tx, predicate *repository.Predicate, existing *repository.Assertion, req *AssertRequest, landingAccepted bool, now time.Time) (*repository.Assertion, error) {
 	// Append provenance + emit provenance_added per genuinely-new locator.
-	if err := s.appendProvenance(ctx, tx, existing, req.Locators); err != nil {
+	if err := s.appendProvenance(ctx, tx, predicate, existing, req.Locators); err != nil {
 		return nil, err
 	}
 
@@ -721,10 +770,41 @@ func (s *AssertService) corroborate(ctx context.Context, tx pgx.Tx, predicate *r
 	return existing, nil
 }
 
+// checkSameCorrectionAct rejects adding locators to correction assertion
+// existing once it carries one, unless every incoming locator is one it already
+// carries: a correction assertion carries the one locator of the act that wrote
+// it, so a different act cannot corroborate or widen it, and a retry of the same
+// act appends nothing.
+func (s *AssertService) checkSameCorrectionAct(ctx context.Context, tx pgx.Tx, predicate *repository.Predicate, existing *repository.Assertion, locators []ProvenanceLocator) error {
+	recorded, err := s.assertionRepo.ListProvenanceTx(ctx, tx, existing.ID)
+	if err != nil {
+		return fmt.Errorf("list correction provenance: %w", err)
+	}
+	if len(recorded) == 0 {
+		return nil
+	}
+	hashes := make(map[string]struct{}, len(recorded))
+	for i := range recorded {
+		hashes[recorded[i].LocatorHash] = struct{}{}
+	}
+	for _, loc := range locators {
+		if _, ok := hashes[computeLocatorHash(loc)]; !ok {
+			return validationError("correction predicate %q: assertion %s is already recorded by another correction act", predicate.Key, existing.ID)
+		}
+	}
+	return nil
+}
+
 // appendProvenance inserts each incoming locator (ON CONFLICT no-op) and emits
 // assertion.provenance_added only for a genuinely-new locator (the :execrows
-// affected count tells us), keyed by locator_hash for idempotency.
-func (s *AssertService) appendProvenance(ctx context.Context, tx pgx.Tx, assertion *repository.Assertion, locators []ProvenanceLocator) error {
+// affected count tells us), keyed by locator_hash for idempotency. A correction
+// assertion takes locators only from the act that wrote it.
+func (s *AssertService) appendProvenance(ctx context.Context, tx pgx.Tx, predicate *repository.Predicate, assertion *repository.Assertion, locators []ProvenanceLocator) error {
+	if predicate.Correction {
+		if err := s.checkSameCorrectionAct(ctx, tx, predicate, assertion, locators); err != nil {
+			return err
+		}
+	}
 	for _, loc := range locators {
 		hash := computeLocatorHash(loc)
 		inserted, err := s.assertionRepo.InsertProvenanceTx(ctx, tx, repository.InsertProvenanceParams{
@@ -867,7 +947,7 @@ func (s *AssertService) insertNewAndEmit(ctx context.Context, tx pgx.Tx, predica
 	if err := s.emitAssertionEvent(ctx, tx, createKind, inserted, now); err != nil {
 		return nil, false, err
 	}
-	if err := s.appendProvenance(ctx, tx, inserted, req.Locators); err != nil {
+	if err := s.appendProvenance(ctx, tx, predicate, inserted, req.Locators); err != nil {
 		return nil, false, err
 	}
 	return inserted, false, nil
@@ -992,7 +1072,7 @@ func (s *AssertService) widenReaffirmation(ctx context.Context, tx pgx.Tx, predi
 	for _, other := range same[1:] {
 		widenedFrom = minStart(widenedFrom, other.ValidFrom)
 		widenedTo = maxEnd(widenedTo, other.ValidTo)
-		if err := s.mergeSameValue(ctx, tx, other, survivor); err != nil {
+		if err := s.mergeSameValue(ctx, tx, predicate, other, survivor); err != nil {
 			return nil, err
 		}
 	}
@@ -1016,7 +1096,7 @@ func (s *AssertService) widenReaffirmation(ctx context.Context, tx pgx.Tx, predi
 			widenedTo = maxEnd(widenedTo, collider.ValidTo)
 			widenedReq.ValidFrom = widenedFrom
 			newKey = computePropositionKey(predicate, canonKey, canonSubject, canonObject, &widenedReq)
-			if err := s.mergeSameValue(ctx, tx, collider, survivor); err != nil {
+			if err := s.mergeSameValue(ctx, tx, predicate, collider, survivor); err != nil {
 				return nil, err
 			}
 			mergedCollider = collider
@@ -1078,7 +1158,7 @@ func (s *AssertService) widenReaffirmation(ctx context.Context, tx pgx.Tx, predi
 	existing.PropositionKey = newKey
 
 	// Append the corroborating provenance + re-aggregate confidence/trust.
-	if err := s.appendProvenance(ctx, tx, existing, req.Locators); err != nil {
+	if err := s.appendProvenance(ctx, tx, predicate, existing, req.Locators); err != nil {
 		return nil, err
 	}
 	newConfidence := existing.Confidence
@@ -1100,8 +1180,38 @@ func (s *AssertService) widenReaffirmation(ctx context.Context, tx pgx.Tx, predi
 // survivor: move the loser's provenance onto the survivor (ON CONFLICT no-op),
 // fold the loser's confidence (max) + trust_tier (strongest) into the survivor,
 // and close the loser superseded with superseded_by = survivor. Emits
-// provenance_added per moved locator + superseded for the loser.
-func (s *AssertService) mergeSameValue(ctx context.Context, tx pgx.Tx, loser, survivor *repository.Assertion) error {
+// provenance_added per moved locator + superseded for the loser. A correction
+// assertion carries only its own act's locator, so a correction loser is only
+// closed: its act and reason stay on the closed row, readable through
+// superseded_by.
+func (s *AssertService) mergeSameValue(ctx context.Context, tx pgx.Tx, predicate *repository.Predicate, loser, survivor *repository.Assertion) error {
+	if !predicate.Correction {
+		if err := s.foldIntoSurvivor(ctx, tx, loser, survivor); err != nil {
+			return err
+		}
+	}
+	now := accelerated.GetCurrentTime().UTC()
+	knowledgeTo := now
+	if loser.KnowledgeFrom.After(knowledgeTo) {
+		knowledgeTo = loser.KnowledgeFrom.UTC()
+	}
+	closure := repository.ClosureReasonSuperseded
+	if err := s.assertionRepo.CloseAssertionTx(ctx, tx, repository.CloseAssertionParams{
+		ID:            loser.ID,
+		ValidTo:       loser.ValidTo,
+		Status:        repository.AssertionStatusSuperseded,
+		ClosureReason: &closure,
+		SupersededBy:  &survivor.ID,
+		KnowledgeTo:   &knowledgeTo,
+	}); err != nil {
+		return fmt.Errorf("close merged loser: %w", err)
+	}
+	return s.emitAssertionEvent(ctx, tx, events.KindAssertionSuperseded, loser, now)
+}
+
+// foldIntoSurvivor moves the loser's provenance onto the survivor and folds the
+// loser's confidence and trust tier into it.
+func (s *AssertService) foldIntoSurvivor(ctx context.Context, tx pgx.Tx, loser, survivor *repository.Assertion) error {
 	provs, err := s.assertionRepo.ListProvenanceTx(ctx, tx, loser.ID)
 	if err != nil {
 		return fmt.Errorf("list loser provenance: %w", err)
@@ -1144,23 +1254,7 @@ func (s *AssertService) mergeSameValue(ctx context.Context, tx pgx.Tx, loser, su
 		survivor.Confidence = newConfidence
 		survivor.TrustTier = newTrust
 	}
-	now := accelerated.GetCurrentTime().UTC()
-	knowledgeTo := now
-	if loser.KnowledgeFrom.After(knowledgeTo) {
-		knowledgeTo = loser.KnowledgeFrom.UTC()
-	}
-	closure := repository.ClosureReasonSuperseded
-	if err := s.assertionRepo.CloseAssertionTx(ctx, tx, repository.CloseAssertionParams{
-		ID:            loser.ID,
-		ValidTo:       loser.ValidTo,
-		Status:        repository.AssertionStatusSuperseded,
-		ClosureReason: &closure,
-		SupersededBy:  &survivor.ID,
-		KnowledgeTo:   &knowledgeTo,
-	}); err != nil {
-		return fmt.Errorf("close merged loser: %w", err)
-	}
-	return s.emitAssertionEvent(ctx, tx, events.KindAssertionSuperseded, loser, now)
+	return nil
 }
 
 // closeConflicts closes each different-value overlapping prior for a present /
@@ -1286,7 +1380,7 @@ func (s *AssertService) resolveAcceptConflicts(ctx context.Context, tx pgx.Tx, p
 		for _, other := range same[1:] {
 			widenedFrom = minStart(widenedFrom, other.ValidFrom)
 			widenedTo = maxEnd(widenedTo, other.ValidTo)
-			if err := s.mergeSameValue(ctx, tx, other, survivor); err != nil {
+			if err := s.mergeSameValue(ctx, tx, predicate, other, survivor); err != nil {
 				return nil, false, err
 			}
 		}
@@ -1335,7 +1429,7 @@ func (s *AssertService) resolveAcceptConflicts(ctx context.Context, tx pgx.Tx, p
 		// MERGE/close the accepting (loser) row FIRST so it is no longer live —
 		// otherwise WidenAssertionValidity could assign the survivor a key the still-
 		// live accepting row holds and 23505 on idx_assertion_live_proposition.
-		if err := s.mergeSameValue(ctx, tx, accepting, survivor); err != nil {
+		if err := s.mergeSameValue(ctx, tx, predicate, accepting, survivor); err != nil {
 			return nil, false, err
 		}
 		if err := s.assertionRepo.WidenAssertionValidityTx(ctx, tx, survivor.ID, survivor.ValidFrom, survivor.ValidTo, newKey); err != nil {
@@ -1429,6 +1523,9 @@ func (s *AssertService) AssertClosureTx(ctx context.Context, tx pgx.Tx, req Clos
 		return fmt.Errorf("load predicate: %w", err)
 	}
 	now := accelerated.GetCurrentTime().UTC()
+	if err := s.lockCorrectionNodes(ctx, tx, predicate, req.SubjectNodeID, nil); err != nil {
+		return err
+	}
 	// Close the current accepted row for the slot (the subject's own slot; a
 	// closure targets the subject's predicate directly, not the canonical edge —
 	// closure is a fact/single-edge concept and the read uses subject+predicate).
@@ -1438,6 +1535,9 @@ func (s *AssertService) AssertClosureTx(ctx context.Context, tx pgx.Tx, req Clos
 			return nil // already a gap; nothing to close (idempotent)
 		}
 		return fmt.Errorf("load current for closure: %w", err)
+	}
+	if err := s.lockCorrectionNodes(ctx, tx, predicate, current.SubjectNodeID, current.ObjectNodeID); err != nil {
+		return err
 	}
 	// knowledge_to >= the closed row's knowledge_from (a future KnowledgeFromOverride
 	// could otherwise push knowledge_from past now → assertion_knowledge_range CHECK).
@@ -1498,11 +1598,13 @@ func (s *AssertService) AcceptTx(ctx context.Context, tx pgx.Tx, assertionID uui
 	if err != nil {
 		return nil, fmt.Errorf("load predicate: %w", err)
 	}
+	var slots []writeSlot
 	if predicate.Cardinality == repository.PredicateCardinalitySingle {
 		canonKey, canonSubject, canonObject := canonicalEdge(predicate, pre.SubjectNodeID, pre.ObjectNodeID)
-		if err := s.acquireSlotLocks(ctx, tx, predicate, canonKey, canonSubject, canonObject); err != nil {
-			return nil, err
-		}
+		slots = []writeSlot{{predicate, canonKey, canonSubject, canonObject}}
+	}
+	if err := s.lockForWrite(ctx, tx, correctionNodes(predicate, pre.SubjectNodeID, pre.ObjectNodeID), slots); err != nil {
+		return nil, err
 	}
 	// Now row-lock so the proposed-status check + the accept are atomic vs a
 	// concurrent Accept/Reject of the same row (re-read under the lock; a concurrent
@@ -1565,6 +1667,19 @@ func (s *AssertService) terminalTransition(ctx context.Context, assertionID uuid
 		}
 	}()
 	now := accelerated.GetCurrentTime().UTC()
+	// The correction lock before the row lock (the global order): a plain read
+	// names the nodes, which never change on a row.
+	pre, err := s.assertionRepo.GetAssertionTx(ctx, tx, assertionID)
+	if err != nil {
+		return nil, err
+	}
+	predicate, err := s.predicateRepo.GetPredicateTx(ctx, tx, pre.PredicateKey)
+	if err != nil {
+		return nil, fmt.Errorf("load predicate: %w", err)
+	}
+	if err := s.lockCorrectionNodes(ctx, tx, predicate, pre.SubjectNodeID, pre.ObjectNodeID); err != nil {
+		return nil, err
+	}
 	// Row-lock so the from-status check + the update are atomic (a concurrent
 	// Accept/Reject on the same row blocks here, so they cannot both succeed).
 	assertion, err := s.assertionRepo.GetAssertionForUpdateTx(ctx, tx, assertionID)
@@ -1621,7 +1736,27 @@ func (s *AssertService) RunRollover(ctx context.Context) (rolledOver int, err er
 		}
 	}()
 	now := accelerated.GetCurrentTime().UTC()
-	rows, err := s.assertionRepo.RolloverDueBoundedSuccessorsTx(ctx, tx, now)
+	// The correction lock on every candidate's interaction nodes before any
+	// candidate row is updated (the global order), then the update limited to the
+	// locked candidates, so no row is closed without its nodes' locks.
+	candidates, err := s.assertionRepo.ListDueBoundedSuccessorsTx(ctx, tx, now)
+	if err != nil {
+		return 0, fmt.Errorf("list due bounded successors: %w", err)
+	}
+	lockNodes := make(map[uuid.UUID]struct{})
+	ids := make([]uuid.UUID, 0, len(candidates))
+	for i := range candidates {
+		predicate, err := s.predicateRepo.GetPredicateTx(ctx, tx, candidates[i].PredicateKey)
+		if err != nil {
+			return 0, fmt.Errorf("load predicate %q for rollover: %w", candidates[i].PredicateKey, err)
+		}
+		collectCorrectionNodes(lockNodes, predicate, candidates[i].SubjectNodeID, candidates[i].ObjectNodeID)
+		ids = append(ids, candidates[i].ID)
+	}
+	if err := s.acquireCorrectionLocks(ctx, tx, lockNodes); err != nil {
+		return 0, err
+	}
+	rows, err := s.assertionRepo.RolloverDueBoundedSuccessorsTx(ctx, tx, now, ids)
 	if err != nil {
 		return 0, fmt.Errorf("rollover due bounded successors: %w", err)
 	}
@@ -1712,24 +1847,28 @@ func (s *AssertService) MergeAssertionsTx(ctx context.Context, tx pgx.Tx, loser,
 	// Pass 1: rewrite + recompute, and collect the slot locks the LIVE
 	// single-cardinality rows imply.
 	plans := make([]repointedAssertion, 0, len(rows))
-	lockKeys := make(map[int64]struct{})
+	var slots []writeSlot
+	lockNodes := make(map[uuid.UUID]struct{})
 	for i := range rows {
 		plan, err := s.planRepoint(ctx, tx, &rows[i], loser, winner)
 		if err != nil {
 			return err
 		}
 		plans = append(plans, plan)
+		// The row's nodes before and after the re-point: a winner-side collider
+		// names the latter.
+		collectCorrectionNodes(lockNodes, plan.predicate, rows[i].SubjectNodeID, rows[i].ObjectNodeID)
+		collectCorrectionNodes(lockNodes, plan.predicate, plan.canonSubject, plan.canonObject)
 		// A self-loop row is closed, not re-pointed into a slot, so it implies no lock.
 		if plan.live && !plan.selfLoop && plan.predicate.Cardinality == repository.PredicateCardinalitySingle {
-			for _, k := range slotLockKeysFor(plan.predicate, plan.canonKey, plan.canonSubject, plan.canonObject) {
-				lockKeys[k] = struct{}{}
-			}
+			slots = append(slots, writeSlot{plan.predicate, plan.canonKey, plan.canonSubject, plan.canonObject})
 		}
 	}
 
-	// Acquire every implied slot lock in sorted order (deadlock-safe across
-	// concurrent asserts touching any affected slot).
-	if err := s.acquireSortedSlotLocks(ctx, tx, lockKeys); err != nil {
+	// The correction lock on every interaction node a re-pointed row, a collider
+	// or a slot row names, then every implied slot lock in sorted order
+	// (deadlock-safe across concurrent asserts touching any affected slot).
+	if err := s.lockForWrite(ctx, tx, lockNodes, slots); err != nil {
 		return err
 	}
 
@@ -1825,9 +1964,9 @@ func (s *AssertService) applyRepoint(ctx context.Context, tx pgx.Tx, plan *repoi
 		loserWins := plan.row.Status == repository.AssertionStatusAccepted &&
 			collider.Status == repository.AssertionStatusProposed
 		if !loserWins {
-			return s.mergeSameValue(ctx, tx, plan.row, collider)
+			return s.mergeSameValue(ctx, tx, plan.predicate, plan.row, collider)
 		}
-		if err := s.mergeSameValue(ctx, tx, collider, plan.row); err != nil {
+		if err := s.mergeSameValue(ctx, tx, plan.predicate, collider, plan.row); err != nil {
 			return err
 		}
 		if err := s.repointRow(ctx, tx, plan); err != nil {
@@ -1942,7 +2081,7 @@ func (s *AssertService) widenMergedSurvivor(ctx context.Context, tx pgx.Tx, plan
 				pendingSuccessor = other.SupersededBy
 			}
 		}
-		if err := s.mergeSameValue(ctx, tx, other, survivor); err != nil {
+		if err := s.mergeSameValue(ctx, tx, plan.predicate, other, survivor); err != nil {
 			return nil, err
 		}
 	}
@@ -2065,7 +2204,7 @@ func (s *AssertService) repointWithRecover(ctx context.Context, tx pgx.Tx, plan 
 			if ferr != nil {
 				return false, fmt.Errorf("re-find collider after merge repoint conflict: %w", ferr)
 			}
-			if err := s.mergeSameValue(ctx, tx, plan.row, collider); err != nil {
+			if err := s.mergeSameValue(ctx, tx, plan.predicate, plan.row, collider); err != nil {
 				return false, err
 			}
 			return true, nil
@@ -2135,6 +2274,135 @@ func slotLockKeysFor(predicate *repository.Predicate, canonKey string, canonSubj
 	return []int64{slotLockKey(canonKey, canonSubject)}
 }
 
+// lockCorrectionNodes takes the correction lock on each interaction node an
+// assertion under predicate names, before the caller writes the assertion, so
+// every assertion write is serialized with the corrections of those nodes.
+func (s *AssertService) lockCorrectionNodes(ctx context.Context, tx pgx.Tx, predicate *repository.Predicate, subject uuid.UUID, object *uuid.UUID) error {
+	return s.acquireCorrectionLocks(ctx, tx, correctionNodes(predicate, subject, object))
+}
+
+// correctionNodes returns the interaction nodes an assertion under predicate
+// names.
+func correctionNodes(predicate *repository.Predicate, subject uuid.UUID, object *uuid.UUID) map[uuid.UUID]struct{} {
+	nodes := make(map[uuid.UUID]struct{})
+	collectCorrectionNodes(nodes, predicate, subject, object)
+	return nodes
+}
+
+// collectCorrectionNodes adds the interaction nodes an assertion under predicate
+// names to nodes. When the predicate names interaction in either role, both of
+// the assertion's nodes are added: inverse canonicalization swaps a stored
+// row's positions, so the position does not say which node is the interaction
+// node, and a lock on the other node only over-serializes.
+func collectCorrectionNodes(nodes map[uuid.UUID]struct{}, predicate *repository.Predicate, subject uuid.UUID, object *uuid.UUID) {
+	if !namesInteraction(predicate) {
+		return
+	}
+	nodes[subject] = struct{}{}
+	if object != nil {
+		nodes[*object] = struct{}{}
+	}
+}
+
+// namesInteraction reports whether predicate names the interaction node type
+// in either role.
+func namesInteraction(predicate *repository.Predicate) bool {
+	return predicate.SubjectType == repository.NodeTypeInteraction ||
+		(predicate.ObjectType != nil && *predicate.ObjectType == repository.NodeTypeInteraction)
+}
+
+// writeSlot is one single-cardinality slot whose accepted rows a write may
+// supersede, merge or widen.
+type writeSlot struct {
+	predicate    *repository.Predicate
+	canonKey     string
+	canonSubject uuid.UUID
+	canonObject  *uuid.UUID
+}
+
+// lockForWrite takes the locks a write needs, in the global order: the
+// correction lock on nodes and on every interaction node an accepted row of
+// slots names, then the slot locks; the write's row locks come after. So no
+// assertion the write changes or closes, its own or a slot row it supersedes or
+// merges, is written without the correction lock on its interaction nodes. A
+// row that enters a slot after its nodes are read is found under the slot
+// locks; the slot locks taken here are then released (a savepoint rollback) and
+// the round repeats with that row's nodes, so this call never takes a
+// correction lock while holding a slot lock it took.
+func (s *AssertService) lockForWrite(ctx context.Context, tx pgx.Tx, nodes map[uuid.UUID]struct{}, slots []writeSlot) error {
+	if err := s.collectSlotCorrectionNodes(ctx, tx, nodes, slots); err != nil {
+		return err
+	}
+	keys := make(map[int64]struct{})
+	for _, sl := range slots {
+		for _, k := range slotLockKeysFor(sl.predicate, sl.canonKey, sl.canonSubject, sl.canonObject) {
+			keys[k] = struct{}{}
+		}
+	}
+	for {
+		if err := s.acquireCorrectionLocks(ctx, tx, nodes); err != nil {
+			return err
+		}
+		if len(keys) == 0 {
+			return nil
+		}
+		sp, err := tx.Begin(ctx)
+		if err != nil {
+			return fmt.Errorf("begin slot-lock savepoint: %w", err)
+		}
+		known := len(nodes)
+		err = s.acquireSortedSlotLocks(ctx, sp, keys)
+		if err == nil {
+			err = s.collectSlotCorrectionNodes(ctx, sp, nodes, slots)
+		}
+		if err == nil && len(nodes) == known {
+			if err := sp.Commit(ctx); err != nil {
+				return fmt.Errorf("release slot-lock savepoint: %w", err)
+			}
+			return nil
+		}
+		if rbErr := sp.Rollback(ctx); rbErr != nil {
+			return fmt.Errorf("roll back slot-lock savepoint: %w", rbErr)
+		}
+		if err != nil {
+			return err
+		}
+	}
+}
+
+// collectSlotCorrectionNodes adds the interaction nodes the accepted rows of
+// each slot name to nodes.
+func (s *AssertService) collectSlotCorrectionNodes(ctx context.Context, tx pgx.Tx, nodes map[uuid.UUID]struct{}, slots []writeSlot) error {
+	for _, sl := range slots {
+		if !namesInteraction(sl.predicate) {
+			continue
+		}
+		symmetric := sl.predicate.Symmetric && sl.canonObject != nil
+		participants := []uuid.UUID{sl.canonSubject}
+		if symmetric {
+			participants = append(participants, *sl.canonObject)
+		}
+		rows, err := s.assertionRepo.ListAcceptedSlotNodesTx(ctx, tx, sl.canonKey, symmetric, participants)
+		if err != nil {
+			return fmt.Errorf("list slot nodes: %w", err)
+		}
+		for _, row := range rows {
+			collectCorrectionNodes(nodes, sl.predicate, row.SubjectNodeID, row.ObjectNodeID)
+		}
+	}
+	return nil
+}
+
+// acquireCorrectionLocks takes the correction lock on every collected node in
+// one call (the lock query orders them, deadlock-safe).
+func (s *AssertService) acquireCorrectionLocks(ctx context.Context, tx pgx.Tx, nodes map[uuid.UUID]struct{}) error {
+	ids := make([]uuid.UUID, 0, len(nodes))
+	for id := range nodes {
+		ids = append(ids, id)
+	}
+	return s.nodeRepo.AcquireCorrectionLocksTx(ctx, tx, ids...)
+}
+
 // acquireSortedSlotLocks takes every collected slot lock in ascending key order
 // (deadlock-safe).
 func (s *AssertService) acquireSortedSlotLocks(ctx context.Context, tx pgx.Tx, keys map[int64]struct{}) error {
@@ -2145,7 +2413,7 @@ func (s *AssertService) acquireSortedSlotLocks(ctx context.Context, tx pgx.Tx, k
 	sort.Slice(ordered, func(i, j int) bool { return ordered[i] < ordered[j] })
 	for _, k := range ordered {
 		if err := s.assertionRepo.AcquirePropositionSlotLockTx(ctx, tx, k); err != nil {
-			return fmt.Errorf("acquire merge slot lock: %w", err)
+			return fmt.Errorf("acquire slot lock: %w", err)
 		}
 	}
 	return nil

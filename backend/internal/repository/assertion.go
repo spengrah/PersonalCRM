@@ -370,6 +370,31 @@ func (r *AssertionRepository) FindAcceptedForSlotSymmetricTx(ctx context.Context
 	return dbAssertionsToDomain(rows), nil
 }
 
+// SlotRowNodes is the node pair one assertion row names.
+type SlotRowNodes struct {
+	SubjectNodeID uuid.UUID
+	ObjectNodeID  *uuid.UUID
+}
+
+// ListAcceptedSlotNodesTx returns the nodes the accepted, knowledge-open rows of
+// a single-cardinality slot name, at any valid time and without a row lock.
+// participants is the slot's subject, or a symmetric slot's two participants.
+func (r *AssertionRepository) ListAcceptedSlotNodesTx(ctx context.Context, tx pgx.Tx, predicateKey string, symmetric bool, participants []uuid.UUID) ([]SlotRowNodes, error) {
+	rows, err := db.New(tx).ListAcceptedSlotNodes(ctx, db.ListAcceptedSlotNodesParams{
+		PredicateKey:  predicateKey,
+		Participants:  participants,
+		SymmetricSlot: symmetric,
+	})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]SlotRowNodes, len(rows))
+	for i, row := range rows {
+		out[i] = SlotRowNodes{SubjectNodeID: row.SubjectNodeID, ObjectNodeID: row.ObjectNodeID}
+	}
+	return out, nil
+}
+
 // CloseAssertion terminalizes an assertion (present-successor / closure-only /
 // retract / rollover paths).
 func (r *AssertionRepository) CloseAssertion(ctx context.Context, p CloseAssertionParams) error {
@@ -423,22 +448,33 @@ func (r *AssertionRepository) WidenAssertionValidityTx(ctx context.Context, tx p
 	})
 }
 
+// ListDueBoundedSuccessorsTx returns the rows whose rollover is due (the
+// candidates RolloverDueBoundedSuccessorsTx may terminalize), without locking
+// them.
+func (r *AssertionRepository) ListDueBoundedSuccessorsTx(ctx context.Context, tx pgx.Tx, now time.Time) ([]Assertion, error) {
+	rows, err := db.New(tx).ListDueBoundedSuccessors(ctx, now)
+	if err != nil {
+		return nil, err
+	}
+	return dbAssertionsToDomain(rows), nil
+}
+
 // RolloverDueBoundedSuccessors terminalizes the bounded-with-pending-successor
-// rows whose bound has passed (knowledgeTo = now), returning the updated rows so
-// the caller can emit one assertion.superseded event per row.
-func (r *AssertionRepository) RolloverDueBoundedSuccessors(ctx context.Context, knowledgeTo time.Time) ([]Assertion, error) {
-	return rolloverDueBoundedSuccessors(ctx, r.queries, knowledgeTo)
+// rows among ids whose bound has passed (knowledgeTo = now), returning the
+// updated rows so the caller can emit one assertion.superseded event per row.
+func (r *AssertionRepository) RolloverDueBoundedSuccessors(ctx context.Context, knowledgeTo time.Time, ids []uuid.UUID) ([]Assertion, error) {
+	return rolloverDueBoundedSuccessors(ctx, r.queries, knowledgeTo, ids)
 }
 
 // RolloverDueBoundedSuccessorsTx is the tx-bound variant of
 // RolloverDueBoundedSuccessors (the rollover worker runs the terminal flip + its
 // per-row event publish in one tx).
-func (r *AssertionRepository) RolloverDueBoundedSuccessorsTx(ctx context.Context, tx pgx.Tx, knowledgeTo time.Time) ([]Assertion, error) {
-	return rolloverDueBoundedSuccessors(ctx, db.New(tx), knowledgeTo)
+func (r *AssertionRepository) RolloverDueBoundedSuccessorsTx(ctx context.Context, tx pgx.Tx, knowledgeTo time.Time, ids []uuid.UUID) ([]Assertion, error) {
+	return rolloverDueBoundedSuccessors(ctx, db.New(tx), knowledgeTo, ids)
 }
 
-func rolloverDueBoundedSuccessors(ctx context.Context, q db.Querier, knowledgeTo time.Time) ([]Assertion, error) {
-	rows, err := q.RolloverDueBoundedSuccessors(ctx, knowledgeTo)
+func rolloverDueBoundedSuccessors(ctx context.Context, q db.Querier, knowledgeTo time.Time, ids []uuid.UUID) ([]Assertion, error) {
+	rows, err := q.RolloverDueBoundedSuccessors(ctx, db.RolloverDueBoundedSuccessorsParams{Now: knowledgeTo, Ids: ids})
 	if err != nil {
 		return nil, err
 	}

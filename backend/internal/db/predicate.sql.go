@@ -23,7 +23,7 @@ RETURNING
     key, kind, subject_type, object_type, value_type, cardinality, "symmetric",
     inverse_predicate, temporal_profile, base_rate_days, typical_duration_days,
     default_salience, default_review_policy, proposition_bucket, status,
-    description, synonyms, created_at
+    description, synonyms, correction, created_at
 `
 
 type CreatePredicateParams struct {
@@ -64,6 +64,7 @@ type CreatePredicateRow struct {
 	Status              string    `json:"status"`
 	Description         string    `json:"description"`
 	Synonyms            []string  `json:"synonyms"`
+	Correction          bool      `json:"correction"`
 	CreatedAt           time.Time `json:"created_at"`
 }
 
@@ -110,6 +111,7 @@ func (q *Queries) CreatePredicate(ctx context.Context, arg CreatePredicateParams
 		&i.Status,
 		&i.Description,
 		&i.Synonyms,
+		&i.Correction,
 		&i.CreatedAt,
 	)
 	return &i, err
@@ -121,7 +123,7 @@ SELECT
     key, kind, subject_type, object_type, value_type, cardinality, "symmetric",
     inverse_predicate, temporal_profile, base_rate_days, typical_duration_days,
     default_salience, default_review_policy, proposition_bucket, status,
-    description, synonyms, created_at
+    description, synonyms, correction, created_at
 FROM predicate WHERE key = $1
 `
 
@@ -143,6 +145,7 @@ type GetPredicateRow struct {
 	Status              string    `json:"status"`
 	Description         string    `json:"description"`
 	Synonyms            []string  `json:"synonyms"`
+	Correction          bool      `json:"correction"`
 	CreatedAt           time.Time `json:"created_at"`
 }
 
@@ -173,9 +176,83 @@ func (q *Queries) GetPredicate(ctx context.Context, key string) (*GetPredicateRo
 		&i.Status,
 		&i.Description,
 		&i.Synonyms,
+		&i.Correction,
 		&i.CreatedAt,
 	)
 	return &i, err
+}
+
+const ListCorrectionPredicates = `-- name: ListCorrectionPredicates :many
+SELECT
+    key, kind, subject_type, object_type, value_type, cardinality, "symmetric",
+    inverse_predicate, temporal_profile, base_rate_days, typical_duration_days,
+    default_salience, default_review_policy, proposition_bucket, status,
+    description, synonyms, correction, created_at
+FROM predicate WHERE correction ORDER BY key
+`
+
+type ListCorrectionPredicatesRow struct {
+	Key                 string    `json:"key"`
+	Kind                string    `json:"kind"`
+	SubjectType         string    `json:"subject_type"`
+	ObjectType          *string   `json:"object_type"`
+	ValueType           *string   `json:"value_type"`
+	Cardinality         string    `json:"cardinality"`
+	Symmetric           bool      `json:"symmetric"`
+	InversePredicate    *string   `json:"inverse_predicate"`
+	TemporalProfile     string    `json:"temporal_profile"`
+	BaseRateDays        *int32    `json:"base_rate_days"`
+	TypicalDurationDays *int32    `json:"typical_duration_days"`
+	DefaultSalience     int16     `json:"default_salience"`
+	DefaultReviewPolicy string    `json:"default_review_policy"`
+	PropositionBucket   string    `json:"proposition_bucket"`
+	Status              string    `json:"status"`
+	Description         string    `json:"description"`
+	Synonyms            []string  `json:"synonyms"`
+	Correction          bool      `json:"correction"`
+	CreatedAt           time.Time `json:"created_at"`
+}
+
+// The correction predicates (predicate.correction, migration 089): the one
+// source of the set.
+func (q *Queries) ListCorrectionPredicates(ctx context.Context) ([]*ListCorrectionPredicatesRow, error) {
+	rows, err := q.db.Query(ctx, ListCorrectionPredicates)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []*ListCorrectionPredicatesRow{}
+	for rows.Next() {
+		var i ListCorrectionPredicatesRow
+		if err := rows.Scan(
+			&i.Key,
+			&i.Kind,
+			&i.SubjectType,
+			&i.ObjectType,
+			&i.ValueType,
+			&i.Cardinality,
+			&i.Symmetric,
+			&i.InversePredicate,
+			&i.TemporalProfile,
+			&i.BaseRateDays,
+			&i.TypicalDurationDays,
+			&i.DefaultSalience,
+			&i.DefaultReviewPolicy,
+			&i.PropositionBucket,
+			&i.Status,
+			&i.Description,
+			&i.Synonyms,
+			&i.Correction,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const ListCuratedPredicates = `-- name: ListCuratedPredicates :many
@@ -183,7 +260,7 @@ SELECT
     key, kind, subject_type, object_type, value_type, cardinality, "symmetric",
     inverse_predicate, temporal_profile, base_rate_days, typical_duration_days,
     default_salience, default_review_policy, proposition_bucket, status,
-    description, synonyms, created_at
+    description, synonyms, correction, created_at
 FROM predicate WHERE status = 'curated' ORDER BY key
 `
 
@@ -205,6 +282,7 @@ type ListCuratedPredicatesRow struct {
 	Status              string    `json:"status"`
 	Description         string    `json:"description"`
 	Synonyms            []string  `json:"synonyms"`
+	Correction          bool      `json:"correction"`
 	CreatedAt           time.Time `json:"created_at"`
 }
 
@@ -235,6 +313,7 @@ func (q *Queries) ListCuratedPredicates(ctx context.Context) ([]*ListCuratedPred
 			&i.Status,
 			&i.Description,
 			&i.Synonyms,
+			&i.Correction,
 			&i.CreatedAt,
 		); err != nil {
 			return nil, err
@@ -252,7 +331,7 @@ SELECT
     key, kind, subject_type, object_type, value_type, cardinality, "symmetric",
     inverse_predicate, temporal_profile, base_rate_days, typical_duration_days,
     default_salience, default_review_policy, proposition_bucket, status,
-    description, synonyms, created_at
+    description, synonyms, correction, created_at
 FROM predicate WHERE status = $1 ORDER BY key
 `
 
@@ -274,6 +353,7 @@ type ListPredicatesByStatusRow struct {
 	Status              string    `json:"status"`
 	Description         string    `json:"description"`
 	Synonyms            []string  `json:"synonyms"`
+	Correction          bool      `json:"correction"`
 	CreatedAt           time.Time `json:"created_at"`
 }
 
@@ -304,6 +384,7 @@ func (q *Queries) ListPredicatesByStatus(ctx context.Context, status string) ([]
 			&i.Status,
 			&i.Description,
 			&i.Synonyms,
+			&i.Correction,
 			&i.CreatedAt,
 		); err != nil {
 			return nil, err

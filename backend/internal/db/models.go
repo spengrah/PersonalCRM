@@ -213,6 +213,14 @@ type ContactTask struct {
 	Lifecycle      string     `json:"lifecycle"`
 }
 
+type EffectiveParticipation struct {
+	ContactID         uuid.UUID  `json:"contact_id"`
+	InteractionNodeID *uuid.UUID `json:"interaction_node_id"`
+	Direction         string     `json:"direction"`
+	OccurredAt        time.Time  `json:"occurred_at"`
+	Members           []byte     `json:"members"`
+}
+
 type Embedding struct {
 	TargetKind   string          `json:"target_kind"`
 	TargetID     uuid.UUID       `json:"target_id"`
@@ -356,6 +364,18 @@ type InteractionNode struct {
 	NodeID      uuid.UUID `json:"node_id"`
 	Source      string    `json:"source"`
 	IdentityKey *string   `json:"identity_key"`
+}
+
+type InteractionObservationVerdict struct {
+	ObservationID     uuid.UUID  `json:"observation_id"`
+	ContactID         uuid.UUID  `json:"contact_id"`
+	Source            string     `json:"source"`
+	SourceRef         *string    `json:"source_ref"`
+	Direction         string     `json:"direction"`
+	OccurredAt        time.Time  `json:"occurred_at"`
+	InteractionNodeID *uuid.UUID `json:"interaction_node_id"`
+	RootNodeID        *uuid.UUID `json:"root_node_id"`
+	Excluded          bool       `json:"excluded"`
 }
 
 type JobExecSample struct {
@@ -565,6 +585,7 @@ type Predicate struct {
 	Synonyms            []string        `json:"synonyms"`
 	Embedding           pgvector.Vector `json:"embedding"`
 	CreatedAt           time.Time       `json:"created_at"`
+	Correction          bool            `json:"correction"`
 }
 
 type RelationshipSignal struct {

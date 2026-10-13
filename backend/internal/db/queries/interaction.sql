@@ -194,16 +194,17 @@ WHERE id = sqlc.arg(id)
 RETURNING *;
 
 -- name: HasResponseAfter :one
--- Returns TRUE if any later inbound/mutual interaction exists for the
--- contact after the given outreach time. Used by the FollowUpManager's
+-- Returns TRUE if any later inbound/mutual effective participation exists for
+-- the contact after the given outreach time. Used by the FollowUpManager's
 -- out-of-order guard: an outbound event arriving after a response has
 -- already landed must not produce a stale follow-up.
+-- Reads effective participation (migration 089), so a response a correction
+-- removed is no response, and a merged participation answers as one.
 SELECT EXISTS (
-    SELECT 1 FROM interaction
+    SELECT 1 FROM effective_participation
     WHERE contact_id = sqlc.arg('contact_id')
       AND direction IN ('inbound', 'mutual')
-      AND occurred_at > sqlc.arg('outreach_at')
-      AND deleted_at IS NULL
+      AND occurred_at > sqlc.arg('outreach_at')::timestamptz
     LIMIT 1
 ) AS has_response;
 
@@ -302,3 +303,56 @@ WHERE contact_id = sqlc.arg('contact_id')
       END
     )
   );
+
+-- Effective participation reads (arc seam S4). Each reads the one derivation,
+-- the effective_participation and interaction_observation_verdict views of
+-- migration 089; none derives participation of its own.
+
+-- name: ListEffectiveParticipationForContact :many
+-- One row per effective participation of the contact, latest first.
+SELECT * FROM effective_participation ep
+WHERE ep.contact_id = sqlc.arg('contact_id')
+ORDER BY ep.occurred_at DESC, ep.members->0->>'observation_id';
+
+-- name: ListInteractionParticipants :many
+-- The effective participants of the interaction whose alias tree holds
+-- node_id (the root or any node merged into it), each with its entry for the
+-- root. Only the contacts observed on the tree are derived.
+SELECT * FROM effective_participation ep
+WHERE ep.interaction_node_id = interaction_node_root(sqlc.arg('node_id')::uuid)
+  AND ep.contact_id = ANY(ARRAY(
+      SELECT i.contact_id FROM interaction i
+      WHERE i.interaction_node_id IN (
+          SELECT interaction_alias_tree(interaction_node_root(sqlc.arg('node_id')::uuid)))
+        AND i.deleted_at IS NULL))
+ORDER BY ep.contact_id;
+
+-- name: GetObservationVerdict :one
+-- Whether a correction excludes the live observation, with the contact and
+-- root its effective entry is keyed by.
+SELECT
+    v.contact_id,
+    v.root_node_id,
+    v.excluded
+FROM interaction_observation_verdict v
+WHERE v.observation_id = sqlc.arg('observation_id');
+
+-- name: GetEffectiveParticipationOfObservation :one
+-- The contact's effective entry that holds the observation as a member. The
+-- root qual (NULL for a message burst) narrows the derivation to that entry.
+SELECT * FROM effective_participation ep
+WHERE ep.contact_id = sqlc.arg('contact_id')
+  AND ep.interaction_node_id IS NOT DISTINCT FROM sqlc.narg('root_node_id')::uuid
+  AND ep.members @> jsonb_build_array(jsonb_build_object('observation_id', sqlc.arg('observation_id')::uuid));
+
+-- name: ListInteractionAliasTree :many
+-- Every node of the alias tree that holds node_id, each with its own alias
+-- (NULL for the root). No row when node_id names no interaction node.
+SELECT n.id, n.merged_into
+FROM node n
+WHERE n.type = 'interaction'
+  AND n.id IN (
+      SELECT interaction_alias_tree(interaction_node_root(sqlc.arg('node_id')::uuid)))
+  AND EXISTS (
+      SELECT 1 FROM node q WHERE q.id = sqlc.arg('node_id')::uuid AND q.type = 'interaction')
+ORDER BY n.id;
