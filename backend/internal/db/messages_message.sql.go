@@ -87,6 +87,30 @@ func (q *Queries) ClearMessagesMessageStaleClaim(ctx context.Context, arg ClearM
 	return err
 }
 
+const FillMessagesMessageBody = `-- name: FillMessagesMessageBody :execrows
+UPDATE messages_message
+SET text = $1
+WHERE guid = $2
+  AND deleted_at IS NULL
+  AND (text IS NULL OR text = '')
+`
+
+type FillMessagesMessageBodyParams struct {
+	Body *string `json:"body"`
+	Guid string  `json:"guid"`
+}
+
+// Sets the body of a stored, non-deleted row that has none. Touches nothing
+// else: no processed, claim, interaction or contact column. Returns 0 rows
+// when the row is absent, deleted, or already has a body.
+func (q *Queries) FillMessagesMessageBody(ctx context.Context, arg FillMessagesMessageBodyParams) (int64, error) {
+	result, err := q.db.Exec(ctx, FillMessagesMessageBody, arg.Body, arg.Guid)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const GetMessagesMessage = `-- name: GetMessagesMessage :one
 SELECT id, guid, chat_guid, peer_handle, peer_normalized, text, message_type, sent_at, is_outgoing, is_group_chat, reply_to_guid, matched_contact_id, interaction_id, mac_host_id, processed_at, claimed_at, claimed_session_ref, deleted_at, created_at FROM messages_message
 WHERE guid = $1
@@ -199,6 +223,44 @@ WHERE mac_host_id = $1
 func (q *Queries) HardDeleteMessagesMessagesByMacHost(ctx context.Context, macHostID *uuid.UUID) error {
 	_, err := q.db.Exec(ctx, HardDeleteMessagesMessagesByMacHost, macHostID)
 	return err
+}
+
+const ListBodylessMessagesMessageGuids = `-- name: ListBodylessMessagesMessageGuids :many
+SELECT guid FROM messages_message
+WHERE deleted_at IS NULL
+  AND (text IS NULL OR text = '')
+  AND ($1::text IS NULL OR guid > $1::text)
+ORDER BY guid ASC
+LIMIT $2
+`
+
+type ListBodylessMessagesMessageGuidsParams struct {
+	After    *string `json:"after"`
+	RowLimit int32   `json:"row_limit"`
+}
+
+// Guids of stored, non-deleted rows with no body (NULL or empty text), in
+// guid order, keyset-paged by an exclusive @after guid. Whichever host pushed
+// the row. The caller asks for one row more than a page to learn whether
+// another page remains.
+func (q *Queries) ListBodylessMessagesMessageGuids(ctx context.Context, arg ListBodylessMessagesMessageGuidsParams) ([]string, error) {
+	rows, err := q.db.Query(ctx, ListBodylessMessagesMessageGuids, arg.After, arg.RowLimit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []string{}
+	for rows.Next() {
+		var guid string
+		if err := rows.Scan(&guid); err != nil {
+			return nil, err
+		}
+		items = append(items, guid)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const ListMessagesContainersForContact = `-- name: ListMessagesContainersForContact :many
@@ -657,6 +719,39 @@ func (q *Queries) SummarizeMessagesByInteractionIDs(ctx context.Context, interac
 		return nil, err
 	}
 	return items, nil
+}
+
+const TestGetMessagesMessageIncludingDeleted = `-- name: TestGetMessagesMessageIncludingDeleted :one
+SELECT id, guid, chat_guid, peer_handle, peer_normalized, text, message_type, sent_at, is_outgoing, is_group_chat, reply_to_guid, matched_contact_id, interaction_id, mac_host_id, processed_at, claimed_at, claimed_session_ref, deleted_at, created_at FROM messages_message WHERE guid = $1
+`
+
+// Test-only: reads a messages_message row by guid whether or not it is
+// soft-deleted. Production code MUST NOT call this.
+func (q *Queries) TestGetMessagesMessageIncludingDeleted(ctx context.Context, guid string) (*MessagesMessage, error) {
+	row := q.db.QueryRow(ctx, TestGetMessagesMessageIncludingDeleted, guid)
+	var i MessagesMessage
+	err := row.Scan(
+		&i.ID,
+		&i.Guid,
+		&i.ChatGuid,
+		&i.PeerHandle,
+		&i.PeerNormalized,
+		&i.Text,
+		&i.MessageType,
+		&i.SentAt,
+		&i.IsOutgoing,
+		&i.IsGroupChat,
+		&i.ReplyToGuid,
+		&i.MatchedContactID,
+		&i.InteractionID,
+		&i.MacHostID,
+		&i.ProcessedAt,
+		&i.ClaimedAt,
+		&i.ClaimedSessionRef,
+		&i.DeletedAt,
+		&i.CreatedAt,
+	)
+	return &i, err
 }
 
 const TestInsertMessagesMessageLinked = `-- name: TestInsertMessagesMessageLinked :one

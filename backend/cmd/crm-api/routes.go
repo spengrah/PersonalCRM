@@ -109,9 +109,13 @@ func registerRoutes(deps routeDeps) {
 	// known-ids). Registered via the shared helper so integration tests
 	// exercise the same code path. Admin routes are registered later
 	// inside the global-API-key-protected v1 group.
+	enrichmentHandler := handlers.NewMessagesEnrichmentHandler(
+		service.NewMessagesEnrichmentService(repository.NewMessagesMessageRepository(database.Queries)),
+	)
 	handlers.RegisterMacHostRoutes(router, handlers.MacHostRouteDeps{
 		HostRepo:    deps.MacHostRepo,
 		Handler:     deps.MacHostHandler,
+		Enrichment:  enrichmentHandler,
 		AuthLimiter: auth.DefaultMacHostAuthLimiterConfig(),
 	})
 

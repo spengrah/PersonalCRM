@@ -26,6 +26,8 @@ public struct ChatDBMessage: Equatable, Sendable {
     public let chatGUID: String?
     /// Raw handle.id from chat.db — caller normalizes before lookup.
     public let peerHandleRaw: String
+    /// The message body, resolved by `MessageBodyExtractor` from
+    /// `message.text` / `message.attributedBody`. Nil when the row has no body.
     public let text: String?
     public let isFromMe: Bool
     public let isGroup: Bool
@@ -137,6 +139,7 @@ public final class ChatDBReader {
             message.ROWID                         AS msg_rowid,
             message.guid                          AS msg_guid,
             message.text                          AS msg_text,
+            message.attributedBody                AS msg_attributed_body,
             message.is_from_me                    AS msg_is_from_me,
             message.item_type                     AS msg_item_type,
             message.date                          AS msg_date,
@@ -197,8 +200,8 @@ public final class ChatDBReader {
         // (att_join_id non-NULL), NOT the optional metadata columns,
         // which can legitimately be NULL on a real attachment row.
         let itemType: Int64 = (row["msg_item_type"] as Int64?) ?? 0
-        let text: String? = row["msg_text"]
-        let hasText = (text?.isEmpty == false)
+        let plainText: String? = row["msg_text"]
+        let hasText = (plainText?.isEmpty == false)
         let hasAttachment = (row["att_join_id"] as Int64?) != nil
         if itemType != 0 && !hasText && !hasAttachment { return nil }
 
@@ -215,6 +218,13 @@ public final class ChatDBReader {
             if handleRaw.isEmpty { return nil }
         }
 
+        let body: String?
+        switch MessageBodyExtractor.extract(
+            text: plainText, attributedBody: row["msg_attributed_body"]) {
+        case .body(let s): body = s
+        case .absent, .undecodable: body = nil
+        }
+
         let sentAt = Date(timeIntervalSince1970:
             Self.appleEpochOffset + Double(rawDate) / 1e9)
         let chatStyle: Int64 = (row["chat_style"] as Int64?) ?? 0
@@ -224,7 +234,7 @@ public final class ChatDBReader {
             guid: guid,
             chatGUID: chatGUID,
             peerHandleRaw: handleRaw,
-            text: text,
+            text: body,
             isFromMe: isFromMe,
             // style 43 is a group chat per Apple's internal convention.
             isGroup: chatStyle == 43,

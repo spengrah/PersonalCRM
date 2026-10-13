@@ -45,6 +45,7 @@ type macHostTestEnv struct {
 	syncRepo   *repository.SyncRepository
 	macService *service.MacHostService
 	macHandler *handlers.MacHostHandler
+	messages   *repository.MessagesMessageRepository
 }
 
 func setupMacHostEnv(t *testing.T) *macHostTestEnv {
@@ -66,6 +67,8 @@ func setupMacHostEnv(t *testing.T) *macHostTestEnv {
 	macService := service.NewMacHostService(hostRepo, tokenRepo, syncRepo, nil, externalRepo, nil, database.Pool, 4)
 	limiter := auth.NewPairingIPRateLimiter()
 	macHandler := handlers.NewMacHostHandler(macService, hostRepo, limiter)
+	messagesRepo := repository.NewMessagesMessageRepository(database.Queries)
+	enrichmentHandler := handlers.NewMessagesEnrichmentHandler(service.NewMessagesEnrichmentService(messagesRepo))
 
 	router := gin.New()
 	router.Use(api.RequestIDMiddleware())
@@ -79,6 +82,7 @@ func setupMacHostEnv(t *testing.T) *macHostTestEnv {
 	handlers.RegisterMacHostRoutes(router, handlers.MacHostRouteDeps{
 		HostRepo:    hostRepo,
 		Handler:     macHandler,
+		Enrichment:  enrichmentHandler,
 		AuthLimiter: auth.DefaultMacHostAuthLimiterConfig(),
 	})
 	v1 := router.Group("/api/v1")
@@ -94,6 +98,7 @@ func setupMacHostEnv(t *testing.T) *macHostTestEnv {
 		syncRepo:   syncRepo,
 		macService: macService,
 		macHandler: macHandler,
+		messages:   messagesRepo,
 	}
 
 	t.Cleanup(func() {

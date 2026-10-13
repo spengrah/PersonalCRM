@@ -599,6 +599,10 @@ type Querier interface {
 	ExistsMessagesMessage(ctx context.Context, id uuid.UUID) (bool, error)
 	ExistsPhoneCall(ctx context.Context, id uuid.UUID) (bool, error)
 	ExistsTelegramMessage(ctx context.Context, id uuid.UUID) (bool, error)
+	// Sets the body of a stored, non-deleted row that has none. Touches nothing
+	// else: no processed, claim, interaction or contact column. Returns 0 rows
+	// when the row is absent, deleted, or already has a body.
+	FillMessagesMessageBody(ctx context.Context, arg FillMessagesMessageBodyParams) (int64, error)
 	// Single-cardinality conflict check for an ASYMMETRIC predicate: the accepted,
 	// knowledge-open assertion(s) for (subject, predicate) whose valid-time window
 	// OVERLAPS the new one's effective window. The new-side lower bound is
@@ -1244,6 +1248,11 @@ type Querier interface {
 	// rewrites loser→winner on each row; oldest-first is a stable, deterministic
 	// order so the live-row collision/supersession steps run reproducibly.
 	ListAssertionsTouchingNode(ctx context.Context, subjectNodeID uuid.UUID) ([]*Assertion, error)
+	// Guids of stored, non-deleted rows with no body (NULL or empty text), in
+	// guid order, keyset-paged by an exclusive @after guid. Whichever host pushed
+	// the row. The caller asks for one row more than a page to learn whether
+	// another page remains.
+	ListBodylessMessagesMessageGuids(ctx context.Context, arg ListBodylessMessagesMessageGuidsParams) ([]string, error)
 	ListCalendarEventsByIDs(ctx context.Context, ids []uuid.UUID) ([]*CalendarEvent, error)
 	// Returns the deduplicated canonicalized value set for the given
 	// contact_method types, scoped to non-deleted contacts. Ordered
@@ -2683,6 +2692,9 @@ type Querier interface {
 	// Test-only read for migration fixtures that verify a deleted interaction is
 	// outside a historical repair selector. Production reads remain live-only.
 	TestGetInteractionIncludingDeleted(ctx context.Context, arg TestGetInteractionIncludingDeletedParams) (*Interaction, error)
+	// Test-only: reads a messages_message row by guid whether or not it is
+	// soft-deleted. Production code MUST NOT call this.
+	TestGetMessagesMessageIncludingDeleted(ctx context.Context, guid string) (*MessagesMessage, error)
 	// Test assertion — a planted job's disposition: its state, whether it is
 	// finalized, and its attempt counter. `attempt` is the load-bearing one for
 	// queue isolation: River increments it on FETCH, so attempt = 0 says the job was

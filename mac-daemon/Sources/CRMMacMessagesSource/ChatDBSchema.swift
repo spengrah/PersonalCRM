@@ -24,7 +24,7 @@ public enum ChatDBSchema {
 
     public static let requiredColumns: [String: Set<String>] = [
         "message": [
-            "ROWID", "guid", "text", "handle_id",
+            "ROWID", "guid", "text", "attributedBody", "handle_id",
             "date", "is_from_me", "item_type", "cache_has_attachments",
             "associated_message_guid",
         ],

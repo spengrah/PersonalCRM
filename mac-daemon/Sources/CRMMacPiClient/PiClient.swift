@@ -169,6 +169,31 @@ public final class PiClient: @unchecked Sendable {
         return try decodeNeedsAttention(data: data, http: http)
     }
 
+    /// GET /api/v1/host/:id/messages/enrichment/missing-bodies. One page of
+    /// stored message guids that have no body, in guid order, strictly after
+    /// `after`. `limit` is 1...500.
+    public func missingBodies(
+        auth: PiAuth,
+        after: String?,
+        limit: Int
+    ) async throws -> MissingBodiesPage {
+        let request = try builder.missingBodies(auth: auth, after: after, limit: limit)
+        let (data, http) = try await transport.send(request)
+        return try decodeEnrichment(data: data, http: http, type: MissingBodiesPage.self)
+    }
+
+    /// POST /api/v1/host/:id/messages/enrichment with `fill_body` items (at
+    /// most 500, under 8 MiB). Each item sets a stored row's missing body and
+    /// nothing else, so a retried request is safe.
+    public func fillBodies(
+        auth: PiAuth,
+        items: [FillBodyItem]
+    ) async throws -> FillBodiesData {
+        let request = try builder.fillBodies(auth: auth, items: items)
+        let (data, http) = try await transport.send(request)
+        return try decodeEnrichment(data: data, http: http, type: FillBodiesData.self)
+    }
+
     // MARK: - decoding helpers
 
     private func decodePair(data: Data, http: HTTPURLResponse) throws -> PairData {
@@ -410,6 +435,27 @@ public final class PiClient: @unchecked Sendable {
         switch http.statusCode {
         case 200:
             return try decodeSuccess(data: data, type: [NeedsAttentionListItem].self)
+        case 401:
+            throw PiClientError.authenticationRevoked(
+                message: errorMessage(data) ?? "authentication revoked")
+        case 400...499:
+            throw mapClient4xx(status: http.statusCode, data: data)
+        case 500...599:
+            throw PiClientError.serverError(
+                status: http.statusCode,
+                message: errorMessage(data) ?? "server error \(http.statusCode)")
+        default:
+            throw PiClientError.transport(
+                underlying: "unexpected status \(http.statusCode)")
+        }
+    }
+
+    private func decodeEnrichment<T: Decodable>(
+        data: Data, http: HTTPURLResponse, type: T.Type
+    ) throws -> T {
+        switch http.statusCode {
+        case 200:
+            return try decodeSuccess(data: data, type: type)
         case 401:
             throw PiClientError.authenticationRevoked(
                 message: errorMessage(data) ?? "authentication revoked")

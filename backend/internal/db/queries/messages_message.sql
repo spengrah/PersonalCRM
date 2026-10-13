@@ -230,3 +230,30 @@ ORDER BY chat_guid;
 -- upstream tombstone. There is no production messages delete path. Production
 -- code MUST NOT call this.
 UPDATE messages_message SET deleted_at = NOW() WHERE id = @id AND deleted_at IS NULL;
+
+-- name: TestGetMessagesMessageIncludingDeleted :one
+-- Test-only: reads a messages_message row by guid whether or not it is
+-- soft-deleted. Production code MUST NOT call this.
+SELECT * FROM messages_message WHERE guid = @guid;
+
+-- name: ListBodylessMessagesMessageGuids :many
+-- Guids of stored, non-deleted rows with no body (NULL or empty text), in
+-- guid order, keyset-paged by an exclusive @after guid. Whichever host pushed
+-- the row. The caller asks for one row more than a page to learn whether
+-- another page remains.
+SELECT guid FROM messages_message
+WHERE deleted_at IS NULL
+  AND (text IS NULL OR text = '')
+  AND (sqlc.narg(after)::text IS NULL OR guid > sqlc.narg(after)::text)
+ORDER BY guid ASC
+LIMIT @row_limit;
+
+-- name: FillMessagesMessageBody :execrows
+-- Sets the body of a stored, non-deleted row that has none. Touches nothing
+-- else: no processed, claim, interaction or contact column. Returns 0 rows
+-- when the row is absent, deleted, or already has a body.
+UPDATE messages_message
+SET text = @body
+WHERE guid = @guid
+  AND deleted_at IS NULL
+  AND (text IS NULL OR text = '');

@@ -139,6 +139,30 @@ func (r *MessagesMessageRepository) TestSoftDeleteMessage(ctx context.Context, i
 	return r.queries.TestSoftDeleteMessagesMessage(ctx, id)
 }
 
+// TestGetMessageIncludingDeleted is test-only; production code MUST NOT call this.
+func (r *MessagesMessageRepository) TestGetMessageIncludingDeleted(ctx context.Context, guid string) (*MessagesMessage, error) {
+	dbMsg, err := r.queries.TestGetMessagesMessageIncludingDeleted(ctx, guid)
+	if err != nil {
+		return nil, err
+	}
+	msg := convertDbMessagesMessage(dbMsg)
+	return &msg, nil
+}
+
+// ListBodylessGuids returns up to limit guids of stored, non-deleted rows
+// whose text is NULL or empty, ordered by guid ascending, strictly after
+// the given guid (nil lists from the start).
+func (r *MessagesMessageRepository) ListBodylessGuids(ctx context.Context, after *string, limit int32) ([]string, error) {
+	return r.queries.ListBodylessMessagesMessageGuids(ctx, db.ListBodylessMessagesMessageGuidsParams{After: after, RowLimit: limit})
+}
+
+// FillBody sets the body of a stored, non-deleted row that has none and
+// reports whether it did. It changes no other column.
+func (r *MessagesMessageRepository) FillBody(ctx context.Context, guid, body string) (bool, error) {
+	n, err := r.queries.FillMessagesMessageBody(ctx, db.FillMessagesMessageBodyParams{Guid: guid, Body: &body})
+	return n > 0, err
+}
+
 func convertDbMessagesMessage(m *db.MessagesMessage) MessagesMessage {
 	msg := MessagesMessage{
 		Guid:        m.Guid,

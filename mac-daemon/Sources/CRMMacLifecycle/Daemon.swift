@@ -8,7 +8,7 @@ public enum Daemon {
     public static let label = "xyz.spengrah.crm-mac"
     /// Daemon version string. Sent in pair + heartbeat payloads.
     /// Bumped per release.
-    public static let version = "0.1.0"
+    public static let version = "0.2.0"
     /// Protocol version transmitted to the Pi. Bumped to 2 when the
     /// daemon started emitting `call.received` / `call.sent` events
     /// (Phase 1.5 phone_calls source). The Pi accepts both v1 and v2

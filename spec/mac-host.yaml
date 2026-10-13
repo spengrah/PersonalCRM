@@ -651,3 +651,64 @@ behaviors:
     surface: none
     statement: the Anarlog people source never sends a person deletion; an identity the CRM holds is kept when the person's last session is deleted, when they are removed from a session, or when they stop appearing in the CLI's output.
     provenance: [.agents/spec/2026-09-29-anarlog-cli-source.md]
+
+  # --- iMessage body capture and re-scan (spec: .agents/spec/2026-10-13-interaction-review-readiness.md) ---
+
+  - id: MAC-056
+    title: The daemon captures an iMessage body from either stored representation
+    type: business-logic
+    status: current
+    surface: none
+    given: a message in the Mac's messages database whose body is stored as plain text, as rich text, or as both
+    when: the daemon reads the message to publish it
+    then:
+      - the published body is the plain text when it holds body text, else the body decoded from the rich text
+      - a body made only of attachment placeholders or whitespace is published as no body
+      - a rich-text body that cannot be decoded is published as no body
+      - every daemon read of the messages database, whether a live tick, a backfill, or an operator scan, decides a message's body through the same single step
+    provenance: [MessageBodyExtractor.extract, ChatDBReader, .agents/spec/2026-10-13-interaction-review-readiness.md]
+    notes: Group-chat capture is outside this behavior.
+
+  - id: MAC-057
+    title: A paired host lists stored body-less messages and fills their missing bodies
+    type: api
+    status: current
+    surface: api
+    given: a paired host presenting its bearer key
+    when: it lists body-less messages and submits fill_body items for them
+    then:
+      - key: lists-body-less-rows
+        text: the listing returns the guids of stored, non-deleted messages whose body is empty or absent, whichever host pushed them, in guid order, one page at a time, with a cursor to the next page when more remain
+      - key: fills-missing-body
+        text: a fill_body item sets the body of a named stored message that has none, and the answer reports that item as filled
+      - key: keeps-existing-body
+        text: a fill_body item for a message that already has a body leaves that body as it is, and the answer reports the item as unchanged
+      - key: unknown-guid-not-created
+        text: a fill_body item naming a guid with no stored non-deleted message creates nothing, and the answer reports the item as unknown
+      - key: row-identity-preserved
+        text: filling a body changes no other column of the row, so its identity, interaction links, and processing state stay as they were
+      - key: no-cadence-or-event-effect
+        text: filling a body replays no ingest, so it changes no contact cadence field, creates no follow-up, and emits no event
+      - key: second-run-unchanged
+        text: submitting the same items again changes nothing, and the answer reports each item as unchanged
+      - key: invalid-request-writes-nothing
+        text: a request with an unknown op, an item missing its guid or body, more than the per-request item cap, or a body over the request size cap is rejected whole, and none of its items is written
+    provenance: [MessagesEnrichmentHandler.ListMissingBodies/FillBodies, MessagesEnrichmentService, messages_enrichment_test.go, .agents/spec/2026-10-13-interaction-review-readiness.md]
+    notes: Group-chat messages are outside this behavior.
+
+  - id: MAC-058
+    title: A one-time operator re-scan fills stored body-less messages and classifies the rest
+    type: business-logic
+    status: current
+    surface: none
+    given: the operator runs the re-scan script on the Mac against a paired Pi
+    when: it walks every stored body-less message the Pi lists
+    then:
+      - each listed message whose body the messages database holds, in either representation, is submitted to the Pi as a fill_body item
+      - each listed message not submitted is classified against its source record as body-less by nature (attachment-only, reaction, or none stored), unavailable at the source, or a capture failure
+      - the output holds only counts per outcome and per classification, plus the guid of each capture failure, and no body, name, or other message content
+      - the script reads the messages database read-only and writes no file, so a body exists only in memory and in the request that carries it to the Pi
+      - a second run submits nothing the first run filled and reports the same classification
+      - a Pi that rejects a request, cannot be reached, or cannot hold a body in one request ends the run non-zero with no report
+    provenance: [rescan-messages, RescanMessagesTests, .agents/spec/2026-10-13-interaction-review-readiness.md]
+    notes: The script is an operator tool run from the source tree. It is not part of the shipped daemon, its subcommands, or its assembled bundle.
