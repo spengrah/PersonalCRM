@@ -1,11 +1,14 @@
 // EnrichmentEndpoint — wire shapes for the message-enrichment exchange:
 //   GET  /api/v1/host/:id/messages/enrichment/missing-bodies?after=<guid>&limit=<1..500>
+//   GET  /api/v1/host/:id/messages/enrichment/group-chats?after=<chat_guid>&limit=<1..500>
 //   POST /api/v1/host/:id/messages/enrichment
 //
-// Both answer the standard {success, data, ...} envelope; this file declares
-// the `data` payloads and the request body. The one op the exchange carries
-// today is `fill_body`: it sets the body of a stored row that has none and
-// changes nothing else.
+// All answer the standard {success, data, ...} envelope; this file declares
+// the `data` payloads and the request body. The exchange carries three ops:
+// `fill_body` sets the body of a stored row that has none; `add_group_message`
+// adds a group message the Pi lacks inside a window of a stored group chat;
+// `clear_outbound_peer` removes the member attribution of a stored outbound
+// group row. None of them replays any ingest effect.
 import Foundation
 
 /// One listed body-less stored row. The guid is all the daemon needs to
@@ -92,6 +95,179 @@ struct FillBodiesRequestBody: Encodable {
     let items: [FillBodyItem]
 }
 
+/// One listed group chat and the windows of its messages interactions.
+public struct GroupChatItem: Decodable, Equatable, Sendable {
+    public let chatGUID: String
+    public let windows: [GroupChatWindow]
+
+    public init(chatGUID: String, windows: [GroupChatWindow]) {
+        self.chatGUID = chatGUID
+        self.windows = windows
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case chatGUID = "chat_guid"
+        case windows
+    }
+}
+
+/// The closed span of sent times of one interaction's messages.
+public struct GroupChatWindow: Decodable, Equatable, Sendable {
+    public let start: Date
+    public let end: Date
+
+    public init(start: Date, end: Date) {
+        self.start = start
+        self.end = end
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case start, end
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        start = try Self.decodeTime(c, .start)
+        end = try Self.decodeTime(c, .end)
+    }
+
+    /// RFC 3339, with or without fractional seconds.
+    private static func decodeTime(
+        _ c: KeyedDecodingContainer<CodingKeys>, _ key: CodingKeys
+    ) throws -> Date {
+        let text = try c.decode(String.self, forKey: key)
+        let plain = ISO8601DateFormatter()
+        let fractional = ISO8601DateFormatter()
+        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        guard let date = plain.date(from: text) ?? fractional.date(from: text) else {
+            throw DecodingError.dataCorruptedError(
+                forKey: key, in: c, debugDescription: "not an RFC 3339 time")
+        }
+        return date
+    }
+}
+
+/// Decoded `data` payload of the group-chats listing. `nextAfter` is the last
+/// listed chat guid when more chats remain, else nil.
+public struct GroupChatsPage: Decodable, Equatable, Sendable {
+    public let items: [GroupChatItem]
+    public let nextAfter: String?
+
+    public init(items: [GroupChatItem], nextAfter: String?) {
+        self.items = items
+        self.nextAfter = nextAfter
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case items
+        case nextAfter = "next_after"
+    }
+}
+
+/// One enrichment request item of any op. A request may mix them.
+public enum EnrichmentItem: Encodable, Equatable, Sendable {
+    case addGroupMessage(AddGroupMessageItem)
+    case clearOutboundPeer(guid: String)
+
+    public func encode(to encoder: Encoder) throws {
+        switch self {
+        case .addGroupMessage(let item):
+            try item.encode(to: encoder)
+        case .clearOutboundPeer(let guid):
+            var c = encoder.container(keyedBy: AddGroupMessageItem.CodingKeys.self)
+            try c.encode("clear_outbound_peer", forKey: .op)
+            try c.encode(guid, forKey: .guid)
+        }
+    }
+}
+
+/// One `add_group_message` request item. `sender` is the member's raw handle
+/// for an inbound message and nil for the user's own; `body` is nil when the
+/// message has none. Both encode as an explicit null.
+public struct AddGroupMessageItem: Encodable, Equatable, Sendable {
+    public enum Direction: String, Encodable, Sendable {
+        case inbound, outbound
+    }
+
+    public let guid: String
+    public let chatGUID: String
+    public let sender: String?
+    public let direction: Direction
+    public let sentAt: Date
+    public let body: String?
+
+    public init(
+        guid: String, chatGUID: String, sender: String?,
+        direction: Direction, sentAt: Date, body: String?
+    ) {
+        self.guid = guid
+        self.chatGUID = chatGUID
+        self.sender = sender
+        self.direction = direction
+        self.sentAt = sentAt
+        self.body = body
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case op, guid, sender, direction, body
+        case chatGUID = "chat_guid"
+        case sentAt = "sent_at"
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode("add_group_message", forKey: .op)
+        try c.encode(guid, forKey: .guid)
+        try c.encode(chatGUID, forKey: .chatGUID)
+        try c.encode(sender, forKey: .sender)
+        try c.encode(direction, forKey: .direction)
+        try c.encode(sentAt, forKey: .sentAt)
+        try c.encode(body, forKey: .body)
+    }
+}
+
+/// What the Pi did with one item of the enrichment exchange.
+public enum EnrichmentOutcome: String, Decodable, Equatable, Sendable, CaseIterable {
+    case filled, unchanged, unknown, added
+    case outsideWindow = "outside_window"
+    case cleared
+}
+
+public struct EnrichmentResult: Decodable, Equatable, Sendable {
+    public let guid: String
+    public let outcome: EnrichmentOutcome
+
+    public init(guid: String, outcome: EnrichmentOutcome) {
+        self.guid = guid
+        self.outcome = outcome
+    }
+}
+
+/// Decoded `data` payload of an enrichment POST carrying any ops: one result
+/// per request item, in request order. `totals` is not decoded; the results
+/// carry the same information.
+public struct EnrichmentData: Decodable, Equatable, Sendable {
+    public let results: [EnrichmentResult]
+
+    public init(results: [EnrichmentResult]) {
+        self.results = results
+    }
+}
+
+struct EnrichmentRequestBody: Encodable {
+    let items: [EnrichmentItem]
+}
+
+public enum EnrichmentWire {
+    /// The encoder every enrichment request body is written with. Times use
+    /// `.iso8601` (whole seconds), as the messages publisher encodes `sent_at`.
+    public static func makeEncoder() -> JSONEncoder {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        return encoder
+    }
+}
+
 extension RequestBuilder {
     func missingBodies(auth: PiAuth, after: String?, limit: Int) throws -> URLRequest {
         var query = [URLQueryItem(name: "limit", value: String(limit))]
@@ -105,7 +281,27 @@ extension RequestBuilder {
         return req
     }
 
+    func groupChats(auth: PiAuth, after: String?, limit: Int) throws -> URLRequest {
+        var query = [URLQueryItem(name: "limit", value: String(limit))]
+        if let after { query.insert(URLQueryItem(name: "after", value: after), at: 0) }
+        let url = try enrichmentURL(
+            auth: auth, suffix: "/messages/enrichment/group-chats", query: query)
+        var req = URLRequest(url: url)
+        req.httpMethod = "GET"
+        req.setValue("application/json", forHTTPHeaderField: "Accept")
+        Self.applyAuth(&req, auth: auth)
+        return req
+    }
+
     func fillBodies(auth: PiAuth, items: [FillBodyItem]) throws -> URLRequest {
+        try enrichmentPost(auth: auth, body: FillBodiesRequestBody(items: items))
+    }
+
+    func enrichment(auth: PiAuth, items: [EnrichmentItem]) throws -> URLRequest {
+        try enrichmentPost(auth: auth, body: EnrichmentRequestBody(items: items))
+    }
+
+    private func enrichmentPost<Body: Encodable>(auth: PiAuth, body: Body) throws -> URLRequest {
         let url = try enrichmentURL(auth: auth, suffix: "/messages/enrichment", query: [])
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
@@ -113,7 +309,7 @@ extension RequestBuilder {
         req.setValue("application/json", forHTTPHeaderField: "Accept")
         Self.applyAuth(&req, auth: auth)
         do {
-            req.httpBody = try JSONEncoder().encode(FillBodiesRequestBody(items: items))
+            req.httpBody = try EnrichmentWire.makeEncoder().encode(body)
         } catch {
             throw RequestBuilderError.encode("encode enrichment body: \(error)")
         }

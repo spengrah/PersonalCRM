@@ -18,6 +18,12 @@ struct SourceRow {
     var attributedBody: Data?
     var hasAttachment = false
     var associatedMessageType = 0
+    /// Set for a message of a chat: `chat` is the chat.guid, `handle` the
+    /// sender's handle.id (inbound only), `sentAt` the sent time.
+    var chat: String?
+    var handle: String?
+    var isFromMe = false
+    var sentAt: Date?
 }
 
 /// Typedstream bytes shaped like the ones Messages.app stores in
@@ -46,10 +52,24 @@ func typedstream(_ body: String) -> Data {
 /// An `attributedBody` the extractor cannot decode.
 let undecodableBlob = Data([0x04, 0x0B, 0x01, 0x02, 0x03])
 
+/// A stored group-chat row on the fake Pi, beyond its body.
+struct PiGroupRow {
+    var chat: String
+    var outbound: Bool
+    /// Carries a member attribution (only an outbound row can lose it).
+    var attributed: Bool
+}
+
 /// Fake Pi. Rows are guid -> stored body (nil/empty = body-less). Answers only
-/// the two enrichment routes for the paired host with its bearer key.
+/// the enrichment routes for the paired host with its bearer key.
 final class FakePi: @unchecked Sendable {
-    enum Failure { case none, listing(Int), fill(Int), unreachable }
+    enum Failure {
+        case none, listing(Int), fill(Int), unreachable
+        /// The group-chats listing answers 400, or cannot be reached.
+        case groupListingRejected, groupListingUnreachable
+        /// The nth group-item POST answers 400, or cannot be reached.
+        case groupSubmission(Int), groupSubmissionUnreachable
+    }
 
     private let lock = NSLock()
     private var bodies: [String: String]
@@ -57,15 +77,31 @@ final class FakePi: @unchecked Sendable {
     private let failure: Failure
     private(set) var fillRequests: [[FillBodyItem]] = []
     private(set) var listRequests = 0
+    /// Group chat -> the windows of its live messages interactions.
+    private var groupChats: [String: [(start: Date, end: Date)]]
+    private let groupPageCap: Int
+    private var groupRows: [String: PiGroupRow]
+    private(set) var groupListRequests = 0
+    /// Raw JSON items of each POST that carried group ops, in request order.
+    private(set) var groupRequests: [[[String: Any]]] = []
     /// Runs under the Pi's lock right after a listing is answered, so a test
     /// can change Pi rows between the listing and the submission.
     var afterListing: (@Sendable (inout [String: String]) -> Void)?
+    /// Runs under the Pi's lock right after a group-chats listing is answered,
+    /// so a test can change the Pi's windows between listing and submission.
+    var afterGroupListing: (@Sendable (inout [String: [(start: Date, end: Date)]]) -> Void)?
 
-    init(rows: [String: String?], pageCap: Int = 500,
-         failure: Failure = .none) {
+    init(rows: [String: String?] = [:], pageCap: Int = 500,
+         failure: Failure = .none,
+         groupChats: [String: [(start: Date, end: Date)]] = [:], groupPageCap: Int = 500,
+         groupRows: [String: PiGroupRow] = [:]) {
         self.bodies = rows.compactMapValues { $0 }
         self.pageCap = pageCap
         self.failure = failure
+        self.groupChats = groupChats
+        self.groupPageCap = groupPageCap
+        self.groupRows = groupRows
+        for guid in groupRows.keys where bodies[guid] == nil { bodies[guid] = "stored" }
         for (guid, body) in rows where body == nil { bodies[guid] = "" }
     }
 
@@ -75,6 +111,11 @@ final class FakePi: @unchecked Sendable {
     }
 
     var submittedGuids: [String] { fillRequests.flatMap { $0.map(\.guid) } }
+    var groupItems: [[String: Any]] { groupRequests.flatMap { $0 } }
+    func groupRow(_ guid: String) -> PiGroupRow? {
+        lock.lock(); defer { lock.unlock() }
+        return groupRows[guid]
+    }
 
     func client(baseURL: URL) -> PiClient {
         PiClient(baseURL: baseURL, transport: { [self] request in try handle(request) },
@@ -86,6 +127,68 @@ final class FakePi: @unchecked Sendable {
                                           httpVersion: "HTTP/1.1", headerFields: nil)!)
     }
 
+    static func rfc3339(_ date: Date) -> String {
+        ISO8601DateFormatter().string(from: date)
+    }
+
+    /// Answers a POST whose items include `add_group_message` /
+    /// `clear_outbound_peer`, as the Pi's S1 group half does.
+    private func handleGroupItems(_ request: URLRequest, _ raw: [[String: Any]]) throws -> (Data, URLResponse) {
+        groupRequests.append(raw)
+        if case .groupSubmissionUnreachable = failure { throw URLError(.cannotConnectToHost) }
+        if case .groupSubmission(let n) = failure, groupRequests.count == n {
+            return respond(request, 400, #"{"success":false,"error":{"code":"VALIDATION","message":"bad"}}"#)
+        }
+        var results: [String] = []
+        for item in raw {
+            let guid = item["guid"] as! String
+            let outcome: String
+            switch item["op"] as? String {
+            case "add_group_message":
+                let chat = item["chat_guid"] as! String
+                let outbound = item["direction"] as? String == "outbound"
+                XCTAssertTrue(["inbound", "outbound"].contains(item["direction"] as? String))
+                if outbound {
+                    XCTAssertTrue(item["sender"] is NSNull, "outbound sender must be null")
+                } else {
+                    XCTAssertTrue((item["sender"] as? String)?.isEmpty == false)
+                }
+                XCTAssertTrue(item["body"] is NSNull || (item["body"] as? String)?.isEmpty == false)
+                let sentAt = ISO8601DateFormatter().date(from: item["sent_at"] as! String)
+                XCTAssertNotNil(sentAt, "sent_at must be RFC 3339")
+                if bodies[guid] != nil || groupRows[guid] != nil {
+                    outcome = "unchanged"
+                } else if let sentAt, groupChats[chat, default: []].contains(where: {
+                    $0.start <= sentAt && sentAt <= $0.end
+                }) {
+                    bodies[guid] = (item["body"] as? String) ?? ""
+                    groupRows[guid] = PiGroupRow(chat: chat, outbound: outbound, attributed: false)
+                    outcome = "added"
+                } else {
+                    outcome = "outside_window"
+                }
+            case "clear_outbound_peer":
+                if var row = groupRows[guid] {
+                    if row.outbound && row.attributed {
+                        row.attributed = false
+                        groupRows[guid] = row
+                        outcome = "cleared"
+                    } else {
+                        outcome = "unchanged"
+                    }
+                } else {
+                    outcome = "unknown"
+                }
+            default:
+                XCTFail("unexpected op \(String(describing: item["op"]))")
+                outcome = "unknown"
+            }
+            results.append(#"{"guid":"\#(guid)","outcome":"\#(outcome)"}"#)
+        }
+        return respond(request, 200,
+                       #"{"success":true,"data":{"results":[\#(results.joined(separator: ","))],"totals":{}}}"#)
+    }
+
     private func handle(_ request: URLRequest) throws -> (Data, URLResponse) {
         lock.lock(); defer { lock.unlock() }
         let hostPath = "/api/v1/host/\(testHostID.uuidString.lowercased())/messages/enrichment"
@@ -94,6 +197,29 @@ final class FakePi: @unchecked Sendable {
             return respond(request, 401, #"{"success":false,"error":{"code":"AUTH","message":"no"}}"#)
         }
         let comps = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)!
+        if request.httpMethod == "GET", comps.path == hostPath + "/group-chats" {
+            groupListRequests += 1
+            if case .groupListingUnreachable = failure { throw URLError(.cannotConnectToHost) }
+            if case .groupListingRejected = failure {
+                return respond(request, 400, #"{"success":false,"error":{"code":"VALIDATION","message":"bad"}}"#)
+            }
+            let after = comps.queryItems?.first { $0.name == "after" }?.value
+            let limit = Int(comps.queryItems?.first { $0.name == "limit" }?.value ?? "") ?? 500
+            XCTAssertTrue((1...500).contains(limit), "limit \(limit) outside 1...500")
+            let chats = groupChats.keys.sorted().filter { after == nil || $0 > after! }
+            let page = Array(chats.prefix(min(limit, groupPageCap)))
+            let next = chats.count > page.count ? "\"\(page.last!)\"" : "null"
+            // Typed as String: GRDB's SQL literal otherwise claims the interpolation.
+            let items: String = page.map { (chat: String) -> String in
+                let windows: String = groupChats[chat]!.map { (w: (start: Date, end: Date)) -> String in
+                    #"{"start":"\#(Self.rfc3339(w.start))","end":"\#(Self.rfc3339(w.end))"}"#
+                }.joined(separator: ",")
+                return #"{"chat_guid":"\#(chat)","windows":[\#(windows)]}"#
+            }.joined(separator: ",")
+            defer { afterGroupListing?(&groupChats) }
+            return respond(request, 200,
+                           #"{"success":true,"data":{"items":[\#(items)],"next_after":\#(next)}}"#)
+        }
         if request.httpMethod == "GET", comps.path == hostPath + "/missing-bodies" {
             listRequests += 1
             if case .unreachable = failure { throw URLError(.cannotConnectToHost) }
@@ -114,10 +240,13 @@ final class FakePi: @unchecked Sendable {
         if request.httpMethod == "POST", comps.path == hostPath {
             let json = try JSONSerialization.jsonObject(with: request.httpBody ?? Data()) as! [String: Any]
             let raw = json["items"] as! [[String: Any]]
+            XCTAssertLessThanOrEqual(raw.count, 500)
+            XCTAssertLessThan(request.httpBody?.count ?? 0, 8 << 20)
+            if raw.contains(where: { $0["op"] as? String != "fill_body" }) {
+                return try handleGroupItems(request, raw)
+            }
             let items = raw.map { FillBodyItem(guid: $0["guid"] as! String, body: $0["body"] as! String) }
             XCTAssertTrue(raw.allSatisfy { $0["op"] as? String == "fill_body" })
-            XCTAssertLessThanOrEqual(items.count, 500)
-            XCTAssertLessThan(request.httpBody?.count ?? 0, 8 << 20)
             fillRequests.append(items)
             if case .unreachable = failure { throw URLError(.cannotConnectToHost) }
             if case .fill(let n) = failure, fillRequests.count == n {
@@ -206,7 +335,17 @@ final class RescanFixture {
                     attributedBody BLOB,
                     date INTEGER NOT NULL DEFAULT 0,
                     cache_has_attachments INTEGER NOT NULL DEFAULT 0,
-                    associated_message_type INTEGER NOT NULL DEFAULT 0
+                    associated_message_type INTEGER NOT NULL DEFAULT 0,
+                    is_from_me INTEGER NOT NULL DEFAULT 0,
+                    item_type INTEGER NOT NULL DEFAULT 0,
+                    handle_id INTEGER,
+                    associated_message_guid TEXT
+                );
+                CREATE TABLE handle (ROWID INTEGER PRIMARY KEY, id TEXT NOT NULL);
+                CREATE TABLE chat (ROWID INTEGER PRIMARY KEY, guid TEXT NOT NULL UNIQUE, style INTEGER);
+                CREATE TABLE chat_message_join (chat_id INTEGER NOT NULL, message_id INTEGER NOT NULL);
+                CREATE TABLE attachment (
+                    ROWID INTEGER PRIMARY KEY, uti TEXT, mime_type TEXT, transfer_name TEXT, total_bytes INTEGER
                 );
                 CREATE TABLE message_attachment_join (
                     ROWID INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -214,14 +353,36 @@ final class RescanFixture {
                     attachment_id INTEGER NOT NULL
                 );
                 """)
+            var handleIDs: [String: Int64] = [:]
+            var chatIDs: [String: Int64] = [:]
             for (i, row) in rows.enumerated() {
                 let rowID = Int64(i + 1)
+                var handleID: Int64?
+                if let handle = row.handle {
+                    if handleIDs[handle] == nil {
+                        handleIDs[handle] = Int64(handleIDs.count + 1)
+                        try db.execute(sql: "INSERT INTO handle (ROWID, id) VALUES (?, ?)",
+                                       arguments: [handleIDs[handle], handle])
+                    }
+                    handleID = handleIDs[handle]
+                }
+                let appleNanos = Int64(((row.sentAt?.timeIntervalSince1970 ?? 978_307_200) - 978_307_200) * 1e9)
                 try db.execute(sql: """
-                    INSERT INTO message (ROWID, guid, text, attributedBody, cache_has_attachments,
-                                         associated_message_type)
-                    VALUES (?, ?, ?, ?, ?, ?)
-                    """, arguments: [rowID, row.guid, row.text, row.attributedBody,
-                                     row.hasAttachment ? 1 : 0, row.associatedMessageType])
+                    INSERT INTO message (ROWID, guid, text, attributedBody, date, cache_has_attachments,
+                                         associated_message_type, is_from_me, handle_id)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """, arguments: [rowID, row.guid, row.text, row.attributedBody, appleNanos,
+                                     row.hasAttachment ? 1 : 0, row.associatedMessageType,
+                                     row.isFromMe ? 1 : 0, handleID])
+                if let chat = row.chat {
+                    if chatIDs[chat] == nil {
+                        chatIDs[chat] = Int64(chatIDs.count + 1)
+                        try db.execute(sql: "INSERT INTO chat (ROWID, guid, style) VALUES (?, ?, 43)",
+                                       arguments: [chatIDs[chat], chat])
+                    }
+                    try db.execute(sql: "INSERT INTO chat_message_join (chat_id, message_id) VALUES (?, ?)",
+                                   arguments: [chatIDs[chat], rowID])
+                }
                 if row.hasAttachment {
                     try db.execute(sql:
                         "INSERT INTO message_attachment_join (message_id, attachment_id) VALUES (?, ?)",

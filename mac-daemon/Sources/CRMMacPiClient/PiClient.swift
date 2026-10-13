@@ -182,6 +182,32 @@ public final class PiClient: @unchecked Sendable {
         return try decodeEnrichment(data: data, http: http, type: MissingBodiesPage.self)
     }
 
+    /// GET /api/v1/host/:id/messages/enrichment/group-chats. One page of the
+    /// stored group chats that have messages interactions, with their windows,
+    /// in chat guid order, strictly after `after`. `limit` is 1...500.
+    public func groupChats(
+        auth: PiAuth,
+        after: String?,
+        limit: Int
+    ) async throws -> GroupChatsPage {
+        let request = try builder.groupChats(auth: auth, after: after, limit: limit)
+        let (data, http) = try await transport.send(request)
+        return try decodeEnrichment(data: data, http: http, type: GroupChatsPage.self)
+    }
+
+    /// POST /api/v1/host/:id/messages/enrichment with `add_group_message` and
+    /// `clear_outbound_peer` items (at most 500, under 8 MiB). Each item adds
+    /// evidence or removes an attribution and nothing else, so a retried
+    /// request is safe.
+    public func submitEnrichment(
+        auth: PiAuth,
+        items: [EnrichmentItem]
+    ) async throws -> EnrichmentData {
+        let request = try builder.enrichment(auth: auth, items: items)
+        let (data, http) = try await transport.send(request)
+        return try decodeEnrichment(data: data, http: http, type: EnrichmentData.self)
+    }
+
     /// POST /api/v1/host/:id/messages/enrichment with `fill_body` items (at
     /// most 500, under 8 MiB). Each item sets a stored row's missing body and
     /// nothing else, so a retried request is safe.

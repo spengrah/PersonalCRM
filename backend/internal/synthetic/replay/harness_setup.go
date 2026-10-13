@@ -268,6 +268,8 @@ func newHarness(ctx context.Context, database *db.Database, namespace string, se
 
 	recorder := consumer.NewInteractionRecorder(contactService, stagingRegistry, bus, cadenceUpdater, nil, calendarEventRepo)
 	recorder.SetVenueResolver(venueResolver)
+	groupBursts := service.NewGroupBurstPromoter(messagesRepo, contactService)
+	recorder.SetGroupReplyPromoter(groupBursts)
 	recorderShim.real = consumer.NewInteractionRecorderWorker(bus, database.Pool, recorder, nil)
 	cadenceShim.real = consumer.NewCadenceUpdaterWorker(bus, database.Pool, cadenceUpdater)
 
@@ -301,6 +303,7 @@ func newHarness(ctx context.Context, database *db.Database, namespace string, se
 	messagesEngine := messages.NewAggregationEngine(
 		4, 48, messagesRepo, interactionRepo, contactService, contactService, bus, database.Pool, messagesEnqueuer,
 	)
+	messagesEngine.SetGroupReplyPromoter(groupBursts)
 	gchatEnqueuer := consumer.NewRiverInteractionRecorderEnqueuer(client)
 	gchatEngine := google.NewGChatAggregationEngine(
 		google.GChatBurstWindowHours, google.GChatReplyBridgeHours,
@@ -396,6 +399,7 @@ func newHarness(ctx context.Context, database *db.Database, namespace string, se
 		// reconcile after an icloud_contacts replay is off.
 		AddressBookReconciler: noAddressBookReconcile{},
 		Venue:                 venueResolver,
+		GroupBursts:           groupBursts,
 	})
 
 	// Telegram peer matcher + aggregation engine for the telegram adapter.

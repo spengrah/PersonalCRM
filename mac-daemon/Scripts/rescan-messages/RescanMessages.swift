@@ -1,12 +1,17 @@
-// rescan-messages — one-time operator script that fills the message bodies the
-// Pi lacks, from the Mac's messages database.
+// rescan-messages — one-time operator script that completes what the Pi holds
+// of the Mac's messages database.
 //
-// It walks the Pi's missing-bodies listing, reads each listed guid's source
-// record, decodes the body through `MessageBodyExtractor` and submits it as a
-// `fill_body` enrichment item. Every listed row it does not submit gets one
-// content-free classification. It reads the daemon's config.json and api-key
-// file and opens the messages database read-only; it writes no file, and a
-// body exists only in memory and in the request that carries it to the Pi.
+// A group pass runs first. It walks the Pi's group-chats listing, reads each
+// listed chat through `ChatDBReader.fetchChatWindow`, and for each message
+// sent inside one of the chat's windows submits an `add_group_message`
+// enrichment item, plus a `clear_outbound_peer` item after each of the user's
+// own. The body pass then walks the Pi's missing-bodies listing, reads each
+// listed guid's source record, decodes the body through `MessageBodyExtractor`
+// and submits it as a `fill_body` item. Every listed row it does not submit
+// gets one content-free classification. It reads the daemon's config.json and
+// api-key file and opens the messages database read-only; it writes no file,
+// and a body or sender exists only in memory and in the request that carries
+// it to the Pi.
 import Foundation
 import GRDB
 import CRMMacCore
@@ -39,6 +44,8 @@ enum SourceDecision: Equatable {
 }
 
 struct RescanReport {
+    var groupChats = 0
+    var groupOutcomes: [EnrichmentOutcome: Int] = [:]
     var listed = 0
     var outcomes: [FillBodyOutcome: Int] = [:]
     var byNature: [ByNature: Int] = [:]
@@ -55,21 +62,24 @@ struct RescanReport {
         }
         out.append("unavailable: \(unavailable)")
         out.append("capture_failure: \(captureFailureGuids.count)")
+        out.append("group_chats: \(groupChats)")
+        for outcome in [EnrichmentOutcome.added, .unchanged, .outsideWindow, .cleared, .unknown] {
+            out.append("group.\(outcome.rawValue): \(groupOutcomes[outcome, default: 0])")
+        }
         out += captureFailureGuids.map { "capture_failure_guid: \($0)" }
         return out
     }
 }
 
 /// The Pi caps a listing page and an enrichment request at 500 items, and a
-/// request at 8 MiB. A listing page holds at most 500 guids and is submitted as
-/// a unit, so a request never exceeds 500 items. Requests are split by the
-/// size of each item as JSON-encoded, which counts escaping.
+/// request at 8 MiB. Items are split into requests by count and by the size of
+/// each item as JSON-encoded, which counts escaping.
 private let pageLimit = 500
 private let maxRequestBytes = 8 << 20
 /// `{"items":[` and `]}`.
 private let requestEnvelopeBytes = 12
 
-/// A single body whose encoded item cannot fit in one request.
+/// A single item whose encoding cannot fit in one request.
 private struct OversizeBody: Error {}
 
 func rescanMessages(_ env: RescanEnvironment) async -> Int32 {
@@ -98,7 +108,9 @@ func rescanMessages(_ env: RescanEnvironment) async -> Int32 {
     let pi = env.makePiClient(config.piURL)
     let auth = PiAuth(hostID: config.hostID, apiKey: apiKey)
     do {
-        let report = try await walk(pi: pi, auth: auth, pool: pool)
+        var report = RescanReport()
+        try await groupPass(pi: pi, auth: auth, pool: pool, report: &report)
+        try await bodyPass(pi: pi, auth: auth, pool: pool, report: &report)
         report.lines.forEach(env.stdout)
         return 0
     } catch let error as PiClientError {
@@ -113,8 +125,61 @@ func rescanMessages(_ env: RescanEnvironment) async -> Int32 {
     }
 }
 
-private func walk(pi: PiClient, auth: PiAuth, pool: DatabasePool) async throws -> RescanReport {
-    var report = RescanReport()
+private func groupPass(
+    pi: PiClient, auth: PiAuth, pool: DatabasePool, report: inout RescanReport
+) async throws {
+    var after: String?
+    repeat {
+        let page = try await pi.groupChats(auth: auth, after: after, limit: pageLimit)
+        report.groupChats += page.items.count
+        for chat in page.items {
+            let items = try await pool.read { db in try groupItems(db: db, chat: chat) }
+            for batch in try batches(of: items) {
+                for result in try await pi.submitEnrichment(auth: auth, items: batch).results {
+                    report.groupOutcomes[result.outcome, default: 0] += 1
+                }
+            }
+        }
+        after = page.nextAfter
+    } while after != nil
+}
+
+/// The items to submit for one listed chat: an add for each message sent inside
+/// one of its windows, and a clear after the add of each of the user's own.
+private func groupItems(db: Database, chat: GroupChatItem) throws -> [EnrichmentItem] {
+    guard let first = chat.windows.map(\.start).min(),
+          let last = chat.windows.map(\.end).max() else { return [] }
+    // The wire time drops sub-second precision, so the read is widened by a
+    // second each side and the windows decide on the wire time.
+    let messages = try ChatDBReader.fetchChatWindow(
+        db: db, chatGUID: chat.chatGUID,
+        from: first.addingTimeInterval(-1), through: last.addingTimeInterval(1))
+    var items: [EnrichmentItem] = []
+    for message in messages {
+        let wireTime = try wireTime(of: message.sentAt)
+        guard chat.windows.contains(where: { $0.start <= wireTime && wireTime <= $0.end }) else {
+            continue
+        }
+        items.append(.addGroupMessage(AddGroupMessageItem(
+            guid: message.guid, chatGUID: chat.chatGUID,
+            sender: message.isFromMe ? nil : message.peerHandleRaw,
+            direction: message.isFromMe ? .outbound : .inbound,
+            sentAt: message.sentAt, body: message.text)))
+        if message.isFromMe { items.append(.clearOutboundPeer(guid: message.guid)) }
+    }
+    return items
+}
+
+/// `date` as the Pi receives it: encoded as `sent_at` is, then read back.
+private func wireTime(of date: Date) throws -> Date {
+    let decoder = JSONDecoder()
+    decoder.dateDecodingStrategy = .iso8601
+    return try decoder.decode([Date].self, from: EnrichmentWire.makeEncoder().encode([date]))[0]
+}
+
+private func bodyPass(
+    pi: PiClient, auth: PiAuth, pool: DatabasePool, report: inout RescanReport
+) async throws {
     var after: String?
     repeat {
         let page = try await pi.missingBodies(auth: auth, after: after, limit: pageLimit)
@@ -138,19 +203,18 @@ private func walk(pi: PiClient, auth: PiAuth, pool: DatabasePool) async throws -
         }
         after = page.nextAfter
     } while after != nil
-    return report
 }
 
-private func batches(of items: [FillBodyItem]) throws -> [[FillBodyItem]] {
-    let encoder = JSONEncoder()
-    var batches: [[FillBodyItem]] = []
-    var current: [FillBodyItem] = []
+private func batches<Item: Encodable>(of items: [Item]) throws -> [[Item]] {
+    let encoder = EnrichmentWire.makeEncoder()
+    var batches: [[Item]] = []
+    var current: [Item] = []
     var currentBytes = requestEnvelopeBytes
     for item in items {
         // One byte for the comma that joins the item to its neighbour.
         let bytes = try encoder.encode(item).count + 1
         if requestEnvelopeBytes + bytes >= maxRequestBytes { throw OversizeBody() }
-        if !current.isEmpty && currentBytes + bytes >= maxRequestBytes {
+        if !current.isEmpty && (current.count >= pageLimit || currentBytes + bytes >= maxRequestBytes) {
             batches.append(current)
             current = []
             currentBytes = requestEnvelopeBytes

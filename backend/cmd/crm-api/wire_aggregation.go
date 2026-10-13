@@ -127,6 +127,8 @@ func buildAggregationEngines(
 		database.Pool,
 		messagesEnqueuer,
 	)
+	// A burst the engine extends may now contain a user's group message (R12).
+	messagesEngine.SetGroupReplyPromoter(service.NewGroupBurstPromoter(messagesMessageRepo, contactService))
 	messagesReenqueuer := consumer.NewMessagesAggregatorReenqueuer(
 		messagesEngine,
 		riverClient,

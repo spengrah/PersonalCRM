@@ -39,6 +39,7 @@ const (
 	ingestRejectPayloadInvariant                  = "PAYLOAD_INVARIANT"
 	ingestRejectPayloadInvalid                    = "PAYLOAD_INVALID"
 	ingestRejectIdentityMatchFailed               = "IDENTITY_MATCH_FAILED"
+	ingestRejectGroupPromotionFailed              = "GROUP_PROMOTION_FAILED"
 	ingestRejectStagingUpsertFailed               = "STAGING_UPSERT_FAILED"
 	ingestRejectExternalContactGetFailed          = "EXTERNAL_CONTACT_GET_FAILED"
 	ingestRejectExternalContactUpsertFailed       = "EXTERNAL_CONTACT_UPSERT_FAILED"
@@ -326,6 +327,7 @@ type IngestService struct {
 	discovery             IngestTitleDiscoveryWriter
 	addressBookReconciler AddressBookReconciler
 	venue                 IngestVenueResolver
+	groupBursts           *GroupBurstPromoter
 }
 
 // IngestVenueResolver is the venue-resolution surface the phone-call and
@@ -370,6 +372,9 @@ type IngestDeps struct {
 	// Venue sets interaction.venue_id for phone-call and anarlog-session
 	// interactions atomically with the insert.
 	Venue IngestVenueResolver
+	// GroupBursts promotes the member inbound bursts a user's group message
+	// falls inside (R12).
+	GroupBursts *GroupBurstPromoter
 }
 
 // NewIngestService builds an IngestService. It panics when any dependency
@@ -401,6 +406,7 @@ func NewIngestService(d IngestDeps) *IngestService {
 		discovery:             d.Discovery,
 		addressBookReconciler: d.AddressBookReconciler,
 		venue:                 d.Venue,
+		groupBursts:           d.GroupBursts,
 	}
 }
 
@@ -431,6 +437,7 @@ func (d IngestDeps) missing() []string {
 		{"FollowUp", d.FollowUp == nil},
 		{"AddressBookReconciler", d.AddressBookReconciler == nil},
 		{"Venue", d.Venue == nil},
+		{"GroupBursts", d.GroupBursts == nil},
 	} {
 		if f.isNil {
 			m = append(m, f.name)
@@ -762,6 +769,10 @@ func (s *IngestService) IngestBatch(
 //  4. Return the matched contactID (nil when unmatched — caller skips
 //     aggregator enqueue) and nil rejection on success.
 //
+// The user's own group message (raw_message.sent with is_group) skips step 2:
+// it is stored with no member attribution and promotes each member inbound
+// burst whose window contains it (R12), so it never enqueues the aggregator.
+//
 // Returns (contactID, rejection): contactID may be nil even on success
 // (unmatched peer). rejection != nil means the inline handler refused
 // the event for a domain reason; the caller rolls back the savepoint
@@ -786,35 +797,45 @@ func (s *IngestService) handleRawMessage(
 		}
 	}
 
-	idType := identity.DetectIdentifierType(p.PeerHandle)
-	matchReq := MatchRequest{
-		RawIdentifier: p.PeerHandle,
-		Type:          idType,
-		Source:        env.Source,
-		SourceID:      &p.Guid,
-		DisplayName:   p.PeerName,
-	}
-	// FailEmpty: a raw_message carries exactly one peer handle, so an
-	// un-normalizable handle is fatal data — reject the event (the
-	// daemon holds its cursor for retry) rather than dropping it.
-	matchResult, err := s.identity.MatchOrCreateTx(ctx, tx, matchReq, NormalizationFailEmpty)
-	if err != nil {
-		return nil, &IngestPerEventRejection{
-			Code:    ingestRejectIdentityMatchFailed,
-			Message: fmt.Sprintf("identity match: %s", err.Error()),
-		}
-	}
-
+	// The user's own group message names no recipient, so it carries no member
+	// attribution: no peer, no identity match, no contact. R12 reads it as the
+	// user's reply to each member inbound burst whose window contains it.
+	outboundGroup := env.Kind == events.KindRawMessageSent && p.IsGroup
+	peerHandle := p.PeerHandle
 	var peerNormalized *string
-	if matchResult.Identity != nil && matchResult.Identity.Identifier != "" {
-		s := matchResult.Identity.Identifier
-		peerNormalized = &s
+	var contactID *uuid.UUID
+	if outboundGroup {
+		peerHandle = ""
+	} else {
+		idType := identity.DetectIdentifierType(p.PeerHandle)
+		matchReq := MatchRequest{
+			RawIdentifier: p.PeerHandle,
+			Type:          idType,
+			Source:        env.Source,
+			SourceID:      &p.Guid,
+			DisplayName:   p.PeerName,
+		}
+		// FailEmpty: a raw_message carries exactly one peer handle, so an
+		// un-normalizable handle is fatal data — reject the event (the
+		// daemon holds its cursor for retry) rather than dropping it.
+		matchResult, err := s.identity.MatchOrCreateTx(ctx, tx, matchReq, NormalizationFailEmpty)
+		if err != nil {
+			return nil, &IngestPerEventRejection{
+				Code:    ingestRejectIdentityMatchFailed,
+				Message: fmt.Sprintf("identity match: %s", err.Error()),
+			}
+		}
+		if matchResult.Identity != nil && matchResult.Identity.Identifier != "" {
+			s := matchResult.Identity.Identifier
+			peerNormalized = &s
+		}
+		contactID = matchResult.ContactID
 	}
 
 	upsertParams := repository.UpsertMessagesMessageParams{
 		Guid:             p.Guid,
 		ChatGuid:         p.ChatID,
-		PeerHandle:       p.PeerHandle,
+		PeerHandle:       peerHandle,
 		PeerNormalized:   peerNormalized,
 		Text:             p.Text,
 		MessageType:      p.MessageType,
@@ -822,7 +843,7 @@ func (s *IngestService) handleRawMessage(
 		IsOutgoing:       env.Kind == events.KindRawMessageSent,
 		IsGroupChat:      p.IsGroup,
 		ReplyToGuid:      p.ReplyToGuid,
-		MatchedContactID: matchResult.ContactID,
+		MatchedContactID: contactID,
 		MacHostID:        &hostID,
 	}
 	if _, err := s.messages.UpsertMessageTx(ctx, tx, upsertParams); err != nil {
@@ -832,7 +853,16 @@ func (s *IngestService) handleRawMessage(
 		}
 	}
 
-	return matchResult.ContactID, nil
+	if outboundGroup {
+		if err := s.groupBursts.PromoteContainingTx(ctx, tx, p.ChatID, p.SentAt); err != nil {
+			return nil, &IngestPerEventRejection{
+				Code:    ingestRejectGroupPromotionFailed,
+				Message: fmt.Sprintf("promote containing group bursts: %s", err.Error()),
+			}
+		}
+	}
+
+	return contactID, nil
 }
 
 // verifyRawMessageInvariants enforces the cross-field consistency

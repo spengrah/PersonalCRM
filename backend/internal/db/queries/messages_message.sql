@@ -176,6 +176,9 @@ SELECT * FROM messages_message
 WHERE matched_contact_id IS NULL
   AND processed_at IS NULL
   AND deleted_at IS NULL
+  -- An outbound group-chat message is never attributed to a member: it names
+  -- no recipient, so no later contact can claim it.
+  AND NOT (is_outgoing AND is_group_chat)
 ORDER BY sent_at;
 
 -- name: UpdateMatchedContactForStrandedMessage :exec
@@ -257,3 +260,93 @@ SET text = @body
 WHERE guid = @guid
   AND deleted_at IS NULL
   AND (text IS NULL OR text = '');
+
+-- name: ListMessagesGroupBurstWindows :many
+-- The one derivation of a group-chat burst's window: the closed span from the
+-- earliest to the latest sent time of the live messages_message rows linked to
+-- one live messages interaction. The group-chats listing, the
+-- add_group_message containment test and the R12 promotion all read windows
+-- through this query and compute none of their own.
+-- Every filter is optional. Chats page by an exclusive @after chat_guid, and
+-- @chat_limit bounds the number of distinct chats returned.
+WITH windows AS (
+    SELECT i.id AS interaction_id, i.contact_id, i.direction, i.occurred_at,
+           m.chat_guid,
+           MIN(m.sent_at)::timestamptz AS window_start,
+           MAX(m.sent_at)::timestamptz AS window_end
+    FROM interaction i
+    JOIN messages_message m ON m.interaction_id = i.id
+    WHERE i.source = 'messages'
+      AND i.deleted_at IS NULL
+      AND m.deleted_at IS NULL
+      AND m.is_group_chat
+      AND (sqlc.narg(chat_guid)::text IS NULL OR m.chat_guid = sqlc.narg(chat_guid)::text)
+      AND (sqlc.narg(after)::text IS NULL OR m.chat_guid > sqlc.narg(after)::text)
+      AND (sqlc.narg(interaction_id)::uuid IS NULL OR i.id = sqlc.narg(interaction_id)::uuid)
+      AND (sqlc.narg(direction)::text IS NULL OR i.direction = sqlc.narg(direction)::text)
+    GROUP BY i.id, i.contact_id, i.direction, i.occurred_at, m.chat_guid
+), matching AS (
+    SELECT w.*, DENSE_RANK() OVER (ORDER BY w.chat_guid) AS chat_rank
+    FROM windows w
+    WHERE sqlc.narg(contains_at)::timestamptz IS NULL
+       OR (w.window_start <= sqlc.narg(contains_at)::timestamptz
+           AND sqlc.narg(contains_at)::timestamptz <= w.window_end)
+)
+SELECT interaction_id, contact_id, direction, occurred_at, chat_guid, window_start, window_end
+FROM matching
+WHERE chat_rank <= COALESCE(sqlc.narg(chat_limit)::int, 2147483647)
+ORDER BY chat_guid, window_start, window_end, interaction_id;
+
+-- name: ExistsMessagesUnattributedGroupOutbound :one
+-- Whether a live outbound group-chat message with no member attribution that
+-- no pipeline step has processed was sent inside the closed span. Ingest stores
+-- the user's group messages in exactly this state, and it is the state R12
+-- reads as the user's reply. A message the enrichment added is stored
+-- processed, and a cleared message was processed when it was linked to its
+-- burst, so neither reads as a reply.
+SELECT EXISTS (
+    SELECT 1 FROM messages_message
+    WHERE chat_guid = @chat_guid
+      AND is_group_chat
+      AND is_outgoing
+      AND peer_handle = ''
+      AND peer_normalized IS NULL
+      AND matched_contact_id IS NULL
+      AND processed_at IS NULL
+      AND deleted_at IS NULL
+      AND sent_at >= @from_time AND sent_at <= @to_time
+) AS found;
+
+-- name: MessagesMessageGuidExists :one
+-- Whether any row holds the guid, soft-deleted or not.
+SELECT EXISTS (SELECT 1 FROM messages_message WHERE guid = @guid) AS found;
+
+-- name: InsertMessagesGroupEvidenceMessage :execrows
+-- Adds a group-chat message as evidence only: stored processed with no
+-- interaction link and no contact match, so no aggregation, sweep, promotion
+-- or rematch picks it up. The caller leaves peer_handle empty for the user's
+-- own message. Returns 0 rows when the guid is already stored.
+INSERT INTO messages_message (
+    guid, chat_guid, peer_handle, text, message_type, sent_at,
+    is_outgoing, is_group_chat, mac_host_id, processed_at
+) VALUES (
+    @guid, @chat_guid, @peer_handle, @text, 'text', @sent_at,
+    @is_outgoing, TRUE, @mac_host_id, NOW()
+)
+ON CONFLICT (guid) DO NOTHING;
+
+-- name: ClearMessagesMessageOutboundPeer :execrows
+-- Removes the member attribution from a stored, non-deleted outbound
+-- group-chat row, leaving the state ingest stores for such a message. Touches
+-- no other column: guid, chat, time, body, interaction link, processing and
+-- claim state stay. Returns 0 rows when the row is absent, deleted, not an
+-- outbound group-chat row, or already without attribution.
+UPDATE messages_message
+SET peer_handle = '',
+    peer_normalized = NULL,
+    matched_contact_id = NULL
+WHERE guid = @guid
+  AND deleted_at IS NULL
+  AND is_outgoing
+  AND is_group_chat
+  AND (peer_handle <> '' OR peer_normalized IS NOT NULL OR matched_contact_id IS NOT NULL);

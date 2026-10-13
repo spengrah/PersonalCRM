@@ -336,14 +336,40 @@ public final class ChatDBReader {
             exhausted: rows.count < limit)
     }
 
+    /// Every message row of the chat whose `chat.guid` is `chatGUID` sent
+    /// within `from ... through` (both inclusive), ordered by sent time
+    /// then ROWID ascending. Rows map exactly as the other chat.db reads
+    /// map them (same skips, same body decoding), so the group re-scan
+    /// shapes them through the same publish rule as the live tick.
+    public static func fetchChatWindow(
+        db: Database,
+        chatGUID: String,
+        from: Date,
+        through: Date
+    ) throws -> [ChatDBMessage] {
+        let sql = """
+            \(Self.selectColumnsAndJoins)
+            WHERE chat.guid = ? AND message.date >= ? AND message.date <= ?
+            ORDER BY message.date ASC, message.ROWID ASC
+            """
+        let rows = try Row.fetchAll(
+            db, sql: sql,
+            arguments: [chatGUID, appleNanos(from), appleNanos(through)])
+        return rows.compactMap(Self.mapMessageRow)
+    }
+
+    /// chat.db's Apple-epoch NANOSECONDS for `date`.
+    static func appleNanos(_ date: Date) -> Int64 {
+        Int64(((date.timeIntervalSince1970 - appleEpochOffset) * 1e9).rounded())
+    }
+
     /// Resolve an outbound row's peer: the `handle.id` of the FIRST
     /// `chat_handle_join` entry (by join ROWID) for `chatGUID`. Returns
     /// the raw handle.id string, or nil if the chat has no
     /// `chat_handle_join` rows.
     ///
-    /// This covers both 1:1 (the chat's single peer handle) and group
-    /// chats (the first member by join ROWID — the v1 simplification, so
-    /// every outbound group message attributes to the same peer). There
+    /// The publish rule uses it for 1:1 chats only (the chat's single
+    /// peer handle); an outbound group message names no member. There
     /// is NO self-handle exclusion: the query returns the first joined
     /// handle, full stop. It behaves as "the peer" only because macOS
     /// does not insert the account owner's own handle into
@@ -390,5 +416,37 @@ public final class ChatDBReader {
             }
         }
         return resolved
+    }
+
+    /// Raw `handle.id`s of every member (`chat_handle_join`) of the group
+    /// chats of `rows`, as a `chatGUID -> handles` map. One query per
+    /// distinct group chat (memoized — most rows in a page share a few
+    /// chats). Chats with no members are simply absent from the map.
+    ///
+    /// Runs inside the same `pool.read` snapshot as the page fetch so a
+    /// transient error lands in the caller's catch path (cursor not
+    /// advanced) rather than silently dropping rows.
+    public static func resolveGroupMembers(
+        db: Database,
+        rows: [ChatDBMessage]
+    ) throws -> [String: [String]] {
+        let sql = """
+            SELECT handle.id AS hid
+            FROM chat_handle_join AS chj
+            JOIN chat   ON chat.ROWID = chj.chat_id
+            JOIN handle ON handle.ROWID = chj.handle_id
+            WHERE chat.guid = ?
+            ORDER BY chj.ROWID ASC
+            """
+        var members: [String: [String]] = [:]
+        var attempted: Set<String> = []
+        for row in rows where row.isGroup {
+            guard let chatGUID = row.chatGUID, !chatGUID.isEmpty,
+                  attempted.insert(chatGUID).inserted else { continue }
+            let handles = try Row.fetchAll(db, sql: sql, arguments: [chatGUID])
+                .compactMap { $0["hid"] as String? }
+            if !handles.isEmpty { members[chatGUID] = handles }
+        }
+        return members
     }
 }

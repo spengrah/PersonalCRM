@@ -136,6 +136,13 @@ type followUpDispatcher interface {
 	HandleEvent(ctx context.Context, tx pgx.Tx, env *events.Envelope) error
 }
 
+// groupReplyPromoter promotes an inbound group-chat burst to mutual when its
+// window contains the user's own group message (R12). Satisfied by
+// *service.GroupBurstPromoter; nil in tests that do not exercise group chats.
+type groupReplyPromoter interface {
+	PromoteIfRepliedTx(ctx context.Context, tx pgx.Tx, interactionID uuid.UUID) error
+}
+
 // InteractionRecorder is the event-bus consumer that turns raw provider
 // events into interaction rows + emits interaction.recorded. See spec
 // §3.4.1 for the atomicity contract.
@@ -155,6 +162,7 @@ type InteractionRecorder struct {
 	followUp     followUpDispatcher
 	calendarLock calendarEventLocker
 	venue        venueResolver
+	groupReplies groupReplyPromoter
 }
 
 // NewInteractionRecorder builds the consumer. staging may be nil for
@@ -186,6 +194,10 @@ func NewInteractionRecorder(
 		calendarLock: calendarLock,
 	}
 }
+
+// SetGroupReplyPromoter wires the R12 check that runs after a messages burst is
+// recorded: a new inbound burst may already contain a user's group message.
+func (r *InteractionRecorder) SetGroupReplyPromoter(p groupReplyPromoter) { r.groupReplies = p }
 
 // SetVenueResolver wires the venue resolver used to populate interaction.venue_id
 // for message.* and gcal interactions. Optional: when unset the recorder records
@@ -371,6 +383,15 @@ func (r *InteractionRecorder) HandleEvent(ctx context.Context, tx pgx.Tx, env *e
 	if r.followUp != nil {
 		if followUpErr := r.followUp.HandleEvent(ctx, tx, recordedEnv); followUpErr != nil {
 			return nil, fmt.Errorf("inline apply follow-up: %w", followUpErr)
+		}
+	}
+
+	// R12: a freshly recorded inbound group burst may already contain a user's
+	// group message that arrived first. Runs last so the promotion applies on
+	// top of the burst's own inbound cadence effect.
+	if r.groupReplies != nil && env.Source == repository.InteractionSourceMessages && env.Kind == events.KindMessageReceived {
+		if err := r.groupReplies.PromoteIfRepliedTx(ctx, tx, res.Interaction.ID); err != nil {
+			return nil, fmt.Errorf("promote burst the user replied inside: %w", err)
 		}
 	}
 

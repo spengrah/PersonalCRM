@@ -540,7 +540,10 @@ func validateRawMessagePayload(index int, ev IngestEventRequest) *IngestError {
 		return &IngestError{Index: index, Code: ingestCodeMissingField,
 			Message: "raw_message payload: chat_id is required"}
 	}
-	if p.PeerHandle == "" {
+	// The user's own group message names no recipient, so its peer_handle is
+	// empty; every other raw message needs the peer it was exchanged with.
+	usersGroupMessage := events.Kind(ev.Kind) == events.KindRawMessageSent && p.IsGroup
+	if p.PeerHandle == "" && !usersGroupMessage {
 		return &IngestError{Index: index, Code: ingestCodeMissingField,
 			Message: "raw_message payload: peer_handle is required"}
 	}
