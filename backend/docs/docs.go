@@ -5729,6 +5729,9 @@ const docTemplate = `{
                 "answered": {
                     "type": "boolean"
                 },
+                "direction": {
+                    "type": "string"
+                },
                 "duration_seconds": {
                     "type": "integer"
                 },
@@ -6415,6 +6418,9 @@ const docTemplate = `{
         "handlers.InteractionListItemResponse": {
             "type": "object",
             "properties": {
+                "cadence_inert": {
+                    "type": "boolean"
+                },
                 "call": {
                     "$ref": "#/definitions/handlers.CallSummaryResponse"
                 },
@@ -6441,6 +6447,9 @@ const docTemplate = `{
                 },
                 "is_group": {
                     "type": "boolean"
+                },
+                "kind": {
+                    "type": "string"
                 },
                 "label": {
                     "type": "string"

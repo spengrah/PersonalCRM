@@ -15,6 +15,8 @@ export type InteractionDirection = 'outbound' | 'inbound' | 'mutual';
 export type InteractionContentKind = 'messages' | 'meeting_note' | 'call' | 'none';
 export type InteractionVenueKind = 'group_chat' | 'dm' | 'email_thread';
 export type CallService = 'voice' | 'facetime_audio' | 'facetime_video';
+export type CallDirection = 'inbound' | 'outbound';
+export type TimelineItemKind = 'interaction' | 'missed_call';
 
 //////////
 // source: contact_dto.go
@@ -266,11 +268,20 @@ export interface EventSummaryResponse {
 }
 export interface CallSummaryResponse {
   service: CallService;
+  direction: CallDirection;
   answered?: boolean;
   has_voicemail: boolean;
   duration_seconds: number /* int */;
 }
+/**
+ * InteractionListItemResponse is one item of a contact's interaction history.
+ * Kind "interaction" is a recorded interaction and ID its interaction id; kind
+ * "missed_call" is a missed inbound call that left no voicemail, ID the call
+ * record's id. A missed call bears no cadence, which CadenceInert states.
+ */
 export interface InteractionListItemResponse {
+  kind: TimelineItemKind;
+  cadence_inert: boolean;
   id: string;
   contact_id: string;
   source: string;

@@ -32,6 +32,8 @@ vi.mock('@/hooks/use-accelerated-time', () => ({
 import { Interactions } from '../interactions'
 
 const item: InteractionListItemResponse = {
+  kind: 'interaction',
+  cadence_inert: false,
   id: 'interaction-1',
   contact_id: 'contact-1',
   source: 'gchat',

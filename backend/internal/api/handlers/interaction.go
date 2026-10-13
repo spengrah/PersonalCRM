@@ -98,36 +98,26 @@ func (h *InteractionHandler) ListContactInteractions(c *gin.Context) {
 		return
 	}
 	ctx := c.Request.Context()
-	interactions, err := h.interactionRepo.ListContactInteractionsFiltered(ctx, params)
+	timeline, err := h.content.ListTimeline(ctx, params)
 	if err != nil {
 		api.RespondInternal(c, err)
 		return
 	}
 
-	total, err := h.interactionRepo.CountContactInteractionsFiltered(ctx, params)
+	total, err := h.interactionRepo.CountContactTimelineFiltered(ctx, params)
 	if err != nil {
 		api.RespondInternal(c, err)
 		return
 	}
 
-	enrichment, err := h.content.EnrichPage(ctx, interactions)
-	if err != nil {
-		api.RespondInternal(c, err)
-		return
-	}
 	venues, err := h.content.ListContactVenues(ctx, contactID)
 	if err != nil {
 		api.RespondInternal(c, err)
 		return
 	}
-	items := make([]InteractionListItemResponse, len(interactions))
-	for i, interaction := range interactions {
-		enriched, exists := enrichment[interaction.ID]
-		if !exists {
-			api.RespondInternal(c, errors.New("interaction enrichment missing"))
-			return
-		}
-		items[i] = interactionListItemResponse(interaction, enriched)
+	items := make([]InteractionListItemResponse, len(timeline))
+	for i, item := range timeline {
+		items[i] = interactionListItemResponse(item)
 	}
 	response := InteractionListResponse{Items: items, VenueOptions: venueTagResponses(venues)}
 
@@ -175,11 +165,13 @@ func interactionListParams(c *gin.Context, contactID uuid.UUID, limit, offset in
 	return params, true
 }
 
-func interactionListItemResponse(interaction repository.Interaction, enriched service.InteractionEnrichment) InteractionListItemResponse {
+func interactionListItemResponse(item service.TimelineItem) InteractionListItemResponse {
+	enriched := item.Enrichment
 	return InteractionListItemResponse{
-		ID: interaction.ID.String(), ContactID: interaction.ContactID.String(), Source: interaction.Source,
-		SourceRef: interaction.SourceRef, OccurredAt: interaction.OccurredAt, Description: interaction.Description,
-		Direction: interaction.Direction, CreatedAt: interaction.CreatedAt, Label: enriched.Label,
+		Kind: item.Kind, CadenceInert: item.Kind == repository.TimelineKindMissedCall,
+		ID: item.ID.String(), ContactID: item.ContactID.String(), Source: item.Source,
+		SourceRef: item.SourceRef, OccurredAt: item.OccurredAt, Description: item.Description,
+		Direction: item.Direction, CreatedAt: item.CreatedAt, Label: enriched.Label,
 		ContentKind: enriched.ContentKind, MessageCount: enriched.MessageCount, IsGroup: enriched.IsGroup,
 		VenueTags: venueTagResponses(enriched.VenueTags), Event: eventSummaryResponse(enriched.Event), Call: callSummaryResponse(enriched.Call),
 	}
@@ -204,7 +196,7 @@ func callSummaryResponse(call *service.CallContent) *CallSummaryResponse {
 	if call == nil {
 		return nil
 	}
-	return &CallSummaryResponse{Service: call.Service, Answered: call.Answered, HasVoicemail: call.HasVoicemail, DurationSeconds: call.DurationSeconds}
+	return &CallSummaryResponse{Service: call.Service, Direction: call.Direction, Answered: call.Answered, HasVoicemail: call.HasVoicemail, DurationSeconds: call.DurationSeconds}
 }
 
 // GetInteractionContent returns the assembled read-only content for an interaction.

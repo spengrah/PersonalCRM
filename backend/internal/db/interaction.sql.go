@@ -43,33 +43,48 @@ func (q *Queries) CountContactInteractions(ctx context.Context, contactID uuid.U
 	return count, err
 }
 
-const CountContactInteractionsFiltered = `-- name: CountContactInteractionsFiltered :one
-SELECT COUNT(*) FROM interaction
-WHERE contact_id = $1
-  AND deleted_at IS NULL
-  AND ($2::timestamptz IS NULL OR occurred_at >= $2)
-  AND ($3::timestamptz IS NULL OR occurred_at < $3)
-  AND (
-    ($4::text IS NULL AND $5::text IS NULL)
-    OR (
-      $4::text IS NOT NULL AND $5::text IS NOT NULL
-      AND CASE
-        WHEN $4::text IN ('email', 'gchat', 'whatsapp') THEN EXISTS (
-          SELECT 1 FROM comms_message cm WHERE cm.interaction_id = interaction.id AND cm.deleted_at IS NULL
-            AND cm.source = $4::text AND cm.thread_id = $5::text)
-        WHEN $4::text = 'telegram' THEN EXISTS (
-          SELECT 1 FROM telegram_message tm WHERE tm.interaction_id = interaction.id AND tm.deleted_at IS NULL
-            AND tm.telegram_chat_id::text = $5::text)
-        WHEN $4::text = 'messages' THEN EXISTS (
-          SELECT 1 FROM messages_message mm WHERE mm.interaction_id = interaction.id AND mm.deleted_at IS NULL
-            AND mm.chat_guid = $5::text)
-        ELSE FALSE
-      END
+const CountContactTimelineFiltered = `-- name: CountContactTimelineFiltered :one
+SELECT COUNT(*) FROM (
+  SELECT interaction.id FROM interaction
+  WHERE 'interaction' = ANY($1::text[])
+    AND interaction.contact_id = $2
+    AND interaction.deleted_at IS NULL
+    AND ($3::timestamptz IS NULL OR interaction.occurred_at >= $3)
+    AND ($4::timestamptz IS NULL OR interaction.occurred_at < $4)
+    AND (
+      ($5::text IS NULL AND $6::text IS NULL)
+      OR (
+        $5::text IS NOT NULL AND $6::text IS NOT NULL
+        AND CASE
+          WHEN $5::text IN ('email', 'gchat', 'whatsapp') THEN EXISTS (
+            SELECT 1 FROM comms_message cm WHERE cm.interaction_id = interaction.id AND cm.deleted_at IS NULL
+              AND cm.source = $5::text AND cm.thread_id = $6::text)
+          WHEN $5::text = 'telegram' THEN EXISTS (
+            SELECT 1 FROM telegram_message tm WHERE tm.interaction_id = interaction.id AND tm.deleted_at IS NULL
+              AND tm.telegram_chat_id::text = $6::text)
+          WHEN $5::text = 'messages' THEN EXISTS (
+            SELECT 1 FROM messages_message mm WHERE mm.interaction_id = interaction.id AND mm.deleted_at IS NULL
+              AND mm.chat_guid = $6::text)
+          ELSE FALSE
+        END
+      )
     )
-  )
+  UNION ALL
+  SELECT phone_call.id FROM phone_call
+  WHERE 'missed_call' = ANY($1::text[])
+    AND phone_call.matched_contact_id = $2
+    AND phone_call.interaction_id IS NULL
+    AND phone_call.direction = 'inbound'
+    AND phone_call.answered IS NOT TRUE
+    AND NOT phone_call.has_voicemail
+    AND $5::text IS NULL AND $6::text IS NULL
+    AND ($3::timestamptz IS NULL OR phone_call.started_at >= $3)
+    AND ($4::timestamptz IS NULL OR phone_call.started_at < $4)
+) AS item
 `
 
-type CountContactInteractionsFilteredParams struct {
+type CountContactTimelineFilteredParams struct {
+	Kinds          []string   `json:"kinds"`
 	ContactID      uuid.UUID  `json:"contact_id"`
 	FromTime       *time.Time `json:"from_time"`
 	ToTime         *time.Time `json:"to_time"`
@@ -77,8 +92,11 @@ type CountContactInteractionsFilteredParams struct {
 	VenueContainer *string    `json:"venue_container"`
 }
 
-func (q *Queries) CountContactInteractionsFiltered(ctx context.Context, arg CountContactInteractionsFilteredParams) (int64, error) {
-	row := q.db.QueryRow(ctx, CountContactInteractionsFiltered,
+// Counts the items ListContactTimelineFiltered pages over, under the same
+// arguments.
+func (q *Queries) CountContactTimelineFiltered(ctx context.Context, arg CountContactTimelineFilteredParams) (int64, error) {
+	row := q.db.QueryRow(ctx, CountContactTimelineFiltered,
+		arg.Kinds,
 		arg.ContactID,
 		arg.FromTime,
 		arg.ToTime,
@@ -541,35 +559,50 @@ func (q *Queries) ListContactInteractions(ctx context.Context, arg ListContactIn
 	return items, nil
 }
 
-const ListContactInteractionsFiltered = `-- name: ListContactInteractionsFiltered :many
-SELECT id, contact_id, source, source_ref, occurred_at, description, created_at, deleted_at, direction, venue_id FROM interaction
-WHERE contact_id = $1
-  AND deleted_at IS NULL
-  AND ($2::timestamptz IS NULL OR occurred_at >= $2)
-  AND ($3::timestamptz IS NULL OR occurred_at < $3)
-  AND (
-    ($4::text IS NULL AND $5::text IS NULL)
-    OR (
-      $4::text IS NOT NULL AND $5::text IS NOT NULL
-      AND CASE
-        WHEN $4::text IN ('email', 'gchat', 'whatsapp') THEN EXISTS (
-          SELECT 1 FROM comms_message cm WHERE cm.interaction_id = interaction.id AND cm.deleted_at IS NULL
-            AND cm.source = $4::text AND cm.thread_id = $5::text)
-        WHEN $4::text = 'telegram' THEN EXISTS (
-          SELECT 1 FROM telegram_message tm WHERE tm.interaction_id = interaction.id AND tm.deleted_at IS NULL
-            AND tm.telegram_chat_id::text = $5::text)
-        WHEN $4::text = 'messages' THEN EXISTS (
-          SELECT 1 FROM messages_message mm WHERE mm.interaction_id = interaction.id AND mm.deleted_at IS NULL
-            AND mm.chat_guid = $5::text)
-        ELSE FALSE
-      END
+const ListContactTimelineFiltered = `-- name: ListContactTimelineFiltered :many
+SELECT item.kind, item.id FROM (
+  SELECT 'interaction'::text AS kind, interaction.id, interaction.occurred_at FROM interaction
+  WHERE 'interaction' = ANY($1::text[])
+    AND interaction.contact_id = $2
+    AND interaction.deleted_at IS NULL
+    AND ($3::timestamptz IS NULL OR interaction.occurred_at >= $3)
+    AND ($4::timestamptz IS NULL OR interaction.occurred_at < $4)
+    AND (
+      ($5::text IS NULL AND $6::text IS NULL)
+      OR (
+        $5::text IS NOT NULL AND $6::text IS NOT NULL
+        AND CASE
+          WHEN $5::text IN ('email', 'gchat', 'whatsapp') THEN EXISTS (
+            SELECT 1 FROM comms_message cm WHERE cm.interaction_id = interaction.id AND cm.deleted_at IS NULL
+              AND cm.source = $5::text AND cm.thread_id = $6::text)
+          WHEN $5::text = 'telegram' THEN EXISTS (
+            SELECT 1 FROM telegram_message tm WHERE tm.interaction_id = interaction.id AND tm.deleted_at IS NULL
+              AND tm.telegram_chat_id::text = $6::text)
+          WHEN $5::text = 'messages' THEN EXISTS (
+            SELECT 1 FROM messages_message mm WHERE mm.interaction_id = interaction.id AND mm.deleted_at IS NULL
+              AND mm.chat_guid = $6::text)
+          ELSE FALSE
+        END
+      )
     )
-  )
-ORDER BY occurred_at DESC, id DESC
-LIMIT $7 OFFSET $6
+  UNION ALL
+  SELECT 'missed_call'::text AS kind, phone_call.id, phone_call.started_at AS occurred_at FROM phone_call
+  WHERE 'missed_call' = ANY($1::text[])
+    AND phone_call.matched_contact_id = $2
+    AND phone_call.interaction_id IS NULL
+    AND phone_call.direction = 'inbound'
+    AND phone_call.answered IS NOT TRUE
+    AND NOT phone_call.has_voicemail
+    AND $5::text IS NULL AND $6::text IS NULL
+    AND ($3::timestamptz IS NULL OR phone_call.started_at >= $3)
+    AND ($4::timestamptz IS NULL OR phone_call.started_at < $4)
+) AS item
+ORDER BY item.occurred_at DESC, item.id DESC
+LIMIT $8 OFFSET $7
 `
 
-type ListContactInteractionsFilteredParams struct {
+type ListContactTimelineFilteredParams struct {
+	Kinds          []string   `json:"kinds"`
 	ContactID      uuid.UUID  `json:"contact_id"`
 	FromTime       *time.Time `json:"from_time"`
 	ToTime         *time.Time `json:"to_time"`
@@ -579,8 +612,20 @@ type ListContactInteractionsFilteredParams struct {
 	LimitCount     int32      `json:"limit_count"`
 }
 
-func (q *Queries) ListContactInteractionsFiltered(ctx context.Context, arg ListContactInteractionsFilteredParams) ([]*Interaction, error) {
-	rows, err := q.db.Query(ctx, ListContactInteractionsFiltered,
+type ListContactTimelineFilteredRow struct {
+	Kind string    `json:"kind"`
+	ID   uuid.UUID `json:"id"`
+}
+
+// One page of a contact's interaction history, as (kind, id) keys.
+// Two kinds share the time axis: 'interaction' (a live interaction row) and
+// 'missed_call' (an unanswered inbound call that left no voicemail, which
+// ingest stores as a phone_call with no interaction; see migration 055). The
+// kinds argument selects which kinds the page holds. A missed call has no
+// content container, so any venue filter excludes it.
+func (q *Queries) ListContactTimelineFiltered(ctx context.Context, arg ListContactTimelineFilteredParams) ([]*ListContactTimelineFilteredRow, error) {
+	rows, err := q.db.Query(ctx, ListContactTimelineFiltered,
+		arg.Kinds,
 		arg.ContactID,
 		arg.FromTime,
 		arg.ToTime,
@@ -589,6 +634,33 @@ func (q *Queries) ListContactInteractionsFiltered(ctx context.Context, arg ListC
 		arg.OffsetCount,
 		arg.LimitCount,
 	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []*ListContactTimelineFilteredRow{}
+	for rows.Next() {
+		var i ListContactTimelineFilteredRow
+		if err := rows.Scan(&i.Kind, &i.ID); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const ListInteractionsByIDs = `-- name: ListInteractionsByIDs :many
+SELECT id, contact_id, source, source_ref, occurred_at, description, created_at, deleted_at, direction, venue_id FROM interaction
+WHERE id = ANY($1::uuid[]) AND deleted_at IS NULL
+`
+
+// Live interactions with the given ids, in no particular order. Hydrates the
+// interaction keys of a ListContactTimelineFiltered page.
+func (q *Queries) ListInteractionsByIDs(ctx context.Context, ids []uuid.UUID) ([]*Interaction, error) {
+	rows, err := q.db.Query(ctx, ListInteractionsByIDs, ids)
 	if err != nil {
 		return nil, err
 	}

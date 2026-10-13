@@ -5,7 +5,7 @@ import { useContactInteractions } from '@/hooks/use-interactions'
 import { useUpcomingEventsForContact } from '@/hooks/use-calendar'
 import { useAcceleratedTime } from '@/hooks/use-accelerated-time'
 import type { CalendarEvent } from '@/types/calendar'
-import { InteractionRow } from './interaction-row'
+import { InteractionRow, MissedCallRow } from './interaction-row'
 import {
   InteractionFilters,
   DEFAULT_FILTER_SELECTION,
@@ -128,13 +128,17 @@ export function Interactions({ contactId }: { contactId: string }) {
         <>
           {items.length > 0 && (
             <div role="list" aria-label="Interaction history" className="divide-y divide-gray-200">
-              {items.map(item => (
-                <InteractionRow
-                  key={item.id}
-                  item={item}
-                  venueFilter={selection.venue || undefined}
-                />
-              ))}
+              {items.map(item =>
+                item.kind === 'missed_call' ? (
+                  <MissedCallRow key={`${item.kind}:${item.id}`} item={item} />
+                ) : (
+                  <InteractionRow
+                    key={`${item.kind}:${item.id}`}
+                    item={item}
+                    venueFilter={selection.venue || undefined}
+                  />
+                )
+              )}
             </div>
           )}
           {interactions.hasNextPage && (

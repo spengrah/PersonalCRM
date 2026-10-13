@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import type { InteractionListItemResponse } from '@/types/generated/contact'
+import type { CallSummaryResponse, InteractionListItemResponse } from '@/types/generated/contact'
 import { useInteractionContent } from '@/hooks/use-interactions'
 import { InteractionContent } from './interaction-content'
 
@@ -113,9 +113,16 @@ function EventDetails({ item }: { item: InteractionListItemResponse }) {
   )
 }
 
+// "Missed" names an inbound call the user did not answer. A call the user
+// placed is connected when it lasted, and otherwise an unanswered attempt.
+function callState(call: CallSummaryResponse): string {
+  if (call.direction === 'outbound') return call.duration_seconds > 0 ? 'Connected' : 'No answer'
+  return call.answered === true ? 'Answered' : 'Missed'
+}
+
 function CallDetails({ item }: { item: InteractionListItemResponse }) {
   if (!item.call) return null
-  const state = item.call.answered === true ? 'Answered' : 'Missed'
+  const state = callState(item.call)
   return (
     <div className="mt-2 text-sm text-gray-600">
       <span>{callServiceLabel(item.call.service)}</span>
@@ -130,6 +137,40 @@ function CallDetails({ item }: { item: InteractionListItemResponse }) {
       <span> · </span>
       <span>{formatDuration(item.call.duration_seconds)}</span>
     </div>
+  )
+}
+
+// A missed call without voicemail is evidence, not an interaction: it bears no
+// cadence and offers no actions, and its row says so.
+export function MissedCallRow({ item }: { item: InteractionListItemResponse }) {
+  return (
+    <article
+      role="listitem"
+      data-missed-call-id={item.id}
+      data-source={item.source}
+      className="bg-gray-50 px-4 py-4 sm:px-6"
+    >
+      <div className="flex items-start gap-3">
+        <DirectionGlyph direction={item.direction} />
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-2">
+            <span
+              data-badge
+              className="rounded bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-800"
+            >
+              {item.label}
+            </span>
+            <time dateTime={item.occurred_at} className="text-sm text-gray-500">
+              {formatDateTime(item.occurred_at)}
+            </time>
+            {item.cadence_inert && (
+              <span className="text-sm text-gray-500">Not counted toward cadence</span>
+            )}
+          </div>
+          <CallDetails item={item} />
+        </div>
+      </div>
+    </article>
   )
 }
 

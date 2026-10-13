@@ -39,12 +39,19 @@ type EventSummaryResponse struct {
 
 type CallSummaryResponse struct {
 	Service         string `json:"service" tstype:"CallService"`
+	Direction       string `json:"direction" tstype:"CallDirection"`
 	Answered        *bool  `json:"answered,omitempty"`
 	HasVoicemail    bool   `json:"has_voicemail"`
 	DurationSeconds int    `json:"duration_seconds"`
 }
 
+// InteractionListItemResponse is one item of a contact's interaction history.
+// Kind "interaction" is a recorded interaction and ID its interaction id; kind
+// "missed_call" is a missed inbound call that left no voicemail, ID the call
+// record's id. A missed call bears no cadence, which CadenceInert states.
 type InteractionListItemResponse struct {
+	Kind         string                `json:"kind" tstype:"TimelineItemKind"`
+	CadenceInert bool                  `json:"cadence_inert"`
 	ID           string                `json:"id"`
 	ContactID    string                `json:"contact_id"`
 	Source       string                `json:"source"`

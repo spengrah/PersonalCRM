@@ -470,3 +470,84 @@ func TestInteractionListAPI_OrderAndSoftDelete(t *testing.T) {
 	assert.Equal(t, http.StatusOK, status)
 	assert.Empty(t, deadFilter["data"].(map[string]any)["items"])
 }
+
+func seedAPIMissedCall(t *testing.T, e *interactionAPIDB, contactID uuid.UUID, uniqueID string, at time.Time) repository.PhoneCall {
+	t.Helper()
+	answered := false
+	row, err := e.phoneRepo.UpsertCall(e.ctx, repository.UpsertPhoneCallParams{CallUniqueID: "synthetic-missed-" + uniqueID, PeerHandle: "synthetic-peer", PeerNormalized: "synthetic-peer", Service: repository.PhoneCallServiceVoice, Direction: repository.PhoneCallDirectionInbound, Answered: &answered, HasVoicemail: false, DurationSeconds: 0, StartedAt: at, MatchedContactID: &contactID})
+	require.NoError(t, err)
+	// Ingest marks a missed call without voicemail processed with no interaction.
+	require.NoError(t, e.phoneRepo.MarkProcessed(e.ctx, repository.MarkProcessedParams{ID: row.ID, InteractionID: nil}))
+	return *row
+}
+
+func seedAPIVoicemailCall(t *testing.T, e *interactionAPIDB, interactionID uuid.UUID, at time.Time) repository.PhoneCall {
+	t.Helper()
+	answered := false
+	row, err := e.phoneRepo.UpsertCall(e.ctx, repository.UpsertPhoneCallParams{CallUniqueID: "synthetic-voicemail-" + interactionID.String(), PeerHandle: "synthetic-peer", PeerNormalized: "synthetic-peer", Service: repository.PhoneCallServiceVoice, Direction: repository.PhoneCallDirectionInbound, Answered: &answered, HasVoicemail: true, DurationSeconds: 12, StartedAt: at, MatchedContactID: &e.contact.ID})
+	require.NoError(t, err)
+	require.NoError(t, e.phoneRepo.MarkProcessed(e.ctx, repository.MarkProcessedParams{ID: row.ID, InteractionID: &interactionID}))
+	return *row
+}
+
+// spec: IXN-024.missed-call-item
+// spec: IXN-024.cadence-inert-marked
+// spec: IXN-024.missed-call-summary
+// spec: IXN-024.ordered-among-items
+// spec: IXN-024.voicemail-stays-interaction
+// spec: IXN-024.own-calls-only
+func TestInteractionListAPI_MissedCallItems(t *testing.T) {
+	e := newInteractionAPITest(t)
+	when := time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC)
+	older := seedAPIInteraction(t, e, repository.InteractionSourceManual, when.Add(-time.Hour), nil)
+	missed := seedAPIMissedCall(t, e, e.contact.ID, "subject", when)
+	voicemail := seedAPIInteraction(t, e, repository.InteractionSourcePhoneCalls, when.Add(time.Hour), nil)
+	seedAPIVoicemailCall(t, e, voicemail.ID, when.Add(time.Hour))
+	other, err := repository.NewContactRepository(e.database.Queries).CreateContact(e.ctx, repository.CreateContactRequest{FullName: "Synthetic other contact"})
+	require.NoError(t, err)
+	otherMissed := seedAPIMissedCall(t, e, other.ID, "other", when.Add(30*time.Minute))
+
+	status, envelope := getInteractionList(t, e, "")
+	require.Equal(t, http.StatusOK, status)
+	items := envelope["data"].(map[string]any)["items"].([]any)
+	ids := make([]string, len(items))
+	for i, raw := range items {
+		ids[i] = raw.(map[string]any)["id"].(string)
+	}
+	require.Equal(t, []string{voicemail.ID.String(), missed.ID.String(), older.ID.String()}, ids, "items order by time across kinds")
+	assert.NotContains(t, ids, otherMissed.ID.String())
+	assert.Equal(t, float64(3), envelope["meta"].(map[string]any)["pagination"].(map[string]any)["total"])
+
+	voicemailRow, missedRow, olderRow := items[0].(map[string]any), items[1].(map[string]any), items[2].(map[string]any)
+	assert.Equal(t, "missed_call", missedRow["kind"])
+	assert.Equal(t, true, missedRow["cadence_inert"])
+	assert.Equal(t, e.contact.ID.String(), missedRow["contact_id"])
+	assert.Equal(t, repository.InteractionSourcePhoneCalls, missedRow["source"])
+	occurredAt, err := time.Parse(time.RFC3339, missedRow["occurred_at"].(string))
+	require.NoError(t, err)
+	assert.True(t, when.Equal(occurredAt), "a missed call occurs at the call's start")
+	assert.Equal(t, repository.InteractionDirectionInbound, missedRow["direction"])
+	assert.Equal(t, "call", missedRow["content_kind"])
+	assert.Equal(t, []any{}, missedRow["venue_tags"])
+	call := missedRow["call"].(map[string]any)
+	assert.Equal(t, "voice", call["service"])
+	assert.Equal(t, "inbound", call["direction"])
+	assert.Equal(t, false, call["answered"])
+	assert.Equal(t, false, call["has_voicemail"])
+	assert.Equal(t, float64(0), call["duration_seconds"])
+
+	assert.Equal(t, "interaction", voicemailRow["kind"])
+	assert.Equal(t, false, voicemailRow["cadence_inert"])
+	assert.Equal(t, true, voicemailRow["call"].(map[string]any)["has_voicemail"])
+	assert.Equal(t, "interaction", olderRow["kind"])
+	assert.Equal(t, false, olderRow["cadence_inert"])
+
+	// Pagination runs over the same time order, so the missed call is the
+	// second page of one-item pages.
+	status, page2 := getInteractionList(t, e, "?limit=1&page=2")
+	require.Equal(t, http.StatusOK, status)
+	page2Items := page2["data"].(map[string]any)["items"].([]any)
+	require.Len(t, page2Items, 1)
+	assert.Equal(t, missed.ID.String(), page2Items[0].(map[string]any)["id"])
+	assert.Equal(t, float64(3), page2["meta"].(map[string]any)["pagination"].(map[string]any)["total"])
+}

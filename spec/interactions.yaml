@@ -162,7 +162,7 @@ behaviors:
       - key: duplicates-render-distinct
         text: separately recorded interactions remain distinct even when they appear duplicative
       - key: empty-state-explicit
-        text: a contact with no recorded interactions receives an explicit empty state
+        text: a contact with no recorded interactions or missed calls receives an explicit empty state
     provenance: [.agents/spec/contact-interactions-surface.md]
 
   - id: IXN-010
@@ -254,3 +254,73 @@ behaviors:
       - key: empty-arrays-not-null
         text: absent messages or meeting notes are represented by empty arrays rather than null
     provenance: [.agents/spec/contact-interactions-surface.md, InteractionContentService]
+
+  - id: IXN-020
+    title: A missed call without voicemail appears as cadence-inert evidence
+    type: ux
+    status: current
+    surface: ui
+    given: a contact called and the user missed the call, which left no voicemail
+    when: the contact's interaction history is viewed
+    then:
+      - key: distinct-missed-call-row
+        text: the missed call appears at its time as a row distinct from recorded interactions
+      - key: cadence-inert-shown
+        text: the row visibly states that the missed call did not count toward cadence
+      - key: no-row-actions
+        text: the row offers no actions
+    provenance: [.agents/spec/2026-10-13-interaction-review-readiness.md]
+    notes: The missed call stays a call record with no interaction (ING-039); IXN-024 owns its list item and IXN-025 its cadence-inertness at ingest.
+
+  - id: IXN-021
+    title: A call the user placed never shows as missed
+    type: ux
+    status: current
+    surface: ui
+    given: a contact's history includes calls
+    when: the call rows are rendered
+    then:
+      - key: connected-outbound-not-missed
+        text: an outbound call with positive duration shows as connected, never as missed
+      - key: unanswered-outbound-not-missed
+        text: an outbound call with zero duration shows as an unanswered attempt, never as missed
+      - key: missed-inbound-shows-missed
+        text: an inbound call the user did not answer shows as missed, including one that left a voicemail
+    provenance: [.agents/spec/2026-10-13-interaction-review-readiness.md]
+    notes: Missed names an inbound call the user did not answer. The call record's direction and duration decide the state; the recorded interaction direction is unchanged (ING-039).
+
+  - id: IXN-024
+    title: The contact interaction list includes missed calls without voicemail as their own items
+    type: api
+    status: current
+    surface: api
+    given: a contact missed an inbound call that left no voicemail
+    when: the contact's interactions are listed
+    then:
+      - key: missed-call-item
+        text: the missed call is an item of kind missed_call identified by the call record's id, while recorded interactions are items of kind interaction
+      - key: cadence-inert-marked
+        text: the missed-call item is marked cadence-inert and interaction items are not
+      - key: missed-call-summary
+        text: the missed-call item carries the call summary that call interactions carry, including the call's direction
+      - key: ordered-among-items
+        text: missed-call items order, paginate, and count by the call's time among the contact's interactions
+      - key: voicemail-stays-interaction
+        text: a missed call that left a voicemail remains an interaction item
+      - key: own-calls-only
+        text: another contact's missed calls are absent
+    provenance: [.agents/spec/2026-10-13-interaction-review-readiness.md, InteractionContentService.ListTimeline]
+    notes: A missed call has no content container, so a venue filter excludes it; date filters apply to the call's time.
+
+  - id: IXN-025
+    title: A missed call without voicemail never bears cadence
+    type: business-logic
+    status: current
+    surface: none
+    given: a contact with cadence fields, an awaiting-reply window, an active skip and a live follow-up task
+    when: an inbound call the user missed, which left no voicemail, is ingested for that contact
+    then:
+      - no interaction is recorded for the contact
+      - the contact's cadence fields, awaiting-reply window and skip state are unchanged
+      - the contact's follow-up tasks are unchanged and no follow-up operation is enqueued
+    provenance: [.agents/spec/2026-10-13-interaction-review-readiness.md, decideCallInteraction]

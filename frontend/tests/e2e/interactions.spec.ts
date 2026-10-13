@@ -10,6 +10,8 @@ import {
 import { fulfillJson } from './helpers/fulfill-json'
 
 interface InteractionItem {
+  kind: 'interaction' | 'missed_call'
+  cadence_inert: boolean
   id: string
   source: string
   source_ref?: string
@@ -30,6 +32,7 @@ interface InteractionItem {
   }
   call?: {
     service: string
+    direction: 'inbound' | 'outbound'
     answered?: boolean
     has_voicemail: boolean
     duration_seconds: number
@@ -453,5 +456,70 @@ test.describe('Interactions Section @area:interactions', () => {
       { timeout: JOB_TIMEOUT_MS }
     )
     await errorContext.close()
+  })
+})
+
+test.describe('Call evidence @area:interactions', () => {
+  let testApi: TestAPI
+
+  test.beforeEach(async ({ request }, testInfo) => {
+    testApi = createTestAPI(request, testInfo)
+  })
+
+  test.afterEach(async () => {
+    await testApi.cleanup()
+  })
+
+  test('IXN-020: a missed call without voicemail is a distinct, cadence-inert row', async ({
+    page,
+    request,
+  }) => {
+    const seeded = await testApi.seedBehavior('IXN-020')
+    const contactId = handleId(seeded, 'subject')
+    const missedId = handleId(seeded, 'missed-call')
+    const response = await fetchInteractions(request, contactId)
+    const missed = response.items.find(item => item.id === missedId)
+    expect(missed?.kind).toBe('missed_call')
+
+    await page.goto(`/contacts/${contactId}`)
+    const rows = historyRows(page)
+    await expect(rows).toHaveCount(3)
+
+    // spec: IXN-020.distinct-missed-call-row
+    await expect(rows.nth(0)).toHaveAttribute('data-interaction-id', handleId(seeded, 'newer-row'))
+    await expect(rows.nth(1)).toHaveAttribute('data-missed-call-id', missedId)
+    await expect(rows.nth(2)).toHaveAttribute('data-interaction-id', handleId(seeded, 'older-row'))
+    const missedRow = rows.nth(1)
+    await expect(missedRow).not.toHaveAttribute('data-interaction-id', /.*/)
+    await expect(missedRow.locator('[data-badge]')).toHaveText('Missed call')
+    await expect(
+      missedRow.getByText(expectedDateTime(missed!.occurred_at), { exact: true })
+    ).toBeVisible()
+    await expect(missedRow.getByText('Missed', { exact: true })).toBeVisible()
+    // spec: IXN-020.cadence-inert-shown
+    await expect(missedRow.getByText('Not counted toward cadence', { exact: true })).toBeVisible()
+    // spec: IXN-020.no-row-actions
+    await expect(missedRow.getByRole('button')).toHaveCount(0)
+    await expect(rows.nth(0).getByRole('button', { name: 'More actions' })).toHaveCount(1)
+  })
+
+  test('IXN-021: a call the user placed never shows as missed', async ({ page }) => {
+    const seeded = await testApi.seedBehavior('IXN-021')
+    const contactId = handleId(seeded, 'subject')
+    const row = (handle: string) =>
+      page.locator(`[data-interaction-id="${handleId(seeded, handle)}"]`)
+
+    await page.goto(`/contacts/${contactId}`)
+    await expect(historyRows(page)).toHaveCount(3)
+
+    // spec: IXN-021.connected-outbound-not-missed
+    await expect(row('outbound-connected').getByText('Connected', { exact: true })).toBeVisible()
+    await expect(row('outbound-connected').getByText(/missed/i)).toHaveCount(0)
+    // spec: IXN-021.unanswered-outbound-not-missed
+    await expect(row('outbound-no-answer').getByText('No answer', { exact: true })).toBeVisible()
+    await expect(row('outbound-no-answer').getByText(/missed/i)).toHaveCount(0)
+    // spec: IXN-021.missed-inbound-shows-missed
+    await expect(row('inbound-voicemail').getByText('Missed', { exact: true })).toBeVisible()
+    await expect(row('inbound-voicemail').getByText('Voicemail', { exact: true })).toBeVisible()
   })
 })
