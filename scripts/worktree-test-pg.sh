@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Per-worktree Postgres for cross-run integration-test isolation (gh #433).
+# Per-checkout Postgres for cross-run integration-test isolation (gh #433).
 #
-# Each linked git worktree gets its own private Postgres CLUSTER — a plain
+# A checkout that uses its own cluster gets a private Postgres CLUSTER — a plain
 # `initdb`/`pg_ctl` process on a derived 127.0.0.1 port, with its own data dir,
 # maintenance DB and advisory lock. The Go test harness (testdb.SetupPackage)
 # then mints templates/clones inside THAT instance instead of competing with
@@ -9,15 +9,21 @@
 # sudo, no system cluster — runs identically on macOS, the bare VPS host, and
 # inside the rootless Podman sandbox (zero nesting, "never podman-in-podman").
 #
+# Which checkouts use one (cluster_active below): every linked worktree, and
+# the main checkout only when no Docker daemon answers. With Docker, the main
+# checkout uses the shared crm-postgres:5432. CI and CRM_WORKTREE_PG=0 never
+# use one. The instance id derives from the checkout's absolute git-dir, which
+# is stable for the main checkout and for each linked worktree.
+#
 # The base DB is named personal_crm_test (the harness refuses any other base),
 # so isolation comes from a separate INSTANCE, not a separate DB name. No Go
-# change is needed: pointing a worktree at its own instance is purely a matter
+# change is needed: pointing a checkout at its own instance is purely a matter
 # of what DATABASE_URL/TEST_DATABASE_URL the harness sees, which the Makefile
 # sets from `url` below.
 #
 # Subcommands:
 #   url       Pure value, side-effect-FREE, render-safe. Emits the running
-#             per-worktree TEST_DATABASE_URL or nothing. NEVER starts a server,
+#             per-checkout TEST_DATABASE_URL or nothing. NEVER starts a server,
 #             NEVER warns. Safe to expand during `make -n` / variable eval.
 #   ensure    Side-effecting provisioner (stderr-visible). initdb + start +
 #             role/db/extension provisioning. On failure: loud actionable
@@ -27,6 +33,9 @@
 #   reap      Prune instances whose worktree no longer exists.
 #   status    Human-readable state of this worktree's instance.
 #   port      Print this worktree's resolved port (no side effects).
+#   psql-bin  Print the absolute path of the discovered Postgres 16 psql (no
+#             side effects); fails when no toolchain qualifies. Callers that
+#             talk to this cluster use it rather than whatever psql is on PATH.
 #
 # Env knobs:
 #   CRM_WORKTREE_PG       unset|1|auto -> auto + soft fallback (default)
@@ -48,6 +57,8 @@
 #                               (proceeds against a running instance, else falls
 #                               back to shared); stop/teardown/reap fail loud.
 set -euo pipefail
+# shellcheck source=lib/docker-answers.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/docker-answers.sh"
 
 # --- Test hook: count real invocations (render-guard laziness assertion) ----
 if [ -n "${CRM_WORKTREE_PG_COUNT_FILE:-}" ]; then
@@ -81,6 +92,15 @@ is_linked_worktree() {
   gd=$(git rev-parse --git-dir 2>/dev/null) || return 1
   cd=$(git rev-parse --git-common-dir 2>/dev/null) || return 1
   [ -n "$gd" ] && [ "$gd" != "$cd" ]
+}
+
+# Whether this checkout uses its own cluster. The one activation rule for
+# url, active and ensure: a linked worktree always; the main checkout only when
+# no Docker daemon answers; never in CI or under CRM_WORKTREE_PG=0.
+cluster_active() {
+  [ "$(pg_mode)" = off ] && return 1
+  [ "${GITHUB_ACTIONS:-}" = "true" ] && return 1
+  is_linked_worktree || ! docker_answers
 }
 
 # Absolute git-dir for this worktree (stable + unique per worktree across life).
@@ -452,9 +472,7 @@ clear_meta_claim() {
 # Subcommand: url  (pure value, side-effect-free, render-safe)
 # ===========================================================================
 cmd_url() {
-  [ "$(pg_mode)" = off ] && return 0
-  [ "${GITHUB_ACTIONS:-}" = "true" ] && return 0
-  is_linked_worktree || return 0
+  cluster_active || return 0
   local id; id=$(worktree_id) || return 0
   instance_running "$id" || return 0   # not yet ensured -> emit nothing
   local port; port=$(meta_get "$id" PORT) || return 0
@@ -463,16 +481,14 @@ cmd_url() {
 
 # ===========================================================================
 # Subcommand: active  (pure boolean, side-effect-free, render-safe)
-# Echoes "1" iff `ensure` would provision a per-worktree instance (active
-# linked worktree, not CI, not opt-out); else nothing. Lets the Makefile decide
-# at expansion time whether to EMIT the ensure recipe command at all, so the
-# main-checkout / forced-shared / CI render stays byte-identical (the ensure
-# line is not even printed by `make -n` when inactive).
+# Echoes "1" iff `ensure` would provision this checkout's instance
+# (cluster_active); else nothing. Lets the Makefile decide at expansion time
+# whether to EMIT the ensure recipe command at all, so the main-checkout-with-
+# Docker / forced-shared / CI render stays byte-identical (the ensure line is
+# not even printed by `make -n` when inactive).
 # ===========================================================================
 cmd_active() {
-  [ "$(pg_mode)" = off ] && return 0
-  [ "${GITHUB_ACTIONS:-}" = "true" ] && return 0
-  is_linked_worktree || return 0
+  cluster_active || return 0
   printf '1'
 }
 
@@ -482,9 +498,7 @@ cmd_active() {
 cmd_ensure() {
   local mode; mode=$(pg_mode)
   # Inert cases: not active. No warning (these are normal, not failures).
-  [ "$mode" = off ] && return 0
-  [ "${GITHUB_ACTIONS:-}" = "true" ] && return 0
-  is_linked_worktree || return 0
+  cluster_active || return 0
 
   local id; id=$(worktree_id) || { _ensure_fail "$mode" "could not derive worktree id"; return $?; }
   # Serialize same-worktree ensure/stop/teardown under the per-worktree lock.
@@ -730,7 +744,6 @@ force_stop_instance() {
 # Subcommand: stop
 # ===========================================================================
 cmd_stop() {
-  is_linked_worktree || { warn "not a linked worktree; nothing to stop"; return 0; }
   local id; id=$(worktree_id) || return 0
   with_lock "$(instance_dir "$id")/lock" _stop_locked "$id"
 }
@@ -753,7 +766,6 @@ _stop_locked() {
 # Subcommand: teardown
 # ===========================================================================
 cmd_teardown() {
-  is_linked_worktree || { warn "not a linked worktree; nothing to tear down"; return 0; }
   local id; id=$(worktree_id) || return 0
   with_lock "$(instance_dir "$id")/lock" _teardown_locked "$id"
 }
@@ -851,7 +863,6 @@ _reap_one() {
 # Subcommand: status / port
 # ===========================================================================
 cmd_status() {
-  if ! is_linked_worktree; then echo "main checkout (uses shared crm-postgres:5432)"; return 0; fi
   local id; id=$(worktree_id) || { echo "could not derive worktree id"; return 0; }
   local port; port=$(meta_get "$id" PORT 2>/dev/null || true)
   if [ -z "$port" ]; then echo "id=$id not provisioned"; return 0; fi
@@ -863,9 +874,13 @@ cmd_status() {
 }
 
 cmd_port() {
-  is_linked_worktree || return 0
   local id; id=$(worktree_id) || return 0
   meta_get "$id" PORT 2>/dev/null || seed_port "$id"
+}
+
+cmd_psql_bin() {
+  local d; d=$(resolve_bindir) || { warn "no Postgres 16 toolchain found"; return 1; }
+  printf '%s/psql\n' "$d"
 }
 
 # ===========================================================================
@@ -889,8 +904,9 @@ main() {
     reap)     cmd_reap ;;
     status)   cmd_status ;;
     port)     cmd_port ;;
+    psql-bin) cmd_psql_bin ;;
     *)
-      echo "usage: worktree-test-pg.sh {url|active|ensure|stop|teardown|reap|status|port}" >&2
+      echo "usage: worktree-test-pg.sh {url|active|ensure|stop|teardown|reap|status|port|psql-bin}" >&2
       return 2
       ;;
   esac

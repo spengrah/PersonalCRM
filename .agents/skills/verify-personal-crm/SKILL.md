@@ -23,7 +23,7 @@ Run `.agents/skills/verify-personal-crm/bin/launch`. It:
 
 1. Refuses if this checkout already has an instance recorded, if either port is busy, or if a `next dev` already runs from this checkout's `frontend/` (two dev servers corrupt the shared `frontend/.next`). If the user's `make dev` runs from the same checkout, verify from a worktree instead.
 2. Refuses if `frontend/node_modules` is missing. In a worktree, run `make worktree-deps`; in the main checkout, `cd frontend && bun install --frozen-lockfile`.
-3. Starts Postgres if needed (`scripts/ensure-postgres-for-tests.sh`: the shared `crm-postgres` container where Docker runs, native Postgres on port 5432 otherwise), then creates a fresh database with `scripts/e2e-db-reset.sh`, which refuses if a foreign `crm-api` is attached to it.
+3. Starts Postgres if needed with `scripts/e2e-pg.sh ensure`: the shared `crm-postgres` container when a Docker daemon answers; otherwise this checkout's own cluster from `scripts/worktree-test-pg.sh` (Postgres 16 binaries, no Docker, no sudo); native Postgres on port 5432 when neither is available. It then creates a fresh database with `scripts/e2e-db-reset.sh`, which refuses if a foreign `crm-api` is attached to it.
 4. Seeds it with `crm-admin --seed --profile standard` (migrations run first). Set `VERIFY_SEED_PROFILE` to seed another profile.
 5. Builds `crm-api` from this checkout, stamped with `HEAD`, and starts it with the E2E environment (`.env.example.testing`, `CRM_ENV=testing`, `ENABLE_EXTERNAL_SYNC=true`, `EVENT_BUS_INGEST_ENABLED=true`). It never reads `.env`, so no real credentials or accounts are loaded.
 6. Starts `next dev --turbopack` with `NEXT_PUBLIC_API_URL` pointing at this backend.
@@ -74,7 +74,7 @@ Locate elements by role and accessible name, label, placeholder or `data-testid`
 
 Other helpers:
 
-- `bin/psql -c "<SQL>"` reads the verify database (`docker exec crm-postgres psql`, with a native fallback). Use it to read side effects; do not write.
+- `bin/psql -c "<SQL>"` reads the verify database in whichever Postgres `scripts/e2e-pg.sh` resolves (`docker exec crm-postgres psql`, the checkout's own cluster, or native). Use it to read side effects; do not write.
 - `bin/api <METHOD> <path> [json]` calls the backend with the API key and prints the body plus `[HTTP <code>]`. Use it for reads and for setup the UI cannot reach, never to perform the behavior under proof.
 
 Seeded data: every seeded name starts with `synth-standard-`. Find contacts through the UI or `bin/api GET /api/v1/contacts?search=...` rather than hardcoding names. Create your own records with a unique whole-word marker (the example uses `Verify <stamp> Person`) so they never collide with seeded ones.

@@ -60,20 +60,33 @@ case "$DB_NAME" in
     exit 1 ;;
 esac
 
-if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
-  MODE=docker
-else
-  MODE=native
-  if ! sudo -u postgres psql -tAc "SELECT 1 FROM pg_roles WHERE rolname='crm_user';" | grep -q 1; then
-    echo "crm_user role missing; run scripts/start-postgres-native.sh first" >&2
-    exit 1
-  fi
-fi
+# docker, worktree or native: scripts/e2e-pg.sh owns the rule.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+MODE="$(bash "$SCRIPT_DIR/e2e-pg.sh" mode)"
+case "$MODE" in
+  worktree)
+    # This checkout's own cluster also holds the integration-test harness's
+    # base database, personal_crm_test. Resetting it would break that harness.
+    if [ "$DB_NAME" = personal_crm_test ]; then
+      echo "Refusing to reset personal_crm_test in this checkout's own cluster: the integration-test harness owns it there. Use personal_crm_test_<suffix> (make e2e-db defaults to personal_crm_test_e2e here)." >&2
+      exit 1
+    fi
+    PSQL_BIN="$(bash "$SCRIPT_DIR/worktree-test-pg.sh" psql-bin)"
+    ADMIN_URL="$(bash "$SCRIPT_DIR/e2e-pg.sh" url postgres)"
+    TARGET_URL="$(bash "$SCRIPT_DIR/e2e-pg.sh" url "$DB_NAME")" ;;
+  native)
+    if ! sudo -u postgres psql -tAc "SELECT 1 FROM pg_roles WHERE rolname='crm_user';" | grep -q 1; then
+      echo "crm_user role missing; run scripts/start-postgres-native.sh first" >&2
+      exit 1
+    fi ;;
+esac
 
 # psql against the maintenance database (for DROP/CREATE and pg_stat_activity).
 psql_admin() {
   if [ "$MODE" = docker ]; then
     docker exec crm-postgres psql -v ON_ERROR_STOP=1 -U crm_user -d postgres "$@"
+  elif [ "$MODE" = worktree ]; then
+    "$PSQL_BIN" -v ON_ERROR_STOP=1 "$ADMIN_URL" "$@"
   else
     sudo -u postgres psql -v ON_ERROR_STOP=1 "$@"
   fi
@@ -83,6 +96,8 @@ psql_admin() {
 psql_target() {
   if [ "$MODE" = docker ]; then
     docker exec crm-postgres psql -v ON_ERROR_STOP=1 -U crm_user -d "$DB_NAME" "$@"
+  elif [ "$MODE" = worktree ]; then
+    "$PSQL_BIN" -v ON_ERROR_STOP=1 "$TARGET_URL" "$@"
   else
     sudo -u postgres psql -v ON_ERROR_STOP=1 -d "$DB_NAME" "$@"
   fi
@@ -127,8 +142,9 @@ attached_report() {
 # Terminating also satisfies invariant 1: the DROP cannot fail on "database is
 # being accessed by other users". crm_user may signal its own client backends,
 # which is all of the ones a reset has to clear; the native path runs as the
-# postgres superuser. Server workers are deliberately not signalled here — see
-# the DROP note below for what deals with those.
+# postgres superuser, and crm_user is a superuser in a checkout's own cluster.
+# Server workers are deliberately not signalled here — see the DROP note below
+# for what deals with those.
 #
 # Record the attached PIDs first. pg_terminate_backend() with its default zero
 # timeout only SIGNALS the backend; it does not wait for the process to go away,

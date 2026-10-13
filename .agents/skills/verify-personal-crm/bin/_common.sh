@@ -15,7 +15,11 @@ VERIFY_FRONTEND_PORT=$(( 3400 + VERIFY_SLOT ))
 VERIFY_BACKEND_PORT=$(( 8400 + VERIFY_SLOT ))
 # e2e-db-reset.sh only accepts personal_crm_test or personal_crm_test_<suffix>.
 VERIFY_DB_NAME="personal_crm_test_verify_${VERIFY_SLOT}"
-VERIFY_DATABASE_URL="postgres://crm_user:crm_password@localhost:5432/${VERIFY_DB_NAME}?sslmode=disable"
+# scripts/e2e-pg.sh picks the PostgreSQL: the shared crm-postgres:5432 when a
+# Docker daemon answers, else this checkout's own cluster, else native :5432.
+# bin/launch re-reads this after it has started that PostgreSQL.
+verify_database_url() { bash "$REPO_ROOT/scripts/e2e-pg.sh" url "$VERIFY_DB_NAME"; }
+VERIFY_DATABASE_URL="$(verify_database_url)"
 VERIFY_BASE_URL="http://127.0.0.1:${VERIFY_FRONTEND_PORT}"
 VERIFY_API_URL="http://127.0.0.1:${VERIFY_BACKEND_PORT}"
 # Same key the E2E stack uses (.env.example.testing). Never the real .env.
@@ -29,12 +33,15 @@ export GOCACHE="${GOCACHE:-$REPO_ROOT/.gocache}"
 
 port_pids() { bash "$REPO_ROOT/scripts/port-pids.sh" "$1" 2>/dev/null || true; }
 
-# psql against the maintenance database or the verify database, Docker first,
-# native fallback (mirrors scripts/e2e-db-reset.sh).
+# psql against the maintenance database or the verify database, in the mode
+# scripts/e2e-pg.sh resolves (mirrors scripts/e2e-db-reset.sh).
 verify_psql() {
   local db="$1"; shift
-  if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
+  local mode; mode="$(bash "$REPO_ROOT/scripts/e2e-pg.sh" mode)"
+  if [ "$mode" = docker ]; then
     docker exec -i crm-postgres psql -v ON_ERROR_STOP=1 -U crm_user -d "$db" "$@"
+  elif [ "$mode" = worktree ]; then
+    "$(bash "$REPO_ROOT/scripts/worktree-test-pg.sh" psql-bin)" -v ON_ERROR_STOP=1 "$(bash "$REPO_ROOT/scripts/e2e-pg.sh" url "$db")" "$@"
   else
     sudo -u postgres psql -v ON_ERROR_STOP=1 -d "$db" "$@"
   fi
