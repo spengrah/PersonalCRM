@@ -35,7 +35,7 @@ func TestInteractionNode_TelegramBurstSessionHasNoNode(t *testing.T) {
 	const chatID, peerID = int64(9101), int64(79101)
 
 	insertTestMessage(t, messageRepo, 89101, chatID, true, base, &contact.ID, peerID)
-	require.NoError(t, engine.AggregateAll(ctx)) // the batch path
+	require.NoError(t, engine.AggregateForContactBatch(ctx, contact.ID)) // the batch path
 	requireNoNode(t, waitForInteractionCountExact(t, ctx, interactionRepo, contact.ID, 1, defaultInteractionWaitTimeout), "created")
 
 	insertTestMessage(t, messageRepo, 89102, chatID, true, base.Add(10*time.Minute), &contact.ID, peerID)
@@ -59,7 +59,7 @@ func TestInteractionNode_WhatsAppBurstSessionHasNoNode(t *testing.T) {
 	base := accelerated.GetCurrentTime().Add(-3 * time.Hour).Truncate(time.Microsecond)
 
 	e.seedWhatsAppRow(t, &contact.ID, chatJID, "wa-node1-"+suffix, repository.InteractionDirectionOutbound, base)
-	require.NoError(t, e.engine.AggregateAll(e.ctx)) // the batch path
+	require.NoError(t, e.engine.AggregateForContactBatch(e.ctx, contact.ID)) // the batch path
 	requireNoNode(t, waitForInteractionCountExact(t, e.ctx, e.interactionRepo, contact.ID, 1, defaultInteractionWaitTimeout), "created")
 
 	e.seedWhatsAppRow(t, &contact.ID, chatJID, "wa-node2-"+suffix, repository.InteractionDirectionOutbound, base.Add(10*time.Minute))
@@ -83,7 +83,7 @@ func TestInteractionNode_GChatBurstSessionHasNoNode(t *testing.T) {
 	base := accelerated.GetCurrentTime().Add(-3 * time.Hour).Truncate(time.Microsecond)
 
 	e.seedGChatRow(t, contact.ID, space, "gchat-node1-"+suffix, repository.InteractionDirectionOutbound, base)
-	require.NoError(t, e.engine.AggregateForContact(e.ctx, contact.ID, space))
+	require.NoError(t, e.engine.AggregateForContactBatch(e.ctx, contact.ID)) // the batch path
 	requireNoNode(t, waitForInteractionCountExact(t, e.ctx, e.interactionRepo, contact.ID, 1, defaultInteractionWaitTimeout), "created")
 
 	e.seedGChatRow(t, contact.ID, space, "gchat-node2-"+suffix, repository.InteractionDirectionOutbound, base.Add(10*time.Minute))

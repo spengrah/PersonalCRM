@@ -333,6 +333,11 @@ type ExternalSyncState struct {
 	UpdatedAt            *time.Time `json:"updated_at"`
 }
 
+type GcalOrphanNode struct {
+	SourceRef *string   `json:"source_ref"`
+	NodeID    uuid.UUID `json:"node_id"`
+}
+
 type Interaction struct {
 	ID                uuid.UUID  `json:"id"`
 	ContactID         uuid.UUID  `json:"contact_id"`

@@ -1,4 +1,4 @@
--- Interaction nodes (interaction-review-readiness PR4).
+-- Interaction nodes: one structural node per real-world interaction.
 --
 -- Every correctable observation (an interaction row of any source except the
 -- message-burst sources) resolves to exactly one structural node of type

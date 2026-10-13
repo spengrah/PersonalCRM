@@ -61,6 +61,12 @@ SELECT * FROM interaction
 WHERE contact_id = $1 AND source = $2 AND source_ref = $3 AND deleted_at IS NULL
 LIMIT 1;
 
+-- name: TestGetInteractionNode :one
+-- Test-only read of an interaction node's subtype row, for backfill fixtures
+-- that check a node's source and persisted identity key.
+SELECT * FROM interaction_node
+WHERE node_id = sqlc.arg(node_id);
+
 -- name: TestGetInteractionIncludingDeleted :one
 -- Test-only read for migration fixtures that verify a deleted interaction is
 -- outside a historical repair selector. Production reads remain live-only.
@@ -217,9 +223,9 @@ ORDER BY source_ref;
 -- Test-only: inserts an interaction with a caller-supplied id, source, and
 -- source_ref and a NULL venue_id, bypassing the recorder. Used by the venue
 -- backfill migration test to stand up pre-existing (venue-less) interactions
--- that the 069 backfill then populates. It resolves the interaction node the
--- way the recorder does, so a fixture row of a correctable source carries its
--- node. Production code MUST NOT call this.
+-- that the 069 backfill then populates. The caller supplies the interaction
+-- node, which the repository wrapper resolves through the observation step.
+-- Production code MUST NOT call this.
 INSERT INTO interaction (id, contact_id, source, source_ref, occurred_at, direction, interaction_node_id)
 VALUES (
     sqlc.arg('id'),
@@ -228,7 +234,7 @@ VALUES (
     sqlc.narg('source_ref'),
     sqlc.arg('occurred_at'),
     sqlc.arg('direction'),
-    (SELECT resolve_interaction_node(sqlc.arg('source')::text, sqlc.narg('source_ref')::text))
+    sqlc.narg('interaction_node_id')
 )
 RETURNING *;
 

@@ -2691,6 +2691,9 @@ type Querier interface {
 	// Test-only read for migration fixtures that verify a deleted interaction is
 	// outside a historical repair selector. Production reads remain live-only.
 	TestGetInteractionIncludingDeleted(ctx context.Context, arg TestGetInteractionIncludingDeletedParams) (*Interaction, error)
+	// Test-only read of an interaction node's subtype row, for backfill fixtures
+	// that check a node's source and persisted identity key.
+	TestGetInteractionNode(ctx context.Context, nodeID uuid.UUID) (*InteractionNode, error)
 	// Test assertion — a planted job's disposition: its state, whether it is
 	// finalized, and its attempt counter. `attempt` is the load-bearing one for
 	// queue isolation: River increments it on FETCH, so attempt = 0 says the job was
@@ -2790,9 +2793,9 @@ type Querier interface {
 	// Test-only: inserts an interaction with a caller-supplied id, source, and
 	// source_ref and a NULL venue_id, bypassing the recorder. Used by the venue
 	// backfill migration test to stand up pre-existing (venue-less) interactions
-	// that the 069 backfill then populates. It resolves the interaction node the
-	// way the recorder does, so a fixture row of a correctable source carries its
-	// node. Production code MUST NOT call this.
+	// that the 069 backfill then populates. The caller supplies the interaction
+	// node, which the repository wrapper resolves through the observation step.
+	// Production code MUST NOT call this.
 	TestInsertInteraction(ctx context.Context, arg TestInsertInteractionParams) (*Interaction, error)
 	// Test-only: inserts a messages_message already linked to an interaction. Used
 	// by the venue backfill test to seed an iMessage chat container row. Production

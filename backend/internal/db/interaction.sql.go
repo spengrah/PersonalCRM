@@ -760,6 +760,20 @@ func (q *Queries) TestGetInteractionIncludingDeleted(ctx context.Context, arg Te
 	return &i, err
 }
 
+const TestGetInteractionNode = `-- name: TestGetInteractionNode :one
+SELECT node_id, source, identity_key FROM interaction_node
+WHERE node_id = $1
+`
+
+// Test-only read of an interaction node's subtype row, for backfill fixtures
+// that check a node's source and persisted identity key.
+func (q *Queries) TestGetInteractionNode(ctx context.Context, nodeID uuid.UUID) (*InteractionNode, error) {
+	row := q.db.QueryRow(ctx, TestGetInteractionNode, nodeID)
+	var i InteractionNode
+	err := row.Scan(&i.NodeID, &i.Source, &i.IdentityKey)
+	return &i, err
+}
+
 const TestInsertInteraction = `-- name: TestInsertInteraction :one
 INSERT INTO interaction (id, contact_id, source, source_ref, occurred_at, direction, interaction_node_id)
 VALUES (
@@ -769,26 +783,27 @@ VALUES (
     $4,
     $5,
     $6,
-    (SELECT resolve_interaction_node($3::text, $4::text))
+    $7
 )
 RETURNING id, contact_id, source, source_ref, occurred_at, description, created_at, deleted_at, direction, venue_id, interaction_node_id
 `
 
 type TestInsertInteractionParams struct {
-	ID         uuid.UUID `json:"id"`
-	ContactID  uuid.UUID `json:"contact_id"`
-	Source     string    `json:"source"`
-	SourceRef  *string   `json:"source_ref"`
-	OccurredAt time.Time `json:"occurred_at"`
-	Direction  string    `json:"direction"`
+	ID                uuid.UUID  `json:"id"`
+	ContactID         uuid.UUID  `json:"contact_id"`
+	Source            string     `json:"source"`
+	SourceRef         *string    `json:"source_ref"`
+	OccurredAt        time.Time  `json:"occurred_at"`
+	Direction         string     `json:"direction"`
+	InteractionNodeID *uuid.UUID `json:"interaction_node_id"`
 }
 
 // Test-only: inserts an interaction with a caller-supplied id, source, and
 // source_ref and a NULL venue_id, bypassing the recorder. Used by the venue
 // backfill migration test to stand up pre-existing (venue-less) interactions
-// that the 069 backfill then populates. It resolves the interaction node the
-// way the recorder does, so a fixture row of a correctable source carries its
-// node. Production code MUST NOT call this.
+// that the 069 backfill then populates. The caller supplies the interaction
+// node, which the repository wrapper resolves through the observation step.
+// Production code MUST NOT call this.
 func (q *Queries) TestInsertInteraction(ctx context.Context, arg TestInsertInteractionParams) (*Interaction, error) {
 	row := q.db.QueryRow(ctx, TestInsertInteraction,
 		arg.ID,
@@ -797,6 +812,7 @@ func (q *Queries) TestInsertInteraction(ctx context.Context, arg TestInsertInter
 		arg.SourceRef,
 		arg.OccurredAt,
 		arg.Direction,
+		arg.InteractionNodeID,
 	)
 	var i Interaction
 	err := row.Scan(

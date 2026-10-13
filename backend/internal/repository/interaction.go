@@ -245,32 +245,49 @@ func (r *InteractionRepository) CountContactInteractionsFiltered(ctx context.Con
 	})
 }
 
-// CreateInteraction creates a new interaction record outside any transaction.
-// It is the fixture entry point: with no transaction to run the observation
-// step in, it resolves the observation's interaction node itself (the same
-// resolution the step makes) and ignores req.InteractionNodeID. Recording paths
-// run ObserveInteractionTx and CreateInteractionTx inside their write's tx.
+// CreateInteraction creates a new interaction record in a transaction of its
+// own: the observation step resolves the interaction node and the insert
+// commits with it. It is the fixture entry point and ignores
+// req.InteractionNodeID. Recording paths run ObserveInteractionTx and
+// CreateInteractionTx inside their own write's tx.
 func (r *InteractionRepository) CreateInteraction(ctx context.Context, req CreateInteractionRequest) (*Interaction, error) {
-	nodeID, err := resolveInteractionNode(ctx, r.queries, req.Source, req.SourceRef)
-	if err != nil {
-		return nil, err
-	}
-	dbInteraction, err := r.queries.CreateInteraction(ctx, db.CreateInteractionParams{
-		ContactID:         req.ContactID,
-		Source:            req.Source,
-		SourceRef:         req.SourceRef,
-		OccurredAt:        req.OccurredAt,
-		Description:       req.Description,
-		Direction:         interactionDirectionArg(req.Direction),
-		VenueID:           req.VenueID,
-		InteractionNodeID: nodeID,
+	var created *Interaction
+	err := r.observeInOwnTx(ctx, InteractionObservation{
+		ContactID:  req.ContactID,
+		Source:     req.Source,
+		SourceRef:  req.SourceRef,
+		OccurredAt: req.OccurredAt,
+	}, func(tx pgx.Tx, nodeID *uuid.UUID) error {
+		req.InteractionNodeID = nodeID
+		var err error
+		created, err = r.CreateInteractionTx(ctx, tx, req)
+		return err
 	})
-	if err != nil {
-		return nil, err
-	}
+	return created, err
+}
 
-	interaction := convertDbInteraction(dbInteraction)
-	return &interaction, nil
+// observeInOwnTx runs the observation step and the caller's insert in one
+// transaction, for fixture writers that have no transaction of their own.
+func (r *InteractionRepository) observeInOwnTx(ctx context.Context, obs InteractionObservation, write func(tx pgx.Tx, nodeID *uuid.UUID) error) error {
+	beginner, ok := r.queries.(interface {
+		Begin(context.Context) (pgx.Tx, error)
+	})
+	if !ok {
+		return errors.New("interaction repository: connection cannot begin a transaction")
+	}
+	tx, err := beginner.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	nodeID, err := r.ObserveInteractionTx(ctx, tx, obs)
+	if err != nil {
+		return err
+	}
+	if err := write(tx, nodeID); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
 
 // SoftDeleteInteraction soft-deletes an interaction
@@ -503,19 +520,31 @@ func (r *InteractionRepository) UpdateInteractionTimestamp(ctx context.Context, 
 // migration test to stand up pre-existing venue-less interactions. Production
 // code MUST NOT call this.
 func (r *InteractionRepository) TestInsertInteraction(ctx context.Context, id, contactID uuid.UUID, source string, sourceRef *string, occurredAt time.Time, direction string) (*Interaction, error) {
-	dbInteraction, err := r.queries.TestInsertInteraction(ctx, db.TestInsertInteractionParams{
-		ID:         id,
+	var inserted *Interaction
+	err := r.observeInOwnTx(ctx, InteractionObservation{
 		ContactID:  contactID,
 		Source:     source,
 		SourceRef:  sourceRef,
-		OccurredAt: occurredAt,
 		Direction:  direction,
+		OccurredAt: occurredAt,
+	}, func(tx pgx.Tx, nodeID *uuid.UUID) error {
+		row, err := db.New(tx).TestInsertInteraction(ctx, db.TestInsertInteractionParams{
+			ID:                id,
+			ContactID:         contactID,
+			Source:            source,
+			SourceRef:         sourceRef,
+			OccurredAt:        occurredAt,
+			Direction:         direction,
+			InteractionNodeID: nodeID,
+		})
+		if err != nil {
+			return err
+		}
+		converted := convertDbInteraction(row)
+		inserted = &converted
+		return nil
 	})
-	if err != nil {
-		return nil, err
-	}
-	interaction := convertDbInteraction(dbInteraction)
-	return &interaction, nil
+	return inserted, err
 }
 
 // UpdateInteractionVenueTx sets venue_id on an existing interaction inside the

@@ -264,7 +264,7 @@ behaviors:
     when: the observation is recorded
     then:
       - key: one-node-per-observation
-        text: the observation resolves to exactly one interaction node, fixed when the observation is created
+        text: the observation resolves to exactly one interaction node, assigned once when the observation is recorded
       - key: shared-per-source-object
         text: observations of the same calendar event, phone call, task or Anarlog session share one interaction node, whichever contact they belong to and however the participant's observation is keyed
       - key: email-thread-day
