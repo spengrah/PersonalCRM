@@ -18,6 +18,7 @@ import (
 // the recording path, corrections written through AssertService and the
 // interaction-node merge write.
 func TestEffectiveParticipationForContact(t *testing.T) {
+	t.Parallel()
 	e := newCorrectionEnv(t)
 	in, out, mutual := repository.InteractionDirectionInbound, repository.InteractionDirectionOutbound, repository.InteractionDirectionMutual
 	ref := func() string { return "call-" + uuid.NewString() }
@@ -252,6 +253,7 @@ func TestEffectiveParticipationForContact(t *testing.T) {
 // it lists exactly the contacts holding an entry for the root in their own
 // effective participation, each with that entry.
 func TestEffectiveParticipationForInteraction(t *testing.T) {
+	t.Parallel()
 	e := newCorrectionEnv(t)
 	in, out := repository.InteractionDirectionInbound, repository.InteractionDirectionOutbound
 	ref := func() string { return "call-" + uuid.NewString() }

@@ -10,13 +10,16 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-// spec: IXN-010
-func TestInteractionRoutes_ReadOnly(t *testing.T) {
+// The interactions surface writes only through the manual entry and the
+// correction requests; no request deletes an interaction.
+// spec: IXN-029.removal-is-only-delete
+func TestInteractionRoutes_RegisteredSet(t *testing.T) {
 	router := gin.New()
 	v1 := router.Group("/api/v1")
 	handlers.RegisterContactRoutes(v1, handlers.ContactRouteDeps{
 		Contact:       &handlers.ContactHandler{},
 		Interaction:   &handlers.InteractionHandler{},
+		Correction:    &handlers.InteractionCorrectionHandler{},
 		Note:          &handlers.NoteHandler{},
 		ContactMethod: &handlers.ContactMethodHandler{},
 	})
@@ -31,7 +34,9 @@ func TestInteractionRoutes_ReadOnly(t *testing.T) {
 		"GET /api/v1/contacts/:id/interactions",
 		"POST /api/v1/contacts/:id/interactions",
 		"GET /api/v1/interactions/:id/content",
-		"DELETE /api/v1/interactions/:id",
+		"POST /api/v1/interactions/merge",
+		"POST /api/v1/interactions/merge/preview",
+		"POST /api/v1/interactions/:id/removals",
 	}, actual)
 }
 

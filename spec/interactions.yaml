@@ -168,10 +168,11 @@ behaviors:
   - id: IXN-010
     title: The contact interactions surface is read-only end to end
     type: invariant
-    status: current
+    status: retired
     surface: api
     statement: the contact interactions surface exposes only reads, adds no mutation endpoint or interaction writer, and leaves interaction creation to the existing recording paths.
     provenance: [.agents/spec/contact-interactions-surface.md]
+    notes: Retired when the user's corrections of interactions became writes on this surface. Merging interactions is IXN-016 and removing participations is IXN-018; their answers and refusals are IXN-029.
 
   - id: IXN-011
     title: Content assembly is reusable outside HTTP delivery
@@ -280,6 +281,81 @@ behaviors:
     provenance: [.agents/spec/2026-10-13-interaction-review-readiness.md]
     notes: Merging interactions and removing participations act on interaction nodes in later behaviors of this domain; this behavior fixes only which node each observation belongs to.
 
+  - id: IXN-016
+    title: A merge declares one interaction for every attendee
+    type: business-logic
+    status: current
+    surface: api
+    given: two or more interactions the user declares to be one, and a contact observed in at least one of them
+    when: the user merges them
+    then:
+      - key: one-participation-per-attendee
+        text: every attendee of the merged interactions holds one effective participation in the result, under the interaction the first listed one belongs to
+      - key: own-members-only
+        text: each contact's participation in the result derives from that contact's own observations of the merged interactions only, so an attendee observed in one of them keeps that one's participation
+      - key: no-observation-no-participation
+        text: a contact with no observation in any merged interaction gains no participation and no cadence change
+      - key: remerge-counts-once
+        text: a merged interaction merged again with another gives each attendee one participation across all of them
+      - key: merged-away-id-acts-on-merged
+        text: naming an interaction that was already merged into another acts on the interaction it was merged into
+      - key: answer-is-first-root
+        text: the merge answers with the interaction the first listed one belongs to
+    provenance: [.agents/spec/2026-10-13-interaction-review-readiness.md]
+    notes: A merge is a judgment of event identity, global across attendees. Unmerge is out of scope.
+
+  - id: IXN-017
+    title: A merged interaction counts once per contact, combining only that contact's members
+    type: business-logic
+    status: current
+    surface: api
+    given: a merge of interactions in which a contact was observed
+    when: the contact's participation in the merged interaction is derived
+    then:
+      - key: mixed-directions-mutual-at-latest
+        text: an inbound and an outbound member of the same contact, in either order, make one mutual participation at the latest of that contact's member times
+      - key: shared-direction-kept
+        text: members of one shared direction make one participation of that direction at the latest of that contact's member times
+      - key: mutual-member-makes-mutual
+        text: any mutual member makes the participation mutual
+      - key: no-inherited-member
+        text: no contact inherits another attendee's member, so a contact present only in an earlier member keeps that member's direction and time
+      - key: preview-equals-merge
+        text: the merge preview answers exactly what the merge answers for the same request
+      - key: preview-writes-nothing
+        text: the merge preview changes no interaction, judgment, cadence field or task and publishes nothing
+    provenance: [.agents/spec/2026-10-13-interaction-review-readiness.md]
+    notes: Nothing invents a direction or a time. If mutual would be wrong, the interactions are not one interaction and the user does not merge them.
+
+  - id: IXN-018
+    title: A removal removes exactly the selected attendees' participations and binds to the observations judged
+    type: business-logic
+    status: current
+    surface: api
+    given: an interaction and a removal scope naming some of its attendees or everyone, with a reason of duplicate, did not attend or did not happen
+    when: the user removes participations
+    then:
+      - key: scope-removes-exactly-selected
+        text: the selected attendees' participations are removed and every other attendee's participation stays
+      - key: everyone-removes-every-attendee
+        text: removing everyone removes every attendee's participation
+      - key: everyone-covers-later-observed
+        text: removing everyone also covers an attendee that a later re-observation of the same source object adds
+      - key: re-observation-stays-removed
+        text: a later re-observation of a removed source object stays removed
+      - key: binds-to-judged-members
+        text: a removal covers the source objects of the interaction as it stood when the user judged it and never a source object merged in afterwards
+      - key: covers-every-member
+        text: a removal on a merged interaction covers every member's source object for the selected attendees, including a member the attendee had no observation of when judged
+      - key: reason-independent-of-scope
+        text: the reason is recorded and never changes what the scope removes
+      - key: merged-away-id-acts-on-merged
+        text: naming an interaction that was merged into another acts on the interaction it was merged into
+      - key: survives-contact-merge
+        text: a removal survives a later merge of the removed contact into another contact
+    provenance: [.agents/spec/2026-10-13-interaction-review-readiness.md]
+    notes: The removal dialog pre-selects the current contact; the request always names its scope explicitly.
+
   - id: IXN-026
     title: The identity backfill gives every stored live correctable observation its interaction node
     type: data
@@ -299,3 +375,36 @@ behaviors:
       - key: idempotent
         text: running the backfill again changes no observation and creates no node
     provenance: [.agents/spec/2026-10-13-interaction-review-readiness.md]
+
+  - id: IXN-029
+    title: The correction requests answer with the result or refuse without writing
+    type: api
+    status: current
+    surface: api
+    given: a merge, merge preview or removal request
+    when: the request is answered
+    then:
+      - key: merge-answers-participation
+        text: a merge or preview answers success with the merged interaction and the requesting contact's resulting direction and time
+      - key: removal-answers-no-content
+        text: a removal answers success with no content once the correction, the cadence recompute and the local follow-up changes are committed
+      - key: fewer-than-two-refused
+        text: a merge or preview naming fewer than two distinct interactions is refused as invalid
+      - key: unknown-interaction-not-found
+        text: a merge or preview naming something that is no interaction, such as a message burst or a contact, is refused as not found
+      - key: contact-refused
+        text: a merge or preview for a contact that does not exist is refused as not found, and for a contact with no participation in the named interactions as invalid
+      - key: removal-body-refused
+        text: a removal with no scope, both scopes, an empty contact list or a reason outside duplicate, did not attend and did not happen is refused as invalid
+      - key: removal-unknown-interaction-not-found
+        text: a removal of something that is no interaction is refused as not found
+      - key: non-participant-refused
+        text: a removal naming a contact that does not take part in the interaction is refused as invalid
+      - key: no-participant-refused
+        text: a removal of an interaction in which no contact takes part any longer is refused as invalid
+      - key: refusal-writes-nothing
+        text: a refused request changes no interaction, judgment, cadence field or task and publishes nothing
+      - key: removal-is-only-delete
+        text: the removal request is the only way over HTTP to remove a participation; the surface has no request that deletes an interaction
+    provenance: [.agents/spec/2026-10-13-interaction-review-readiness.md]
+    notes: No correction answer carries an assertion, predicate or provenance (KNW-033).

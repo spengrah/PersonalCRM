@@ -325,6 +325,13 @@ func (s *stubContactRecorder) RecordInteractionTx(_ context.Context, _ pgx.Tx, _
 			OccurredAt: req.OccurredAt,
 		},
 		IsReplay: false,
+		// An observation no correction touches is its own effective
+		// participation.
+		Verdict: &repository.ObservationVerdict{Entry: &repository.EffectiveParticipation{
+			ContactID:  req.ContactID,
+			Direction:  req.Direction,
+			OccurredAt: req.OccurredAt,
+		}},
 	}, nil
 }
 

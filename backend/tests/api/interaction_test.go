@@ -59,7 +59,6 @@ func setupInteractionTestRouter(t *testing.T) (*gin.Engine, func()) {
 		interactions := v1.Group("/interactions")
 		{
 			interactions.GET("/:id/content", interactionHandler.GetInteractionContent)
-			interactions.DELETE("/:id", interactionHandler.DeleteInteraction)
 		}
 	}
 
@@ -234,69 +233,6 @@ func TestInteraction_ManualDeduplication(t *testing.T) {
 
 		// Should return the same interaction (deduped)
 		assert.Equal(t, firstID, secondID, "duplicate interaction within 30-min window should return existing")
-	})
-}
-
-func TestInteraction_SoftDelete(t *testing.T) {
-	testsupport.RequireDatabase(t)
-
-	t.Parallel()
-	router, cleanup := setupInteractionTestRouter(t)
-	defer cleanup()
-
-	contactID := createInteractionTestContact(t, router, "Delete Interaction Test User "+t.Name()+"-"+uuid.NewString()[:8])
-	defer deleteInteractionTestContact(t, router, contactID)
-
-	// Create an interaction
-	pastDate := accelerated.GetCurrentTime().Add(-48 * time.Hour).Format(time.RFC3339)
-	body, _ := json.Marshal(map[string]string{
-		"occurred_at": pastDate,
-	})
-	req, _ := http.NewRequest("POST", "/api/v1/contacts/"+contactID+"/interactions", bytes.NewBuffer(body))
-	req.Header.Set("Content-Type", "application/json")
-
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-	require.Equal(t, http.StatusCreated, w.Code)
-
-	var createResp api.APIResponse
-	err := json.Unmarshal(w.Body.Bytes(), &createResp)
-	require.NoError(t, err)
-	interactionData := createResp.Data.(map[string]interface{})
-	interactionID := interactionData["id"].(string)
-
-	t.Run("DeleteInteraction", func(t *testing.T) {
-		deleteReq, _ := http.NewRequest("DELETE", "/api/v1/interactions/"+interactionID, nil)
-		deleteW := httptest.NewRecorder()
-		router.ServeHTTP(deleteW, deleteReq)
-
-		assert.Equal(t, http.StatusNoContent, deleteW.Code)
-	})
-
-	t.Run("DeletedInteractionNotInList", func(t *testing.T) {
-		listReq, _ := http.NewRequest("GET", "/api/v1/contacts/"+contactID+"/interactions", nil)
-		listW := httptest.NewRecorder()
-		router.ServeHTTP(listW, listReq)
-
-		var listResp api.APIResponse
-		err := json.Unmarshal(listW.Body.Bytes(), &listResp)
-		require.NoError(t, err)
-
-		// Verify the deleted interaction is not in the list
-		data := listResp.Data.(map[string]interface{})
-		items := data["items"].([]interface{})
-		for _, item := range items {
-			interaction := item.(map[string]interface{})
-			assert.NotEqual(t, interactionID, interaction["id"], "soft-deleted interaction should not appear in list")
-		}
-	})
-
-	t.Run("DeleteNonExistentInteraction", func(t *testing.T) {
-		deleteReq, _ := http.NewRequest("DELETE", "/api/v1/interactions/00000000-0000-0000-0000-000000000000", nil)
-		deleteW := httptest.NewRecorder()
-		router.ServeHTTP(deleteW, deleteReq)
-
-		assert.Equal(t, http.StatusNotFound, deleteW.Code)
 	})
 }
 

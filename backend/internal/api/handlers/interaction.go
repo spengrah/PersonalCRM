@@ -314,30 +314,3 @@ func (h *InteractionHandler) CreateInteraction(c *gin.Context) {
 
 	api.SendSuccess(c, http.StatusCreated, interactionToResponse(interaction), nil)
 }
-
-// DeleteInteraction soft-deletes an interaction
-// @Summary Delete interaction
-// @Tags interactions
-// @Param id path string true "Interaction ID" format(uuid)
-// @Success 204 "Interaction deleted"
-// @Router /interactions/{id} [delete]
-func (h *InteractionHandler) DeleteInteraction(c *gin.Context) {
-	id, ok := api.ParseUUIDParam(c, "id", "interaction")
-	if !ok {
-		return
-	}
-
-	// Verify interaction exists
-	_, err := h.interactionRepo.GetInteraction(c.Request.Context(), id)
-	if err != nil {
-		api.RespondError(c, err, "Interaction")
-		return
-	}
-
-	if err := h.interactionRepo.SoftDeleteInteraction(c.Request.Context(), id); err != nil {
-		api.RespondInternal(c, err)
-		return
-	}
-
-	c.Status(http.StatusNoContent)
-}

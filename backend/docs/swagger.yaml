@@ -624,6 +624,48 @@ definitions:
           $ref: '#/definitions/handlers.VenueTagResponse'
         type: array
     type: object
+  handlers.InteractionMergeRequest:
+    properties:
+      contact_id:
+        type: string
+      interaction_ids:
+        items:
+          type: string
+        type: array
+    required:
+    - contact_id
+    - interaction_ids
+    type: object
+  handlers.InteractionMergeResponse:
+    properties:
+      interaction_id:
+        type: string
+      participation:
+        $ref: '#/definitions/handlers.InteractionParticipationResponse'
+    type: object
+  handlers.InteractionParticipationResponse:
+    properties:
+      direction:
+        type: string
+      occurred_at:
+        type: string
+    type: object
+  handlers.InteractionRemovalRequest:
+    properties:
+      reason:
+        type: string
+      scope:
+        $ref: '#/definitions/handlers.InteractionRemovalScope'
+    type: object
+  handlers.InteractionRemovalScope:
+    properties:
+      contact_ids:
+        items:
+          type: string
+        type: array
+      everyone:
+        type: boolean
+    type: object
   handlers.InteractionResponse:
     properties:
       contact_id:
@@ -3780,21 +3822,6 @@ paths:
       summary: Resolve method suggestions
       tags:
       - imports
-  /interactions/{id}:
-    delete:
-      parameters:
-      - description: Interaction ID
-        format: uuid
-        in: path
-        name: id
-        required: true
-        type: string
-      responses:
-        "204":
-          description: Interaction deleted
-      summary: Delete interaction
-      tags:
-      - interactions
   /interactions/{id}/content:
     get:
       parameters:
@@ -3821,6 +3848,111 @@ paths:
           schema:
             $ref: '#/definitions/api.APIResponse'
       summary: Get interaction content
+      tags:
+      - interactions
+  /interactions/{id}/removals:
+    post:
+      consumes:
+      - application/json
+      description: Removes exactly the selected attendees' participations (scope contact_ids,
+        or everyone) of the interaction that holds the id, whatever the reason.
+      parameters:
+      - description: Interaction ID
+        format: uuid
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Removal scope and reason
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/handlers.InteractionRemovalRequest'
+      responses:
+        "204":
+          description: Participations removed
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.APIResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.APIResponse'
+      summary: Remove participations of an interaction
+      tags:
+      - interactions
+  /interactions/merge:
+    post:
+      consumes:
+      - application/json
+      description: Declares the listed interactions one interaction for every attendee.
+        Answers with contact_id's resulting participation.
+      parameters:
+      - description: Interactions to merge
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/handlers.InteractionMergeRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                data:
+                  $ref: '#/definitions/handlers.InteractionMergeResponse'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.APIResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.APIResponse'
+      summary: Merge interactions
+      tags:
+      - interactions
+  /interactions/merge/preview:
+    post:
+      consumes:
+      - application/json
+      description: Answers exactly what POST /interactions/merge would answer for
+        the same body, and writes nothing.
+      parameters:
+      - description: Interactions to merge
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/handlers.InteractionMergeRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                data:
+                  $ref: '#/definitions/handlers.InteractionMergeResponse'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.APIResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.APIResponse'
+      summary: Preview an interaction merge
       tags:
       - interactions
   /rematch/contacts/{id}/rescan:

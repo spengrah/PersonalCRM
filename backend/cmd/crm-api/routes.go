@@ -41,6 +41,7 @@ type routeDeps struct {
 	// Core (always-on)
 	ContactHandler       *handlers.ContactHandler
 	InteractionHandler   *handlers.InteractionHandler
+	CorrectionHandler    *handlers.InteractionCorrectionHandler
 	NoteHandler          *handlers.NoteHandler
 	ContactMethodHandler *handlers.ContactMethodHandler
 	RematchHandler       *handlers.RematchHandler
@@ -144,6 +145,7 @@ func registerRoutes(deps routeDeps) {
 		handlers.RegisterContactRoutes(v1, handlers.ContactRouteDeps{
 			Contact:       deps.ContactHandler,
 			Interaction:   deps.InteractionHandler,
+			Correction:    deps.CorrectionHandler,
 			Note:          deps.NoteHandler,
 			ContactMethod: deps.ContactMethodHandler,
 		})

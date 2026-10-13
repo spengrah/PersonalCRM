@@ -75,7 +75,18 @@ func (s *stubWriter) RecordInteractionTx(
 		IsReplay:      false,
 		PrevCadence:   s.prev,
 		CadenceAtEmit: s.cadenceAtEmit,
+		Verdict:       uncorrectedVerdict(inter),
 	}, nil
+}
+
+// uncorrectedVerdict is the verdict of an observation no correction touches:
+// effective, its own effective participation.
+func uncorrectedVerdict(ix *repository.Interaction) *repository.ObservationVerdict {
+	return &repository.ObservationVerdict{Entry: &repository.EffectiveParticipation{
+		ContactID:  ix.ContactID,
+		Direction:  ix.Direction,
+		OccurredAt: ix.OccurredAt,
+	}}
 }
 
 type stubTGRepo struct {

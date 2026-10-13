@@ -15,13 +15,14 @@ type coreHandlers struct {
 	Contact       *handlers.ContactHandler
 	Note          *handlers.NoteHandler
 	Interaction   *handlers.InteractionHandler
+	Correction    *handlers.InteractionCorrectionHandler
 	System        *handlers.SystemHandler
 	Rematch       *handlers.RematchHandler
 	ContactMethod *handlers.ContactMethodHandler
 }
 
-// buildCoreHandlers constructs the contact / note / interaction / system /
-// rematch handlers. manualHandler is nil in interaction-mode off (the
+// buildCoreHandlers constructs the contact / note / interaction / interaction
+// correction / system / rematch handlers. manualHandler is nil in interaction-mode off (the
 // InteractionHandler tolerates a nil manual handler exactly as today).
 func buildCoreHandlers(
 	database *db.Database,
@@ -32,6 +33,7 @@ func buildCoreHandlers(
 	noteService *service.NoteService,
 	manualHandler *service.ManualInteractionHandler,
 	eventBus *events.Bus,
+	consumers eventConsumers,
 ) coreHandlers {
 	contactRepo := core.Contact
 	interactionRepo := core.Interaction
@@ -52,10 +54,25 @@ func buildCoreHandlers(
 		contactRepo,
 	)
 
+	// The correction routes recompute cadence fields and follow-up tasks
+	// through the same consumers every recording path uses.
+	correctionService := service.NewInteractionCorrectionService(
+		database.Pool,
+		interactionRepo,
+		graph.GraphNode,
+		graph.GraphAssertion,
+		contactRepo,
+		graph.AssertService,
+		consumers.CadenceUpdater,
+		consumers.FollowUpManager,
+		eventBus,
+	)
+
 	return coreHandlers{
 		Contact:       handlers.NewContactHandler(contactService),
 		Note:          handlers.NewNoteHandler(noteService),
 		Interaction:   handlers.NewInteractionHandler(interactionRepo, manualHandler, contentService),
+		Correction:    handlers.NewInteractionCorrectionHandler(correctionService),
 		System:        handlers.NewSystemHandler(contactRepo, cfg.Runtime),
 		Rematch:       handlers.NewRematchHandler(rematchService, contactService),
 		ContactMethod: handlers.NewContactMethodHandler(contactMethodService),

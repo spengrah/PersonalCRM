@@ -88,3 +88,41 @@ type MeetingNoteContentResponse struct {
 	Summary *string `json:"summary,omitempty"`
 	Memo    *string `json:"memo,omitempty"`
 }
+
+// InteractionMergeRequest declares the listed interactions one interaction for
+// every attendee. ContactID names the contact whose resulting participation
+// the merge answers with.
+type InteractionMergeRequest struct {
+	InteractionIDs []string `json:"interaction_ids" binding:"required"`
+	ContactID      string   `json:"contact_id" binding:"required"`
+}
+
+// InteractionParticipationResponse is one contact's effective participation in
+// an interaction.
+type InteractionParticipationResponse struct {
+	Direction  string    `json:"direction" tstype:"InteractionDirection"`
+	OccurredAt time.Time `json:"occurred_at"`
+}
+
+// InteractionMergeResponse answers a merge or its preview: the merged
+// interaction (the root of the first listed id) and the requesting contact's
+// participation in it.
+type InteractionMergeResponse struct {
+	InteractionID string                           `json:"interaction_id"`
+	Participation InteractionParticipationResponse `json:"participation"`
+}
+
+// InteractionRemovalScope selects whose participations a removal removes:
+// the listed contacts, or everyone. Exactly one is given; the fields are
+// pointers so a scope's presence is read from the body, not its zero value.
+type InteractionRemovalScope struct {
+	ContactIDs *[]string `json:"contact_ids,omitempty"`
+	Everyone   *bool     `json:"everyone,omitempty"`
+}
+
+// InteractionRemovalRequest removes participations of an interaction. Reason
+// explains the removal and never changes what is removed.
+type InteractionRemovalRequest struct {
+	Scope  InteractionRemovalScope `json:"scope"`
+	Reason string                  `json:"reason" tstype:"'duplicate' | 'did_not_attend' | 'did_not_happen'"`
+}

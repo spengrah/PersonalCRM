@@ -225,7 +225,7 @@ behaviors:
       - message, calendar-attended, and task completion/outreach kinds route to the interaction recorder
       - a recorded-interaction event fans out to both the cadence and follow-up consumers
       - calendar-declined, email, contact-methods-added, and accepted/superseded-assertion kinds each route to their own dedicated consumer
-      - proposed/rejected/provenance assertion kinds, task-skipped, and interaction.manual route to no consumer — the assertion/task kinds land durably for audit, while interaction.manual is invoked inline by the manual handler
+      - proposed/rejected/provenance assertion kinds, task-skipped, interaction.corrected, and interaction.manual route to no consumer — the assertion, task and correction kinds land durably for audit, while interaction.manual is invoked inline by the manual handler
     provenance: [consumerJobsForKind]
     notes: Consumer internals belong to their own domains (CAD for cadence/follow-up, IMP for rematch, KNW for the knowledge cache, CAL for calendar decline); ING owns only the routing table.
 
@@ -515,6 +515,27 @@ behaviors:
         text: an answered inbound call or inbound voicemail records an inbound interaction; a missed inbound call without voicemail records no interaction
     provenance: [decideCallInteraction, handleCall]
     notes: Migration 084 repairs historical connected outbound call rows without replaying events, forward-merges cadence projections, and preserves newer follow-up and skip state. A repaired call that advances last-contacted past a skip supersedes that skip and its undo state.
+
+  - id: ING-040
+    title: Corrections apply wherever an observation becomes effective, and no sync restores a corrected observation
+    type: business-logic
+    status: current
+    surface: none
+    given: an observation a merge or removal of interactions has corrected
+    when: any source re-processes it — a create, an extension, a promotion to mutual or a re-link, by calendar, email, call, Anarlog or manual recording
+    then:
+      - key: no-sync-restores-correction
+        text: no re-processing restores a removed observation's effect on cadence fields or follow-up tasks, and a merged interaction stays one participation per attendee
+      - key: excluded-observation-recorded-without-effect
+        text: an observation a correction excludes is still recorded as raw evidence and has no cadence or follow-up effect
+      - key: merged-member-applies-merged-participation
+        text: an observation of a merged interaction moves cadence as the contact's merged participation does, at its latest time and with the other members' directions included
+      - key: excluded-response-is-no-response
+        text: an outbound whose only later response the user removed gets the follow-up the rules give with no response on record
+      - key: excluded-evidence-acknowledged
+        text: the source still acknowledges an event whose observation a correction excludes, and its re-delivery is deduplicated
+    provenance: [.agents/spec/2026-10-13-interaction-review-readiness.md]
+    notes: Corrections are applied at the one place an observation becomes effective, which every sync path passes through; no source keeps a tombstone of its own.
 
   - id: ING-045
     title: Re-processing a source object resolves to the interaction node resolved before

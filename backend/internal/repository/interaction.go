@@ -86,6 +86,13 @@ type RecordInteractionResult struct {
 	// (may be nil if the contact has no cadence). Non-nil only when
 	// publishesEvent=true and cadence is set.
 	CadenceAtEmit *string
+	// Verdict is the verdict read (ObservationVerdictTx) of the freshly
+	// recorded observation, taken after the write in the same tx: whether a
+	// correction excludes it and, when effective, the contact's effective
+	// participation it belongs to. A caller that publishes interaction.recorded
+	// publishes nothing when it is excluded and otherwise publishes the entry's
+	// direction and time. Nil on replay.
+	Verdict *ObservationVerdict
 }
 
 // InteractionRepository handles interaction persistence

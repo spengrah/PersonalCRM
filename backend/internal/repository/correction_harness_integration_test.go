@@ -15,6 +15,8 @@ import (
 	"personal-crm/backend/internal/events"
 	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/service"
+	"personal-crm/backend/internal/synthetic"
+	"personal-crm/backend/internal/synthetic/factory"
 	"personal-crm/backend/tests/testsupport"
 
 	"github.com/google/uuid"
@@ -24,14 +26,15 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// correctionEnv records observations through the contact service's recording
-// path and writes correction state through AssertService and the
+// correctionEnv seeds contacts through the synthetic harness, records
+// observations through the contact service's recording path and writes correction state through AssertService and the
 // interaction-node merge write, in the correction representation: a removal is
 // an accepted not_participant_in or removed_for_everyone assertion, and a merge
 // is an alias plus an accepted same_interaction_as assertion, each with one
 // user locator.
 type correctionEnv struct {
 	ctx          context.Context
+	harness      *synthetic.Harness
 	database     *db.Database
 	contacts     *service.ContactService
 	interactions *repository.InteractionRepository
@@ -63,6 +66,7 @@ func newCorrectionEnv(t *testing.T) *correctionEnv {
 
 	return &correctionEnv{
 		ctx:          ctx,
+		harness:      synthetic.NewHarnessForNamespace(t, ctx, database, "r"+uuid.NewString()[:8], factory.DefaultSeed),
 		database:     database,
 		contacts:     contacts,
 		interactions: interactions,
@@ -100,10 +104,11 @@ func (*knowledgeCacheNoopWorker) Work(context.Context, *river.Job[consumerjobs.K
 // at returns the base time plus h hours.
 func (e *correctionEnv) at(h int) time.Time { return e.base.Add(time.Duration(h) * time.Hour) }
 
-// contact creates a contact (and its person node) through the contact service.
+// contact seeds a synthetic contact (and its person node) in the env's
+// namespace.
 func (e *correctionEnv) contact(t *testing.T) uuid.UUID {
 	t.Helper()
-	c, _, err := e.contacts.CreateContact(e.ctx, repository.CreateContactRequest{FullName: "Contact " + uuid.NewString()[:8]}, nil)
+	c, err := e.harness.SeedContact(e.ctx, e.harness.Generator().Contact())
 	require.NoError(t, err)
 	return c.ID
 }

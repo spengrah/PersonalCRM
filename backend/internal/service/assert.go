@@ -1523,21 +1523,22 @@ func (s *AssertService) AssertClosureTx(ctx context.Context, tx pgx.Tx, req Clos
 		return fmt.Errorf("load predicate: %w", err)
 	}
 	now := accelerated.GetCurrentTime().UTC()
-	if err := s.lockCorrectionNodes(ctx, tx, predicate, req.SubjectNodeID, nil); err != nil {
+	// The slot is the subject's own (a closure targets the subject's predicate
+	// directly, not the canonical edge — closure is a fact/single-edge concept and
+	// the read uses subject+predicate). Its complete lock set, the correction
+	// locks on the subject and on every node the slot's accepted rows name, then
+	// the slot lock, comes before the read of the row it closes (the global order
+	// AssertTx and AcceptTx use).
+	slots := []writeSlot{{predicate, predicate.Key, req.SubjectNodeID, nil}}
+	if err := s.lockForWrite(ctx, tx, correctionNodes(predicate, req.SubjectNodeID, nil), slots); err != nil {
 		return err
 	}
-	// Close the current accepted row for the slot (the subject's own slot; a
-	// closure targets the subject's predicate directly, not the canonical edge —
-	// closure is a fact/single-edge concept and the read uses subject+predicate).
 	current, err := s.assertionRepo.GetCurrentAcceptedTx(ctx, tx, req.SubjectNodeID, predicate.Key, now)
 	if err != nil {
 		if errors.Is(err, db.ErrNotFound) {
 			return nil // already a gap; nothing to close (idempotent)
 		}
 		return fmt.Errorf("load current for closure: %w", err)
-	}
-	if err := s.lockCorrectionNodes(ctx, tx, predicate, current.SubjectNodeID, current.ObjectNodeID); err != nil {
-		return err
 	}
 	// knowledge_to >= the closed row's knowledge_from (a future KnowledgeFromOverride
 	// could otherwise push knowledge_from past now → assertion_knowledge_range CHECK).
@@ -2326,9 +2327,10 @@ type writeSlot struct {
 // assertion the write changes or closes, its own or a slot row it supersedes or
 // merges, is written without the correction lock on its interaction nodes. A
 // row that enters a slot after its nodes are read is found under the slot
-// locks; the slot locks taken here are then released (a savepoint rollback) and
-// the round repeats with that row's nodes, so this call never takes a
-// correction lock while holding a slot lock it took.
+// locks; every lock taken in the round is then released (a savepoint rollback)
+// and the round repeats with that row's nodes, so this call takes its complete
+// correction-lock set in one ordered acquisition and never adds a node to a set
+// it holds.
 func (s *AssertService) lockForWrite(ctx context.Context, tx pgx.Tx, nodes map[uuid.UUID]struct{}, slots []writeSlot) error {
 	if err := s.collectSlotCorrectionNodes(ctx, tx, nodes, slots); err != nil {
 		return err
@@ -2339,30 +2341,30 @@ func (s *AssertService) lockForWrite(ctx context.Context, tx pgx.Tx, nodes map[u
 			keys[k] = struct{}{}
 		}
 	}
+	if len(keys) == 0 {
+		return s.acquireCorrectionLocks(ctx, tx, nodes)
+	}
 	for {
-		if err := s.acquireCorrectionLocks(ctx, tx, nodes); err != nil {
-			return err
-		}
-		if len(keys) == 0 {
-			return nil
-		}
 		sp, err := tx.Begin(ctx)
 		if err != nil {
-			return fmt.Errorf("begin slot-lock savepoint: %w", err)
+			return fmt.Errorf("begin lock savepoint: %w", err)
 		}
 		known := len(nodes)
-		err = s.acquireSortedSlotLocks(ctx, sp, keys)
+		err = s.acquireCorrectionLocks(ctx, sp, nodes)
+		if err == nil {
+			err = s.acquireSortedSlotLocks(ctx, sp, keys)
+		}
 		if err == nil {
 			err = s.collectSlotCorrectionNodes(ctx, sp, nodes, slots)
 		}
 		if err == nil && len(nodes) == known {
 			if err := sp.Commit(ctx); err != nil {
-				return fmt.Errorf("release slot-lock savepoint: %w", err)
+				return fmt.Errorf("release lock savepoint: %w", err)
 			}
 			return nil
 		}
 		if rbErr := sp.Rollback(ctx); rbErr != nil {
-			return fmt.Errorf("roll back slot-lock savepoint: %w", rbErr)
+			return fmt.Errorf("roll back lock savepoint: %w", rbErr)
 		}
 		if err != nil {
 			return err

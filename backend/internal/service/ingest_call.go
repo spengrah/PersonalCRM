@@ -289,9 +289,16 @@ func (s *IngestService) handleCall(
 		return nil, nil
 	}
 
+	// A correction excludes the observation (ING-040): the call is still
+	// acknowledged, its staging row and observation stay recorded and linked,
+	// and it has no cadence or follow-up effect, so nothing is published.
+	if res.Verdict.Excluded {
+		return nil, nil
+	}
+
 	// Fresh write: build the V3 InteractionRecordedPayload + envelope
 	// and publish in the same tx.
-	recordedPayload, err := buildCallRecordedPayload(res.Interaction, interactionDirection, recReq, res.PrevCadence, res.CadenceAtEmit)
+	recordedPayload, err := buildCallRecordedPayload(res.Interaction, res.Verdict.Entry, recReq, res.PrevCadence, res.CadenceAtEmit)
 	if err != nil {
 		return nil, &IngestPerEventRejection{
 			Code:    ingestRejectStagingUpsertFailed,
@@ -404,13 +411,14 @@ func callServiceLabel(service string) string {
 }
 
 // buildCallRecordedPayload constructs the V3 InteractionRecordedPayload
-// for a phone_calls-source interaction. Mirrors the recorder's
+// for a phone_calls-source interaction, at the direction and time of effect,
+// the call observation's verdict entry. Mirrors the recorder's
 // marshalRecordedPayload but lives here so the service package doesn't
 // import consumer. CadenceUpdater and FollowUpManager both consume the
 // V3 shape; PrevCadenceSnapshot + PrevCadenceValue come from
 // ContactService.RecordInteractionTx's publishesEvent=true output.
 func buildCallRecordedPayload(
-	interaction *repository.Interaction, direction string, req repository.RecordInteractionRequest,
+	interaction *repository.Interaction, effect *repository.EffectiveParticipation, req repository.RecordInteractionRequest,
 	prev *repository.ContactCadenceFields, cadenceAtEmit *string,
 ) (json.RawMessage, error) {
 	if interaction == nil {
@@ -420,8 +428,8 @@ func buildCallRecordedPayload(
 		Version:          3,
 		ContactID:        interaction.ContactID,
 		InteractionID:    interaction.ID,
-		Direction:        direction,
-		OccurredAt:       interaction.OccurredAt,
+		Direction:        effect.Direction,
+		OccurredAt:       effect.OccurredAt,
 		Source:           interaction.Source,
 		SourceRef:        req.SourceRef,
 		PrevCadenceValue: cadenceAtEmit,

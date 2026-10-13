@@ -3,6 +3,7 @@
 package repository_test
 
 import (
+	"bytes"
 	"testing"
 	"time"
 
@@ -20,6 +21,7 @@ import (
 // correction, and AssertService accepts interaction nodes where they name
 // 'interaction', landing a user-located write accepted.
 func TestCorrectionPredicateCatalog(t *testing.T) {
+	t.Parallel()
 	e := newCorrectionEnv(t)
 
 	t.Run("each row reads back with its kind, types, cardinality, symmetry and review policy", func(t *testing.T) {
@@ -140,6 +142,7 @@ func TestCorrectionPredicateCatalog(t *testing.T) {
 // locator is not one user locator of the act, a removal without its reason, and
 // a second act's corroboration of a recorded correction, and writes nothing.
 func TestCorrectionProvenanceIsRequired(t *testing.T) {
+	t.Parallel()
 	e := newCorrectionEnv(t)
 	c := e.contact(t)
 	x := e.call(t, c, "call-"+uuid.NewString(), repository.InteractionDirectionInbound, e.at(1))
@@ -195,33 +198,15 @@ func TestCorrectionProvenanceIsRequired(t *testing.T) {
 // while another transaction holds X's correction lock, and closes P -> X once
 // the lock is released.
 func TestAssertWaitsForCorrectionLockOfClosedAssertion(t *testing.T) {
+	t.Parallel()
 	e := newCorrectionEnv(t)
-	interaction := "interaction"
-	predicate, err := e.predicates.CreateProvisional(e.ctx, repository.CreatePredicateRequest{
-		Key:                 "test_single_attended_" + uuid.NewString()[:8],
-		Kind:                repository.PredicateKindEdge,
-		SubjectType:         "person",
-		ObjectType:          &interaction,
-		Cardinality:         repository.PredicateCardinalitySingle,
-		TemporalProfile:     repository.PredicateTemporalMutable,
-		DefaultSalience:     50,
-		DefaultReviewPolicy: repository.PredicateReviewAutoIfConfident,
-		PropositionBucket:   repository.PredicateBucketNone,
-		Description:         "test single-cardinality person-to-interaction edge",
-	})
-	require.NoError(t, err)
+	predicate := singleAttendedPredicate(t, e)
 
 	c := e.contact(t)
 	x := *e.call(t, c, "call-"+uuid.NewString(), repository.InteractionDirectionInbound, e.at(1)).InteractionNodeID
 	y := *e.call(t, c, "call-"+uuid.NewString(), repository.InteractionDirectionInbound, e.at(2)).InteractionNodeID
 	write := func(object uuid.UUID) (*repository.Assertion, error) {
-		return e.asserts.Assert(e.ctx, service.AssertRequest{
-			SubjectNodeID: c,
-			PredicateKey:  predicate.Key,
-			ObjectNodeID:  &object,
-			Confidence:    100,
-			Locators:      []service.ProvenanceLocator{userLocator(uuid.New(), nil)},
-		})
+		return e.asserts.Assert(e.ctx, attendedRequest(predicate, c, object))
 	}
 	prior, err := write(x)
 	require.NoError(t, err)
@@ -254,12 +239,108 @@ func TestAssertWaitsForCorrectionLockOfClosedAssertion(t *testing.T) {
 	assert.Equal(t, repository.AssertionStatusSuperseded, closed.Status)
 }
 
+// singleAttendedPredicate mints a provisional single-cardinality
+// person-to-interaction edge predicate.
+func singleAttendedPredicate(t *testing.T, e *correctionEnv) *repository.Predicate {
+	t.Helper()
+	interaction := "interaction"
+	predicate, err := e.predicates.CreateProvisional(e.ctx, repository.CreatePredicateRequest{
+		Key:                 "test_single_attended_" + uuid.NewString()[:8],
+		Kind:                repository.PredicateKindEdge,
+		SubjectType:         "person",
+		ObjectType:          &interaction,
+		Cardinality:         repository.PredicateCardinalitySingle,
+		TemporalProfile:     repository.PredicateTemporalMutable,
+		DefaultSalience:     50,
+		DefaultReviewPolicy: repository.PredicateReviewAutoIfConfident,
+		PropositionBucket:   repository.PredicateBucketNone,
+		Description:         "test single-cardinality person-to-interaction edge",
+	})
+	require.NoError(t, err)
+	return predicate
+}
+
+// attendedRequest is a user-located write of subject -> object under predicate.
+func attendedRequest(predicate *repository.Predicate, subject, object uuid.UUID) service.AssertRequest {
+	return service.AssertRequest{
+		SubjectNodeID: subject,
+		PredicateKey:  predicate.Key,
+		ObjectNodeID:  &object,
+		Confidence:    100,
+		Locators:      []service.ProvenanceLocator{userLocator(uuid.New(), nil)},
+	}
+}
+
+// A closure and a replacement of one single-cardinality person-to-interaction
+// slot serialize on the correction locks without a deadlock
+// (effective-participation.c7, ruling R41): with P -> X accepted and X sorting
+// before P in the correction-lock order, a closure of P's slot waits while
+// another transaction holds X's correction lock, that transaction replaces
+// P -> X with P -> Y, and both complete; the closure then closes P -> Y.
+func TestClosureAndReplacementSerializeOnCorrectionLocks(t *testing.T) {
+	t.Parallel()
+	e := newCorrectionEnv(t)
+	predicate := singleAttendedPredicate(t, e)
+
+	c := e.contact(t)
+	// The correction lock is taken in node-id order, so X must sort before P.
+	// An observation's node id is a hash and P's is random, so X is an
+	// interaction node whose id leads with eight zero bytes: it sorts before
+	// every version-4 id, P's included, since a version-4 id has a nonzero
+	// byte 6.
+	x := uuid.New()
+	copy(x[:8], make([]byte, 8))
+	e.inTx(t, func(tx pgx.Tx) error {
+		_, err := e.nodes.CreateNodeTx(e.ctx, tx, x, repository.NodeTypeInteraction, "")
+		return err
+	})
+	require.Negative(t, bytes.Compare(x[:], c[:]), "X sorts before P")
+	y := *e.call(t, c, "call-"+uuid.NewString(), repository.InteractionDirectionInbound, e.at(2)).InteractionNodeID
+	prior, err := e.asserts.Assert(e.ctx, attendedRequest(predicate, c, x))
+	require.NoError(t, err)
+
+	holder, err := e.database.Pool.Begin(e.ctx)
+	require.NoError(t, err)
+	defer func() { _ = holder.Rollback(e.ctx) }()
+	require.NoError(t, e.nodes.AcquireCorrectionLocksTx(e.ctx, holder, x))
+
+	done := make(chan error, 1)
+	go func() {
+		done <- e.asserts.AssertClosure(e.ctx, service.ClosureRequest{SubjectNodeID: c, PredicateKey: predicate.Key})
+	}()
+	select {
+	case err := <-done:
+		require.Failf(t, "closure did not wait", "the closure of P -> X finished while X's correction lock was held (err=%v)", err)
+	case <-time.After(500 * time.Millisecond):
+	}
+
+	replacement, err := e.asserts.AssertTx(e.ctx, holder, attendedRequest(predicate, c, y))
+	require.NoError(t, err)
+	require.NoError(t, holder.Commit(e.ctx))
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(10 * time.Second):
+		require.FailNow(t, "the closure did not finish after the replacement committed")
+	}
+
+	closedPrior, err := e.assertions.GetAssertion(e.ctx, prior.ID)
+	require.NoError(t, err)
+	assert.Equal(t, repository.AssertionStatusSuperseded, closedPrior.Status)
+	closedReplacement, err := e.assertions.GetAssertion(e.ctx, replacement.ID)
+	require.NoError(t, err)
+	assert.Equal(t, repository.AssertionStatusSuperseded, closedReplacement.Status)
+	require.NotNil(t, closedReplacement.ClosureReason)
+	assert.Equal(t, repository.ClosureReasonEnded, *closedReplacement.ClosureReason)
+}
+
 // A correction assertion keeps one user locator through a contact merge
 // (effective-participation.c4): when two contacts' removals from one
 // interaction node collide, the surviving removal keeps only its own act's
 // locator, and the merged-away removal stays readable, closed, with its act and
 // reason.
 func TestContactMergeKeepsOneLocatorPerCorrection(t *testing.T) {
+	t.Parallel()
 	e := newCorrectionEnv(t)
 	loser := e.contact(t)
 	winner := e.contact(t)

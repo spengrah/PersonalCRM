@@ -19,6 +19,7 @@ import (
 	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/repository"
 
+	migrate "github.com/golang-migrate/migrate/v4"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/require"
@@ -81,6 +82,18 @@ func countNodes(t *testing.T, ctx context.Context, q *db.Queries) int64 {
 
 func strPtr(s string) *string { return &s }
 
+// rollAppTo rolls the golang-migrate app schema down to version, whatever
+// migrations follow it (no raw SQL — uses the migrate library).
+func rollAppTo(t *testing.T, databaseURL, migrationsPath string, version uint) {
+	t.Helper()
+	m, err := migrate.New(fmt.Sprintf("file://%s", migrationsPath), databaseURL)
+	require.NoError(t, err)
+	require.NoError(t, m.Migrate(version), "roll app schema to %d", version)
+	srcErr, dbErr := m.Close()
+	require.NoError(t, srcErr)
+	require.NoError(t, dbErr)
+}
+
 // newBackfillWorld seeds observations at the schema before migration 087 and
 // returns the world after crm-admin --migrate has run over it.
 func newBackfillWorld(t *testing.T) *backfillWorld {
@@ -93,7 +106,7 @@ func newBackfillWorld(t *testing.T) *backfillWorld {
 	// node, and every other column is the base schema's. The pre-087 rollback
 	// then drops the column and leaves exactly the base-schema rows.
 	require.NoError(t, db.RunMigrations(ctx, cloneURL, migrationsPath))
-	rollAppDownOne(t, cloneURL, migrationsPath) // 088 → 087
+	rollAppTo(t, cloneURL, migrationsPath, 87) // before 088
 
 	q := openQueries(t, ctx, cloneURL)
 	contactRepo := repository.NewContactRepository(q)
@@ -167,7 +180,7 @@ func newBackfillWorld(t *testing.T) *backfillWorld {
 		require.Nil(t, w.before[id].InteractionNodeID, "observation %q is seeded without a node", name)
 	}
 
-	rollAppDownOne(t, cloneURL, migrationsPath) // 087 → before 087
+	rollAppDownOne(t, cloneURL, migrationsPath) // one step down from pinned 087 → before 087
 	w.nodesBefore = countNodes(t, ctx, q)
 
 	var out bytes.Buffer
@@ -252,7 +265,7 @@ func TestIdentityBackfill(t *testing.T) {
 	})
 
 	t.Run("rolling 088 back and migrating again leaves every observation on its node and creates no node", func(t *testing.T) {
-		rollAppDownOne(t, w.cloneURL, w.migrationsPath) // 088 → 087
+		rollAppTo(t, w.cloneURL, w.migrationsPath, 87) // before 088
 		var out bytes.Buffer
 		require.NoError(t, runMigrate(ctx, w.cloneURL, w.migrationsPath, &out))
 

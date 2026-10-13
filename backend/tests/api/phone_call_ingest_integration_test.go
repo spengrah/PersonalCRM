@@ -110,7 +110,9 @@ func (f *failingPhoneCallWriter) MarkProcessedTx(ctx context.Context, tx pgx.Tx,
 // setupPhoneCallIngestEnv wires the full call.* ingest stack against a
 // real DB + live river client. Returns a populated env or t.Skip if no
 // DATABASE_URL is set.
-func setupPhoneCallIngestEnv(t *testing.T) *phoneCallIngestEnv {
+// setupPhoneCallIngestEnv builds the env. Todoist is unconfigured unless the
+// caller passes the settings its follow-up manager reads.
+func setupPhoneCallIngestEnv(t *testing.T, todoistSettings ...consumer.TodoistSettingsFunc) *phoneCallIngestEnv {
 	t.Helper()
 
 	ctx := t.Context()
@@ -148,6 +150,7 @@ func setupPhoneCallIngestEnv(t *testing.T) *phoneCallIngestEnv {
 	river.AddWorker(workers, &apiTestCadenceShim{})
 	river.AddWorker(workers, &apiTestFollowUpShim{})
 	river.AddWorker(workers, &apiKnowledgeCacheNoopWorker{})
+	river.AddWorker(workers, &apiTodoistOpNoop{})
 	riverClient, err := river.NewClient(riverpgxv5.New(database.Pool), &river.Config{
 		JobTimeout: cfg.River.JobTimeout,
 		Queues: map[string]river.QueueConfig{
@@ -181,6 +184,12 @@ func setupPhoneCallIngestEnv(t *testing.T) *phoneCallIngestEnv {
 	// no Todoist integration; the post-commit closure is expected to be
 	// nil on the inline path, so this wiring matters only for
 	// defence-in-depth.
+	settings := consumer.TodoistSettingsFunc(func(ctx context.Context) (*todoist.Settings, string, error) {
+		return nil, "", consumer.ErrTodoistUnconfigured
+	})
+	if len(todoistSettings) > 0 {
+		settings = todoistSettings[0]
+	}
 	followUpManager := consumer.NewFollowUpManager(
 		consumer.FollowUpModeCutover,
 		eventClaimRepo,
@@ -189,9 +198,7 @@ func setupPhoneCallIngestEnv(t *testing.T) *phoneCallIngestEnv {
 		contactTaskRepo,
 		interactionRepo,
 		riverClient,
-		func(ctx context.Context) (*todoist.Settings, string, error) {
-			return nil, "", consumer.ErrTodoistUnconfigured
-		},
+		settings,
 		cfg.CORS.FrontendURL,
 		cfg.Watchdog,
 	)

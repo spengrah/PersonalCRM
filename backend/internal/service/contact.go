@@ -802,41 +802,27 @@ func (s *ContactService) RecordInteractionTx(
 		return nil, fmt.Errorf("create interaction: %w", err)
 	}
 
-	// 6. Direct-path cadence write. When publishesEvent=false the caller is
-	// NOT going through the event bus (non-bus wrappers: Todoist action /
-	// cadence task completion, and service-layer tests). No
-	// interaction.recorded will be emitted, so InteractionRecorder's
-	// inline CadenceUpdater.HandleEvent dispatch won't fire and cadence
-	// columns would otherwise silently stop updating. Route through
-	// CadenceUpdater.ApplyInteraction so this path stays under the
-	// sole-writer invariant. publishesEvent=true callers (the
-	// InteractionRecorder) still rely on the recorder's inline
-	// HandleEvent path + event-id claim for dedupe across inline +
-	// queued delivery.
-	if !publishesEvent {
-		if s.cadence == nil {
-			return nil, errors.New("record interaction: cadence updater not wired (pass cadence to NewContactService)")
-		}
-		if err := s.cadence.ApplyInteraction(ctx, tx, repository.ApplyInteractionRequest{
-			ContactID:  req.ContactID,
-			Direction:  req.Direction,
-			Source:     req.Source,
-			OccurredAt: req.OccurredAt,
-		}); err != nil {
-			return nil, fmt.Errorf("apply interaction cadence: %w", err)
-		}
+	// 6. Verdict read (arc seam S3): whether a correction excludes the
+	// observation and, when it is effective, the contact's effective
+	// participation it belongs to. Every cadence or follow-up effect of this
+	// write follows it.
+	verdict, err := s.interactionRepo.ObservationVerdictTx(ctx, tx, interaction.ID)
+	if err != nil {
+		return nil, fmt.Errorf("observation verdict: %w", err)
 	}
 
-	// 7. Derive the follow-up closure. Cadence writes happen via either
-	// the recorder's inline CadenceUpdater.HandleEvent (publishesEvent true)
-	// or the direct ApplyInteraction call above (publishesEvent false).
-	// Follow-up runs the same way: publishesEvent=true callers rely on the
-	// recorder's inline FollowUpManager.HandleEvent; the publishesEvent=false
-	// path (Todoist completion wrapper) applies it INLINE here, in the
-	// caller's tx, so the op enqueue commits atomically with the interaction
-	// (I4 — no best-effort post-commit closure).
+	// 7. Direct-path cadence + follow-up. When publishesEvent=false the
+	// caller is NOT going through the event bus (non-bus wrappers: Todoist
+	// action / cadence task completion, Anarlog sessions, service-layer
+	// tests). No interaction.recorded will be emitted, so the effect is
+	// applied here, inline in the caller's tx, through the sole writers
+	// (CadenceUpdater.ApplyInteraction, FollowUpManager.ApplyInteraction), so
+	// any op enqueue commits atomically with the interaction (I4).
+	// publishesEvent=true callers publish interaction.recorded from
+	// res.Verdict instead: nothing when excluded, else the entry's direction
+	// and time, which the recorder's inline HandleEvent paths apply.
 	if !publishesEvent {
-		if err := s.applyFollowUpInlineTx(ctx, tx, interaction); err != nil {
+		if err := s.applyEffectTx(ctx, tx, interaction, verdict); err != nil {
 			return nil, err
 		}
 	}
@@ -844,6 +830,7 @@ func (s *ContactService) RecordInteractionTx(
 	res := &RecordInteractionResult{
 		Interaction: interaction,
 		IsReplay:    false,
+		Verdict:     verdict,
 	}
 	if publishesEvent {
 		// The caller will publish interaction.recorded after this returns;
@@ -881,19 +868,9 @@ func (s *ContactService) PromoteInteractionToMutualTx(
 	if err != nil {
 		return fmt.Errorf("update interaction direction: %w", err)
 	}
-	// Route cadence writes through CadenceUpdater so the sole-writer
-	// invariant holds. Promote does NOT emit interaction.recorded and
-	// therefore does not claim an event — ApplyInteraction is the
-	// direct-invoke path that bypasses the claim store.
-	if err := s.cadence.ApplyInteraction(ctx, tx, repository.ApplyInteractionRequest{
-		ContactID:  contactID,
-		Direction:  repository.InteractionDirectionMutual,
-		Source:     updated.Source,
-		OccurredAt: replyAt,
-	}); err != nil {
-		return fmt.Errorf("apply promote cadence: %w", err)
-	}
-	return s.applyFollowUpInlineTx(ctx, tx, updated)
+	// Promote does NOT emit interaction.recorded and therefore does not
+	// claim an event; the effect goes through the direct-invoke sole writers.
+	return s.applyWrittenEffectTx(ctx, tx, updated)
 }
 
 // ExtendInteraction extends an existing interaction's timestamp/description (incremental
@@ -923,24 +900,10 @@ func (s *ContactService) ExtendInteractionTx(
 	if err != nil {
 		return fmt.Errorf("update interaction timestamp: %w", err)
 	}
-	// UpdateInteractionTimestamp did not change the row's Direction column —
-	// the persisted Direction may be outbound/inbound/mutual from a prior
-	// write. The follow-up apply reads the row's Direction, which for
-	// same-direction coalescing equals the caller-supplied direction. Guard
-	// against surprises by overriding the row's Direction in-memory with the
-	// caller's intent before applying effects.
-	updated.Direction = direction
-	// Route cadence writes through CadenceUpdater. Extend does NOT emit
-	// interaction.recorded; ApplyInteraction is the direct-invoke path.
-	if err := s.cadence.ApplyInteraction(ctx, tx, repository.ApplyInteractionRequest{
-		ContactID:  contactID,
-		Direction:  direction,
-		Source:     updated.Source,
-		OccurredAt: occurredAt,
-	}); err != nil {
-		return fmt.Errorf("apply extend cadence: %w", err)
-	}
-	return s.applyFollowUpInlineTx(ctx, tx, updated)
+	// Extend does NOT emit interaction.recorded; the effect goes through the
+	// direct-invoke sole writers. Every caller extends a row of the same
+	// direction, so the row's direction is the caller's.
+	return s.applyWrittenEffectTx(ctx, tx, updated)
 }
 
 // observeReplayTx runs the observation step for a dedup hit, so a live row
@@ -984,7 +947,11 @@ func (s *ContactService) observeExistingTx(
 // RelinkInteractionVenueTx moves an existing interaction to a (re-resolved)
 // venue, for example when its Anarlog session was re-linked to a calendar
 // event. The observation step runs first; the row keeps the interaction node
-// it has. Caller owns the tx. A nil venueID clears the venue.
+// it has. Moving a venue changes neither the observation's direction nor its
+// time, so a re-link has no cadence or follow-up effect of its own; a re-link
+// that also re-times or re-creates a participation does so through
+// ExtendInteractionTx or RecordInteractionTx, which apply the verdict. Caller
+// owns the tx. A nil venueID clears the venue.
 func (s *ContactService) RelinkInteractionVenueTx(ctx context.Context, tx pgx.Tx, existing repository.Interaction, venueID *uuid.UUID) error {
 	if _, err := s.interactionRepo.ObserveInteractionTx(ctx, tx, repository.InteractionObservation{
 		ContactID:  existing.ContactID,
@@ -1017,25 +984,48 @@ func (s *ContactService) updateInteractionTimestampTx(
 	return s.interactionRepo.UpdateInteractionTimestampTx(ctx, tx, id, occurredAt, description)
 }
 
-// applyFollowUpInlineTx routes non-bus follow-up work through
-// FollowUpManager.ApplyInteraction INSIDE the caller's tx. Used by the
-// non-bus callers (RecordInteractionTx for Todoist completion, Promote/
-// Extend) where no interaction.recorded event is published and therefore
-// the recorder's inline dispatch never fires. ApplyInteraction performs
-// its own direction dispatch (unknown directions no-op) and enqueues any
-// op job in the same tx, so the follow-up write commits atomically with
-// the interaction — no best-effort post-commit closure (I4). No-op when
-// the follow-up consumer isn't wired (tests).
-func (s *ContactService) applyFollowUpInlineTx(ctx context.Context, tx pgx.Tx, interaction *repository.Interaction) error {
-	if s.followUp == nil || interaction == nil {
+// applyWrittenEffectTx reads the verdict of the observation a promote or
+// extend just wrote, in the same tx, and applies its effect (applyEffectTx).
+func (s *ContactService) applyWrittenEffectTx(ctx context.Context, tx pgx.Tx, written *repository.Interaction) error {
+	verdict, err := s.interactionRepo.ObservationVerdictTx(ctx, tx, written.ID)
+	if err != nil {
+		return fmt.Errorf("observation verdict: %w", err)
+	}
+	return s.applyEffectTx(ctx, tx, written, verdict)
+}
+
+// applyEffectTx applies the cadence and follow-up effect of a written
+// observation by its verdict (ING-040): none when a correction excludes it —
+// the raw observation stays recorded — and otherwise the effect of the
+// contact's effective participation the observation belongs to, at that
+// entry's direction and time, under the observation's own source (a manual
+// observation keeps its unconditional branch). For an uncorrected
+// observation the entry is the observation itself.
+//
+// Both writes run inside the caller's tx through the sole writers
+// (CadenceUpdater.ApplyInteraction, FollowUpManager.ApplyInteraction), so
+// any Todoist op enqueue commits atomically with the observation (I4). The
+// follow-up write no-ops when the follow-up consumer isn't wired (tests).
+func (s *ContactService) applyEffectTx(ctx context.Context, tx pgx.Tx, written *repository.Interaction, verdict *repository.ObservationVerdict) error {
+	if verdict.Excluded {
 		return nil
 	}
-	if err := s.followUp.ApplyInteraction(ctx, tx, repository.ApplyInteractionRequest{
-		ContactID:  interaction.ContactID,
-		Direction:  interaction.Direction,
-		Source:     interaction.Source,
-		OccurredAt: interaction.OccurredAt,
-	}); err != nil {
+	if s.cadence == nil {
+		return errors.New("apply interaction effect: cadence updater not wired (pass cadence to NewContactService)")
+	}
+	effect := repository.ApplyInteractionRequest{
+		ContactID:  written.ContactID,
+		Direction:  verdict.Entry.Direction,
+		Source:     written.Source,
+		OccurredAt: verdict.Entry.OccurredAt,
+	}
+	if err := s.cadence.ApplyInteraction(ctx, tx, effect); err != nil {
+		return fmt.Errorf("apply interaction cadence: %w", err)
+	}
+	if s.followUp == nil {
+		return nil
+	}
+	if err := s.followUp.ApplyInteraction(ctx, tx, effect); err != nil {
 		return fmt.Errorf("apply follow-up: %w", err)
 	}
 	return nil

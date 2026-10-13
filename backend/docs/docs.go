@@ -3788,25 +3788,118 @@ const docTemplate = `{
                 }
             }
         },
-        "/interactions/{id}": {
-            "delete": {
+        "/interactions/merge": {
+            "post": {
+                "description": "Declares the listed interactions one interaction for every attendee. Answers with contact_id's resulting participation.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
                 "tags": [
                     "interactions"
                 ],
-                "summary": "Delete interaction",
+                "summary": "Merge interactions",
                 "parameters": [
                     {
-                        "type": "string",
-                        "format": "uuid",
-                        "description": "Interaction ID",
-                        "name": "id",
-                        "in": "path",
-                        "required": true
+                        "description": "Interactions to merge",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/handlers.InteractionMergeRequest"
+                        }
                     }
                 ],
                 "responses": {
-                    "204": {
-                        "description": "Interaction deleted"
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/api.APIResponse"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/handlers.InteractionMergeResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/api.APIResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/api.APIResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/interactions/merge/preview": {
+            "post": {
+                "description": "Answers exactly what POST /interactions/merge would answer for the same body, and writes nothing.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "interactions"
+                ],
+                "summary": "Preview an interaction merge",
+                "parameters": [
+                    {
+                        "description": "Interactions to merge",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/handlers.InteractionMergeRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/api.APIResponse"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/handlers.InteractionMergeResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/api.APIResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/api.APIResponse"
+                        }
                     }
                 }
             }
@@ -3847,6 +3940,54 @@ const docTemplate = `{
                                     }
                                 }
                             ]
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/api.APIResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/interactions/{id}/removals": {
+            "post": {
+                "description": "Removes exactly the selected attendees' participations (scope contact_ids, or everyone) of the interaction that holds the id, whatever the reason.",
+                "consumes": [
+                    "application/json"
+                ],
+                "tags": [
+                    "interactions"
+                ],
+                "summary": "Remove participations of an interaction",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "format": "uuid",
+                        "description": "Interaction ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Removal scope and reason",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/handlers.InteractionRemovalRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "Participations removed"
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/api.APIResponse"
                         }
                     },
                     "404": {
@@ -6479,6 +6620,71 @@ const docTemplate = `{
                     "items": {
                         "$ref": "#/definitions/handlers.VenueTagResponse"
                     }
+                }
+            }
+        },
+        "handlers.InteractionMergeRequest": {
+            "type": "object",
+            "required": [
+                "contact_id",
+                "interaction_ids"
+            ],
+            "properties": {
+                "contact_id": {
+                    "type": "string"
+                },
+                "interaction_ids": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
+        "handlers.InteractionMergeResponse": {
+            "type": "object",
+            "properties": {
+                "interaction_id": {
+                    "type": "string"
+                },
+                "participation": {
+                    "$ref": "#/definitions/handlers.InteractionParticipationResponse"
+                }
+            }
+        },
+        "handlers.InteractionParticipationResponse": {
+            "type": "object",
+            "properties": {
+                "direction": {
+                    "type": "string"
+                },
+                "occurred_at": {
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.InteractionRemovalRequest": {
+            "type": "object",
+            "properties": {
+                "reason": {
+                    "type": "string"
+                },
+                "scope": {
+                    "$ref": "#/definitions/handlers.InteractionRemovalScope"
+                }
+            }
+        },
+        "handlers.InteractionRemovalScope": {
+            "type": "object",
+            "properties": {
+                "contact_ids": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "everyone": {
+                    "type": "boolean"
                 }
             }
         },

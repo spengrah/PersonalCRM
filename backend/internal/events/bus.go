@@ -65,6 +65,8 @@ type consumerJob struct {
 //     Gmail provider publishes these events in production; the consumer
 //     stays idle when no such event is routed (e.g. event-bus off mode).
 //   - task.skipped: no consumer yet wired.
+//   - interaction.corrected: no consumer (the correction's effects commit in
+//     its own tx).
 func consumerJobsForKind(env *Envelope) ([]consumerJob, error) {
 	switch env.Kind {
 	case KindMessageReceived, KindMessageSent, KindCalendarAttended,
@@ -146,6 +148,10 @@ func consumerJobsForKind(env *Envelope) ([]consumerJob, error) {
 		// row (no value change). The events land durably for audit + (source,
 		// source_id) idempotency. An explicit no-consumer case (over the
 		// fallthrough) documents the deliberate decision.
+		return nil, nil
+	case KindInteractionCorrected:
+		// No consumer: a correction commits its cadence and follow-up effects in
+		// its own tx; the event lands for audit.
 		return nil, nil
 	}
 	return nil, nil

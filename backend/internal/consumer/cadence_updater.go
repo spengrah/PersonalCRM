@@ -61,8 +61,11 @@ type contactCadenceReader interface {
 //   - HandleEvent:       envelope-driven (from InteractionRecorder inline
 //     call + queued river worker). Dedupes on
 //     event_consumer_claim (event_id, consumer='cadence_updater').
-//   - ApplyInteraction:  direct-invoke for ExtendInteraction +
-//     PromoteInteractionToMutual (no event, no claim).
+//   - ApplyInteraction:  direct-invoke for ExtendInteraction,
+//     PromoteInteractionToMutual and recordings that publish no event
+//     (no event, no claim), with the effective-participation entry.
+//   - RecomputeAfterCorrection: direct-invoke for the interaction
+//     correction routes; replays effective participation (CAD-047).
 //   - BulkApply:         direct-invoke for MergeContacts. Forward-max
 //     semantics across individual fields.
 //   - ApplyContactByOverride: direct-invoke for user cadence edits
@@ -332,6 +335,126 @@ func (h *CadenceUpdater) ApplyUndoSkip(ctx context.Context, tx pgx.Tx, contactID
 		return errors.New("cadence_updater: undo skip affected no row")
 	}
 	return nil
+}
+
+// RecomputeAfterCorrection is the direct-invoke entry point for the
+// interaction correction routes (CAD-047). before and after are the contact's
+// effective participations before and after the correction, each as the
+// recording rules take it, in the order they were recorded. The caller holds
+// the contact's row lock.
+//
+// Each field becomes what recording after through the normal rules
+// (buildInteractionWrite + applyTx) from the contact's creation state gives.
+// That result is composed with the user's own cadence acts: a contact_by or
+// awaiting_reply_until that differs from what recording before gives was set
+// by hand (a cadence edit, a Todoist deadline edit or skip, a CRM skip) after
+// the last observation that wrote it, and is kept. Skip state is cleared when
+// the result moves last_contacted or contact_by, and kept otherwise.
+func (h *CadenceUpdater) RecomputeAfterCorrection(ctx context.Context, tx pgx.Tx, contactID uuid.UUID, before, after []repository.ApplyInteractionRequest) error {
+	if tx == nil {
+		return errors.New("cadence_updater: nil tx")
+	}
+	if h.mode == CadenceModeOff {
+		return nil
+	}
+	current, err := h.contacts.GetContactTx(ctx, tx, contactID)
+	if err != nil {
+		return fmt.Errorf("get contact for correction recompute: %w", err)
+	}
+	recordedBefore, err := h.replayTx(ctx, tx, current, before)
+	if err != nil {
+		return fmt.Errorf("replay before correction: %w", err)
+	}
+	recordedAfter, err := h.replayTx(ctx, tx, current, after)
+	if err != nil {
+		return fmt.Errorf("replay after correction: %w", err)
+	}
+
+	contactBy := recordedAfter.ContactBy
+	if !sameInstant(current.ContactBy, recordedBefore.ContactBy) {
+		contactBy = current.ContactBy
+	}
+	awaitingReplyUntil := recordedAfter.AwaitingReplyUntil
+	if !sameInstant(current.AwaitingReplyUntil, recordedBefore.AwaitingReplyUntil) {
+		awaitingReplyUntil = current.AwaitingReplyUntil
+	}
+	return h.applyTx(ctx, tx, cadenceWriteRequest{
+		ContactID:               contactID,
+		Branch:                  repository.CadenceBranchUnconditional,
+		ApplyLastContacted:      true,
+		LastContacted:           recordedAfter.LastContacted,
+		ApplyLastInteractionAt:  true,
+		LastInteractionAt:       recordedAfter.LastInteractionAt,
+		ApplyLastOutreachAt:     true,
+		LastOutreachAt:          recordedAfter.LastOutreachAt,
+		ApplyLastResponseAt:     true,
+		LastResponseAt:          recordedAfter.LastResponseAt,
+		ApplyContactBy:          true,
+		ContactBy:               contactBy,
+		ApplyAwaitingReplyUntil: true,
+		AwaitingReplyUntil:      awaitingReplyUntil,
+		ClearSkipState: !sameInstant(current.LastContacted, recordedAfter.LastContacted) ||
+			!sameInstant(current.ContactBy, contactBy),
+	})
+}
+
+// replayTx returns the cadence fields contact would hold had exactly
+// participations been recorded, in order, through the normal recording rules,
+// starting from its creation state (no interaction timestamps; contact_by
+// derived from created_at when it has a cadence). The replay writes inside a
+// savepoint it rolls back, so the contact row is unchanged on return.
+func (h *CadenceUpdater) replayTx(ctx context.Context, tx pgx.Tx, contact *repository.Contact, participations []repository.ApplyInteractionRequest) (replayed *repository.Contact, err error) {
+	sp, err := tx.Begin(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("open replay savepoint: %w", err)
+	}
+	defer func() {
+		if rbErr := sp.Rollback(ctx); rbErr != nil && err == nil {
+			err = fmt.Errorf("roll back replay savepoint: %w", rbErr)
+		}
+	}()
+
+	var cadenceStr string
+	if contact.Cadence != nil {
+		cadenceStr = *contact.Cadence
+	}
+	var createdContactBy *time.Time
+	if cadenceType, parseErr := cadence.ParseCadence(cadenceStr); cadenceStr != "" && parseErr == nil {
+		t := cadence.CalculateContactBy(contact.CreatedAt, cadenceType)
+		createdContactBy = &t
+	}
+	if err := h.applyTx(ctx, sp, cadenceWriteRequest{
+		ContactID:               contact.ID,
+		Branch:                  repository.CadenceBranchUnconditional,
+		ApplyLastContacted:      true,
+		ApplyLastInteractionAt:  true,
+		ApplyLastOutreachAt:     true,
+		ApplyLastResponseAt:     true,
+		ApplyContactBy:          true,
+		ContactBy:               createdContactBy,
+		ApplyAwaitingReplyUntil: true,
+	}); err != nil {
+		return nil, fmt.Errorf("write creation state: %w", err)
+	}
+	for _, p := range participations {
+		row, err := h.contacts.GetContactTx(ctx, sp, contact.ID)
+		if err != nil {
+			return nil, fmt.Errorf("read replayed contact: %w", err)
+		}
+		req := h.buildInteractionWrite(contact.ID, p.Direction, p.Source, p.OccurredAt, repository.ContactCadenceFieldsFromContact(row), cadenceStr)
+		if err := h.applyTx(ctx, sp, req); err != nil {
+			return nil, fmt.Errorf("replay participation: %w", err)
+		}
+	}
+	return h.contacts.GetContactTx(ctx, sp, contact.ID)
+}
+
+// sameInstant reports whether two optional timestamps hold the same value.
+func sameInstant(a, b *time.Time) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	return a.Equal(*b)
 }
 
 // --------------------------------------------------------------------------

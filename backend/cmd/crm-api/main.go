@@ -345,7 +345,7 @@ func run() int {
 	registerMessagingWorkers(reg, ingest, messaging, agg, riverClient)
 
 	// Core HTTP handlers.
-	handlersCore := buildCoreHandlers(database, core, contactService, graph, cfg, noteService, manualHandler, eventBus)
+	handlersCore := buildCoreHandlers(database, core, contactService, graph, cfg, noteService, manualHandler, eventBus, consumers)
 	contactHandler := handlersCore.Contact
 	noteHandler := handlersCore.Note
 	interactionHandler := handlersCore.Interaction
@@ -413,6 +413,7 @@ func run() int {
 		MeetingNoteHandler:       meetingNoteHandler,
 		ContactHandler:           contactHandler,
 		InteractionHandler:       interactionHandler,
+		CorrectionHandler:        handlersCore.Correction,
 		NoteHandler:              noteHandler,
 		ContactMethodHandler:     handlersCore.ContactMethod,
 		RematchHandler:           rematchHandler,
