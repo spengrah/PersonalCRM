@@ -7,6 +7,7 @@ import {
 import { invalidateFor } from '@/lib/query-invalidation'
 import { interactionKeys } from '@/lib/query-keys'
 import { staleTime } from '@/lib/query-client'
+import type { TimelineIdentityResponse } from '@/types/generated/contact'
 
 // useCreateInteraction posts a manual interaction for a contact and
 // invalidates the caches that depend on cadence-column state. Used by
@@ -39,11 +40,11 @@ export function useContactInteractions(contactId: string, filters: InteractionLi
   })
 }
 
-export function useInteractionContent(interactionId: string, opts: { enabled: boolean }) {
+export function useTimelineContent(identity: TimelineIdentityResponse, contactId: string) {
   return useQuery({
-    queryKey: interactionKeys.content(interactionId),
-    queryFn: () => interactionsApi.getContent(interactionId),
-    enabled: opts.enabled && !!interactionId,
+    queryKey: interactionKeys.timelineContent(contactId, identity.kind, identity.id),
+    queryFn: () => interactionsApi.getTimelineContent(identity, contactId),
+    enabled: !!identity.id && !!contactId,
     staleTime: staleTime(1000 * 60 * 5),
   })
 }

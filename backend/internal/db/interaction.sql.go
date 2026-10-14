@@ -63,71 +63,6 @@ func (q *Queries) CountContactInteractions(ctx context.Context, contactID uuid.U
 	return count, err
 }
 
-const CountContactTimelineFiltered = `-- name: CountContactTimelineFiltered :one
-SELECT COUNT(*) FROM (
-  SELECT interaction.id FROM interaction
-  WHERE 'interaction' = ANY($1::text[])
-    AND interaction.contact_id = $2
-    AND interaction.deleted_at IS NULL
-    AND ($3::timestamptz IS NULL OR interaction.occurred_at >= $3)
-    AND ($4::timestamptz IS NULL OR interaction.occurred_at < $4)
-    AND (
-      ($5::text IS NULL AND $6::text IS NULL)
-      OR (
-        $5::text IS NOT NULL AND $6::text IS NOT NULL
-        AND CASE
-          WHEN $5::text IN ('email', 'gchat', 'whatsapp') THEN EXISTS (
-            SELECT 1 FROM comms_message cm WHERE cm.interaction_id = interaction.id AND cm.deleted_at IS NULL
-              AND cm.source = $5::text AND cm.thread_id = $6::text)
-          WHEN $5::text = 'telegram' THEN EXISTS (
-            SELECT 1 FROM telegram_message tm WHERE tm.interaction_id = interaction.id AND tm.deleted_at IS NULL
-              AND tm.telegram_chat_id::text = $6::text)
-          WHEN $5::text = 'messages' THEN EXISTS (
-            SELECT 1 FROM messages_message mm WHERE mm.interaction_id = interaction.id AND mm.deleted_at IS NULL
-              AND mm.chat_guid = $6::text)
-          ELSE FALSE
-        END
-      )
-    )
-  UNION ALL
-  SELECT phone_call.id FROM phone_call
-  WHERE 'missed_call' = ANY($1::text[])
-    AND phone_call.matched_contact_id = $2
-    AND phone_call.interaction_id IS NULL
-    AND phone_call.direction = 'inbound'
-    AND phone_call.answered IS NOT TRUE
-    AND NOT phone_call.has_voicemail
-    AND $5::text IS NULL AND $6::text IS NULL
-    AND ($3::timestamptz IS NULL OR phone_call.started_at >= $3)
-    AND ($4::timestamptz IS NULL OR phone_call.started_at < $4)
-) AS item
-`
-
-type CountContactTimelineFilteredParams struct {
-	Kinds          []string   `json:"kinds"`
-	ContactID      uuid.UUID  `json:"contact_id"`
-	FromTime       *time.Time `json:"from_time"`
-	ToTime         *time.Time `json:"to_time"`
-	VenueSource    *string    `json:"venue_source"`
-	VenueContainer *string    `json:"venue_container"`
-}
-
-// Counts the items ListContactTimelineFiltered pages over, under the same
-// arguments.
-func (q *Queries) CountContactTimelineFiltered(ctx context.Context, arg CountContactTimelineFilteredParams) (int64, error) {
-	row := q.db.QueryRow(ctx, CountContactTimelineFiltered,
-		arg.Kinds,
-		arg.ContactID,
-		arg.FromTime,
-		arg.ToTime,
-		arg.VenueSource,
-		arg.VenueContainer,
-	)
-	var count int64
-	err := row.Scan(&count)
-	return count, err
-}
-
 const CreateInteraction = `-- name: CreateInteraction :one
 INSERT INTO interaction (contact_id, source, source_ref, occurred_at, description, direction, venue_id, interaction_node_id)
 VALUES (
@@ -675,99 +610,6 @@ func (q *Queries) ListContactInteractions(ctx context.Context, arg ListContactIn
 	return items, nil
 }
 
-const ListContactTimelineFiltered = `-- name: ListContactTimelineFiltered :many
-SELECT item.kind, item.id FROM (
-  SELECT 'interaction'::text AS kind, interaction.id, interaction.occurred_at FROM interaction
-  WHERE 'interaction' = ANY($1::text[])
-    AND interaction.contact_id = $2
-    AND interaction.deleted_at IS NULL
-    AND ($3::timestamptz IS NULL OR interaction.occurred_at >= $3)
-    AND ($4::timestamptz IS NULL OR interaction.occurred_at < $4)
-    AND (
-      ($5::text IS NULL AND $6::text IS NULL)
-      OR (
-        $5::text IS NOT NULL AND $6::text IS NOT NULL
-        AND CASE
-          WHEN $5::text IN ('email', 'gchat', 'whatsapp') THEN EXISTS (
-            SELECT 1 FROM comms_message cm WHERE cm.interaction_id = interaction.id AND cm.deleted_at IS NULL
-              AND cm.source = $5::text AND cm.thread_id = $6::text)
-          WHEN $5::text = 'telegram' THEN EXISTS (
-            SELECT 1 FROM telegram_message tm WHERE tm.interaction_id = interaction.id AND tm.deleted_at IS NULL
-              AND tm.telegram_chat_id::text = $6::text)
-          WHEN $5::text = 'messages' THEN EXISTS (
-            SELECT 1 FROM messages_message mm WHERE mm.interaction_id = interaction.id AND mm.deleted_at IS NULL
-              AND mm.chat_guid = $6::text)
-          ELSE FALSE
-        END
-      )
-    )
-  UNION ALL
-  SELECT 'missed_call'::text AS kind, phone_call.id, phone_call.started_at AS occurred_at FROM phone_call
-  WHERE 'missed_call' = ANY($1::text[])
-    AND phone_call.matched_contact_id = $2
-    AND phone_call.interaction_id IS NULL
-    AND phone_call.direction = 'inbound'
-    AND phone_call.answered IS NOT TRUE
-    AND NOT phone_call.has_voicemail
-    AND $5::text IS NULL AND $6::text IS NULL
-    AND ($3::timestamptz IS NULL OR phone_call.started_at >= $3)
-    AND ($4::timestamptz IS NULL OR phone_call.started_at < $4)
-) AS item
-ORDER BY item.occurred_at DESC, item.id DESC
-LIMIT $8 OFFSET $7
-`
-
-type ListContactTimelineFilteredParams struct {
-	Kinds          []string   `json:"kinds"`
-	ContactID      uuid.UUID  `json:"contact_id"`
-	FromTime       *time.Time `json:"from_time"`
-	ToTime         *time.Time `json:"to_time"`
-	VenueSource    *string    `json:"venue_source"`
-	VenueContainer *string    `json:"venue_container"`
-	OffsetCount    int32      `json:"offset_count"`
-	LimitCount     int32      `json:"limit_count"`
-}
-
-type ListContactTimelineFilteredRow struct {
-	Kind string    `json:"kind"`
-	ID   uuid.UUID `json:"id"`
-}
-
-// One page of a contact's interaction history, as (kind, id) keys.
-// Two kinds share the time axis: 'interaction' (a live interaction row) and
-// 'missed_call' (an unanswered inbound call that left no voicemail, which
-// ingest stores as a phone_call with no interaction; see migration 055). The
-// kinds argument selects which kinds the page holds. A missed call has no
-// content container, so any venue filter excludes it.
-func (q *Queries) ListContactTimelineFiltered(ctx context.Context, arg ListContactTimelineFilteredParams) ([]*ListContactTimelineFilteredRow, error) {
-	rows, err := q.db.Query(ctx, ListContactTimelineFiltered,
-		arg.Kinds,
-		arg.ContactID,
-		arg.FromTime,
-		arg.ToTime,
-		arg.VenueSource,
-		arg.VenueContainer,
-		arg.OffsetCount,
-		arg.LimitCount,
-	)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []*ListContactTimelineFilteredRow{}
-	for rows.Next() {
-		var i ListContactTimelineFilteredRow
-		if err := rows.Scan(&i.Kind, &i.ID); err != nil {
-			return nil, err
-		}
-		items = append(items, &i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const ListEffectiveParticipationForContact = `-- name: ListEffectiveParticipationForContact :many
 
 SELECT contact_id, interaction_node_id, direction, occurred_at, members FROM effective_participation ep
@@ -883,13 +725,62 @@ func (q *Queries) ListInteractionParticipants(ctx context.Context, nodeID uuid.U
 	return items, nil
 }
 
+const ListInteractionTreeObservations = `-- name: ListInteractionTreeObservations :many
+SELECT i.id, i.contact_id, i.source, i.source_ref, i.occurred_at, i.description, i.created_at, i.deleted_at, i.direction, i.venue_id, i.interaction_node_id, i.recorded_at, r.root_id::uuid AS root_id
+FROM unnest($1::uuid[]) AS r(root_id)
+CROSS JOIN LATERAL interaction_alias_tree(r.root_id) AS t(node_id)
+JOIN interaction i ON i.interaction_node_id = t.node_id AND i.deleted_at IS NULL
+ORDER BY i.occurred_at, i.id
+`
+
+type ListInteractionTreeObservationsRow struct {
+	Interaction Interaction `json:"interaction"`
+	RootID      uuid.UUID   `json:"root_id"`
+}
+
+// The live observations, of any contact, on every node of the alias tree under
+// each root, with the root they belong to: the members of each merged
+// interaction. The alias is read only to find the tree.
+func (q *Queries) ListInteractionTreeObservations(ctx context.Context, rootIds []uuid.UUID) ([]*ListInteractionTreeObservationsRow, error) {
+	rows, err := q.db.Query(ctx, ListInteractionTreeObservations, rootIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []*ListInteractionTreeObservationsRow{}
+	for rows.Next() {
+		var i ListInteractionTreeObservationsRow
+		if err := rows.Scan(
+			&i.Interaction.ID,
+			&i.Interaction.ContactID,
+			&i.Interaction.Source,
+			&i.Interaction.SourceRef,
+			&i.Interaction.OccurredAt,
+			&i.Interaction.Description,
+			&i.Interaction.CreatedAt,
+			&i.Interaction.DeletedAt,
+			&i.Interaction.Direction,
+			&i.Interaction.VenueID,
+			&i.Interaction.InteractionNodeID,
+			&i.Interaction.RecordedAt,
+			&i.RootID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const ListInteractionsByIDs = `-- name: ListInteractionsByIDs :many
 SELECT id, contact_id, source, source_ref, occurred_at, description, created_at, deleted_at, direction, venue_id, interaction_node_id, recorded_at FROM interaction
 WHERE id = ANY($1::uuid[]) AND deleted_at IS NULL
 `
 
-// Live interactions with the given ids, in no particular order. Hydrates the
-// interaction keys of a ListContactTimelineFiltered page.
+// Live interactions with the given ids, in no particular order.
 func (q *Queries) ListInteractionsByIDs(ctx context.Context, ids []uuid.UUID) ([]*Interaction, error) {
 	rows, err := q.db.Query(ctx, ListInteractionsByIDs, ids)
 	if err != nil {
@@ -948,6 +839,53 @@ func (q *Queries) ListLiveContactsObservedOnNodes(ctx context.Context, nodeIds [
 			return nil, err
 		}
 		items = append(items, contact_id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const ListObservationsInVenue = `-- name: ListObservationsInVenue :many
+SELECT interaction.id FROM interaction
+WHERE interaction.id = ANY($1::uuid[])
+  AND interaction.deleted_at IS NULL
+  AND CASE
+    WHEN $2::text IN ('email', 'gchat', 'whatsapp') THEN EXISTS (
+      SELECT 1 FROM comms_message cm WHERE cm.interaction_id = interaction.id AND cm.deleted_at IS NULL
+        AND cm.source = $2::text AND cm.thread_id = $3::text)
+    WHEN $2::text = 'telegram' THEN EXISTS (
+      SELECT 1 FROM telegram_message tm WHERE tm.interaction_id = interaction.id AND tm.deleted_at IS NULL
+        AND tm.telegram_chat_id::text = $3::text)
+    WHEN $2::text = 'messages' THEN EXISTS (
+      SELECT 1 FROM messages_message mm WHERE mm.interaction_id = interaction.id AND mm.deleted_at IS NULL
+        AND mm.chat_guid = $3::text)
+    ELSE FALSE
+  END
+`
+
+type ListObservationsInVenueParams struct {
+	ObservationIds []uuid.UUID `json:"observation_ids"`
+	VenueSource    string      `json:"venue_source"`
+	VenueContainer string      `json:"venue_container"`
+}
+
+// The given live observations whose content sits in the venue: the base venue
+// filter of a contact's interaction list. A source that has no content
+// container matches nothing.
+func (q *Queries) ListObservationsInVenue(ctx context.Context, arg ListObservationsInVenueParams) ([]uuid.UUID, error) {
+	rows, err := q.db.Query(ctx, ListObservationsInVenue, arg.ObservationIds, arg.VenueSource, arg.VenueContainer)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []uuid.UUID{}
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err

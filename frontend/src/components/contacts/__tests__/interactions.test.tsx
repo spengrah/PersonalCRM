@@ -2,21 +2,21 @@ import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest'
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type {
-  InteractionContentResponse,
   InteractionListItemResponse,
+  TimelineContentResponse,
 } from '@/types/generated/contact'
 import type { CalendarEvent } from '@/types/calendar'
 
 const mocks = vi.hoisted(() => ({
   list: vi.fn(),
-  getContent: vi.fn(),
+  getTimelineContent: vi.fn(),
   currentTime: new Date('2031-05-10T12:00:00.000Z'),
   events: [] as CalendarEvent[],
   advancingClock: false,
 }))
 
 vi.mock('@/lib/interactions-api', () => ({
-  interactionsApi: { list: mocks.list, getContent: mocks.getContent },
+  interactionsApi: { list: mocks.list, getTimelineContent: mocks.getTimelineContent },
 }))
 vi.mock('@/hooks/use-calendar', () => ({
   useUpcomingEventsForContact: () => ({ data: mocks.events, isLoading: false, error: null }),
@@ -31,51 +31,58 @@ vi.mock('@/hooks/use-accelerated-time', () => ({
 
 import { Interactions } from '../interactions'
 
+const venueTags = [
+  { key: 'venue-a', label: 'Alpha', kind: 'group_chat' as const, is_group: true },
+  { key: 'venue-b', label: 'Beta', kind: 'group_chat' as const, is_group: true },
+]
+
 const item: InteractionListItemResponse = {
-  kind: 'interaction',
+  identity: { kind: 'interaction', id: 'interaction-1' },
   cadence_inert: false,
-  id: 'interaction-1',
-  contact_id: 'contact-1',
-  source: 'gchat',
   occurred_at: '2031-05-09T12:00:00Z',
-  created_at: '2031-05-09T12:00:00Z',
   direction: 'mutual',
-  label: 'Thread',
-  content_kind: 'messages',
-  message_count: 2,
-  is_group: true,
-  venue_tags: [
-    { key: 'venue-a', label: 'Alpha', kind: 'group_chat', is_group: true },
-    { key: 'venue-b', label: 'Beta', kind: 'group_chat', is_group: true },
+  members: [
+    {
+      source: 'gchat',
+      label: 'Thread',
+      content_kind: 'messages',
+      message_count: 2,
+      is_group: true,
+      venue_tags: venueTags,
+    },
   ],
 }
 
-const content: InteractionContentResponse = {
-  interaction_id: item.id,
-  kind: 'messages',
-  meeting_notes: [],
-  messages: [
+const message = (id: string, sender: string, body: string, container: string) => ({
+  id,
+  sender,
+  is_outgoing: false,
+  sent_at: item.occurred_at,
+  body,
+  venue_key: container,
+  source: 'gchat',
+  channel: 'group_chat' as const,
+  container,
+  content_ref: `ref-${id}`,
+})
+
+const content: TimelineContentResponse = {
+  identity: item.identity,
+  members: [
     {
-      id: 'message-a',
-      sender: 'Sender A',
-      is_outgoing: false,
-      sent_at: item.occurred_at,
-      body: 'A',
-      venue_key: 'venue-a',
-    },
-    {
-      id: 'message-b',
-      sender: 'Sender B',
-      is_outgoing: false,
-      sent_at: item.occurred_at,
-      body: 'B',
-      venue_key: 'venue-b',
+      source: 'gchat',
+      kind: 'messages',
+      meeting_notes: [],
+      messages: [
+        message('message-a', 'Sender A', 'A', 'venue-a'),
+        message('message-b', 'Sender B', 'B', 'venue-b'),
+      ],
     },
   ],
 }
 
 const response = {
-  data: { items: [item], venue_options: item.venue_tags },
+  data: { items: [item], venue_options: venueTags },
   meta: { pagination: { page: 1, pages: 1 } },
 }
 
@@ -90,7 +97,7 @@ function renderInteractions() {
 
 beforeEach(() => {
   mocks.list.mockReset().mockResolvedValue(response)
-  mocks.getContent.mockReset().mockResolvedValue(content)
+  mocks.getTimelineContent.mockReset().mockResolvedValue(content)
   mocks.events = []
   mocks.currentTime = new Date('2031-05-10T12:00:00.000Z')
   mocks.advancingClock = false

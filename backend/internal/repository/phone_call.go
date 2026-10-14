@@ -95,6 +95,31 @@ func (r *PhoneCallRepository) ListByIDs(ctx context.Context, ids []uuid.UUID) ([
 	return out, nil
 }
 
+// MissedCallFilter narrows ListMissedCalls: to the contact the call matched,
+// to one call, and to the half-open range [From, To) of the call's start. A nil
+// field narrows nothing.
+type MissedCallFilter struct {
+	ContactID *uuid.UUID
+	CallID    *uuid.UUID
+	From      *time.Time
+	To        *time.Time
+}
+
+// ListMissedCalls returns the missed calls (unanswered inbound calls that left
+// no voicemail, which ingest records with no interaction) under the filter,
+// latest first.
+func (r *PhoneCallRepository) ListMissedCalls(ctx context.Context, f MissedCallFilter) ([]PhoneCall, error) {
+	rows, err := r.queries.ListMissedCalls(ctx, db.ListMissedCallsParams{ContactID: f.ContactID, CallID: f.CallID, FromTime: f.From, ToTime: f.To})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]PhoneCall, len(rows))
+	for i, row := range rows {
+		out[i] = convertDbPhoneCall(row)
+	}
+	return out, nil
+}
+
 // TestInsertPhoneCallLinked inserts a staged call already linked to an
 // interaction. Test-only: production ingestion links the staging row through
 // MarkProcessed after recording the interaction.

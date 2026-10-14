@@ -26,22 +26,19 @@ import (
 // and commits. When manualHandler is nil (interaction mode off),
 // POST returns 503 Service Unavailable.
 type InteractionHandler struct {
-	interactionRepo *repository.InteractionRepository
-	manualHandler   *service.ManualInteractionHandler
-	content         *service.InteractionContentService
+	manualHandler *service.ManualInteractionHandler
+	content       *service.InteractionContentService
 }
 
 // NewInteractionHandler creates a new interaction handler. manualHandler
 // may be nil; POST /contacts/:id/interactions returns 503 in that case.
 func NewInteractionHandler(
-	interactionRepo *repository.InteractionRepository,
 	manualHandler *service.ManualInteractionHandler,
 	content *service.InteractionContentService,
 ) *InteractionHandler {
 	return &InteractionHandler{
-		interactionRepo: interactionRepo,
-		manualHandler:   manualHandler,
-		content:         content,
+		manualHandler: manualHandler,
+		content:       content,
 	}
 }
 
@@ -104,24 +101,18 @@ func (h *InteractionHandler) ListContactInteractions(c *gin.Context) {
 		return
 	}
 
-	total, err := h.interactionRepo.CountContactTimelineFiltered(ctx, params)
-	if err != nil {
-		api.RespondInternal(c, err)
-		return
-	}
-
 	venues, err := h.content.ListContactVenues(ctx, contactID)
 	if err != nil {
 		api.RespondInternal(c, err)
 		return
 	}
-	items := make([]InteractionListItemResponse, len(timeline))
-	for i, item := range timeline {
+	items := make([]InteractionListItemResponse, len(timeline.Items))
+	for i, item := range timeline.Items {
 		items[i] = interactionListItemResponse(item)
 	}
 	response := InteractionListResponse{Items: items, VenueOptions: venueTagResponses(venues)}
 
-	api.SendSuccess(c, http.StatusOK, response, &api.Meta{Pagination: api.BuildPaginationMeta(int(page64), int(limit64), total)})
+	api.SendSuccess(c, http.StatusOK, response, &api.Meta{Pagination: api.BuildPaginationMeta(int(page64), int(limit64), int64(timeline.Total))})
 }
 
 var interactionVenuePattern = regexp.MustCompile(`^[a-z_]+:.+$`)
@@ -166,15 +157,23 @@ func interactionListParams(c *gin.Context, contactID uuid.UUID, limit, offset in
 }
 
 func interactionListItemResponse(item service.TimelineItem) InteractionListItemResponse {
-	enriched := item.Enrichment
-	return InteractionListItemResponse{
-		Kind: item.Kind, CadenceInert: item.Kind == repository.TimelineKindMissedCall,
-		ID: item.ID.String(), ContactID: item.ContactID.String(), Source: item.Source,
-		SourceRef: item.SourceRef, OccurredAt: item.OccurredAt, Description: item.Description,
-		Direction: item.Direction, CreatedAt: item.CreatedAt, Label: enriched.Label,
-		ContentKind: enriched.ContentKind, MessageCount: enriched.MessageCount, IsGroup: enriched.IsGroup,
-		VenueTags: venueTagResponses(enriched.VenueTags), Event: eventSummaryResponse(enriched.Event), Call: callSummaryResponse(enriched.Call),
+	members := make([]TimelineMemberResponse, len(item.Members))
+	for i, member := range item.Members {
+		enriched := member.Enrichment
+		members[i] = TimelineMemberResponse{
+			Source: member.Source, SourceRef: member.SourceRef, Label: enriched.Label,
+			ContentKind: enriched.ContentKind, MessageCount: enriched.MessageCount, IsGroup: enriched.IsGroup,
+			VenueTags: venueTagResponses(enriched.VenueTags), Event: eventSummaryResponse(enriched.Event), Call: callSummaryResponse(enriched.Call),
+		}
 	}
+	return InteractionListItemResponse{
+		Identity: timelineIdentityResponse(item.Identity), Direction: item.Direction,
+		OccurredAt: item.OccurredAt, CadenceInert: item.CadenceInert(), Members: members,
+	}
+}
+
+func timelineIdentityResponse(identity service.TimelineIdentity) TimelineIdentityResponse {
+	return TimelineIdentityResponse{Kind: identity.Kind, ID: identity.ID.String()}
 }
 
 func venueTagResponses(tags []service.VenueTag) []VenueTagResponse {
@@ -199,37 +198,60 @@ func callSummaryResponse(call *service.CallContent) *CallSummaryResponse {
 	return &CallSummaryResponse{Service: call.Service, Direction: call.Direction, Answered: call.Answered, HasVoicemail: call.HasVoicemail, DurationSeconds: call.DurationSeconds}
 }
 
-// GetInteractionContent returns the assembled read-only content for an interaction.
-// @Summary Get interaction content
+// GetTimelineItemContent returns the assembled read-only content of a timeline
+// item, member by member, with contact_id the participation context.
+// @Summary Get timeline item content
 // @Tags interactions
 // @Produce json
-// @Param id path string true "Interaction ID" format(uuid)
-// @Success 200 {object} api.APIResponse{data=InteractionContentResponse}
+// @Param kind path string true "Timeline item kind" Enums(interaction, message_burst, upcoming_event, missed_call)
+// @Param id path string true "Timeline item ID" format(uuid)
+// @Param contact_id query string true "Participation context contact ID" format(uuid)
+// @Success 200 {object} api.APIResponse{data=TimelineContentResponse}
+// @Failure 400 {object} api.APIResponse
 // @Failure 404 {object} api.APIResponse
-// @Router /interactions/{id}/content [get]
-func (h *InteractionHandler) GetInteractionContent(c *gin.Context) {
-	id, ok := api.ParseUUIDParam(c, "id", "interaction")
+// @Router /timeline-items/{kind}/{id}/content [get]
+func (h *InteractionHandler) GetTimelineItemContent(c *gin.Context) {
+	id, ok := api.ParseUUIDParam(c, "id", "timeline item")
 	if !ok {
 		return
 	}
-	content, err := h.content.GetContent(c.Request.Context(), id)
+	contactID, err := uuid.Parse(c.Query("contact_id"))
 	if err != nil {
-		if errors.Is(err, db.ErrNotFound) {
-			api.SendNotFound(c, "Interaction")
-			return
-		}
-		api.RespondInternal(c, err)
+		api.SendValidationError(c, "Invalid contact_id", "contact_id must be a contact UUID")
 		return
 	}
-	messages := make([]ContentMessageResponse, 0, len(content.Messages))
-	for _, message := range content.Messages {
-		messages = append(messages, ContentMessageResponse{ID: message.ID.String(), Sender: message.Sender, IsOutgoing: message.IsOutgoing, SentAt: message.SentAt, Body: message.Body, VenueKey: message.VenueKey})
+	content, err := h.content.GetTimelineContent(c.Request.Context(), c.Param("kind"), id, contactID)
+	if err != nil {
+		switch {
+		case errors.Is(err, service.ErrUnknownTimelineKind):
+			api.SendValidationError(c, "Invalid timeline item kind", err.Error())
+		case errors.Is(err, db.ErrNotFound):
+			api.SendNotFound(c, "Timeline item")
+		default:
+			api.RespondInternal(c, err)
+		}
+		return
 	}
-	notes := make([]MeetingNoteContentResponse, 0, len(content.MeetingNotes))
-	for _, note := range content.MeetingNotes {
-		notes = append(notes, MeetingNoteContentResponse{Title: note.Title, Summary: note.Summary, Memo: note.Memo})
+	members := make([]TimelineContentMemberResponse, len(content.Members))
+	for i, member := range content.Members {
+		messages := make([]ContentMessageResponse, 0, len(member.Content.Messages))
+		for _, message := range member.Content.Messages {
+			messages = append(messages, ContentMessageResponse{
+				ID: message.ID.String(), Sender: message.Sender, IsOutgoing: message.IsOutgoing, SentAt: message.SentAt,
+				Body: message.Body, VenueKey: message.VenueKey, Source: message.Source, Channel: message.Channel,
+				Container: message.Container, ContentRef: message.ContentRef,
+			})
+		}
+		notes := make([]MeetingNoteContentResponse, 0, len(member.Content.MeetingNotes))
+		for _, note := range member.Content.MeetingNotes {
+			notes = append(notes, MeetingNoteContentResponse{
+				Title: note.Title, Summary: note.Summary, Memo: note.Memo, Source: note.Source,
+				Channel: note.Channel, Container: note.Container, ContentRef: note.ContentRef,
+			})
+		}
+		members[i] = TimelineContentMemberResponse{Source: member.Source, Kind: member.Content.Kind, Messages: messages, MeetingNotes: notes}
 	}
-	api.SendSuccess(c, http.StatusOK, InteractionContentResponse{InteractionID: id.String(), Kind: content.Kind, Messages: messages, MeetingNotes: notes}, nil)
+	api.SendSuccess(c, http.StatusOK, TimelineContentResponse{Identity: timelineIdentityResponse(content.Identity), Members: members}, nil)
 }
 
 // CreateInteraction creates a manual interaction for a contact

@@ -159,13 +159,22 @@ func (r *InteractionRepository) ObservationVerdictTx(ctx context.Context, tx pgx
 	return &ObservationVerdict{Entry: &entry}, nil
 }
 
-// GetInteractionTreeTx returns the alias tree that holds nodeID. Returns
+// GetInteractionTree returns the alias tree that holds nodeID. Returns
 // db.ErrNotFound when nodeID names no interaction node.
+func (r *InteractionRepository) GetInteractionTree(ctx context.Context, nodeID uuid.UUID) (*InteractionTree, error) {
+	return getInteractionTree(ctx, r.queries, nodeID)
+}
+
+// GetInteractionTreeTx is the tx-bound variant of GetInteractionTree.
 func (r *InteractionRepository) GetInteractionTreeTx(ctx context.Context, tx pgx.Tx, nodeID uuid.UUID) (*InteractionTree, error) {
 	if tx == nil {
 		return nil, fmt.Errorf("GetInteractionTreeTx: %w", errNilTx)
 	}
-	rows, err := db.New(tx).ListInteractionAliasTree(ctx, nodeID)
+	return getInteractionTree(ctx, db.New(tx), nodeID)
+}
+
+func getInteractionTree(ctx context.Context, q db.Querier, nodeID uuid.UUID) (*InteractionTree, error) {
+	rows, err := q.ListInteractionAliasTree(ctx, nodeID)
 	if err != nil {
 		return nil, fmt.Errorf("list interaction alias tree: %w", err)
 	}

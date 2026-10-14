@@ -36,7 +36,7 @@ func setupContactSortTestRouter(t *testing.T) (*gin.Engine, func()) {
 	contactHandler := handlers.NewContactHandler(contactService)
 	interactionRepo := repository.NewInteractionRepository(database.Queries)
 	contentService := service.NewInteractionContentService(interactionRepo, repository.NewCommsMessageRepository(database.Queries), repository.NewTelegramMessageRepository(database.Queries), repository.NewMessagesMessageRepository(database.Queries), repository.NewMeetingNoteRepository(database.Queries), repository.NewCalendarEventRepository(database.Queries), repository.NewPhoneCallRepository(database.Queries), repository.NewContactRepository(database.Queries))
-	interactionHandler := handlers.NewInteractionHandler(interactionRepo, manualHandler, contentService)
+	interactionHandler := handlers.NewInteractionHandler(manualHandler, contentService)
 
 	router := gin.New()
 	router.Use(api.RequestIDMiddleware())

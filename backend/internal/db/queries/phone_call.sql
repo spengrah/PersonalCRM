@@ -100,6 +100,21 @@ SELECT * FROM phone_call
 WHERE interaction_id = ANY(@interaction_ids::uuid[]);
 
 -- name: ListPhoneCallsByIDs :many
--- Hydrates the missed-call keys of a ListContactTimelineFiltered page.
 SELECT * FROM phone_call
 WHERE id = ANY(@ids::uuid[]);
+
+-- name: ListMissedCalls :many
+-- Missed calls: unanswered inbound calls that left no voicemail, which ingest
+-- records with no interaction (migration 055). Narrowed by the contact the call
+-- matched, by the call's id, and to the half-open range of its start; each
+-- narrowing is absent when its argument is NULL. Latest first.
+SELECT * FROM phone_call
+WHERE phone_call.interaction_id IS NULL
+  AND phone_call.direction = 'inbound'
+  AND phone_call.answered IS NOT TRUE
+  AND NOT phone_call.has_voicemail
+  AND (sqlc.narg('contact_id')::uuid IS NULL OR phone_call.matched_contact_id = sqlc.narg('contact_id'))
+  AND (sqlc.narg('call_id')::uuid IS NULL OR phone_call.id = sqlc.narg('call_id'))
+  AND (sqlc.narg('from_time')::timestamptz IS NULL OR phone_call.started_at >= sqlc.narg('from_time'))
+  AND (sqlc.narg('to_time')::timestamptz IS NULL OR phone_call.started_at < sqlc.narg('to_time'))
+ORDER BY phone_call.started_at DESC, phone_call.id DESC;

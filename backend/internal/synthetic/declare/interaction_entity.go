@@ -353,7 +353,7 @@ func runGroupThread(ctx context.Context, h *replay.Harness, p *messageInteractio
 	}); err != nil {
 		return Seeded{}, fmt.Errorf("replay group thread %q: %w", p.name, err)
 	}
-	rows, err := h.InteractionRepo().ListContactInteractionsFiltered(ctx, repository.InteractionListFilterParams{ContactID: subjectID, Limit: 100})
+	rows, err := h.InteractionRepo().ListContactInteractions(ctx, subjectID, 100, 0)
 	if err != nil {
 		return Seeded{}, fmt.Errorf("read back group thread %q: %w", p.name, err)
 	}
@@ -538,7 +538,7 @@ func runPhoneCallInteraction(ctx context.Context, h *replay.Harness, p *phoneCal
 }
 
 func findInteractionAt(ctx context.Context, h *replay.Harness, contactID uuid.UUID, source string, target time.Time) (*repository.Interaction, error) {
-	rows, err := h.InteractionRepo().ListContactInteractionsFiltered(ctx, repository.InteractionListFilterParams{ContactID: contactID, Limit: 100})
+	rows, err := h.InteractionRepo().ListContactInteractions(ctx, contactID, 100, 0)
 	if err != nil {
 		return nil, err
 	}

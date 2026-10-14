@@ -7,26 +7,7 @@ import {
   TestAPI,
   type SeedBehaviorResult,
 } from './helpers/test-api'
-
-interface ContentMessage {
-  id: string
-  sender: string
-  sent_at: string
-  body: string
-  venue_key: string
-}
-
-interface MeetingNote {
-  title?: string
-  summary?: string
-  memo?: string
-}
-
-interface InteractionContent {
-  kind: string
-  messages: ContentMessage[]
-  meeting_notes: MeetingNote[]
-}
+import { fetchTimeline, fetchTimelineContent, itemWithSource } from './helpers/timeline-items'
 
 const handleId = (seeded: SeedBehaviorResult, handle: string): string => {
   const entity = seeded.entities[handle]
@@ -38,18 +19,6 @@ const handleName = (seeded: SeedBehaviorResult, handle: string): string => {
   const entity = seeded.entities[handle]
   expect(entity, `declared handle ${handle} should be in the manifest`).toBeTruthy()
   return entity.name
-}
-
-async function fetchContent(
-  request: APIRequestContext,
-  interactionId: string
-): Promise<InteractionContent> {
-  const response = await request.get(
-    `${API_BASE_URL}/api/v1/interactions/${interactionId}/content`,
-    { headers: API_HEADERS }
-  )
-  expect(response.ok()).toBe(true)
-  return (await response.json()).data as InteractionContent
 }
 
 async function fetchContactName(request: APIRequestContext, contactId: string): Promise<string> {
@@ -91,7 +60,8 @@ test.describe('Interactions Drill-down @area:interactions', () => {
     const seeded = await testApi.seedBehavior('IXN-004')
     const contactId = handleId(seeded, 'subject')
     const speakerId = handleId(seeded, 'speaker')
-    const interactionId = handleId(seeded, 'group-thread')
+    const item = itemWithSource((await fetchTimeline(request, contactId)).items, 'gchat')
+    const interactionId = item.identity.id
     await page.goto(`/contacts/${contactId}`)
 
     const interactions = page.getByRole('region', { name: 'Interactions' })
@@ -100,7 +70,11 @@ test.describe('Interactions Drill-down @area:interactions', () => {
     const urlBeforeExpand = page.url()
     await row.getByRole('button', { name: 'Expand content', exact: true }).click()
 
-    const content = await fetchContent(request, interactionId)
+    const content = {
+      messages: (await fetchTimelineContent(request, item.identity, contactId)).members.flatMap(
+        member => member.messages
+      ),
+    }
     const region = row.locator('[data-content-region]')
     await expect(region).toBeVisible({ timeout: SLOW_TIMEOUT_MS })
     const messageNodes = region.locator('[data-message-id]')
@@ -140,7 +114,7 @@ test.describe('Interactions Drill-down @area:interactions', () => {
     // The row's count and the evidence on screen are drawn from different
     // sets — recorded-against-the-interaction vs the surrounding thread
     // window — so when they differ the drill-down states both.
-    const scope = region.locator('[data-evidence-scope]')
+    const scope = row.locator('[data-evidence-scope]')
     await expect(scope).toHaveCount(1, { timeout: SLOW_TIMEOUT_MS })
     await expect(scope).toContainText(`Showing ${content.messages.length} messages`, {
       timeout: SLOW_TIMEOUT_MS,
@@ -189,11 +163,15 @@ test.describe('Interactions Drill-down @area:interactions', () => {
     const interactions = page.getByRole('region', { name: 'Interactions' })
     const row = interactions.locator('[data-source="gcal"]')
     await expect(row.getByText('Meeting note', { exact: true })).toBeVisible()
-    const interactionId = await row.getAttribute('data-interaction-id')
-    expect(interactionId).toBeTruthy()
+    const item = itemWithSource((await fetchTimeline(request, contactId)).items, 'gcal')
+    await expect(row).toHaveAttribute('data-interaction-id', item.identity.id)
     await row.getByRole('button', { name: 'Expand content', exact: true }).click()
 
-    const content = await fetchContent(request, interactionId!)
+    const content = {
+      meeting_notes: (
+        await fetchTimelineContent(request, item.identity, contactId)
+      ).members.flatMap(member => member.meeting_notes),
+    }
     const region = row.locator('[data-content-region]')
     await expect(region).toBeVisible({ timeout: SLOW_TIMEOUT_MS })
     const noteNodes = region.locator('[data-meeting-note]')

@@ -398,6 +398,12 @@ definitions:
     properties:
       body:
         type: string
+      channel:
+        type: string
+      container:
+        type: string
+      content_ref:
+        type: string
       id:
         type: string
       is_outgoing:
@@ -405,6 +411,8 @@ definitions:
       sender:
         type: string
       sent_at:
+        type: string
+      source:
         type: string
       venue_key:
         type: string
@@ -565,59 +573,20 @@ definitions:
           $ref: '#/definitions/handlers.SelectedMethodInput'
         type: array
     type: object
-  handlers.InteractionContentResponse:
-    properties:
-      interaction_id:
-        type: string
-      kind:
-        type: string
-      meeting_notes:
-        items:
-          $ref: '#/definitions/handlers.MeetingNoteContentResponse'
-        type: array
-      messages:
-        items:
-          $ref: '#/definitions/handlers.ContentMessageResponse'
-        type: array
-    type: object
   handlers.InteractionListItemResponse:
     properties:
       cadence_inert:
         type: boolean
-      call:
-        $ref: '#/definitions/handlers.CallSummaryResponse'
-      contact_id:
-        type: string
-      content_kind:
-        type: string
-      created_at:
-        type: string
-      description:
-        type: string
       direction:
         type: string
-      event:
-        $ref: '#/definitions/handlers.EventSummaryResponse'
-      id:
-        type: string
-      is_group:
-        type: boolean
-      kind:
-        type: string
-      label:
-        type: string
-      message_count:
-        type: integer
+      identity:
+        $ref: '#/definitions/handlers.TimelineIdentityResponse'
+      members:
+        items:
+          $ref: '#/definitions/handlers.TimelineMemberResponse'
+        type: array
       occurred_at:
         type: string
-      source:
-        type: string
-      source_ref:
-        type: string
-      venue_tags:
-        items:
-          $ref: '#/definitions/handlers.VenueTagResponse'
-        type: array
     type: object
   handlers.InteractionListResponse:
     properties:
@@ -739,7 +708,15 @@ definitions:
     type: object
   handlers.MeetingNoteContentResponse:
     properties:
+      channel:
+        type: string
+      container:
+        type: string
+      content_ref:
+        type: string
       memo:
+        type: string
+      source:
         type: string
       summary:
         type: string
@@ -1119,6 +1096,60 @@ definitions:
         type: string
       suggestion:
         $ref: '#/definitions/handlers.MethodSuggestionResponse'
+    type: object
+  handlers.TimelineContentMemberResponse:
+    properties:
+      kind:
+        type: string
+      meeting_notes:
+        items:
+          $ref: '#/definitions/handlers.MeetingNoteContentResponse'
+        type: array
+      messages:
+        items:
+          $ref: '#/definitions/handlers.ContentMessageResponse'
+        type: array
+      source:
+        type: string
+    type: object
+  handlers.TimelineContentResponse:
+    properties:
+      identity:
+        $ref: '#/definitions/handlers.TimelineIdentityResponse'
+      members:
+        items:
+          $ref: '#/definitions/handlers.TimelineContentMemberResponse'
+        type: array
+    type: object
+  handlers.TimelineIdentityResponse:
+    properties:
+      id:
+        type: string
+      kind:
+        type: string
+    type: object
+  handlers.TimelineMemberResponse:
+    properties:
+      call:
+        $ref: '#/definitions/handlers.CallSummaryResponse'
+      content_kind:
+        type: string
+      event:
+        $ref: '#/definitions/handlers.EventSummaryResponse'
+      is_group:
+        type: boolean
+      label:
+        type: string
+      message_count:
+        type: integer
+      source:
+        type: string
+      source_ref:
+        type: string
+      venue_tags:
+        items:
+          $ref: '#/definitions/handlers.VenueTagResponse'
+        type: array
     type: object
   handlers.TodoistAccountResponse:
     properties:
@@ -3828,34 +3859,6 @@ paths:
       summary: Resolve method suggestions
       tags:
       - imports
-  /interactions/{id}/content:
-    get:
-      parameters:
-      - description: Interaction ID
-        format: uuid
-        in: path
-        name: id
-        required: true
-        type: string
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: OK
-          schema:
-            allOf:
-            - $ref: '#/definitions/api.APIResponse'
-            - properties:
-                data:
-                  $ref: '#/definitions/handlers.InteractionContentResponse'
-              type: object
-        "404":
-          description: Not Found
-          schema:
-            $ref: '#/definitions/api.APIResponse'
-      summary: Get interaction content
-      tags:
-      - interactions
   /interactions/{id}/removals:
     post:
       consumes:
@@ -4474,6 +4477,54 @@ paths:
       summary: Seed a spec behavior's declared fixture
       tags:
       - test
+  /timeline-items/{kind}/{id}/content:
+    get:
+      parameters:
+      - description: Timeline item kind
+        enum:
+        - interaction
+        - message_burst
+        - upcoming_event
+        - missed_call
+        in: path
+        name: kind
+        required: true
+        type: string
+      - description: Timeline item ID
+        format: uuid
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Participation context contact ID
+        format: uuid
+        in: query
+        name: contact_id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                data:
+                  $ref: '#/definitions/handlers.TimelineContentResponse'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.APIResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.APIResponse'
+      summary: Get timeline item content
+      tags:
+      - interactions
   /todoist/labels:
     get:
       description: Get all labels from the connected Todoist account

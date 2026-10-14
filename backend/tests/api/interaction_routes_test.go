@@ -33,7 +33,7 @@ func TestInteractionRoutes_RegisteredSet(t *testing.T) {
 	assert.ElementsMatch(t, []string{
 		"GET /api/v1/contacts/:id/interactions",
 		"POST /api/v1/contacts/:id/interactions",
-		"GET /api/v1/interactions/:id/content",
+		"GET /api/v1/timeline-items/:kind/:id/content",
 		"POST /api/v1/interactions/merge",
 		"POST /api/v1/interactions/merge/preview",
 		"POST /api/v1/interactions/:id/removals",
@@ -41,5 +41,5 @@ func TestInteractionRoutes_RegisteredSet(t *testing.T) {
 }
 
 func containsInteractionPath(path string) bool {
-	return strings.Contains(path, "/interactions")
+	return strings.Contains(path, "/interactions") || strings.Contains(path, "/timeline-items")
 }

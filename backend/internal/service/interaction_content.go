@@ -46,6 +46,12 @@ type InteractionEnrichment struct {
 	Event        *EventContent
 	Call         *CallContent
 }
+
+// ContentMessage is one message of an interaction's content, attributed to its
+// own source and container. Channel and Container are nil exactly when VenueKey
+// is empty: a message with no container. Container is VenueKey otherwise.
+// ContentRef names the source message itself, equal for every per-contact copy
+// of it.
 type ContentMessage struct {
 	ID         uuid.UUID
 	Sender     string
@@ -53,8 +59,29 @@ type ContentMessage struct {
 	SentAt     time.Time
 	Body       string
 	VenueKey   string
+	Source     string
+	Channel    *string
+	Container  *string
+	ContentRef string
 }
-type MeetingNoteContent struct{ Title, Summary, Memo *string }
+
+// attribute sets the message's container from its own venue.
+func (m *ContentMessage) attribute(venue VenueTag) {
+	m.VenueKey = venue.Key
+	m.Channel, m.Container = &venue.Kind, &venue.Key
+}
+
+// MeetingNoteContent is one meeting note, attributed to its own container: the
+// meeting venue of the calendar event its session is linked to (Channel
+// "meeting"), else its session's venue (Channel "session"). Container is nil
+// when the linked event is gone. ContentRef names the note's session.
+type MeetingNoteContent struct {
+	Title, Summary, Memo *string
+	Source               string
+	Channel              string
+	Container            *string
+	ContentRef           string
+}
 type InteractionContent struct {
 	Kind         string
 	Messages     []ContentMessage
@@ -247,92 +274,18 @@ func (s *InteractionContentService) EnrichPage(ctx context.Context, interactions
 	return out, nil
 }
 
-// TimelineItem is one item of a contact's interaction history. Kind is
-// repository.TimelineKindInteraction for a recorded interaction, or
-// repository.TimelineKindMissedCall for a missed call without voicemail, whose
-// ID is the call's own id.
-type TimelineItem struct {
-	Kind          string
-	ID, ContactID uuid.UUID
-	Source        string
-	SourceRef     *string
-	OccurredAt    time.Time
-	Description   *string
-	Direction     string
-	CreatedAt     time.Time
-	Enrichment    InteractionEnrichment
-}
-
-// ListTimeline returns one page of a contact's interaction history, each
-// interaction enriched as EnrichPage enriches it.
-func (s *InteractionContentService) ListTimeline(ctx context.Context, p repository.InteractionListFilterParams) ([]TimelineItem, error) {
-	keys, err := s.interactions.ListContactTimelineFiltered(ctx, p)
-	if err != nil {
-		return nil, err
-	}
-	interactionIDs, callIDs := []uuid.UUID{}, []uuid.UUID{}
-	for _, key := range keys {
-		switch key.Kind {
-		case repository.TimelineKindInteraction:
-			interactionIDs = append(interactionIDs, key.ID)
-		case repository.TimelineKindMissedCall:
-			callIDs = append(callIDs, key.ID)
-		default:
-			return nil, fmt.Errorf("unknown timeline kind %q", key.Kind)
-		}
-	}
-	interactions, err := s.interactions.ListInteractionsByIDs(ctx, interactionIDs)
-	if err != nil {
-		return nil, err
-	}
-	page := make([]repository.Interaction, 0, len(interactions))
-	for _, row := range interactions {
-		page = append(page, row)
-	}
-	enrichment, err := s.EnrichPage(ctx, page)
-	if err != nil {
-		return nil, err
-	}
-	calls, err := s.phoneCalls.ListByIDs(ctx, callIDs)
-	if err != nil {
-		return nil, err
-	}
-	callsByID := make(map[uuid.UUID]repository.PhoneCall, len(calls))
-	for _, call := range calls {
-		callsByID[call.ID] = call
-	}
-	items := make([]TimelineItem, len(keys))
-	for i, key := range keys {
-		if key.Kind == repository.TimelineKindMissedCall {
-			call, ok := callsByID[key.ID]
-			if !ok {
-				return nil, fmt.Errorf("missed call %s left the page between reads", key.ID)
-			}
-			items[i] = TimelineItem{
-				Kind: key.Kind, ID: call.ID, ContactID: p.ContactID, Source: repository.InteractionSourcePhoneCalls,
-				OccurredAt: call.StartedAt, Direction: call.Direction, CreatedAt: call.CreatedAt,
-				Enrichment: InteractionEnrichment{Label: "Missed call", ContentKind: contentKind(repository.InteractionSourcePhoneCalls, 0), VenueTags: []VenueTag{}, Call: callContent(call)},
-			}
-			continue
-		}
-		row, ok := interactions[key.ID]
-		if !ok {
-			return nil, fmt.Errorf("interaction %s left the page between reads", key.ID)
-		}
-		items[i] = TimelineItem{
-			Kind: key.Kind, ID: row.ID, ContactID: row.ContactID, Source: row.Source, SourceRef: row.SourceRef,
-			OccurredAt: row.OccurredAt, Description: row.Description, Direction: row.Direction, CreatedAt: row.CreatedAt,
-			Enrichment: enrichment[row.ID],
-		}
-	}
-	return items, nil
-}
-
+// GetContent returns the content of the live observation id.
 func (s *InteractionContentService) GetContent(ctx context.Context, id uuid.UUID) (*InteractionContent, error) {
 	interaction, err := s.interactions.GetInteraction(ctx, id)
 	if err != nil {
 		return nil, err
 	}
+	return s.contentOf(ctx, *interaction)
+}
+
+// contentOf assembles the content of one observation by its source.
+func (s *InteractionContentService) contentOf(ctx context.Context, interaction repository.Interaction) (*InteractionContent, error) {
+	id := interaction.ID
 	result := &InteractionContent{Messages: []ContentMessage{}, MeetingNotes: []MeetingNoteContent{}}
 	switch interaction.Source {
 	case repository.InteractionSourceGCal:
@@ -341,13 +294,13 @@ func (s *InteractionContentService) GetContent(ctx context.Context, id uuid.UUID
 			result.Kind = "none"
 			return result, nil
 		}
-		notes, err := s.meetingNotes.ListByLinkedRefs(ctx, repository.LinkedKindEvent, []uuid.UUID{parsed})
+		notes, err := s.eventNotes(ctx, parsed)
 		if err != nil {
 			return nil, err
 		}
 		result.Kind = "none"
 		if len(notes) > 0 {
-			result.Kind, result.MeetingNotes = "meeting_note", meetingNotesContent(notes)
+			result.Kind, result.MeetingNotes = "meeting_note", notes
 		}
 		return result, nil
 	case repository.InteractionSourceAnarlogSessions:
@@ -360,7 +313,11 @@ func (s *InteractionContentService) GetContent(ctx context.Context, id uuid.UUID
 		if err != nil {
 			return nil, err
 		}
-		result.Kind, result.MeetingNotes = "meeting_note", meetingNotesContent(notes)
+		result.Kind = "meeting_note"
+		result.MeetingNotes, err = s.noteContents(ctx, notes)
+		if err != nil {
+			return nil, err
+		}
 		return result, nil
 	case repository.InteractionSourcePhoneCalls:
 		result.Kind = "call"
@@ -403,6 +360,34 @@ func (s *InteractionContentService) GetContent(ctx context.Context, id uuid.UUID
 		}
 	}
 	return result, nil
+}
+
+// eventNotes returns the meeting notes linked to a calendar event.
+func (s *InteractionContentService) eventNotes(ctx context.Context, eventID uuid.UUID) ([]MeetingNoteContent, error) {
+	notes, err := s.meetingNotes.ListByLinkedRefs(ctx, repository.LinkedKindEvent, []uuid.UUID{eventID})
+	if err != nil {
+		return nil, err
+	}
+	return s.noteContents(ctx, notes)
+}
+
+// noteContents attributes each note to its own container.
+func (s *InteractionContentService) noteContents(ctx context.Context, notes []repository.MeetingNote) ([]MeetingNoteContent, error) {
+	linked := []uuid.UUID{}
+	for _, row := range notes {
+		if row.LinkedKind != nil && *row.LinkedKind == repository.LinkedKindEvent && row.LinkedID != nil {
+			linked = append(linked, *row.LinkedID)
+		}
+	}
+	events, err := s.calendarEvents.ListByIDs(ctx, uniqueUUIDs(linked))
+	if err != nil {
+		return nil, err
+	}
+	eventByID := make(map[uuid.UUID]repository.CalendarEvent, len(events))
+	for _, event := range events {
+		eventByID[event.ID] = event
+	}
+	return meetingNotesContent(notes, eventByID), nil
 }
 
 func (s *InteractionContentService) ListContactVenues(ctx context.Context, contactID uuid.UUID) ([]VenueTag, error) {
@@ -471,7 +456,7 @@ func deriveLabel(interaction repository.Interaction, eventTitle *string, venues 
 	}
 }
 func deriveVenue(source, container, chatType string, title, subject *string, isGroup bool) VenueTag {
-	tag := VenueTag{Key: source + ":" + container}
+	tag := VenueTag{Key: venueKey(source, container)}
 	switch source {
 	case repository.InteractionSourceEmail:
 		tag.Kind, tag.Label = "email_thread", "Email thread"
@@ -590,16 +575,16 @@ func (s *InteractionContentService) expandComms(ctx context.Context, interaction
 	out := []ContentMessage{}
 	matched := map[uuid.UUID]uuid.UUID{}
 	for _, row := range chosen {
-		venueKey := ""
+		message := ContentMessage{ID: row.ID, IsOutgoing: row.Direction == repository.InteractionDirectionOutbound, SentAt: row.SentAt, Body: stringValue(row.Body), Source: row.Source, ContentRef: row.Source + ":" + row.ExternalID}
 		if row.ThreadID != nil {
-			venueKey = row.Source + ":" + *row.ThreadID
+			message.attribute(deriveVenue(row.Source, *row.ThreadID, "", nil, row.Subject, false))
 		}
-		outgoing := row.Direction == repository.InteractionDirectionOutbound
-		sender, named := deriveSenderDetail(row.Source, outgoing, row.PeerHandle, row.SourceMetadata, nil, nil, nil)
+		sender, named := deriveSenderDetail(row.Source, message.IsOutgoing, row.PeerHandle, row.SourceMetadata, nil, nil, nil)
+		message.Sender = sender
 		if !named && row.MatchedContactID != nil {
 			matched[row.ID] = *row.MatchedContactID
 		}
-		out = append(out, ContentMessage{ID: row.ID, Sender: sender, IsOutgoing: outgoing, SentAt: row.SentAt, Body: stringValue(row.Body), VenueKey: venueKey})
+		out = append(out, message)
 	}
 	if err := s.applySenderNames(ctx, out, matched); err != nil {
 		return nil, err
@@ -631,7 +616,9 @@ func (s *InteractionContentService) expandTelegram(ctx context.Context, linked [
 			if !named && row.MatchedContactID != nil {
 				matched[row.ID] = *row.MatchedContactID
 			}
-			out = append(out, ContentMessage{ID: row.ID, Sender: sender, IsOutgoing: row.IsOutgoing, SentAt: row.SentAt, Body: stringValue(row.MessageText), VenueKey: "telegram:" + strconv.FormatInt(row.TelegramChatID, 10)})
+			message := ContentMessage{ID: row.ID, Sender: sender, IsOutgoing: row.IsOutgoing, SentAt: row.SentAt, Body: stringValue(row.MessageText), Source: repository.InteractionSourceTelegram, ContentRef: fmt.Sprintf("telegram:%d:%d", row.TelegramChatID, row.TelegramMessageID)}
+			message.attribute(deriveVenue("telegram", strconv.FormatInt(row.TelegramChatID, 10), row.ChatType, row.ChatTitle, nil, false))
+			out = append(out, message)
 		}
 	}
 	if err := s.applySenderNames(ctx, out, matched); err != nil {
@@ -665,7 +652,9 @@ func (s *InteractionContentService) expandMessages(ctx context.Context, linked [
 			if !named && row.MatchedContactID != nil {
 				matched[row.ID] = *row.MatchedContactID
 			}
-			out = append(out, ContentMessage{ID: row.ID, Sender: sender, IsOutgoing: row.IsOutgoing, SentAt: row.SentAt, Body: stringValue(row.Text), VenueKey: "messages:" + row.ChatGuid})
+			message := ContentMessage{ID: row.ID, Sender: sender, IsOutgoing: row.IsOutgoing, SentAt: row.SentAt, Body: stringValue(row.Text), Source: repository.InteractionSourceMessages, ContentRef: "messages:" + row.Guid}
+			message.attribute(deriveVenue("messages", row.ChatGuid, "", nil, nil, row.IsGroupChat))
+			out = append(out, message)
 		}
 	}
 	if err := s.applySenderNames(ctx, out, matched); err != nil {
@@ -678,13 +667,30 @@ func (s *InteractionContentService) expandMessages(ctx context.Context, linked [
 func eventContent(event repository.CalendarEvent) *EventContent {
 	return &EventContent{Title: event.Title, Location: event.Location, AttendeeCount: len(event.Attendees), StartTime: event.StartTime, EndTime: event.EndTime, HTMLLink: event.HtmlLink}
 }
-func meetingNotesContent(notes []repository.MeetingNote) []MeetingNoteContent {
+func meetingNotesContent(notes []repository.MeetingNote, events map[uuid.UUID]repository.CalendarEvent) []MeetingNoteContent {
 	out := make([]MeetingNoteContent, len(notes))
 	for i, row := range notes {
-		out[i] = MeetingNoteContent{Title: row.Title, Summary: row.Summary, Memo: row.Memo}
+		note := MeetingNoteContent{
+			Title: row.Title, Summary: row.Summary, Memo: row.Memo,
+			Source:     repository.InteractionSourceAnarlogSessions,
+			ContentRef: repository.InteractionSourceAnarlogSessions + ":" + row.AnarlogSessionID.String(),
+		}
+		if row.LinkedKind != nil && *row.LinkedKind == repository.LinkedKindEvent && row.LinkedID != nil {
+			note.Channel = repository.VenueKindMeeting
+			if event, ok := events[*row.LinkedID]; ok {
+				key := venueKey(repository.InteractionSourceGCal, repository.GCalVenueContainerID(event.GcalEventID, event.GcalCalendarID, event.GoogleAccountID))
+				note.Container = &key
+			}
+		} else {
+			note.Channel = repository.VenueKindSession
+			key := venueKey(repository.InteractionSourceAnarlogSessions, row.AnarlogSessionID.String())
+			note.Container = &key
+		}
+		out[i] = note
 	}
 	return out
 }
+func venueKey(source, container string) string { return source + ":" + container }
 func contentKind(source string, noteCount int) string {
 	switch source {
 	case repository.InteractionSourceGCal:

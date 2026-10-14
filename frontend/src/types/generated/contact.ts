@@ -16,7 +16,7 @@ export type InteractionContentKind = 'messages' | 'meeting_note' | 'call' | 'non
 export type InteractionVenueKind = 'group_chat' | 'dm' | 'email_thread';
 export type CallService = 'voice' | 'facetime_audio' | 'facetime_video';
 export type CallDirection = 'inbound' | 'outbound';
-export type TimelineItemKind = 'interaction' | 'missed_call';
+export type TimelineItemKind = 'interaction' | 'message_burst' | 'upcoming_event' | 'missed_call';
 
 //////////
 // source: contact_dto.go
@@ -274,22 +274,23 @@ export interface CallSummaryResponse {
   duration_seconds: number /* int */;
 }
 /**
- * InteractionListItemResponse is one item of a contact's interaction history.
- * Kind "interaction" is a recorded interaction and ID its interaction id; kind
- * "missed_call" is a missed inbound call that left no voicemail, ID the call
- * record's id. A missed call bears no cadence, which CadenceInert states.
+ * TimelineIdentityResponse is the typed identity of a timeline item. For kind
+ * "interaction" the ID is the interaction's merge-root node; for "message_burst"
+ * the burst's observation; for "upcoming_event" the calendar event; for
+ * "missed_call" the call record.
  */
-export interface InteractionListItemResponse {
+export interface TimelineIdentityResponse {
   kind: TimelineItemKind;
-  cadence_inert: boolean;
   id: string;
-  contact_id: string;
+}
+/**
+ * TimelineMemberResponse is one member of a timeline item: what the item's
+ * representative observation of one merged interaction node, or the item itself,
+ * shows in the list.
+ */
+export interface TimelineMemberResponse {
   source: string;
   source_ref?: string;
-  occurred_at: string;
-  description?: string;
-  direction: InteractionDirection;
-  created_at: string;
   label: string;
   content_kind: InteractionContentKind;
   message_count: number /* int */;
@@ -298,16 +299,43 @@ export interface InteractionListItemResponse {
   event?: EventSummaryResponse;
   call?: CallSummaryResponse;
 }
+/**
+ * InteractionListItemResponse is one item of a contact's interaction history,
+ * at the contact's effective participation. A missed call bears no cadence,
+ * which CadenceInert states.
+ */
+export interface InteractionListItemResponse {
+  identity: TimelineIdentityResponse;
+  direction: InteractionDirection;
+  occurred_at: string;
+  cadence_inert: boolean;
+  members: TimelineMemberResponse[];
+}
 export interface InteractionListResponse {
   items: InteractionListItemResponse[];
   venue_options: VenueTagResponse[];
 }
-export interface InteractionContentResponse {
-  interaction_id: string;
+/**
+ * TimelineContentMemberResponse is the content of one member of a timeline item.
+ */
+export interface TimelineContentMemberResponse {
+  source: string;
   kind: InteractionContentKind;
   messages: ContentMessageResponse[];
   meeting_notes: MeetingNoteContentResponse[];
 }
+/**
+ * TimelineContentResponse is the content of a timeline item.
+ */
+export interface TimelineContentResponse {
+  identity: TimelineIdentityResponse;
+  members: TimelineContentMemberResponse[];
+}
+/**
+ * ContentMessageResponse is one message, attributed to its own source and
+ * container. Channel and Container are null for a message with no container.
+ * ContentRef is equal for every per-contact copy of the same source message.
+ */
 export interface ContentMessageResponse {
   id: string;
   sender: string;
@@ -315,11 +343,23 @@ export interface ContentMessageResponse {
   sent_at: string;
   body: string;
   venue_key: string;
+  source: string;
+  channel: InteractionVenueKind | null;
+  container: string | null;
+  content_ref: string;
 }
+/**
+ * MeetingNoteContentResponse is one meeting note, attributed to its own
+ * container.
+ */
 export interface MeetingNoteContentResponse {
   title?: string;
   summary?: string;
   memo?: string;
+  source: string;
+  channel: 'meeting' | 'session';
+  container: string | null;
+  content_ref: string;
 }
 /**
  * InteractionMergeRequest declares the listed interactions one interaction for

@@ -46,7 +46,7 @@ func setupAwaitingReplyAPIRouter(t *testing.T) (*gin.Engine, *repository.Contact
 	cfg := &config.Config{River: config.RiverConfig{WorkerConcurrency: 1}}
 	manualHandler, contactService := mustBuildManualHandlerForTest(t, ctx, database, cfg)
 	contactHandler := handlers.NewContactHandler(contactService)
-	interactionHandler := handlers.NewInteractionHandler(interactionRepo, manualHandler, contentService)
+	interactionHandler := handlers.NewInteractionHandler(manualHandler, contentService)
 
 	router := gin.New()
 	router.Use(api.RequestIDMiddleware())

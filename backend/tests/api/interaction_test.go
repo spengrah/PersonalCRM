@@ -39,7 +39,7 @@ func setupInteractionTestRouter(t *testing.T) (*gin.Engine, func()) {
 	interactionRepo := repository.NewInteractionRepository(database.Queries)
 	contentService := service.NewInteractionContentService(interactionRepo, repository.NewCommsMessageRepository(database.Queries), repository.NewTelegramMessageRepository(database.Queries), repository.NewMessagesMessageRepository(database.Queries), repository.NewMeetingNoteRepository(database.Queries), repository.NewCalendarEventRepository(database.Queries), repository.NewPhoneCallRepository(database.Queries), repository.NewContactRepository(database.Queries))
 	contactHandler := handlers.NewContactHandler(contactService)
-	interactionHandler := handlers.NewInteractionHandler(interactionRepo, manualHandler, contentService)
+	interactionHandler := handlers.NewInteractionHandler(manualHandler, contentService)
 
 	router := gin.New()
 	router.Use(api.RequestIDMiddleware())
@@ -56,10 +56,7 @@ func setupInteractionTestRouter(t *testing.T) (*gin.Engine, func()) {
 			contacts.GET("/:id/interactions", interactionHandler.ListContactInteractions)
 			contacts.POST("/:id/interactions", interactionHandler.CreateInteraction)
 		}
-		interactions := v1.Group("/interactions")
-		{
-			interactions.GET("/:id/content", interactionHandler.GetInteractionContent)
-		}
+		v1.GET("/timeline-items/:kind/:id/content", interactionHandler.GetTimelineItemContent)
 	}
 
 	cleanup := func() {
@@ -165,22 +162,22 @@ func TestInteraction_CreateAndList(t *testing.T) {
 		items := data["items"].([]interface{})
 		assert.GreaterOrEqual(t, len(items), 2) // At least 2 from the creates above
 
-		// LIST rows carry the same wire shape as the create echo —
-		// description, direction, and source. Today both paths share
-		// interactionToResponse, so this pins the contract against the
-		// mapping ever forking.
-		var coffeeRow map[string]interface{}
+		// A LIST item carries the participation's direction, and its member
+		// carries the source and, for a described interaction, the description as
+		// its label.
+		var coffeeRow, coffeeMember map[string]interface{}
 		for _, item := range items {
 			row := item.(map[string]interface{})
-			assert.NotEmpty(t, row["source"], "list row should carry source")
+			member := row["members"].([]interface{})[0].(map[string]interface{})
+			assert.NotEmpty(t, member["source"], "list member should carry source")
 			assert.Contains(t, []interface{}{"outbound", "inbound", "mutual"}, row["direction"],
 				"list row should carry a valid direction")
-			if row["description"] == "Had coffee together" {
-				coffeeRow = row
+			if member["label"] == "Had coffee together" {
+				coffeeRow, coffeeMember = row, member
 			}
 		}
 		require.NotNil(t, coffeeRow, "created interaction should appear in the list with its description")
-		assert.Equal(t, "manual", coffeeRow["source"])
+		assert.Equal(t, "manual", coffeeMember["source"])
 		assert.Equal(t, "mutual", coffeeRow["direction"]) // create passed no direction; manual default is mutual
 
 		// Check pagination meta
@@ -433,8 +430,10 @@ func listInteractionPage(t *testing.T, router *gin.Engine, contactID string, lim
 	for _, item := range rows {
 		row, isObject := item.(map[string]interface{})
 		require.True(t, isObject)
-		id, hasID := row["id"].(string)
-		require.True(t, hasID, "every interaction row must carry an id")
+		identity, isObject := row["identity"].(map[string]interface{})
+		require.True(t, isObject, "every interaction row must carry an identity")
+		id, hasID := identity["id"].(string)
+		require.True(t, hasID, "every interaction identity must carry an id")
 		ids = append(ids, id)
 	}
 	return interactionPage{

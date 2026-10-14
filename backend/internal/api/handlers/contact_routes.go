@@ -6,7 +6,7 @@ import "github.com/gin-gonic/gin"
 // surface. Contact CRUD, per-contact interactions and notes, and the
 // merge preview/apply pair all live under /contacts and are served by
 // distinct handlers; the interaction correction routes live under
-// /interactions beside the content read.
+// /interactions.
 type ContactRouteDeps struct {
 	Contact       *ContactHandler
 	Interaction   *InteractionHandler
@@ -34,7 +34,7 @@ type ContactRouteDeps struct {
 //   - PUT    /api/v1/contacts/:id/notes
 //   - GET    /api/v1/contacts/:id/merge/preview
 //   - POST   /api/v1/contacts/:id/merge
-//   - GET    /api/v1/interactions/:id/content
+//   - GET    /api/v1/timeline-items/:kind/:id/content
 //   - POST   /api/v1/interactions/merge
 //   - POST   /api/v1/interactions/merge/preview
 //   - POST   /api/v1/interactions/:id/removals
@@ -65,10 +65,11 @@ func RegisterContactRoutes(v1 *gin.RouterGroup, deps ContactRouteDeps) {
 		contacts.POST("/:id/merge", deps.Contact.MergeContacts)
 	}
 
+	v1.GET("/timeline-items/:kind/:id/content", deps.Interaction.GetTimelineItemContent)
+
 	// Interaction routes (non-contact-scoped)
 	interactions := v1.Group("/interactions")
 	{
-		interactions.GET("/:id/content", deps.Interaction.GetInteractionContent)
 		// Corrections (IXN-016, IXN-017, IXN-018): the only HTTP way to merge
 		// interactions or remove a participation.
 		interactions.POST("/merge", deps.Correction.MergeInteractions)

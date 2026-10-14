@@ -71,7 +71,7 @@ func buildCoreHandlers(
 	return coreHandlers{
 		Contact:       handlers.NewContactHandler(contactService),
 		Note:          handlers.NewNoteHandler(noteService),
-		Interaction:   handlers.NewInteractionHandler(interactionRepo, manualHandler, contentService),
+		Interaction:   handlers.NewInteractionHandler(manualHandler, contentService),
 		Correction:    handlers.NewInteractionCorrectionHandler(correctionService),
 		System:        handlers.NewSystemHandler(contactRepo, cfg.Runtime),
 		Rematch:       handlers.NewRematchHandler(rematchService, contactService),

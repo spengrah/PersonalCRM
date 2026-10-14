@@ -151,12 +151,76 @@ func (q *Queries) HardDeletePhoneCallsByMacHost(ctx context.Context, macHostID *
 	return err
 }
 
+const ListMissedCalls = `-- name: ListMissedCalls :many
+SELECT id, call_unique_id, peer_handle, peer_normalized, service, direction, answered, has_voicemail, duration_seconds, started_at, matched_contact_id, interaction_id, mac_host_id, processed_at, created_at FROM phone_call
+WHERE phone_call.interaction_id IS NULL
+  AND phone_call.direction = 'inbound'
+  AND phone_call.answered IS NOT TRUE
+  AND NOT phone_call.has_voicemail
+  AND ($1::uuid IS NULL OR phone_call.matched_contact_id = $1)
+  AND ($2::uuid IS NULL OR phone_call.id = $2)
+  AND ($3::timestamptz IS NULL OR phone_call.started_at >= $3)
+  AND ($4::timestamptz IS NULL OR phone_call.started_at < $4)
+ORDER BY phone_call.started_at DESC, phone_call.id DESC
+`
+
+type ListMissedCallsParams struct {
+	ContactID *uuid.UUID `json:"contact_id"`
+	CallID    *uuid.UUID `json:"call_id"`
+	FromTime  *time.Time `json:"from_time"`
+	ToTime    *time.Time `json:"to_time"`
+}
+
+// Missed calls: unanswered inbound calls that left no voicemail, which ingest
+// records with no interaction (migration 055). Narrowed by the contact the call
+// matched, by the call's id, and to the half-open range of its start; each
+// narrowing is absent when its argument is NULL. Latest first.
+func (q *Queries) ListMissedCalls(ctx context.Context, arg ListMissedCallsParams) ([]*PhoneCall, error) {
+	rows, err := q.db.Query(ctx, ListMissedCalls,
+		arg.ContactID,
+		arg.CallID,
+		arg.FromTime,
+		arg.ToTime,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []*PhoneCall{}
+	for rows.Next() {
+		var i PhoneCall
+		if err := rows.Scan(
+			&i.ID,
+			&i.CallUniqueID,
+			&i.PeerHandle,
+			&i.PeerNormalized,
+			&i.Service,
+			&i.Direction,
+			&i.Answered,
+			&i.HasVoicemail,
+			&i.DurationSeconds,
+			&i.StartedAt,
+			&i.MatchedContactID,
+			&i.InteractionID,
+			&i.MacHostID,
+			&i.ProcessedAt,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const ListPhoneCallsByIDs = `-- name: ListPhoneCallsByIDs :many
 SELECT id, call_unique_id, peer_handle, peer_normalized, service, direction, answered, has_voicemail, duration_seconds, started_at, matched_contact_id, interaction_id, mac_host_id, processed_at, created_at FROM phone_call
 WHERE id = ANY($1::uuid[])
 `
 
-// Hydrates the missed-call keys of a ListContactTimelineFiltered page.
 func (q *Queries) ListPhoneCallsByIDs(ctx context.Context, ids []uuid.UUID) ([]*PhoneCall, error) {
 	rows, err := q.db.Query(ctx, ListPhoneCallsByIDs, ids)
 	if err != nil {

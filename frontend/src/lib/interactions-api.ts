@@ -4,7 +4,8 @@ import type {
   InteractionDirection,
   InteractionResponse,
   InteractionListResponse,
-  InteractionContentResponse,
+  TimelineContentResponse,
+  TimelineIdentityResponse,
 } from '@/types/generated/contact'
 
 export type { InteractionDirection, InteractionResponse }
@@ -46,9 +47,15 @@ export const interactionsApi = {
     )
   },
 
-  async getContent(interactionId: string): Promise<InteractionContentResponse> {
-    return apiClient.get<InteractionContentResponse>(
-      `/api/v1/interactions/${interactionId}/content`
+  // The one content read: a timeline item's content by its typed identity,
+  // read in the participation context of one contact.
+  async getTimelineContent(
+    identity: TimelineIdentityResponse,
+    contactId: string
+  ): Promise<TimelineContentResponse> {
+    return apiClient.get<TimelineContentResponse>(
+      `/api/v1/timeline-items/${identity.kind}/${identity.id}/content`,
+      { contact_id: contactId }
     )
   },
 }

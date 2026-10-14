@@ -5,7 +5,8 @@ import { useContactInteractions } from '@/hooks/use-interactions'
 import { useUpcomingEventsForContact } from '@/hooks/use-calendar'
 import { useAcceleratedTime } from '@/hooks/use-accelerated-time'
 import type { CalendarEvent } from '@/types/calendar'
-import { InteractionRow, MissedCallRow } from './interaction-row'
+import { TimelineRow, type ParticipationContext } from '@/components/timeline'
+import { InteractionDrillDown } from './interaction-content'
 import {
   InteractionFilters,
   DEFAULT_FILTER_SELECTION,
@@ -73,6 +74,7 @@ export function Interactions({ contactId }: { contactId: string }) {
     setSelection(next)
     setFilters(selectionToFilters(next, currentTime))
   }
+  const context: ParticipationContext = { contactId }
   const interactions = useContactInteractions(contactId, filters)
   const upcoming = useUpcomingEventsForContact(contactId, 250)
   const items = interactions.data?.pages.flatMap(page => page.data?.items ?? []) ?? []
@@ -128,17 +130,21 @@ export function Interactions({ contactId }: { contactId: string }) {
         <>
           {items.length > 0 && (
             <div role="list" aria-label="Interaction history" className="divide-y divide-gray-200">
-              {items.map(item =>
-                item.kind === 'missed_call' ? (
-                  <MissedCallRow key={`${item.kind}:${item.id}`} item={item} />
-                ) : (
-                  <InteractionRow
-                    key={`${item.kind}:${item.id}`}
-                    item={item}
-                    venueFilter={selection.venue || undefined}
-                  />
-                )
-              )}
+              {items.map(item => (
+                <TimelineRow
+                  key={`${item.identity.kind}:${item.identity.id}`}
+                  item={item}
+                  context={context}
+                  renderDrillDown={(identity, ctx) => (
+                    <InteractionDrillDown
+                      item={item}
+                      identity={identity}
+                      context={ctx}
+                      venueFilter={selection.venue || undefined}
+                    />
+                  )}
+                />
+              ))}
             </div>
           )}
           {interactions.hasNextPage && (

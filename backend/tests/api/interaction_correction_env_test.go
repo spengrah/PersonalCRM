@@ -117,8 +117,11 @@ func newCorrectionEnvOn(t *testing.T, database *db.Database) *correctionEnv {
 	router.Use(api.RequestIDMiddleware())
 	v1 := router.Group("/api/v1")
 	handlers.RegisterContactRoutes(v1, handlers.ContactRouteDeps{
-		Contact:       handlers.NewContactHandler(contactService),
-		Interaction:   &handlers.InteractionHandler{},
+		Contact: handlers.NewContactHandler(contactService),
+		Interaction: handlers.NewInteractionHandler(nil, service.NewInteractionContentService(interactionRepo,
+			repository.NewCommsMessageRepository(database.Queries), repository.NewTelegramMessageRepository(database.Queries),
+			repository.NewMessagesMessageRepository(database.Queries), repository.NewMeetingNoteRepository(database.Queries),
+			repository.NewCalendarEventRepository(database.Queries), repository.NewPhoneCallRepository(database.Queries), contactRepo)),
 		Correction:    handlers.NewInteractionCorrectionHandler(corrections),
 		Note:          &handlers.NoteHandler{},
 		ContactMethod: &handlers.ContactMethodHandler{},

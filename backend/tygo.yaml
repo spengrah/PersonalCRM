@@ -40,4 +40,4 @@ packages:
       export type InteractionVenueKind = 'group_chat' | 'dm' | 'email_thread';
       export type CallService = 'voice' | 'facetime_audio' | 'facetime_video';
       export type CallDirection = 'inbound' | 'outbound';
-      export type TimelineItemKind = 'interaction' | 'missed_call';
+      export type TimelineItemKind = 'interaction' | 'message_burst' | 'upcoming_event' | 'missed_call';
