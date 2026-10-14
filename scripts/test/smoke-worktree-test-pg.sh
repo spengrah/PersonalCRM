@@ -66,9 +66,9 @@ cleanup() {
     CRM_WORKTREE_PG_HOME="$SMOKE_PG_HOME" bash "$RESOLVER" teardown >/dev/null 2>&1 || true
     ( cd "$SMOKE_WT" 2>/dev/null && CRM_WORKTREE_PG_HOME="$SMOKE_PG_HOME" bash "$RESOLVER" teardown >/dev/null 2>&1 ) || true
   fi
-  # Final sweep: stop any postgres still bound under our temp pg home.
+  # Final sweep: stop any postgres still bound under our temp pg homes.
   shopt -s nullglob 2>/dev/null || true
-  for dd in "$SMOKE_PG_HOME"/*/data; do
+  for dd in "$SMOKE_PG_HOME"/*/data "$TMP"/pghome-cold/*/data; do
     [ -s "$dd/PG_VERSION" ] && "$BINDIR/pg_ctl" -D "$dd" -m immediate stop >/dev/null 2>&1 || true
   done
   rm -rf "$TMP" 2>/dev/null || true
