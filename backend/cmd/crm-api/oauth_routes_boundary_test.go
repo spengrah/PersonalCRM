@@ -144,6 +144,7 @@ func buildRouterForOAuthWiring(t *testing.T, cfg *config.Config) *gin.Engine {
 		ContactHandler:           handlersCore.Contact,
 		InteractionHandler:       handlersCore.Interaction,
 		CorrectionHandler:        handlersCore.Correction,
+		TimelineAssertionHandler: handlersCore.TimelineAssertion,
 		NoteHandler:              handlersCore.Note,
 		ContactMethodHandler:     handlersCore.ContactMethod,
 		RematchHandler:           handlersCore.Rematch,

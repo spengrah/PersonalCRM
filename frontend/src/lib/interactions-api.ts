@@ -4,6 +4,7 @@ import type {
   InteractionDirection,
   InteractionResponse,
   InteractionListResponse,
+  TimelineAssertionsResponse,
   TimelineContentResponse,
   TimelineIdentityResponse,
 } from '@/types/generated/contact'
@@ -55,6 +56,18 @@ export const interactionsApi = {
   ): Promise<TimelineContentResponse> {
     return apiClient.get<TimelineContentResponse>(
       `/api/v1/timeline-items/${identity.kind}/${identity.id}/content`,
+      { contact_id: contactId }
+    )
+  },
+
+  // The assertions whose provenance cites the content the item's drill-down
+  // displays, keyed by content_ref. Read-only.
+  async getTimelineAssertions(
+    identity: TimelineIdentityResponse,
+    contactId: string
+  ): Promise<TimelineAssertionsResponse> {
+    return apiClient.get<TimelineAssertionsResponse>(
+      `/api/v1/timeline-items/${identity.kind}/${identity.id}/assertions`,
       { contact_id: contactId }
     )
   },

@@ -39,14 +39,15 @@ type routeDeps struct {
 	MeetingNoteHandler *handlers.MeetingNoteHandler
 
 	// Core (always-on)
-	ContactHandler       *handlers.ContactHandler
-	InteractionHandler   *handlers.InteractionHandler
-	CorrectionHandler    *handlers.InteractionCorrectionHandler
-	NoteHandler          *handlers.NoteHandler
-	ContactMethodHandler *handlers.ContactMethodHandler
-	RematchHandler       *handlers.RematchHandler
-	StalenessHandler     *handlers.StalenessHandler
-	SystemHandler        *handlers.SystemHandler
+	ContactHandler           *handlers.ContactHandler
+	InteractionHandler       *handlers.InteractionHandler
+	CorrectionHandler        *handlers.InteractionCorrectionHandler
+	TimelineAssertionHandler *handlers.TimelineAssertionHandler
+	NoteHandler              *handlers.NoteHandler
+	ContactMethodHandler     *handlers.ContactMethodHandler
+	RematchHandler           *handlers.RematchHandler
+	StalenessHandler         *handlers.StalenessHandler
+	SystemHandler            *handlers.SystemHandler
 
 	// OAuth / external sync (feature-flagged / nil when unconfigured)
 	OAuthHandler            *handlers.OAuthHandler
@@ -143,11 +144,12 @@ func registerRoutes(deps routeDeps) {
 	{
 		// Contact + interaction routes (unconditional).
 		handlers.RegisterContactRoutes(v1, handlers.ContactRouteDeps{
-			Contact:       deps.ContactHandler,
-			Interaction:   deps.InteractionHandler,
-			Correction:    deps.CorrectionHandler,
-			Note:          deps.NoteHandler,
-			ContactMethod: deps.ContactMethodHandler,
+			Contact:           deps.ContactHandler,
+			Interaction:       deps.InteractionHandler,
+			Correction:        deps.CorrectionHandler,
+			TimelineAssertion: deps.TimelineAssertionHandler,
+			Note:              deps.NoteHandler,
+			ContactMethod:     deps.ContactMethodHandler,
 		})
 
 		// Meeting-note conflict-resolution — user-driven, called from

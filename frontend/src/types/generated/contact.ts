@@ -404,3 +404,30 @@ export interface InteractionRemovalRequest {
   scope: InteractionRemovalScope;
   reason: 'duplicate' | 'did_not_attend' | 'did_not_happen';
 }
+/**
+ * TimelineAssertionResponse is one assertion beside one content item a timeline
+ * item's drill-down displays, keyed by that item's content_ref. Subject is the
+ * subject node's label. An edge carries its object node's label in Object; a
+ * fact carries exactly one Value field (ValueDate as YYYY-MM-DD). Status is the
+ * assertion's recorded review status.
+ */
+export interface TimelineAssertionResponse {
+  content_ref: string;
+  assertion_id: string;
+  predicate: string;
+  subject: string;
+  object?: string;
+  value_text?: string;
+  value_num?: number /* float64 */;
+  value_date?: string;
+  value_bool?: boolean;
+  status: 'proposed' | 'accepted' | 'rejected' | 'superseded' | 'retracted';
+}
+/**
+ * TimelineAssertionsResponse is the assertions beside a timeline item's
+ * content, grouped by content item in content_ref order, each item's in
+ * recording order.
+ */
+export interface TimelineAssertionsResponse {
+  items: TimelineAssertionResponse[];
+}

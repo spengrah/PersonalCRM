@@ -1097,6 +1097,36 @@ definitions:
       suggestion:
         $ref: '#/definitions/handlers.MethodSuggestionResponse'
     type: object
+  handlers.TimelineAssertionResponse:
+    properties:
+      assertion_id:
+        type: string
+      content_ref:
+        type: string
+      object:
+        type: string
+      predicate:
+        type: string
+      status:
+        type: string
+      subject:
+        type: string
+      value_bool:
+        type: boolean
+      value_date:
+        type: string
+      value_num:
+        type: number
+      value_text:
+        type: string
+    type: object
+  handlers.TimelineAssertionsResponse:
+    properties:
+      items:
+        items:
+          $ref: '#/definitions/handlers.TimelineAssertionResponse'
+        type: array
+    type: object
   handlers.TimelineContentMemberResponse:
     properties:
       kind:
@@ -4477,6 +4507,56 @@ paths:
       summary: Seed a spec behavior's declared fixture
       tags:
       - test
+  /timeline-items/{kind}/{id}/assertions:
+    get:
+      description: Read-only. Each entry is one assertion beside one displayed content
+        item, keyed by that item's content_ref. Correction assertions are never returned.
+      parameters:
+      - description: Timeline item kind
+        enum:
+        - interaction
+        - message_burst
+        - upcoming_event
+        - missed_call
+        in: path
+        name: kind
+        required: true
+        type: string
+      - description: Timeline item ID
+        format: uuid
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Participation context contact ID
+        format: uuid
+        in: query
+        name: contact_id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                data:
+                  $ref: '#/definitions/handlers.TimelineAssertionsResponse'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.APIResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.APIResponse'
+      summary: Get timeline item assertions
+      tags:
+      - interactions
   /timeline-items/{kind}/{id}/content:
     get:
       parameters:

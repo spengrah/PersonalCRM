@@ -64,3 +64,49 @@ SELECT EXISTS(SELECT 1 FROM calendar_event WHERE id = $1);
 
 -- name: ExistsPhoneCall :one
 SELECT EXISTS(SELECT 1 FROM phone_call WHERE id = $1);
+
+-- name: ListAssertionsCitingContent :many
+-- The non-correction assertions whose provenance cites a displayed content item,
+-- one row per (content item, assertion), in recording order. Each displayed item
+-- is named by its row (source_kinds[i], row_ids[i]) and keyed by content_refs[i].
+-- A comms message is stored once per matched contact, so provenance citing any
+-- live copy of a displayed comms message cites that item. The correction
+-- predicates come from the catalog's correction marker (migration 089). An
+-- assertion naming a soft-deleted node is not returned.
+WITH displayed AS (
+    SELECT
+        unnest(sqlc.arg(source_kinds)::text[])::text AS source_kind,
+        unnest(sqlc.arg(row_ids)::uuid[])::uuid AS row_id,
+        unnest(sqlc.arg(content_refs)::text[])::text AS content_ref
+), citable AS (
+    SELECT d.source_kind, d.row_id, d.content_ref FROM displayed d
+    UNION
+    SELECT d.source_kind, sibling.id, d.content_ref
+    FROM displayed d
+    JOIN comms_message shown ON d.source_kind = 'comms_message' AND shown.id = d.row_id
+    JOIN comms_message sibling ON sibling.source = shown.source
+        AND sibling.external_id = shown.external_id
+        AND sibling.deleted_at IS NULL
+), cited AS (
+    SELECT DISTINCT c.content_ref, p.assertion_id
+    FROM citable c
+    JOIN assertion_provenance p ON p.source_kind = c.source_kind AND p.source_id = c.row_id::text
+)
+SELECT
+    cited.content_ref::text AS content_ref,
+    a.id,
+    a.predicate_key,
+    subject.canonical_label AS subject_label,
+    object.canonical_label AS object_label,
+    a.value_text,
+    a.value_num,
+    a.value_date,
+    a.value_bool,
+    a.status
+FROM cited
+JOIN assertion a ON a.id = cited.assertion_id
+JOIN predicate pr ON pr.key = a.predicate_key AND NOT pr.correction
+JOIN node subject ON subject.id = a.subject_node_id AND subject.deleted_at IS NULL
+LEFT JOIN node object ON object.id = a.object_node_id
+WHERE a.object_node_id IS NULL OR object.deleted_at IS NULL
+ORDER BY cited.content_ref, a.created_at, a.id;

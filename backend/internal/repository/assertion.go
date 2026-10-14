@@ -719,3 +719,54 @@ func existsContentRow(ctx context.Context, q db.Querier, sourceKind string, id u
 		return false, errors.New("ExistsContentRow called for a source kind with no backing-row check: " + sourceKind)
 	}
 }
+
+// ContentCitation names one displayed content item: the content row a
+// provenance locator cites (SourceKind, RowID) and the item's content ref.
+type ContentCitation struct {
+	SourceKind string
+	RowID      uuid.UUID
+	ContentRef string
+}
+
+// CitedAssertion is one non-correction assertion whose provenance cites a
+// displayed content item, keyed by that item's content ref. ObjectLabel is the
+// object node's label for an edge; a fact carries one Value field instead.
+type CitedAssertion struct {
+	ContentRef   string
+	AssertionID  uuid.UUID
+	PredicateKey string
+	SubjectLabel string
+	ObjectLabel  *string
+	ValueText    *string
+	ValueNum     *float64
+	ValueDate    *time.Time
+	ValueBool    *bool
+	Status       string
+}
+
+// ListAssertionsCitingContent returns, per displayed content item, the
+// assertions whose provenance cites it, excluding the correction predicates.
+// Provenance citing any live copy of a displayed comms message cites that item.
+func (r *AssertionRepository) ListAssertionsCitingContent(ctx context.Context, items []ContentCitation) ([]CitedAssertion, error) {
+	params := db.ListAssertionsCitingContentParams{
+		SourceKinds: make([]string, len(items)),
+		RowIds:      make([]uuid.UUID, len(items)),
+		ContentRefs: make([]string, len(items)),
+	}
+	for i, item := range items {
+		params.SourceKinds[i], params.RowIds[i], params.ContentRefs[i] = item.SourceKind, item.RowID, item.ContentRef
+	}
+	rows, err := r.queries.ListAssertionsCitingContent(ctx, params)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]CitedAssertion, len(rows))
+	for i, row := range rows {
+		out[i] = CitedAssertion{
+			ContentRef: row.ContentRef, AssertionID: row.ID, PredicateKey: row.PredicateKey,
+			SubjectLabel: row.SubjectLabel, ObjectLabel: row.ObjectLabel, ValueText: row.ValueText,
+			ValueNum: row.ValueNum, ValueDate: utcPtr(row.ValueDate), ValueBool: row.ValueBool, Status: row.Status,
+		}
+	}
+	return out, nil
+}

@@ -51,9 +51,10 @@ type InteractionEnrichment struct {
 // own source and container. Channel and Container are nil exactly when VenueKey
 // is empty: a message with no container. Container is VenueKey otherwise.
 // ContentRef names the source message itself, equal for every per-contact copy
-// of it.
+// of it. RowKind is the provenance source kind of the content row ID names.
 type ContentMessage struct {
 	ID         uuid.UUID
+	RowKind    string
 	Sender     string
 	IsOutgoing bool
 	SentAt     time.Time
@@ -74,8 +75,10 @@ func (m *ContentMessage) attribute(venue VenueTag) {
 // MeetingNoteContent is one meeting note, attributed to its own container: the
 // meeting venue of the calendar event its session is linked to (Channel
 // "meeting"), else its session's venue (Channel "session"). Container is nil
-// when the linked event is gone. ContentRef names the note's session.
+// when the linked event is gone. ContentRef names the note's session; ID is the
+// note's row.
 type MeetingNoteContent struct {
+	ID                   uuid.UUID
 	Title, Summary, Memo *string
 	Source               string
 	Channel              string
@@ -575,7 +578,7 @@ func (s *InteractionContentService) expandComms(ctx context.Context, interaction
 	out := []ContentMessage{}
 	matched := map[uuid.UUID]uuid.UUID{}
 	for _, row := range chosen {
-		message := ContentMessage{ID: row.ID, IsOutgoing: row.Direction == repository.InteractionDirectionOutbound, SentAt: row.SentAt, Body: stringValue(row.Body), Source: row.Source, ContentRef: row.Source + ":" + row.ExternalID}
+		message := ContentMessage{ID: row.ID, RowKind: repository.SourceKindCommsMessage, IsOutgoing: row.Direction == repository.InteractionDirectionOutbound, SentAt: row.SentAt, Body: stringValue(row.Body), Source: row.Source, ContentRef: row.Source + ":" + row.ExternalID}
 		if row.ThreadID != nil {
 			message.attribute(deriveVenue(row.Source, *row.ThreadID, "", nil, row.Subject, false))
 		}
@@ -616,7 +619,7 @@ func (s *InteractionContentService) expandTelegram(ctx context.Context, linked [
 			if !named && row.MatchedContactID != nil {
 				matched[row.ID] = *row.MatchedContactID
 			}
-			message := ContentMessage{ID: row.ID, Sender: sender, IsOutgoing: row.IsOutgoing, SentAt: row.SentAt, Body: stringValue(row.MessageText), Source: repository.InteractionSourceTelegram, ContentRef: fmt.Sprintf("telegram:%d:%d", row.TelegramChatID, row.TelegramMessageID)}
+			message := ContentMessage{ID: row.ID, RowKind: repository.SourceKindTelegramMessage, Sender: sender, IsOutgoing: row.IsOutgoing, SentAt: row.SentAt, Body: stringValue(row.MessageText), Source: repository.InteractionSourceTelegram, ContentRef: fmt.Sprintf("telegram:%d:%d", row.TelegramChatID, row.TelegramMessageID)}
 			message.attribute(deriveVenue("telegram", strconv.FormatInt(row.TelegramChatID, 10), row.ChatType, row.ChatTitle, nil, false))
 			out = append(out, message)
 		}
@@ -652,7 +655,7 @@ func (s *InteractionContentService) expandMessages(ctx context.Context, linked [
 			if !named && row.MatchedContactID != nil {
 				matched[row.ID] = *row.MatchedContactID
 			}
-			message := ContentMessage{ID: row.ID, Sender: sender, IsOutgoing: row.IsOutgoing, SentAt: row.SentAt, Body: stringValue(row.Text), Source: repository.InteractionSourceMessages, ContentRef: "messages:" + row.Guid}
+			message := ContentMessage{ID: row.ID, RowKind: repository.SourceKindMessagesMessage, Sender: sender, IsOutgoing: row.IsOutgoing, SentAt: row.SentAt, Body: stringValue(row.Text), Source: repository.InteractionSourceMessages, ContentRef: "messages:" + row.Guid}
 			message.attribute(deriveVenue("messages", row.ChatGuid, "", nil, nil, row.IsGroupChat))
 			out = append(out, message)
 		}
@@ -671,6 +674,7 @@ func meetingNotesContent(notes []repository.MeetingNote, events map[uuid.UUID]re
 	out := make([]MeetingNoteContent, len(notes))
 	for i, row := range notes {
 		note := MeetingNoteContent{
+			ID:    row.ID,
 			Title: row.Title, Summary: row.Summary, Memo: row.Memo,
 			Source:     repository.InteractionSourceAnarlogSessions,
 			ContentRef: repository.InteractionSourceAnarlogSessions + ":" + row.AnarlogSessionID.String(),

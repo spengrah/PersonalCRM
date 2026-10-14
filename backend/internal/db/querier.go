@@ -1286,6 +1286,14 @@ type Querier interface {
 	// All assertions for a subject node (any status), newest first — the review /
 	// history surface.
 	ListAssertionsBySubject(ctx context.Context, subjectNodeID uuid.UUID) ([]*Assertion, error)
+	// The non-correction assertions whose provenance cites a displayed content item,
+	// one row per (content item, assertion), in recording order. Each displayed item
+	// is named by its row (source_kinds[i], row_ids[i]) and keyed by content_refs[i].
+	// A comms message is stored once per matched contact, so provenance citing any
+	// live copy of a displayed comms message cites that item. The correction
+	// predicates come from the catalog's correction marker (migration 089). An
+	// assertion naming a soft-deleted node is not returned.
+	ListAssertionsCitingContent(ctx context.Context, arg ListAssertionsCitingContentParams) ([]*ListAssertionsCitingContentRow, error)
 	// All assertions touching a node in EITHER position (subject OR object), any
 	// status, oldest first — the node-merge re-point scan. The merge procedure
 	// rewrites loser→winner on each row; oldest-first is a stable, deterministic

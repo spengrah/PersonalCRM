@@ -631,6 +631,8 @@ func runEntity(
 		return runMeetingNote(ctx, h, p)
 	case *linkedMeetingNotePlan:
 		return runLinkedMeetingNote(ctx, h, support, p, st)
+	case *messageClaimPlan:
+		return runMessageClaim(ctx, h, p, st)
 	case *notePlan:
 		return runNote(ctx, h, p, st)
 	case *mergePlan:

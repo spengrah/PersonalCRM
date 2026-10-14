@@ -414,6 +414,7 @@ func run() int {
 		ContactHandler:           contactHandler,
 		InteractionHandler:       interactionHandler,
 		CorrectionHandler:        handlersCore.Correction,
+		TimelineAssertionHandler: handlersCore.TimelineAssertion,
 		NoteHandler:              noteHandler,
 		ContactMethodHandler:     handlersCore.ContactMethod,
 		RematchHandler:           rematchHandler,

@@ -164,3 +164,28 @@ type InteractionRemovalRequest struct {
 	Scope  InteractionRemovalScope `json:"scope"`
 	Reason string                  `json:"reason" tstype:"'duplicate' | 'did_not_attend' | 'did_not_happen'"`
 }
+
+// TimelineAssertionResponse is one assertion beside one content item a timeline
+// item's drill-down displays, keyed by that item's content_ref. Subject is the
+// subject node's label. An edge carries its object node's label in Object; a
+// fact carries exactly one Value field (ValueDate as YYYY-MM-DD). Status is the
+// assertion's recorded review status.
+type TimelineAssertionResponse struct {
+	ContentRef  string   `json:"content_ref"`
+	AssertionID string   `json:"assertion_id"`
+	Predicate   string   `json:"predicate"`
+	Subject     string   `json:"subject"`
+	Object      *string  `json:"object,omitempty"`
+	ValueText   *string  `json:"value_text,omitempty"`
+	ValueNum    *float64 `json:"value_num,omitempty"`
+	ValueDate   *string  `json:"value_date,omitempty"`
+	ValueBool   *bool    `json:"value_bool,omitempty"`
+	Status      string   `json:"status" tstype:"'proposed' | 'accepted' | 'rejected' | 'superseded' | 'retracted'"`
+}
+
+// TimelineAssertionsResponse is the assertions beside a timeline item's
+// content, grouped by content item in content_ref order, each item's in
+// recording order.
+type TimelineAssertionsResponse struct {
+	Items []TimelineAssertionResponse `json:"items"`
+}

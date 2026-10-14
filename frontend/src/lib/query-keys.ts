@@ -103,6 +103,8 @@ export const interactionKeys = {
   // the contact's key and contact-scoped invalidation reaches it.
   timelineContent: (contactId: string, kind: string, id: string) =>
     [...interactionKeys.forContact(contactId), 'content', kind, id] as const,
+  timelineAssertions: (contactId: string, kind: string, id: string) =>
+    [...interactionKeys.forContact(contactId), 'assertions', kind, id] as const,
 }
 
 // Rematch job query keys

@@ -435,7 +435,7 @@ behaviors:
       - key: removal-is-only-delete
         text: the removal request is the only way over HTTP to remove a participation; the surface has no request that deletes an interaction
     provenance: [.agents/spec/2026-10-13-interaction-review-readiness.md]
-    notes: No correction answer carries an assertion, predicate or provenance (KNW-033).
+    notes: No correction answer carries an assertion, predicate or provenance (KNW-038).
 
   - id: IXN-020
     title: A missed call without voicemail appears as cadence-inert evidence
@@ -556,3 +556,39 @@ behaviors:
         text: an id that names no item of its kind, and a contact that does not exist, are refused as not found
     provenance: [.agents/spec/2026-10-13-interaction-review-readiness.md, InteractionContentService.GetTimelineContent]
     notes: The content a member holds is what the per-interaction content read of IXN-014 gives for that member.
+
+  - id: IXN-023
+    title: The drill-down shows, read-only, the assertions that cite its content
+    type: ux
+    status: current
+    surface: ui
+    given: a timeline item whose displayed content an assertion's provenance cites
+    when: its row is expanded on the contact page
+    then:
+      - key: assertion-beside-cited-content
+        text: each such assertion appears beside the content item it cites, stating its subject, predicate, value and recorded review status
+      - key: read-only-no-review-controls
+        text: the assertions offer no accept or reject control, no baseline, no verdict and no way into the knowledge graph
+    provenance: [.agents/spec/2026-10-13-interaction-review-readiness.md, InteractionDrillDown]
+    notes: Which assertions appear is IXN-039. Reviewing them belongs to a later claim-review surface.
+
+  - id: IXN-039
+    title: A timeline item's assertions are those whose provenance cites its displayed content
+    type: api
+    status: current
+    surface: api
+    given: a timeline item of a contact, and assertions whose provenance cites content rows
+    when: the item's assertions are read in the participation context of that contact
+    then:
+      - key: cites-displayed-content
+        text: every assertion whose provenance cites a content item the item's content read displays is returned once for that item, keyed by the item's content reference and carrying its predicate, subject, value and recorded review status; provenance citing any contact's copy of a displayed message cites that message
+      - key: undisplayed-content-omitted
+        text: an assertion citing only content the item's content read does not display is not returned
+      - key: merged-any-member
+        text: on a merged interaction, an assertion citing any member's displayed content is returned
+      - key: corrections-never-returned
+        text: an assertion under a correction predicate of the catalog is never returned, whatever its provenance cites
+      - key: no-cited-content-empty
+        text: an item with no cited content answers an empty list
+    provenance: [.agents/spec/2026-10-13-interaction-review-readiness.md, TimelineAssertionService.ListTimelineAssertions]
+    notes: The displayed content is IXN-034's content read for the same identity and contact. This read is the one HTTP read of the assertion store (KNW-038).
