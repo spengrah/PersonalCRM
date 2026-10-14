@@ -219,7 +219,7 @@ func TestInteractionCorrection_ReconcilesFollowUps(t *testing.T) {
 	})
 
 	t.Run("removing the reply that completed a follow-up keeps it completed and opens a new one for the outbound", func(t *testing.T) {
-		// spec: CAD-048.completed-never-created, CAD-048.new-follow-up-by-rules
+		// spec: CAD-048.completed-never-reopened, CAD-048.new-follow-up-by-rules
 		a := e.contact(t, "monthly")
 		_, task := e.liveFollowUp(t, a, e.ref("call"), e.at(20))
 		reply := e.call(t, a, e.ref("call"), repository.InteractionDirectionInbound, e.at(30))
@@ -227,7 +227,7 @@ func TestInteractionCorrection_ReconcilesFollowUps(t *testing.T) {
 
 		e.remove(t, reply, removalBody(service.RemovalReasonDidNotHappen, a))
 
-		require.Equal(t, repository.ContactTaskStateCompleted, e.task(t, task.ID).State, "a completed task is never created")
+		require.Equal(t, repository.ContactTaskStateCompleted, e.task(t, task.ID).State, "a completed task is never reopened")
 		tasks := e.followUps(t, a)
 		require.Len(t, tasks, 2)
 		var opened *repository.ContactTask
@@ -259,7 +259,7 @@ func TestInteractionCorrection_ReconcilesFollowUps(t *testing.T) {
 		require.False(t, e.fields(t, a).AwaitingReply)
 		tasks := e.followUps(t, a)
 		require.Len(t, tasks, 1, "the skip-ended window warrants no new follow-up")
-		require.Equal(t, repository.ContactTaskStateCompleted, tasks[0].State, "a completed task is never created")
+		require.Equal(t, repository.ContactTaskStateCompleted, tasks[0].State, "a completed task is never reopened")
 		require.Equal(t, ops, e.ops(t, opened[0].ID), "no Todoist op is queued")
 	})
 
