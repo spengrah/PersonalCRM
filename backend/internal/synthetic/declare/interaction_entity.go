@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -397,7 +398,16 @@ func anarlogSessionEventPrefix(factoryPrefix string) string {
 	return fmt.Sprintf("%08x-%04x-%04x-%04x-%04x", hash[0:4], hash[4:6], hash[6:8], hash[8:10], hash[10:12])
 }
 
-func runLinkedMeetingNote(ctx context.Context, h *replay.Harness, p *linkedMeetingNotePlan, st *runState) (Seeded, error) {
+// runLinkedMeetingNote records the note through meeting-note ingest, tagging the
+// event's attendee as the session's participant. Ingest links a note to the one
+// event or call in its window, and when several share it, to the one whose
+// attendee the note's participants name. Untagged, the note links only while no
+// other event or call starts within the window, and every declared event starts at
+// the run anchor minus whole days, so a second run of a behavior, or a second
+// declaration at the same day offset, would put a competing event at that
+// instant. The tag is the signal the daemon sends, so the link no longer depends
+// on what else the database holds.
+func runLinkedMeetingNote(ctx context.Context, h *replay.Harness, support *repository.SyntheticSupportRepository, p *linkedMeetingNotePlan, st *runState) (Seeded, error) {
 	seededEvent, ok := st.seeded[p.eventHandle]
 	if !ok {
 		return Seeded{}, fmt.Errorf("linked meeting note %q: event handle %q has not been created", p.name, p.eventHandle)
@@ -415,13 +425,17 @@ func runLinkedMeetingNote(ctx context.Context, h *replay.Harness, p *linkedMeeti
 	}
 	gen := h.Generator()
 	prefix := gen.Prefix()
+	sessionID := anarlogSessionUUID(prefix, p.name)
+	humanID, err := tagEventAttendee(ctx, h, support, st, p, events[0].MatchedContactIDs, sessionID)
+	if err != nil {
+		return Seeded{}, err
+	}
 	title := strings.ToLower(fmt.Sprintf("%s%s note", prefix, p.name))
 	summary := fmt.Sprintf("Summary for %s%s", prefix, p.name)
 	memo := fmt.Sprintf("Memo for %s%s <i>not-markup</i>", prefix, p.name)
-	sessionID := anarlogSessionUUID(prefix, p.name)
 	if err := h.ReplayMeetingNoteRecorded(ctx, replay.MeetingNoteRecordedSpec{
 		SessionID: sessionID, Title: &title, Summary: &summary, Memo: &memo,
-		MeetingAt: events[0].StartTime,
+		MeetingAt: events[0].StartTime, ParticipantIDs: []string{humanID},
 	}); err != nil {
 		return Seeded{}, fmt.Errorf("linked meeting note %q: %w", p.name, err)
 	}
@@ -437,6 +451,59 @@ func runLinkedMeetingNote(ctx context.Context, h *replay.Harness, p *linkedMeeti
 		return Seeded{}, fmt.Errorf("linked meeting note %q: unexpected linkage state=%q kind=%v id=%v", p.name, note.LinkageState, note.LinkedKind, note.LinkedID)
 	}
 	return Seeded{Kind: "meeting_note", ID: note.ID.String(), Name: title}, nil
+}
+
+// tagEventAttendee registers an anarlog human for the declared contact the event
+// matched, through the same anarlog_humans ingest the daemon uses, and returns its
+// id. The human id derives from the session id, so each note owns its human and
+// re-running a namespace reproduces it. The external_contact row it leaves
+// carries no namespace prefix, so its ownership is recorded by id for cleanup,
+// which also removes the identity keyed to it.
+func tagEventAttendee(
+	ctx context.Context,
+	h *replay.Harness,
+	support *repository.SyntheticSupportRepository,
+	st *runState,
+	p *linkedMeetingNotePlan,
+	matched []uuid.UUID,
+	sessionID uuid.UUID,
+) (string, error) {
+	var attendee *factory.ContactSpec
+	for i, handle := range st.orderHandles {
+		seeded := st.order[i]
+		if seeded.Kind != "contact" || !slices.ContainsFunc(matched, func(id uuid.UUID) bool { return id.String() == seeded.ID }) {
+			continue
+		}
+		spec := st.specs[handle]
+		attendee = &spec
+		break
+	}
+	if attendee == nil {
+		return "", fmt.Errorf("linked meeting note %q: event %q matched no declared contact to tag as a participant", p.name, p.eventHandle)
+	}
+	humanID := uuid.NewSHA1(sessionID, []byte("anarlog-human"))
+	hostID := h.MacHostID()
+	if st.macHostID != nil {
+		hostID = *st.macHostID
+	}
+	spec, err := h.Generator().AnarlogHumanFor(*attendee, humanID, hostID)
+	if err != nil {
+		return "", fmt.Errorf("linked meeting note %q: %w", p.name, err)
+	}
+	if _, err := h.ReplayMacContacts(ctx, uuid.Nil, spec); err != nil {
+		return "", fmt.Errorf("linked meeting note %q: tag participant: %w", p.name, err)
+	}
+	row, err := h.ExternalContactRepo().GetBySource(ctx, SourceAnarlogHumans, spec.EntityID, nil)
+	if err != nil {
+		return "", fmt.Errorf("linked meeting note %q: read back participant: %w", p.name, err)
+	}
+	if row == nil {
+		return "", fmt.Errorf("linked meeting note %q: participant %s was not stored", p.name, spec.EntityID)
+	}
+	if err := support.RecordNamespaceEntity(ctx, h.Namespace(), repository.EntityKindExternalContact, row.ID); err != nil {
+		return "", fmt.Errorf("linked meeting note %q: record participant ownership: %w", p.name, err)
+	}
+	return spec.EntityID, nil
 }
 
 func setIMessageChatID(envelope *events.Envelope, chatID string) error {

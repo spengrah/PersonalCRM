@@ -630,7 +630,7 @@ func runEntity(
 	case *meetingNotePlan:
 		return runMeetingNote(ctx, h, p)
 	case *linkedMeetingNotePlan:
-		return runLinkedMeetingNote(ctx, h, p, st)
+		return runLinkedMeetingNote(ctx, h, support, p, st)
 	case *notePlan:
 		return runNote(ctx, h, p, st)
 	case *mergePlan:

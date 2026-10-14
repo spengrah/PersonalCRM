@@ -570,7 +570,23 @@ func (g *Generator) MacContactForSource(target ContactSpec, intent MatchIntent, 
 		email = g.unknownEmail()
 	}
 	displayName := g.Prefix() + "MacContact " + fmt.Sprint(seq)
+	return g.macContactEnvelope(source, entityID, displayName, email, intent, hostID)
+}
 
+// AnarlogHumanFor builds the anarlog_humans external_contact.upserted envelope
+// that registers humanID (an anarlog human UUID, the id a meeting note tags as a
+// participant) as the target contact: the email matches the target, so the ingest
+// writes the anarlog_human_id identity linked to it. The caller picks humanID, so
+// a tagged participant id is derived rather than drawn, and no generator
+// sequence advances.
+func (g *Generator) AnarlogHumanFor(target ContactSpec, humanID uuid.UUID, hostID uuid.UUID) (MacContactSpec, error) {
+	if target.Email == "" {
+		return MacContactSpec{}, fmt.Errorf("anarlog human for %q: the target carries no email to match on", target.FullName)
+	}
+	return g.macContactEnvelope("anarlog_humans", humanID.String(), g.Prefix()+"AnarlogHuman "+humanID.String(), target.Email, MatchSeeded, hostID)
+}
+
+func (g *Generator) macContactEnvelope(source, entityID, displayName, email string, intent MatchIntent, hostID uuid.UUID) (MacContactSpec, error) {
 	payload := events.ExternalContactUpsertedPayload{
 		Version:     1,
 		HostID:      hostID,

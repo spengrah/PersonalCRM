@@ -23,6 +23,9 @@ type MeetingNoteRecordedSpec struct {
 	SessionID            uuid.UUID
 	Title, Summary, Memo *string
 	MeetingAt            time.Time
+	// ParticipantIDs are the anarlog human ids the session tags, the signal ingest
+	// resolves to CRM contacts when more than one event or call is in the window.
+	ParticipantIDs []string
 }
 
 // ReplayMeetingNoteRecorded feeds a meeting_note.recorded envelope through the
@@ -33,7 +36,7 @@ func (h *Harness) ReplayMeetingNoteRecorded(ctx context.Context, spec MeetingNot
 	payload := events.MeetingNoteRecordedPayload{
 		Version: 1, HostID: h.macHostID, Source: "anarlog_sessions",
 		SourceID: spec.SessionID.String(), Title: spec.Title, Summary: spec.Summary,
-		Memo: spec.Memo, MeetingAt: spec.MeetingAt,
+		Memo: spec.Memo, MeetingAt: spec.MeetingAt, ParticipantIDs: spec.ParticipantIDs,
 	}
 	raw, err := events.Marshal(events.KindMeetingNoteRecorded, payload)
 	if err != nil {
