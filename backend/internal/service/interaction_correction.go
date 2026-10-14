@@ -559,59 +559,35 @@ func (s *InteractionCorrectionService) recompute(ctx context.Context, tx pgx.Tx,
 }
 
 // recordedParticipation reads the effective participation of the contact as
-// the recording rules take it: each entry at its own direction and time, with
-// the source of the member observation recorded last, in the order the entries
-// were recorded (an entry is recorded when its last member was). It also
+// the recording rules take it (repository ListRecordedParticipationTx). It also
 // returns the awaited outbound across all the entries (see awaitedOutbound)
 // and when the entries under the root nodes judged were last recorded.
 func (s *InteractionCorrectionService) recordedParticipation(
 	ctx context.Context, tx pgx.Tx, judged []uuid.UUID, contactID uuid.UUID,
 ) ([]repository.RecordedParticipation, *repository.ApplyInteractionRequest, time.Time, error) {
-	var recorded []repository.RecordedParticipation
-	var outbounds []awaitCandidate
-	var latestResponse *repository.ApplyInteractionRequest
-	var judgedRecordedAt time.Time
-	entries, err := s.interactions.ListEffectiveParticipationTx(ctx, tx, contactID)
+	entries, err := s.interactions.ListRecordedParticipationTx(ctx, tx, contactID)
 	if err != nil {
 		return nil, nil, time.Time{}, err
 	}
-	for _, entry := range entries {
-		var last *repository.Interaction
-		for _, member := range entry.Members {
-			row, err := s.interactions.GetInteractionTx(ctx, tx, member.ObservationID)
-			if err != nil {
-				return nil, nil, time.Time{}, fmt.Errorf("read member observation %s: %w", member.ObservationID, err)
-			}
-			if last == nil || row.RecordedAt.After(last.RecordedAt) {
-				last = row
-			}
+	recorded := make([]repository.RecordedParticipation, len(entries))
+	var outbounds []awaitCandidate
+	var latestResponse *repository.ApplyInteractionRequest
+	var judgedRecordedAt time.Time
+	for i, entry := range entries {
+		recorded[i] = entry.RecordedParticipation
+		if entry.InteractionNodeID != nil && slices.Contains(judged, *entry.InteractionNodeID) && entry.RecordedAt.After(judgedRecordedAt) {
+			judgedRecordedAt = entry.RecordedAt
 		}
-		req := repository.ApplyInteractionRequest{
-			ContactID:  contactID,
-			Direction:  entry.Direction,
-			Source:     last.Source,
-			OccurredAt: entry.OccurredAt,
-		}
-		recorded = append(recorded, repository.RecordedParticipation{ApplyInteractionRequest: req, RecordedAt: last.RecordedAt})
-		if entry.InteractionNodeID != nil && slices.Contains(judged, *entry.InteractionNodeID) && last.RecordedAt.After(judgedRecordedAt) {
-			judgedRecordedAt = last.RecordedAt
-		}
+		req := entry.ApplyInteractionRequest
 		switch entry.Direction {
 		case repository.InteractionDirectionOutbound:
-			outbounds = append(outbounds, awaitCandidate{req: req, observationID: last.ID})
+			outbounds = append(outbounds, awaitCandidate{req: req, observationID: entry.LastObservationID})
 		default:
 			if latestResponse == nil || req.OccurredAt.After(latestResponse.OccurredAt) {
-				r := req
-				latestResponse = &r
+				latestResponse = &req
 			}
 		}
 	}
-	sort.SliceStable(recorded, func(i, j int) bool {
-		if !recorded[i].RecordedAt.Equal(recorded[j].RecordedAt) {
-			return recorded[i].RecordedAt.Before(recorded[j].RecordedAt)
-		}
-		return recorded[i].OccurredAt.Before(recorded[j].OccurredAt)
-	})
 	awaited, err := s.awaitedOutbound(ctx, tx, outbounds, latestResponse)
 	if err != nil {
 		return nil, nil, time.Time{}, err

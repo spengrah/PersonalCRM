@@ -71,7 +71,7 @@ func newDeclineCutoverEnv(t *testing.T, ctx context.Context) *declineCutoverEnv 
 	eventRepo := repository.NewEventRepository(database.Queries)
 	claimRepo := repository.NewEventConsumerClaimRepository(database.Queries)
 	cadenceUpdater := consumer.NewCadenceUpdater(claimRepo, contactRepo, database.Queries, consumer.CadenceModeCutover, false, config.TestConfig().Watchdog)
-	declineHandler := consumer.NewCalendarDeclineHandler(interactionRepo, contactRepo, config.TestConfig().Watchdog)
+	declineHandler := consumer.NewCalendarDeclineHandler(interactionRepo, contactRepo, repository.NewNodeRepository(database.Queries), cadenceUpdater, config.TestConfig().Watchdog)
 
 	// Live river client with the real CalendarDeclineHandlerWorker so the
 	// declined job drains after the provider publishes it.

@@ -130,7 +130,7 @@ func newUnstartedRecorderAndDeclineBus(
 	bus := events.NewBus(database.Pool, client, repository.NewEventRepository(database.Queries))
 	recorder := consumer.NewInteractionRecorder(contactService, repository.NewStagingProcessorRegistry(nil), bus, cadenceUpdater, nil, repository.NewCalendarEventRepository(database.Queries))
 	recorderShim.real = consumer.NewInteractionRecorderWorker(bus, database.Pool, recorder, nil)
-	declineShim.real = consumer.NewCalendarDeclineHandlerWorker(bus, database.Pool, consumer.NewCalendarDeclineHandler(interactionRepo, contactRepo, config.TestConfig().Watchdog))
+	declineShim.real = consumer.NewCalendarDeclineHandlerWorker(bus, database.Pool, consumer.NewCalendarDeclineHandler(interactionRepo, contactRepo, repository.NewNodeRepository(database.Queries), cadenceUpdater, config.TestConfig().Watchdog))
 	start := func(ctx context.Context) {
 		require.NoError(t, client.Start(ctx))
 		t.Cleanup(func() {

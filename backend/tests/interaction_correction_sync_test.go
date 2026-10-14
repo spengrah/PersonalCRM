@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"personal-crm/backend/internal/accelerated"
 	"personal-crm/backend/internal/api"
 	"personal-crm/backend/internal/api/handlers"
 	"personal-crm/backend/internal/config"
@@ -234,6 +235,182 @@ func TestInteractionCorrection_HoldsThroughCalendarSync(t *testing.T) {
 		require.Nil(t, after.LastContacted, "the removed observation is no remaining participation")
 		require.Nil(t, after.LastInteractionAt)
 	})
+
+	t.Run("a decline of a merged member recomputes cadence from the remaining merged participation", func(t *testing.T) {
+		// spec: ING-040.no-sync-restores-correction
+		e := newNodeSyncEnv(t)
+		router := correctionRoutes(t, e.database, e.cadenceUpdater, unconfiguredFollowUp(t, e.database))
+		contact, spec := e.newContactWithEmail(t)
+		meeting := e.gen.GCalEventWithShape(spec, factory.MatchSeeded, factory.GCalEventShape{StartOffset: -3 * time.Hour, Duration: time.Hour})
+		e.syncCalendar(t, meeting.AccountID, "", meeting.Event)
+		meetingObs := e.gcalObservation(t, meeting, contact.ID)
+		callRef := "decline-merged-call-" + uuid.NewString()
+		callAt := accelerated.GetCurrentTime().Add(-30 * time.Minute).UTC().Truncate(time.Microsecond)
+		call, err := e.contactService.RecordInteraction(e.ctx, repository.RecordInteractionRequest{
+			ContactID: contact.ID, Source: repository.InteractionSourcePhoneCalls, SourceRef: &callRef,
+			Direction: repository.InteractionDirectionOutbound, OccurredAt: callAt,
+		})
+		require.NoError(t, err)
+		postCorrection(t, router, "/api/v1/interactions/merge",
+			mergeRequest(contact.ID, nodeOfInteraction(t, e.nodes, meetingObs), nodeOfInteraction(t, e.nodes, call)), http.StatusOK)
+		merged := cadenceOf(t, e.contactRepo, contact.ID)
+		require.NotNil(t, merged.LastContacted)
+		require.True(t, merged.LastContacted.Equal(callAt), "the merged participation is mutual at the call's time")
+
+		e.syncCalendar(t, meeting.AccountID, "node-test-cursor", cancelledStubFor(meeting.GcalEventID))
+		waitForInteractionGone(t, e, contact.ID, meetingObs.SourceRef)
+
+		eps := effective(t, e.interactionRepo, contact.ID)
+		require.Len(t, eps, 1)
+		require.Equal(t, repository.InteractionDirectionOutbound, eps[0].Direction)
+		after := cadenceOf(t, e.contactRepo, contact.ID)
+		require.Nil(t, after.LastContacted, "no remaining participation is inbound or mutual")
+		require.Nil(t, after.LastInteractionAt)
+		require.Nil(t, after.LastResponseAt)
+		require.NotNil(t, after.LastOutreachAt)
+		require.True(t, after.LastOutreachAt.Equal(callAt))
+	})
+}
+
+// pausingDeclineInteractions is the decline handler's interaction repository
+// with pause run once, after the first read of the contact's participation
+// that follows the declined observation's soft delete.
+type pausingDeclineInteractions struct {
+	*repository.InteractionRepository
+	deleted bool
+	pause   func()
+}
+
+func (r *pausingDeclineInteractions) SoftDeleteInteractionTx(ctx context.Context, tx pgx.Tx, id uuid.UUID) error {
+	r.deleted = true
+	return r.InteractionRepository.SoftDeleteInteractionTx(ctx, tx, id)
+}
+
+func (r *pausingDeclineInteractions) ListRecordedParticipationTx(ctx context.Context, tx pgx.Tx, contactID uuid.UUID) ([]repository.RecordedEntry, error) {
+	entries, err := r.InteractionRepository.ListRecordedParticipationTx(ctx, tx, contactID)
+	if r.deleted && r.pause != nil {
+		pause := r.pause
+		r.pause = nil
+		pause()
+	}
+	return entries, err
+}
+
+// A recording of the contact that commits while a decline of a merged member
+// is recomputing the contact stays reflected in the contact's cadence fields:
+// the decline holds the contact's cadence row lock across its participation
+// reads and the recompute, so the recording waits for the decline to commit.
+func TestInteractionCorrection_DeclineOfMergedMemberKeepsConcurrentRecording(t *testing.T) {
+	// spec: ING-040.no-sync-restores-correction
+	e := newNodeSyncEnv(t)
+	router := correctionRoutes(t, e.database, e.cadenceUpdater, unconfiguredFollowUp(t, e.database))
+	contact, spec := e.newContactWithEmail(t)
+	meeting := e.gen.GCalEventWithShape(spec, factory.MatchSeeded, factory.GCalEventShape{StartOffset: -3 * time.Hour, Duration: time.Hour})
+	e.syncCalendar(t, meeting.AccountID, "", meeting.Event)
+	meetingObs := e.gcalObservation(t, meeting, contact.ID)
+	now := accelerated.GetCurrentTime().UTC().Truncate(time.Microsecond)
+	callRef := "decline-race-call-" + uuid.NewString()
+	callAt := now.Add(-30 * time.Minute)
+	call, err := e.contactService.RecordInteraction(e.ctx, repository.RecordInteractionRequest{
+		ContactID: contact.ID, Source: repository.InteractionSourcePhoneCalls, SourceRef: &callRef,
+		Direction: repository.InteractionDirectionOutbound, OccurredAt: callAt,
+	})
+	require.NoError(t, err)
+	postCorrection(t, router, "/api/v1/interactions/merge",
+		mergeRequest(contact.ID, nodeOfInteraction(t, e.nodes, meetingObs), nodeOfInteraction(t, e.nodes, call)), http.StatusOK)
+
+	inboundRef := "decline-race-inbound-" + uuid.NewString()
+	inboundAt := now.Add(-10 * time.Minute)
+	recorded := make(chan error, 1)
+	interactions := &pausingDeclineInteractions{InteractionRepository: e.interactionRepo, pause: func() {
+		go func() {
+			_, err := e.contactService.RecordInteraction(e.ctx, repository.RecordInteractionRequest{
+				ContactID: contact.ID, Source: repository.InteractionSourcePhoneCalls, SourceRef: &inboundRef,
+				Direction: repository.InteractionDirectionInbound, OccurredAt: inboundAt,
+			})
+			recorded <- err
+		}()
+		// Give the recording the chance to commit inside the decline's
+		// recompute; it cannot while the decline holds the contact's lock.
+		select {
+		case err := <-recorded:
+			recorded <- err
+		case <-time.After(time.Second):
+		}
+	}}
+	handler := consumer.NewCalendarDeclineHandler(interactions, e.contactRepo, e.nodes, e.cadenceUpdater, config.TestConfig().Watchdog)
+	raw, err := events.Marshal(events.KindCalendarDeclined, events.CalendarDeclinedPayload{
+		Version: 1, ContactID: contact.ID, EventID: *meetingObs.SourceRef, OccurredAt: meetingObs.OccurredAt,
+	})
+	require.NoError(t, err)
+	env := &events.Envelope{
+		ID: uuid.New(), Source: repository.InteractionSourceGCal, SourceID: "declined:" + *meetingObs.SourceRef + ":" + contact.ID.String(),
+		Kind: events.KindCalendarDeclined, Payload: raw, ObservedAt: meetingObs.OccurredAt,
+	}
+	require.NoError(t, pgx.BeginTxFunc(e.ctx, e.database.Pool, pgx.TxOptions{}, func(tx pgx.Tx) error {
+		return handler.HandleEvent(e.ctx, tx, env)
+	}))
+	require.NoError(t, <-recorded)
+
+	after := cadenceOf(t, e.contactRepo, contact.ID)
+	require.NotNil(t, after.LastContacted, "the concurrent inbound is effective participation")
+	require.True(t, after.LastContacted.Equal(inboundAt))
+	require.NotNil(t, after.LastInteractionAt)
+	require.True(t, after.LastInteractionAt.Equal(inboundAt))
+	require.NotNil(t, after.LastResponseAt)
+	require.True(t, after.LastResponseAt.Equal(inboundAt))
+	require.NotNil(t, after.LastOutreachAt)
+	require.True(t, after.LastOutreachAt.Equal(callAt))
+}
+
+// A decline of the last remaining member of a merged interaction recomputes
+// the contact through the correction recompute: when the clock does not move,
+// the contact keeps the skip the user took.
+func TestInteractionCorrection_DeclineOfLastMergedMemberKeepsSkip(t *testing.T) {
+	// spec: ING-040.no-sync-restores-correction
+	e := newNodeSyncEnv(t)
+	router := correctionRoutes(t, e.database, e.cadenceUpdater, unconfiguredFollowUp(t, e.database))
+	spec := e.gen.Contact(factory.WithEmail())
+	methods := make([]service.ContactMethodInput, 0, len(spec.Methods))
+	for _, m := range spec.Methods {
+		methods = append(methods, service.ContactMethodInput{Type: m.Type, Value: m.Value, IsPrimary: m.IsPrimary})
+	}
+	monthly := "monthly"
+	contact, _, err := e.contactService.CreateContact(e.ctx, repository.CreateContactRequest{FullName: spec.FullName, Cadence: &monthly}, methods)
+	require.NoError(t, err)
+	first := e.gen.GCalEventWithShape(spec, factory.MatchSeeded, factory.GCalEventShape{StartOffset: -5 * time.Hour, Duration: time.Hour})
+	second := e.gen.GCalEventWithShape(spec, factory.MatchSeeded, factory.GCalEventShape{StartOffset: -3 * time.Hour, Duration: time.Hour})
+	e.syncCalendar(t, first.AccountID, "", first.Event, second.Event)
+	firstObs := e.gcalObservation(t, first, contact.ID)
+	secondObs := e.gcalObservation(t, second, contact.ID)
+	postCorrection(t, router, "/api/v1/interactions/merge",
+		mergeRequest(contact.ID, nodeOfInteraction(t, e.nodes, firstObs), nodeOfInteraction(t, e.nodes, secondObs)), http.StatusOK)
+
+	e.syncCalendar(t, first.AccountID, "node-test-cursor", cancelledStubFor(first.GcalEventID))
+	waitForInteractionGone(t, e, contact.ID, firstObs.SourceRef)
+	inboundRef := "decline-skip-inbound-" + uuid.NewString()
+	inboundAt := accelerated.GetCurrentTime().Add(-10 * time.Minute).UTC().Truncate(time.Microsecond)
+	_, err = e.contactService.RecordInteraction(e.ctx, repository.RecordInteractionRequest{
+		ContactID: contact.ID, Source: repository.InteractionSourcePhoneCalls, SourceRef: &inboundRef,
+		Direction: repository.InteractionDirectionInbound, OccurredAt: inboundAt,
+	})
+	require.NoError(t, err)
+	_, err = e.contactService.SkipCycle(e.ctx, contact.ID)
+	require.NoError(t, err)
+	skipped := cadenceOf(t, e.contactRepo, contact.ID)
+	require.NotNil(t, skipped.LastSkippedAt)
+
+	e.syncCalendar(t, second.AccountID, "node-test-cursor", cancelledStubFor(second.GcalEventID))
+	waitForInteractionGone(t, e, contact.ID, secondObs.SourceRef)
+
+	after := cadenceOf(t, e.contactRepo, contact.ID)
+	require.NotNil(t, after.LastContacted)
+	require.True(t, after.LastContacted.Equal(inboundAt), "the inbound is the latest remaining participation")
+	require.NotNil(t, after.LastSkippedAt, "a decline that leaves last_contacted unchanged keeps the skip")
+	require.True(t, after.LastSkippedAt.Equal(*skipped.LastSkippedAt))
+	require.Equal(t, skipped.LastSkippedContactBy, after.LastSkippedContactBy)
+	require.Equal(t, skipped.LastSkipReason, after.LastSkipReason)
+	require.Equal(t, skipped.ContactBy, after.ContactBy)
 }
 
 // correctionMailEnv runs GmailSyncProvider.Sync against the live email

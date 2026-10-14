@@ -278,7 +278,7 @@ func newHarness(ctx context.Context, database *db.Database, namespace string, se
 	// interaction. Without a registered worker the enqueued job never finalizes,
 	// so a decline replay's Gate B (and the harness teardown) would stall. Mirrors
 	// the cmd/crm-api wiring; inert for replays that never decline an event.
-	calendarDeclineHandler := consumer.NewCalendarDeclineHandler(interactionRepo, contactRepo, cfg.Watchdog)
+	calendarDeclineHandler := consumer.NewCalendarDeclineHandler(interactionRepo, contactRepo, graphNodeRepo, cadenceUpdater, cfg.Watchdog)
 	river.AddWorker(workers, consumer.NewCalendarDeclineHandlerWorker(bus, database.Pool, calendarDeclineHandler))
 
 	// Off-mode FollowUpManager: cutover-only Todoist deps are nil.

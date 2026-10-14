@@ -68,7 +68,7 @@ func newDeclineTestEnv(t *testing.T, ctx context.Context) *declineTestEnv {
 	cadenceUpdater := consumer.NewCadenceUpdater(
 		claimRepo, contactRepo, database.Queries, consumer.CadenceModeCutover, false, config.TestConfig().Watchdog,
 	)
-	declineHandler := consumer.NewCalendarDeclineHandler(interactionRepo, contactRepo, config.TestConfig().Watchdog)
+	declineHandler := consumer.NewCalendarDeclineHandler(interactionRepo, contactRepo, repository.NewNodeRepository(database.Queries), cadenceUpdater, config.TestConfig().Watchdog)
 
 	gen, _ := migrationGenerator(t)
 	return &declineTestEnv{

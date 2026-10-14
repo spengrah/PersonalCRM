@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"time"
 
 	"personal-crm/backend/internal/db"
@@ -98,6 +99,66 @@ func listEffectiveParticipation(ctx context.Context, q db.Querier, contactID uui
 		return nil, fmt.Errorf("list effective participation: %w", err)
 	}
 	return convertEffectiveParticipations(rows)
+}
+
+// RecordedEntry is one of a contact's effective participations as the
+// recording rules take it (RecordedParticipation), with the entry's root
+// interaction node (nil for a message burst) and the member observation
+// recorded last, whose recording gave the entry its effect.
+type RecordedEntry struct {
+	RecordedParticipation
+	InteractionNodeID *uuid.UUID
+	LastObservationID uuid.UUID
+}
+
+// ListRecordedParticipationTx returns the contact's effective participation as
+// the recording rules take it: each entry at its own direction and time, with
+// the source of the member observation recorded last, in the order the entries
+// were recorded (an entry is recorded when its last member was; ties by
+// occurred_at). It is the one build of the participation a cadence recompute
+// replays (CAD-047).
+func (r *InteractionRepository) ListRecordedParticipationTx(ctx context.Context, tx pgx.Tx, contactID uuid.UUID) ([]RecordedEntry, error) {
+	if tx == nil {
+		return nil, fmt.Errorf("ListRecordedParticipationTx: %w", errNilTx)
+	}
+	q := db.New(tx)
+	entries, err := listEffectiveParticipation(ctx, q, contactID)
+	if err != nil {
+		return nil, err
+	}
+	recorded := make([]RecordedEntry, 0, len(entries))
+	for _, entry := range entries {
+		var last *Interaction
+		for _, member := range entry.Members {
+			row, err := q.GetInteraction(ctx, member.ObservationID)
+			if err != nil {
+				return nil, fmt.Errorf("read member observation %s: %w", member.ObservationID, err)
+			}
+			if ix := convertDbInteraction(row); last == nil || ix.RecordedAt.After(last.RecordedAt) {
+				last = &ix
+			}
+		}
+		recorded = append(recorded, RecordedEntry{
+			RecordedParticipation: RecordedParticipation{
+				ApplyInteractionRequest: ApplyInteractionRequest{
+					ContactID:  contactID,
+					Direction:  entry.Direction,
+					Source:     last.Source,
+					OccurredAt: entry.OccurredAt,
+				},
+				RecordedAt: last.RecordedAt,
+			},
+			InteractionNodeID: entry.InteractionNodeID,
+			LastObservationID: last.ID,
+		})
+	}
+	sort.SliceStable(recorded, func(i, j int) bool {
+		if !recorded[i].RecordedAt.Equal(recorded[j].RecordedAt) {
+			return recorded[i].RecordedAt.Before(recorded[j].RecordedAt)
+		}
+		return recorded[i].OccurredAt.Before(recorded[j].OccurredAt)
+	})
+	return recorded, nil
 }
 
 // ListInteractionParticipants returns the effective participants of the

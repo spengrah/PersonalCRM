@@ -84,7 +84,7 @@ func buildDomainConsumers(
 		cfg.EventBus.UnsafeAllowOffMode,
 		cfg.Watchdog,
 	)
-	calendarDeclineHandler := consumer.NewCalendarDeclineHandler(interactionRepo, contactRepo, cfg.Watchdog)
+	calendarDeclineHandler := consumer.NewCalendarDeclineHandler(interactionRepo, contactRepo, graphNodeRepo, cadenceUpdater, cfg.Watchdog)
 
 	// Knowledge-cache consumer (the location/birthday/how_met authority flip):
 	// the sole writer of those three derived cache columns. ContactService emits
