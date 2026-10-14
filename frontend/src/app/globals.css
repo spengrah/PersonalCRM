@@ -15,6 +15,18 @@
   --font-mono: var(--font-geist-mono);
 }
 
+/* Tailwind 4 draws a border with no color class in currentColor. The app's
+   borders are designed light gray, so that is the default. */
+@layer base {
+  *,
+  ::after,
+  ::before,
+  ::backdrop,
+  ::file-selector-button {
+    border-color: var(--color-gray-200, currentColor);
+  }
+}
+
 html {
   /* Prevent layout shift when scrollbar appears/disappears */
   scrollbar-gutter: stable;
