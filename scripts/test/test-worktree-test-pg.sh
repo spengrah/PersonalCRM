@@ -173,6 +173,17 @@ EOF
 [ "\$1" = "-a" ] && printf 'C\nen_US.UTF-8\nPOSIX\n'
 EOF
   chmod +x "$bin/locale"
+
+  # --- fake docker: a daemon answers `docker info` unless \$d/no_docker exists.
+  # Every case below runs with Docker answering unless it says otherwise, so
+  # the linked-worktree cases prove a linked worktree uses its cluster with
+  # Docker up.
+  cat > "$bin/docker" <<EOF
+#!/usr/bin/env bash
+[ -f "$d/no_docker" ] && exit 1
+exit 0
+EOF
+  chmod +x "$bin/docker"
 }
 
 # Configure a temp env as a LINKED worktree (git-dir != common-dir).
@@ -208,6 +219,36 @@ run() {
 d=$(make_env | tail -1); set_main "$d"
 out=$(run "$d" url)
 [ -z "$out" ] && ok "main checkout: url empty" || bad "main checkout: url='$out' (expected empty)"
+
+# 1b. Main checkout with Docker answering -> inactive, ensure provisions nothing
+d=$(make_env | tail -1); set_main "$d"
+out=$(run "$d" active)
+[ -z "$out" ] && ok "main checkout, Docker up: active empty" || bad "main checkout, Docker up: active='$out'"
+run "$d" ensure 2>"$d/err"; rc=$?
+[ "$rc" -eq 0 ] && [ ! -s "$d/calls" ] && ok "main checkout, Docker up: ensure inert" \
+  || bad "main checkout, Docker up: ensure exit=$rc calls=$(cat "$d/calls" 2>/dev/null)"
+
+# 1c. Main checkout, no Docker daemon -> active; ensure provisions its own cluster
+d=$(make_env | tail -1); set_main "$d"; touch "$d/no_docker"
+out=$(run "$d" active)
+[ "$out" = 1 ] && ok "main checkout, no Docker: active" || bad "main checkout, no Docker: active='$out'"
+run "$d" ensure 2>"$d/err"; rc=$?
+[ "$rc" -eq 0 ] && grep -q '^pg_ctl .*start' "$d/calls" && ok "main checkout, no Docker: ensure starts a cluster" \
+  || bad "main checkout, no Docker: ensure exit=$rc, no start ($(cat "$d/err"))"
+case "$(run "$d" url)" in
+  postgres://crm_user:*@127.0.0.1:*/personal_crm_test?sslmode=disable) ok "main checkout, no Docker: url set after ensure" ;;
+  *) bad "main checkout, no Docker: url unexpected after ensure" ;;
+esac
+rm -f "$d/no_docker"
+out=$(run "$d" url)
+[ -z "$out" ] && ok "main checkout, Docker back up: url empty (shared instance)" || bad "main checkout, Docker back up: url='$out'"
+
+# 1d. Main checkout, no Docker, but CI or CRM_WORKTREE_PG=0 -> inactive
+d=$(make_env | tail -1); set_main "$d"; touch "$d/no_docker"
+out=$(CRM_WORKTREE_PG=0 run "$d" active)
+[ -z "$out" ] && ok "main checkout, no Docker, opt-out (=0): active empty" || bad "main checkout opt-out: active='$out'"
+out=$(GITHUB_ACTIONS=true run "$d" active)
+[ -z "$out" ] && ok "main checkout, no Docker, CI: active empty" || bad "main checkout CI: active='$out'"
 
 # 2. Detection: linked worktree, not yet ensured -> url empty (does NOT start)
 d=$(make_env | tail -1); set_linked "$d"

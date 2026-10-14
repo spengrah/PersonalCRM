@@ -51,8 +51,10 @@ backend_env() {
 }
 
 echo "→ postgres"
-bash "$REPO_ROOT/scripts/ensure-postgres-for-tests.sh" > "$INSTANCE_DIR/postgres.log" 2>&1 \
+bash "$REPO_ROOT/scripts/e2e-pg.sh" ensure > "$INSTANCE_DIR/postgres.log" 2>&1 \
   || fail "postgres did not start; see $INSTANCE_DIR/postgres.log"
+# The URL depends on which PostgreSQL ensure started.
+VERIFY_DATABASE_URL="$(verify_database_url)"
 
 echo "→ fresh database $VERIFY_DB_NAME"
 E2E_DATABASE_NAME="$VERIFY_DB_NAME" bash "$REPO_ROOT/scripts/e2e-db-reset.sh" > "$INSTANCE_DIR/db-reset.log" 2>&1 \

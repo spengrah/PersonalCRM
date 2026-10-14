@@ -24,6 +24,7 @@ backend:
   - 'scripts/check-*.sh'
   - 'scripts/test-parallelism.sh'
   - 'scripts/worktree-test-pg.sh'
+  - 'scripts/lib/docker-answers.sh'
 frontend:
   - 'frontend/**'
   - 'infra/langfuse/*.ts'
