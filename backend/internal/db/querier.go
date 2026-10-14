@@ -96,10 +96,19 @@ type Querier interface {
 	// value), then keep the first 3 elements (newest-first). A NULL current body is
 	// not pushed (nothing to preserve).
 	ApplyCommsMessageEditByExternalID(ctx context.Context, arg ApplyCommsMessageEditByExternalIDParams) (int64, error)
+	// A due date the user set directly: a Todoist deadline edit on the contact's
+	// cadence task. Sets contact_by unconditionally, clears skip state like every
+	// other writer of the clock (CAD-045), and records the date and when it was
+	// set in the SAME statement, for the correction recompute (CAD-047). This is
+	// the only writer of contact_by_direct_set_at and contact_by_direct_set_value.
+	// Cadence-owned: the caller declares crm.derived_writer=cadence first.
+	ApplyContactByDirectSet(ctx context.Context, arg ApplyContactByDirectSetParams) error
 	// The CRM skip (CAD-044): advances contact_by to the caller-computed
 	// skipped-to date (cadence.NextAfterSkip), ends the awaiting-reply window,
 	// and records the skip state in the SAME statement — last_skipped_contact_by
 	// captures the pre-skip contact_by because SET expressions read the old row.
+	// awaiting_reply_skip_ended_at records when the skip ended the window, for
+	// the correction recompute (CAD-047); this is its only writer.
 	// Cadence-owned: the caller declares crm.derived_writer=cadence first.
 	ApplyContactSkip(ctx context.Context, arg ApplyContactSkipParams) error
 	// Undo (CAD-045): restores the recorded pre-skip contact_by and clears the
@@ -1207,6 +1216,11 @@ type Querier interface {
 	// the atomic-claim dedup path observes count>0. Mirrors the row a real
 	// enqueue would insert; the worker never runs in these tests.
 	InsertRiverJobForTest(ctx context.Context, args []byte) error
+	// Whether the recording of the observation suppressed its follow-up (a send
+	// task's completion, CAD-012): read from the interaction.recorded event that
+	// recording published, which is keyed by the observation's id under its
+	// source. An observation recorded without that event suppressed nothing.
+	InteractionRecordingSuppressedFollowUp(ctx context.Context, id uuid.UUID) (bool, error)
 	// Metric 1: peak concurrency over [@window_start,@window_end]. Intervals are selected by
 	// OVERLAP with the window and clamped to it (so a job spanning the whole window
 	// still contributes); deltas are netted per timestamp before the running sum
@@ -1459,6 +1473,10 @@ type Querier interface {
 	// telegram / gcal_attendee / anarlog_* are out of scope (their own
 	// match/enrich flows). ORDER BY ec.id keeps the catchup deterministic.
 	ListLinkedAddressBookExternalContactsForReconcile(ctx context.Context, sources []string) ([]*ListLinkedAddressBookExternalContactsForReconcileRow, error)
+	// The live contacts with a live observation on any of the interaction nodes,
+	// whether or not a correction excludes it: the contacts a merge of those
+	// nodes recomputes.
+	ListLiveContactsObservedOnNodes(ctx context.Context, nodeIds []uuid.UUID) ([]uuid.UUID, error)
 	// Live edges (or facts) of a predicate touching a node in EITHER orientation (the
 	// symmetric two-direction read): a node may be subject or object of a stored edge.
 	// Returns proposed + accepted, knowledge-open rows. A live row requires its

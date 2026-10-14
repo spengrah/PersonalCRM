@@ -62,6 +62,15 @@ type ApplyInteractionRequest struct {
 	OccurredAt time.Time
 }
 
+// RecordedParticipation is one effective participation as the recording rules
+// take it, with when its effect was last recorded: the latest RecordedAt of its
+// member observations. The correction recompute replays these in RecordedAt
+// order (CAD-047).
+type RecordedParticipation struct {
+	ApplyInteractionRequest
+	RecordedAt time.Time
+}
+
 // RecordInteractionResult bundles the non-error returns of
 // ContactService.RecordInteractionTx. Lives in repository (next to
 // RecordInteractionRequest) so consumer.interactionWriter can reference
@@ -130,6 +139,10 @@ type Interaction struct {
 	// source object shares; nil for a message-burst observation. Assigned once
 	// by the observation step, never rewritten.
 	InteractionNodeID *uuid.UUID `json:"interaction_node_id,omitempty"`
+	// RecordedAt is when the observation's effect was last recorded: its
+	// insert, or the latest write that changed its direction or occurred_at.
+	// The database sets it.
+	RecordedAt time.Time `json:"-"`
 }
 
 // CreateInteractionRequest represents the request to create an interaction.
@@ -162,6 +175,7 @@ func convertDbInteraction(dbInteraction *db.Interaction) Interaction {
 	interaction.Description = dbInteraction.Description
 	interaction.VenueID = dbInteraction.VenueID
 	interaction.InteractionNodeID = dbInteraction.InteractionNodeID
+	interaction.RecordedAt = dbInteraction.RecordedAt.UTC()
 
 	return interaction
 }
@@ -190,6 +204,12 @@ func (r *InteractionRepository) GetInteractionTx(ctx context.Context, tx pgx.Tx,
 	}
 	interaction := convertDbInteraction(dbInteraction)
 	return &interaction, nil
+}
+
+// RecordingSuppressedFollowUpTx reports whether the recording of observation
+// id suppressed its follow-up (a send task's completion, CAD-012).
+func (r *InteractionRepository) RecordingSuppressedFollowUpTx(ctx context.Context, tx pgx.Tx, id uuid.UUID) (bool, error) {
+	return db.New(tx).InteractionRecordingSuppressedFollowUp(ctx, id)
 }
 
 // GetInteraction retrieves an interaction by ID
@@ -723,4 +743,18 @@ func (r *InteractionRepository) HasResponseAfterTx(ctx context.Context, tx pgx.T
 		return false, err
 	}
 	return hasResp, nil
+}
+
+// ListLiveContactsObservedOnNodesTx returns the live contacts with a live
+// observation on any of the interaction nodes, effective or excluded, in id
+// order.
+func (r *InteractionRepository) ListLiveContactsObservedOnNodesTx(ctx context.Context, tx pgx.Tx, nodeIDs []uuid.UUID) ([]uuid.UUID, error) {
+	if tx == nil {
+		return nil, fmt.Errorf("ListLiveContactsObservedOnNodesTx: %w", errNilTx)
+	}
+	ids, err := db.New(tx).ListLiveContactsObservedOnNodes(ctx, nodeIDs)
+	if err != nil {
+		return nil, fmt.Errorf("list contacts observed on nodes: %w", err)
+	}
+	return ids, nil
 }

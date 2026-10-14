@@ -370,13 +370,33 @@ WHERE id = sqlc.arg(id) AND deleted_at IS NULL;
 -- skipped-to date (cadence.NextAfterSkip), ends the awaiting-reply window,
 -- and records the skip state in the SAME statement — last_skipped_contact_by
 -- captures the pre-skip contact_by because SET expressions read the old row.
+-- awaiting_reply_skip_ended_at records when the skip ended the window, for
+-- the correction recompute (CAD-047); this is its only writer.
 -- Cadence-owned: the caller declares crm.derived_writer=cadence first.
 UPDATE contact SET
     last_skipped_contact_by = contact_by,
     contact_by              = sqlc.arg(next_contact_by)::date,
     awaiting_reply_until    = NULL,
+    awaiting_reply_skip_ended_at = clock_timestamp(),
     last_skipped_at         = sqlc.arg(skipped_at)::timestamptz,
     last_skip_reason        = sqlc.arg(reason)::text,
+    updated_at = NOW()
+WHERE id = sqlc.arg(id) AND deleted_at IS NULL;
+
+-- name: ApplyContactByDirectSet :exec
+-- A due date the user set directly: a Todoist deadline edit on the contact's
+-- cadence task. Sets contact_by unconditionally, clears skip state like every
+-- other writer of the clock (CAD-045), and records the date and when it was
+-- set in the SAME statement, for the correction recompute (CAD-047). This is
+-- the only writer of contact_by_direct_set_at and contact_by_direct_set_value.
+-- Cadence-owned: the caller declares crm.derived_writer=cadence first.
+UPDATE contact SET
+    contact_by                  = sqlc.arg(contact_by)::date,
+    contact_by_direct_set_value = sqlc.arg(contact_by)::date,
+    contact_by_direct_set_at    = clock_timestamp(),
+    last_skipped_at             = NULL,
+    last_skipped_contact_by     = NULL,
+    last_skip_reason            = NULL,
     updated_at = NOW()
 WHERE id = sqlc.arg(id) AND deleted_at IS NULL;
 

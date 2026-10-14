@@ -669,21 +669,25 @@ behaviors:
     when: the correction is committed
     then:
       - key: recomputed-from-effective-participation
-        text: last_contacted, last_interaction_at, last_response_at, last_outreach_at, contact_by and the awaiting-reply expiry become what the contact would hold had its effective participation, as it now stands, been recorded through the normal recording rules, so a removed observation leaves the fields of a contact on which it was never recorded and removing the only participation returns contact_by to the value derived from the contact's creation
-      - key: manual-recording-order-kept
-        text: the recompute records the participations in the order they were recorded, so a manual entry logged after a later automatic participation and backdated before it keeps the last_contacted it set
-      - key: hand-set-value-kept
-        text: a contact_by or awaiting-reply value the user set by hand after the corrected observation — a cadence edit, a Todoist deadline edit or skip, or a CRM skip — is kept
+        text: last_contacted, last_interaction_at, last_response_at, last_outreach_at and the awaiting-reply expiry become what the contact would hold had its effective participation, as it now stands, been recorded through the normal recording rules, so a removed observation leaves the fields of a contact on which it was never recorded and removing the only participation returns last_contacted to empty
+      - key: recording-order-kept
+        text: the recompute records the participations in the order their effects were recorded, an extension or a promotion to mutual when it was written, so a manual entry logged after a later automatic participation and backdated before it keeps the last_contacted it set, and an automatic extension recorded after that manual entry keeps last_contacted at the extension's time
+      - key: due-date-follows-last-contacted
+        text: contact_by changes only when the correction changes last_contacted; it then becomes the date the normal rules derive from the recomputed last_contacted, or from the contact's creation when no participation remains, unless a due date the user set directly is later
+      - key: direct-due-date-floor
+        text: a due date the user set directly after the corrected observations were recorded — a Todoist deadline edit on the contact's cadence task — is a floor on a recomputed contact_by; a direct set made before them, a cadence-frequency change and a skip from either side set no floor
       - key: skip-withdrawn-when-clock-moves
-        text: a skip in effect is withdrawn, and undo no longer offered, when the correction changes last_contacted or contact_by
+        text: a skip in effect is withdrawn, and undo no longer offered, when the correction changes last_contacted
       - key: skip-kept-when-clock-unmoved
-        text: a skip in effect stays when the correction changes neither last_contacted nor contact_by
+        text: a skip in effect, and contact_by, stay when the correction leaves last_contacted unchanged
+      - key: skip-ended-window-stays-ended
+        text: an awaiting-reply window the user ended with a skip stays ended, also when the correction removes a later response and leaves the earlier outbound unanswered
       - key: only-affected-contacts-recomputed
         text: only the contacts whose effective participation the correction can change are recomputed — for a merge the contacts observed in a merged interaction, for a removal the contacts it removes — and every other contact keeps every field
       - key: merge-recomputes-observed-contacts
         text: merging a contact's inbound with its later outbound leaves its fields as one mutual participation at the later time implies, while an attendee present only in the earlier member keeps its fields
     provenance: [.agents/spec/2026-10-13-interaction-review-readiness.md]
-    notes: The recompute starts from effective participation and never adjusts only a column whose value equals a corrected observation's time. CAD-045's withdrawal of undo on an interaction deletion or merge is the skip rule applied here.
+    notes: The recompute starts from effective participation and never adjusts only a column whose value equals a corrected observation's time, and nothing decides that a value was set by hand by comparing values. A due date set directly before this behavior shipped counts as absent. CAD-045's withdrawal of undo on an interaction deletion or merge is the skip rule applied here.
 
   - id: CAD-048
     title: Follow-up tasks reconcile to the corrected state, and a completed task is never reopened

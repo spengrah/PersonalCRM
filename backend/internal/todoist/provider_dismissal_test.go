@@ -93,6 +93,11 @@ func (f *fakeCadenceOverrider) ApplyContactByOverride(ctx context.Context, tx pg
 	return f.contactRepo.TestSeedContactCadenceFieldsTx(ctx, tx, contactID, repository.TestCadenceSeed{ContactBy: contactBy})
 }
 
+// ApplyContactByDirectSet writes contact_by as ApplyContactByOverride does.
+func (f *fakeCadenceOverrider) ApplyContactByDirectSet(ctx context.Context, tx pgx.Tx, contactID uuid.UUID, contactBy time.Time) error {
+	return f.ApplyContactByOverride(ctx, tx, contactID, &contactBy)
+}
+
 func (f *fakeCadenceOverrider) Calls() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()

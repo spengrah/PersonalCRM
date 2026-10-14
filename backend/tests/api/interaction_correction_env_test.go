@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"testing"
 	"time"
 
@@ -48,6 +49,7 @@ type correctionEnv struct {
 	contactRepo  *repository.ContactRepository
 	interactions *repository.InteractionRepository
 	assertions   *repository.AssertionRepository
+	asserts      *service.AssertService
 	nodes        *repository.NodeRepository
 	tasks        *repository.ContactTaskRepository
 	events       *repository.EventRepository
@@ -55,6 +57,7 @@ type correctionEnv struct {
 	cadence      *consumer.CadenceUpdater
 	riverClient  *river.Client[pgx.Tx]
 	opWorker     *consumer.TodoistTaskOpWorker
+	recorder     *consumer.InteractionRecorder
 	todoist      *correctionTodoist
 	base         time.Time
 }
@@ -130,6 +133,7 @@ func newCorrectionEnvOn(t *testing.T, database *db.Database) *correctionEnv {
 		contactRepo:  contactRepo,
 		interactions: interactionRepo,
 		assertions:   assertionRepo,
+		asserts:      assertSvc,
 		nodes:        nodeRepo,
 		tasks:        taskRepo,
 		events:       eventRepo,
@@ -137,8 +141,10 @@ func newCorrectionEnvOn(t *testing.T, database *db.Database) *correctionEnv {
 		cadence:      cadenceUpdater,
 		riverClient:  riverClient,
 		opWorker:     opWorker,
-		todoist:      fake,
-		base:         accelerated.GetCurrentTime().UTC().Add(-48 * time.Hour).Truncate(time.Second),
+		recorder: consumer.NewInteractionRecorder(contactService, repository.NewStagingProcessorRegistry(nil), bus, cadenceUpdater, followUp,
+			repository.NewCalendarEventRepository(database.Queries)),
+		todoist: fake,
+		base:    accelerated.GetCurrentTime().UTC().Add(-48 * time.Hour).Truncate(time.Second),
 	}
 }
 
@@ -163,17 +169,19 @@ func (*apiTodoistOpNoop) Work(context.Context, *river.Job[consumerjobs.TodoistTa
 }
 
 // correctionTodoist is Todoist faked at its client boundary. While failing,
-// every Sync returns an error. It records every command it accepted.
+// every Sync returns an error. It records every command it accepted, and
+// delivers items once, on the next Sync that reads items.
 type correctionTodoist struct {
 	failing  bool
 	accepted []todoist.SyncCommand
+	items    []todoist.SyncItem
 }
 
 func (f *correctionTodoist) QuickAdd(context.Context, string, string) (*todoist.QuickAddTask, error) {
 	return nil, errTodoistUnreachable
 }
 
-func (f *correctionTodoist) Sync(_ context.Context, _ string, _ []string, cmds []todoist.SyncCommand) (*todoist.SyncResponse, error) {
+func (f *correctionTodoist) Sync(_ context.Context, _ string, resourceTypes []string, cmds []todoist.SyncCommand) (*todoist.SyncResponse, error) {
 	if f.failing {
 		return nil, errTodoistUnreachable
 	}
@@ -184,8 +192,97 @@ func (f *correctionTodoist) Sync(_ context.Context, _ string, _ []string, cmds [
 			tempMap[c.TempID] = "real-" + c.TempID
 		}
 	}
-	return &todoist.SyncResponse{TempIDMap: tempMap}, nil
+	resp := &todoist.SyncResponse{TempIDMap: tempMap}
+	if slices.Contains(resourceTypes, "items") {
+		resp.Items, f.items = f.items, nil
+	}
+	return resp, nil
 }
+
+// cadenceSync is the real Todoist cadence sync (CadenceSyncProvider.Sync) over
+// the env, with Todoist faked at its client boundary. It reconciles every
+// contact with a next-contact date, so it runs on a database the test owns.
+type cadenceSync struct {
+	e        *correctionEnv
+	provider *todoist.CadenceSyncProvider
+	account  string
+}
+
+const correctionTodoistLabel = "crm"
+
+// newCadenceSync builds the cadence sync over e, whose database is the
+// isolated database with config cfg.
+func newCadenceSync(e *correctionEnv, cfg *config.Config) *cadenceSync {
+	return &cadenceSync{
+		e: e,
+		provider: todoist.NewCadenceSyncProvider(correctionOAuth{}, e.tasks, e.contactRepo,
+			repository.NewSyncRepositoryWithPool(e.database.Queries, e.database.Pool), cfg, e.bus, e.cadence, e.database.Pool,
+			func(string) todoist.Client { return e.todoist }, e.riverClient, true),
+		account: e.harness.Generator().Prefix() + "todoist",
+	}
+}
+
+// reconcile runs one cadence sync.
+func (c *cadenceSync) reconcile(t *testing.T) {
+	t.Helper()
+	_, err := c.provider.Sync(c.e.ctx, &repository.SyncState{
+		Source:    repository.InteractionSourceTodoist,
+		AccountID: &c.account,
+		Metadata: map[string]any{
+			todoist.MetadataKeyProjectID: "proj-correction",
+			todoist.MetadataKeyLabelID:   "label-correction",
+			todoist.MetadataKeyLabelName: correctionTodoistLabel,
+		},
+	}, nil)
+	require.NoError(t, err)
+}
+
+// cadenceTask returns the contact's cadence-due task, after a reconcile that
+// creates it when it is missing.
+func (c *cadenceSync) cadenceTask(t *testing.T, contactID uuid.UUID) *repository.ContactTask {
+	t.Helper()
+	c.reconcile(t)
+	task, err := c.e.tasks.GetContactTaskByContactCadenceDue(c.e.ctx, contactID, todoist.SourceName)
+	require.NoError(t, err)
+	require.NotEmpty(t, task.ExternalTaskID)
+	return task
+}
+
+// editDeadline makes a Todoist deadline edit on the contact's cadence task:
+// the user moves the task's deadline to date in Todoist, and the next sync
+// reads it.
+func (c *cadenceSync) editDeadline(t *testing.T, contactID uuid.UUID, date time.Time) {
+	t.Helper()
+	c.deliver(t, contactID, &todoist.SyncDate{Date: date.Format(todoist.DateFormat)})
+}
+
+// skipInTodoist skips the contact's cadence task from Todoist: the user removes
+// its deadline, and the next sync reads it.
+func (c *cadenceSync) skipInTodoist(t *testing.T, contactID uuid.UUID) {
+	t.Helper()
+	c.deliver(t, contactID, nil)
+}
+
+func (c *cadenceSync) deliver(t *testing.T, contactID uuid.UUID, deadline *todoist.SyncDate) {
+	t.Helper()
+	task := c.cadenceTask(t, contactID)
+	c.e.todoist.items = []todoist.SyncItem{{
+		ID:        task.ExternalTaskID,
+		ProjectID: "proj-correction",
+		Content:   "cadence task",
+		Deadline:  deadline,
+		Labels:    []string{correctionTodoistLabel},
+		UpdatedAt: uuid.NewString(),
+	}}
+	c.reconcile(t)
+}
+
+// correctionOAuth is the Todoist OAuth token provider faked for the cadence
+// sync.
+type correctionOAuth struct{}
+
+func (correctionOAuth) GetAccessToken(context.Context, string) (string, error) { return "token", nil }
+func (correctionOAuth) HasAnyAccount(context.Context) bool                     { return true }
 
 var errTodoistUnreachable = &todoistUnreachableError{}
 

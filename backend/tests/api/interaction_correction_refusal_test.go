@@ -219,6 +219,21 @@ func TestInteractionCorrection_PublishesOneEvent(t *testing.T) {
 		requireNoConsumerJob(t, act)
 	})
 
+	t.Run("a merge recomputes an attendee observed on a member and removed from it", func(t *testing.T) {
+		// spec: CAD-047.only-affected-contacts-recomputed
+		a, removed := e.contact(t, "monthly"), e.contact(t, "monthly")
+		evX := e.event(t)
+		nodeX := e.meeting(t, a, evX, e.at(0))
+		e.meeting(t, removed, evX, e.at(0))
+		e.remove(t, nodeX, removalBody(service.RemovalReasonDidNotAttend, removed))
+		nodeY := e.meeting(t, a, e.event(t), e.at(1))
+
+		e.merge(t, a, nodeY, nodeX)
+
+		payload := e.correctionEvent(t, actOf(t, nodeX, "same_interaction_as"))
+		require.ElementsMatch(t, []uuid.UUID{a, removed}, payload.RecomputedContactIDs)
+	})
+
 	t.Run("a removal publishes one event naming removal, the root and every recomputed contact", func(t *testing.T) {
 		// spec: IXN-029.removal-answers-no-content
 		a, b, c := e.contact(t, "monthly"), e.contact(t, "monthly"), e.contact(t, "monthly")

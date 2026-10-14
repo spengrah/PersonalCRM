@@ -356,3 +356,28 @@ WHERE n.type = 'interaction'
   AND EXISTS (
       SELECT 1 FROM node q WHERE q.id = sqlc.arg('node_id')::uuid AND q.type = 'interaction')
 ORDER BY n.id;
+
+-- name: ListLiveContactsObservedOnNodes :many
+-- The live contacts with a live observation on any of the interaction nodes,
+-- whether or not a correction excludes it: the contacts a merge of those
+-- nodes recomputes.
+SELECT DISTINCT i.contact_id
+FROM interaction i
+JOIN live_contact c ON c.id = i.contact_id
+WHERE i.interaction_node_id = ANY(sqlc.arg('node_ids')::uuid[])
+  AND i.deleted_at IS NULL
+ORDER BY i.contact_id;
+
+-- name: InteractionRecordingSuppressedFollowUp :one
+-- Whether the recording of the observation suppressed its follow-up (a send
+-- task's completion, CAD-012): read from the interaction.recorded event that
+-- recording published, which is keyed by the observation's id under its
+-- source. An observation recorded without that event suppressed nothing.
+SELECT EXISTS (
+    SELECT 1
+    FROM interaction i
+    JOIN event e ON e.source = i.source AND e.source_id = i.id::text
+    WHERE i.id = @id
+      AND e.kind = 'interaction.recorded'
+      AND COALESCE((e.payload->>'suppress_follow_up')::boolean, false)
+)::boolean AS suppressed;

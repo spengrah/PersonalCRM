@@ -83,7 +83,7 @@ type MergedParticipation struct {
 // correctionCadence is the subset of *consumer.CadenceUpdater a correction
 // recomputes cadence fields through.
 type correctionCadence interface {
-	RecomputeAfterCorrection(ctx context.Context, tx pgx.Tx, contactID uuid.UUID, before, after []repository.ApplyInteractionRequest) error
+	RecomputeAfterCorrection(ctx context.Context, tx pgx.Tx, contactID uuid.UUID, participation []repository.RecordedParticipation, judgedRecordedAt time.Time) error
 }
 
 // correctionFollowUp is the subset of *consumer.FollowUpManager a correction
@@ -179,7 +179,7 @@ func (s *InteractionCorrectionService) merge(ctx context.Context, req Interactio
 		}
 	}()
 
-	trees, err := s.lockTrees(ctx, tx, req.InteractionIDs)
+	trees, err := s.lockTrees(ctx, tx, req.InteractionIDs, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -196,27 +196,39 @@ func (s *InteractionCorrectionService) merge(ctx context.Context, req Interactio
 		return nil, refused("the listed ids name fewer than two distinct interactions")
 	}
 
-	// The contacts observed in a merged interaction: every effective participant
-	// of any listed interaction.
-	var affected []uuid.UUID
+	// The contacts observed in a merged interaction: every live contact with an
+	// observation on a node of a listed tree, a removed one included. Their
+	// cadence rows are locked before any effective participation is read.
+	var nodes []uuid.UUID
+	for _, tree := range trees {
+		nodes = append(nodes, tree.Nodes...)
+	}
+	affected, err := s.interactions.ListLiveContactsObservedOnNodesTx(ctx, tx, nodes)
+	if err != nil {
+		return nil, err
+	}
+	if !slices.Contains(affected, req.ContactID) {
+		return nil, refused("contact %s has no participation in the listed interactions", req.ContactID)
+	}
+	before, err := s.lockAndRead(ctx, tx, affected, roots)
+	if err != nil {
+		return nil, err
+	}
+
+	// The requesting contact must hold an effective participation in a listed
+	// interaction.
+	participates := false
 	for _, root := range roots {
 		participants, err := s.interactions.ListInteractionParticipantsTx(ctx, tx, root)
 		if err != nil {
 			return nil, err
 		}
-		for _, p := range participants {
-			if !slices.Contains(affected, p.ContactID) {
-				affected = append(affected, p.ContactID)
-			}
+		if slices.ContainsFunc(participants, func(p repository.EffectiveParticipation) bool { return p.ContactID == req.ContactID }) {
+			participates = true
 		}
 	}
-	if !slices.Contains(affected, req.ContactID) {
+	if !participates {
 		return nil, refused("contact %s has no participation in the listed interactions", req.ContactID)
-	}
-
-	before, err := s.lockAndRead(ctx, tx, affected)
-	if err != nil {
-		return nil, err
 	}
 
 	act := uuid.New()
@@ -286,11 +298,39 @@ func (s *InteractionCorrectionService) Remove(ctx context.Context, req Interacti
 		}
 	}()
 
-	trees, err := s.lockTrees(ctx, tx, []uuid.UUID{req.InteractionID})
+	// The not_participant_in assertions name each selected contact's node, on
+	// which AssertService takes the correction lock too; it is taken with the
+	// trees' locks in their one ordered acquisition.
+	trees, err := s.lockTrees(ctx, tx, []uuid.UUID{req.InteractionID}, req.ContactIDs)
 	if err != nil {
 		return err
 	}
 	tree := trees[0]
+
+	// The candidates are the contacts observed on the interaction's nodes, or
+	// the listed ones among them. Their cadence rows are locked before any
+	// effective participation is read.
+	observed, err := s.interactions.ListLiveContactsObservedOnNodesTx(ctx, tx, tree.Nodes)
+	if err != nil {
+		return err
+	}
+	candidates := observed
+	if !req.Everyone {
+		candidates = nil
+		for _, contactID := range req.ContactIDs {
+			if !slices.Contains(observed, contactID) {
+				return refused("contact %s is not a participant of interaction %s", contactID, tree.Root)
+			}
+			if !slices.Contains(candidates, contactID) {
+				candidates = append(candidates, contactID)
+			}
+		}
+	}
+	locked, err := s.lockAndRead(ctx, tx, candidates, []uuid.UUID{tree.Root})
+	if err != nil {
+		return err
+	}
+
 	participants, err := s.interactions.ListInteractionParticipantsTx(ctx, tx, tree.Root)
 	if err != nil {
 		return err
@@ -298,25 +338,18 @@ func (s *InteractionCorrectionService) Remove(ctx context.Context, req Interacti
 	if len(participants) == 0 {
 		return refused("interaction %s has no participation to remove", tree.Root)
 	}
-	var removed []uuid.UUID
-	if req.Everyone {
-		for _, p := range participants {
-			removed = append(removed, p.ContactID)
-		}
-	} else {
-		for _, contactID := range req.ContactIDs {
-			if !slices.ContainsFunc(participants, func(p repository.EffectiveParticipation) bool { return p.ContactID == contactID }) {
-				return refused("contact %s is not a participant of interaction %s", contactID, tree.Root)
-			}
-			if !slices.Contains(removed, contactID) {
-				removed = append(removed, contactID)
-			}
-		}
+	participates := func(contactID uuid.UUID) bool {
+		return slices.ContainsFunc(participants, func(p repository.EffectiveParticipation) bool { return p.ContactID == contactID })
 	}
-
-	before, err := s.lockAndRead(ctx, tx, removed)
-	if err != nil {
-		return err
+	var removed []uuid.UUID
+	var before []contactBefore
+	for _, b := range locked {
+		if participates(b.contactID) {
+			removed = append(removed, b.contactID)
+			before = append(before, b)
+		} else if !req.Everyone {
+			return refused("contact %s is not a participant of interaction %s", b.contactID, tree.Root)
+		}
 	}
 
 	act := uuid.New()
@@ -371,13 +404,16 @@ func (s *InteractionCorrectionService) Remove(ctx context.Context, req Interacti
 }
 
 // lockTrees takes the correction lock on every node of the alias trees that
-// hold ids, and returns those trees, aligned with ids, as they stand under the
-// lock. A tree read before the lock can change before the lock is granted (a
+// hold ids, and on each node of also, and returns those trees, aligned with
+// ids, as they stand under the lock. A correction passes in also every other
+// node its assertions name, so it takes its complete correction-lock set in
+// one ordered acquisition, before any other lock, and AssertService's own
+// acquisition of those locks is then a no-op. A tree read before the lock can change before the lock is granted (a
 // concurrent merge); the locked re-read then differs, and the round is rolled
 // back, releasing its locks, so the next round takes the larger set in one
 // ordered acquisition. Returns ErrInteractionNotFound when an id names no
 // interaction node.
-func (s *InteractionCorrectionService) lockTrees(ctx context.Context, tx pgx.Tx, ids []uuid.UUID) ([]*repository.InteractionTree, error) {
+func (s *InteractionCorrectionService) lockTrees(ctx context.Context, tx pgx.Tx, ids, also []uuid.UUID) ([]*repository.InteractionTree, error) {
 	trees, err := s.readTrees(ctx, tx, ids)
 	if err != nil {
 		return nil, err
@@ -387,7 +423,7 @@ func (s *InteractionCorrectionService) lockTrees(ctx context.Context, tx pgx.Tx,
 		if err != nil {
 			return nil, err
 		}
-		var nodes []uuid.UUID
+		nodes := slices.Clone(also)
 		for _, tree := range trees {
 			nodes = append(nodes, tree.Nodes...)
 		}
@@ -434,17 +470,19 @@ func sameTrees(a, b []*repository.InteractionTree) bool {
 	return true
 }
 
-// contactBefore is a recomputed contact's effective participation before the
-// correction, as the recording rules take it.
+// contactBefore is what the recompute needs of a contact from before the
+// correction: when its observations of the judged interactions were last
+// recorded, and the outbound it awaited a reply to.
 type contactBefore struct {
-	contactID uuid.UUID
-	recorded  []repository.ApplyInteractionRequest
-	awaited   *repository.ApplyInteractionRequest
+	contactID        uuid.UUID
+	judgedRecordedAt time.Time
+	awaited          *repository.ApplyInteractionRequest
 }
 
 // lockAndRead locks the cadence row of each contact, in id order, and reads
-// its effective participation before the correction.
-func (s *InteractionCorrectionService) lockAndRead(ctx context.Context, tx pgx.Tx, contactIDs []uuid.UUID) ([]contactBefore, error) {
+// its effective participation before the correction. judged are the root
+// interaction nodes the correction judges.
+func (s *InteractionCorrectionService) lockAndRead(ctx context.Context, tx pgx.Tx, contactIDs, judged []uuid.UUID) ([]contactBefore, error) {
 	ids := slices.Clone(contactIDs)
 	slices.SortFunc(ids, compareUUID)
 	before := make([]contactBefore, 0, len(ids))
@@ -452,11 +490,11 @@ func (s *InteractionCorrectionService) lockAndRead(ctx context.Context, tx pgx.T
 		if err := s.contacts.LockContactForDateRecomputeTx(ctx, tx, id); err != nil {
 			return nil, fmt.Errorf("lock contact %s: %w", id, err)
 		}
-		recorded, awaited, err := s.recordedParticipation(ctx, tx, id)
+		_, awaited, judgedRecordedAt, err := s.recordedParticipation(ctx, tx, id, judged)
 		if err != nil {
 			return nil, err
 		}
-		before = append(before, contactBefore{contactID: id, recorded: recorded, awaited: awaited})
+		before = append(before, contactBefore{contactID: id, judgedRecordedAt: judgedRecordedAt, awaited: awaited})
 	}
 	return before, nil
 }
@@ -465,11 +503,11 @@ func (s *InteractionCorrectionService) lockAndRead(ctx context.Context, tx pgx.T
 // its effective participation after the correction.
 func (s *InteractionCorrectionService) recompute(ctx context.Context, tx pgx.Tx, act uuid.UUID, before []contactBefore) error {
 	for _, b := range before {
-		recorded, awaited, err := s.recordedParticipation(ctx, tx, b.contactID)
+		participation, awaited, _, err := s.recordedParticipation(ctx, tx, b.contactID, nil)
 		if err != nil {
 			return err
 		}
-		if err := s.cadence.RecomputeAfterCorrection(ctx, tx, b.contactID, b.recorded, recorded); err != nil {
+		if err := s.cadence.RecomputeAfterCorrection(ctx, tx, b.contactID, participation, b.judgedRecordedAt); err != nil {
 			return fmt.Errorf("recompute cadence of contact %s: %w", b.contactID, err)
 		}
 		if err := s.followUp.ReconcileAfterCorrection(ctx, tx, b.contactID, b.awaited, awaited, act); err != nil {
@@ -483,27 +521,27 @@ func (s *InteractionCorrectionService) recompute(ctx context.Context, tx pgx.Tx,
 // recording rules take it: each entry at its own direction and time, with the
 // source of the member observation recorded last, in the order the entries
 // were recorded (an entry is recorded when its last member was). It also
-// returns the awaited outbound: the latest outbound entry with no later
-// inbound or mutual entry, nil when none.
-func (s *InteractionCorrectionService) recordedParticipation(ctx context.Context, tx pgx.Tx, contactID uuid.UUID) ([]repository.ApplyInteractionRequest, *repository.ApplyInteractionRequest, error) {
+// returns the awaited outbound (see awaitedOutbound) and when the contact's
+// entries under the root nodes judged were last recorded.
+func (s *InteractionCorrectionService) recordedParticipation(
+	ctx context.Context, tx pgx.Tx, contactID uuid.UUID, judged []uuid.UUID,
+) ([]repository.RecordedParticipation, *repository.ApplyInteractionRequest, time.Time, error) {
 	entries, err := s.interactions.ListEffectiveParticipationTx(ctx, tx, contactID)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, time.Time{}, err
 	}
-	type recordedEntry struct {
-		req        repository.ApplyInteractionRequest
-		recordedAt time.Time
-	}
-	recorded := make([]recordedEntry, 0, len(entries))
-	var latestOutbound, latestResponse *repository.ApplyInteractionRequest
+	recorded := make([]repository.RecordedParticipation, 0, len(entries))
+	var outbounds []awaitCandidate
+	var latestResponse *repository.ApplyInteractionRequest
+	var judgedRecordedAt time.Time
 	for _, entry := range entries {
 		var last *repository.Interaction
 		for _, member := range entry.Members {
 			row, err := s.interactions.GetInteractionTx(ctx, tx, member.ObservationID)
 			if err != nil {
-				return nil, nil, fmt.Errorf("read member observation %s: %w", member.ObservationID, err)
+				return nil, nil, time.Time{}, fmt.Errorf("read member observation %s: %w", member.ObservationID, err)
 			}
-			if last == nil || row.CreatedAt.After(last.CreatedAt) {
+			if last == nil || row.RecordedAt.After(last.RecordedAt) {
 				last = row
 			}
 		}
@@ -513,13 +551,13 @@ func (s *InteractionCorrectionService) recordedParticipation(ctx context.Context
 			Source:     last.Source,
 			OccurredAt: entry.OccurredAt,
 		}
-		recorded = append(recorded, recordedEntry{req: req, recordedAt: last.CreatedAt})
+		recorded = append(recorded, repository.RecordedParticipation{ApplyInteractionRequest: req, RecordedAt: last.RecordedAt})
+		if entry.InteractionNodeID != nil && slices.Contains(judged, *entry.InteractionNodeID) && last.RecordedAt.After(judgedRecordedAt) {
+			judgedRecordedAt = last.RecordedAt
+		}
 		switch entry.Direction {
 		case repository.InteractionDirectionOutbound:
-			if latestOutbound == nil || req.OccurredAt.After(latestOutbound.OccurredAt) {
-				r := req
-				latestOutbound = &r
-			}
+			outbounds = append(outbounds, awaitCandidate{req: req, observationID: last.ID})
 		default:
 			if latestResponse == nil || req.OccurredAt.After(latestResponse.OccurredAt) {
 				r := req
@@ -528,20 +566,47 @@ func (s *InteractionCorrectionService) recordedParticipation(ctx context.Context
 		}
 	}
 	sort.SliceStable(recorded, func(i, j int) bool {
-		if !recorded[i].recordedAt.Equal(recorded[j].recordedAt) {
-			return recorded[i].recordedAt.Before(recorded[j].recordedAt)
+		if !recorded[i].RecordedAt.Equal(recorded[j].RecordedAt) {
+			return recorded[i].RecordedAt.Before(recorded[j].RecordedAt)
 		}
-		return recorded[i].req.OccurredAt.Before(recorded[j].req.OccurredAt)
+		return recorded[i].OccurredAt.Before(recorded[j].OccurredAt)
 	})
-	reqs := make([]repository.ApplyInteractionRequest, len(recorded))
-	for i, r := range recorded {
-		reqs[i] = r.req
+	awaited, err := s.awaitedOutbound(ctx, tx, outbounds, latestResponse)
+	if err != nil {
+		return nil, nil, time.Time{}, err
 	}
-	var awaited *repository.ApplyInteractionRequest
-	if latestOutbound != nil && (latestResponse == nil || !latestResponse.OccurredAt.After(latestOutbound.OccurredAt)) {
-		awaited = latestOutbound
+	return recorded, awaited, judgedRecordedAt, nil
+}
+
+// awaitCandidate is an outbound entry and the member observation whose
+// recording gave the entry its effect.
+type awaitCandidate struct {
+	req           repository.ApplyInteractionRequest
+	observationID uuid.UUID
+}
+
+// awaitedOutbound is the outbound a follow-up awaits a reply to under the
+// follow-up rules: the latest outbound entry whose recording did not suppress
+// its follow-up (a send's completion never opens or moves one, CAD-012), when
+// no inbound or mutual entry is later. Nil when there is none.
+func (s *InteractionCorrectionService) awaitedOutbound(
+	ctx context.Context, tx pgx.Tx, outbounds []awaitCandidate, latestResponse *repository.ApplyInteractionRequest,
+) (*repository.ApplyInteractionRequest, error) {
+	sort.SliceStable(outbounds, func(i, j int) bool { return outbounds[i].req.OccurredAt.After(outbounds[j].req.OccurredAt) })
+	for _, candidate := range outbounds {
+		if latestResponse != nil && latestResponse.OccurredAt.After(candidate.req.OccurredAt) {
+			return nil, nil
+		}
+		suppressed, err := s.interactions.RecordingSuppressedFollowUpTx(ctx, tx, candidate.observationID)
+		if err != nil {
+			return nil, fmt.Errorf("read follow-up suppression of observation %s: %w", candidate.observationID, err)
+		}
+		if !suppressed {
+			req := candidate.req
+			return &req, nil
+		}
 	}
-	return reqs, awaited, nil
+	return nil, nil
 }
 
 // publish publishes the correction's interaction.corrected event in its tx.

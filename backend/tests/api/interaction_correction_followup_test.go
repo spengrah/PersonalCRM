@@ -3,7 +3,6 @@
 package api
 
 import (
-	"context"
 	"encoding/json"
 	"testing"
 	"time"
@@ -13,6 +12,7 @@ import (
 	"personal-crm/backend/internal/config"
 	"personal-crm/backend/internal/consumer/consumerjobs"
 	"personal-crm/backend/internal/contacttask"
+	"personal-crm/backend/internal/events"
 	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/service"
 	"personal-crm/backend/internal/todoist"
@@ -20,6 +20,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/riverqueue/river"
+	"github.com/riverqueue/river/rivertype"
 	"github.com/stretchr/testify/require"
 )
 
@@ -96,6 +97,70 @@ func (f *correctionTodoist) closedRemotely(externalID string) bool {
 	return false
 }
 
+// deadlinePushed reports whether Todoist accepted a deadline update of the
+// external id to date.
+func (f *correctionTodoist) deadlinePushed(externalID, date string) bool {
+	for _, cmd := range f.accepted {
+		if cmd.Type != "item_update" || cmd.Args["id"] != externalID {
+			continue
+		}
+		if deadline, ok := cmd.Args["deadline"].(map[string]string); ok && deadline["date"] == date {
+			return true
+		}
+	}
+	return false
+}
+
+// countOp counts op in ops.
+func countOp(ops []string, op string) int {
+	n := 0
+	for _, o := range ops {
+		if o == op {
+			n++
+		}
+	}
+	return n
+}
+
+// sendCompleted records the completion of a send task (an outbound whose
+// follow-up the Todoist provider suppresses) through the interaction recorder.
+func (e *correctionEnv) sendCompleted(t *testing.T, contactID uuid.UUID, at time.Time) {
+	t.Helper()
+	payload, err := events.Marshal(events.KindTaskCompleted, events.TaskCompletedPayload{
+		Version:          2,
+		ContactID:        contactID,
+		TaskID:           e.ref("send"),
+		TaskKind:         contacttask.KindSend,
+		CompletedAt:      at,
+		Direction:        repository.InteractionDirectionOutbound,
+		SuppressFollowUp: true,
+	})
+	require.NoError(t, err)
+	env := &events.Envelope{ID: uuid.New(), Source: todoist.SourceName, SourceID: uuid.NewString(), Kind: events.KindTaskCompleted, Payload: payload, ObservedAt: at}
+	tx, err := e.database.Pool.Begin(e.ctx)
+	require.NoError(t, err)
+	defer func() { _ = tx.Rollback(e.ctx) }()
+	ix, err := e.recorder.HandleEvent(e.ctx, tx, env)
+	require.NoError(t, err)
+	require.NoError(t, tx.Commit(e.ctx))
+
+	// The recorder applied the recorded event inline; its queued consumer jobs
+	// are no-ops on this never-started client, so finalize them for teardown.
+	recorded, err := e.events.FindEventBySource(e.ctx, todoist.SourceName, ix.ID.String())
+	require.NoError(t, err)
+	res, err := e.riverClient.JobList(e.ctx, river.NewJobListParams().States(rivertype.JobStateAvailable).First(10000))
+	require.NoError(t, err)
+	for _, job := range res.Jobs {
+		var args struct {
+			EventID uuid.UUID `json:"event_id"`
+		}
+		if json.Unmarshal(job.EncodedArgs, &args) == nil && args.EventID == recorded.ID {
+			_, err := e.riverClient.JobCancel(e.ctx, job.ID)
+			require.NoError(t, err)
+		}
+	}
+}
+
 func TestInteractionCorrection_ReconcilesFollowUps(t *testing.T) {
 	testsupport.RequireDatabase(t)
 	t.Parallel()
@@ -115,17 +180,36 @@ func TestInteractionCorrection_ReconcilesFollowUps(t *testing.T) {
 		require.True(t, e.todoist.closedRemotely(task.ExternalTaskID))
 	})
 
-	t.Run("a live follow-up another remaining outbound still warrants stays open", func(t *testing.T) {
+	t.Run("a live follow-up another remaining outbound still warrants stays open, due by that outbound", func(t *testing.T) {
 		// spec: CAD-048.warranted-follow-up-kept
 		a := e.contact(t, "monthly")
-		_, task := e.liveFollowUp(t, a, e.ref("call"), e.at(20))
+		_, task := e.liveFollowUp(t, a, e.ref("call"), e.at(-24))
 		later := e.call(t, a, e.ref("call"), repository.InteractionDirectionOutbound, e.at(30))
+		updates := countOp(e.ops(t, task.ID), consumerjobs.TaskOpUpdateDeadline)
 
 		e.remove(t, later, removalBody(service.RemovalReasonDuplicate, a))
 
-		require.Equal(t, repository.ContactTaskStateManaged, e.task(t, task.ID).State)
+		kept := e.task(t, task.ID)
+		require.Equal(t, repository.ContactTaskStateManaged, kept.State)
 		require.NotContains(t, e.ops(t, task.ID), consumerjobs.TaskOpClose)
 		require.Len(t, e.followUps(t, a), 1)
+		due := cadence.AwaitingReplyUntil(e.at(-24), config.TestConfig().Watchdog.DaysForCadence("monthly")).Format(todoist.DateFormat)
+		require.Equal(t, due, kept.Metadata["due_date"], "the deadline follows the remaining awaited outbound")
+		require.Equal(t, updates+1, countOp(e.ops(t, task.ID), consumerjobs.TaskOpUpdateDeadline))
+		require.NoError(t, e.runOp(task.ID, consumerjobs.TaskOpUpdateDeadline))
+		require.True(t, e.todoist.deadlinePushed(task.ExternalTaskID, due))
+	})
+
+	t.Run("removing the reply to a one-shot send opens no follow-up", func(t *testing.T) {
+		// spec: CAD-048.new-follow-up-by-rules
+		a := e.contact(t, "monthly")
+		e.sendCompleted(t, a, e.at(20))
+		reply := e.call(t, a, e.ref("call"), repository.InteractionDirectionInbound, e.at(30))
+		require.Empty(t, e.followUps(t, a))
+
+		e.remove(t, reply, removalBody(service.RemovalReasonDidNotHappen, a))
+
+		require.Empty(t, e.followUps(t, a), "a send's completion never warrants a follow-up")
 	})
 
 	t.Run("removing the reply that completed a follow-up keeps it completed and opens a new one for the outbound", func(t *testing.T) {
@@ -183,36 +267,18 @@ func TestInteractionCorrection_ReconcilesFollowUps(t *testing.T) {
 	})
 }
 
-// correctionOAuth is the Todoist OAuth token provider faked for the cadence
-// sync run.
-type correctionOAuth struct{}
-
-func (correctionOAuth) GetAccessToken(context.Context, string) (string, error) { return "token", nil }
-func (correctionOAuth) HasAnyAccount(context.Context) bool                     { return true }
-
 func TestInteractionCorrection_CadenceTaskFollowsAtReconciliation(t *testing.T) {
 	// spec: CAD-048.cadence-task-follows-at-reconciliation
 	testsupport.RequireDatabase(t)
 	t.Parallel()
 	database, cfg := newIsolatedRiverTestDB(t, t.Context())
 	e := newCorrectionEnvOn(t, database)
-	provider := todoist.NewCadenceSyncProvider(correctionOAuth{}, e.tasks, e.contactRepo,
-		repository.NewSyncRepositoryWithPool(database.Queries, database.Pool), cfg, e.bus, e.cadence, database.Pool,
-		func(string) todoist.Client { return e.todoist }, e.riverClient, true)
-	accountID := e.harness.Generator().Prefix() + "todoist"
-	reconcile := func() {
-		_, err := provider.Sync(e.ctx, &repository.SyncState{
-			Source:    repository.InteractionSourceTodoist,
-			AccountID: &accountID,
-			Metadata:  map[string]any{todoist.MetadataKeyProjectID: "proj-correction", todoist.MetadataKeyLabelID: "label-correction"},
-		}, nil)
-		require.NoError(t, err)
-	}
+	todoistSync := newCadenceSync(e, cfg)
 
 	a := e.contact(t, "monthly")
 	e.call(t, a, e.ref("call"), repository.InteractionDirectionInbound, e.at(-40*24))
 	recent := e.call(t, a, e.ref("call"), repository.InteractionDirectionInbound, e.at(0))
-	reconcile()
+	todoistSync.reconcile(t)
 	due, err := e.tasks.GetContactTaskByContactCadenceDue(e.ctx, a, todoist.SourceName)
 	require.NoError(t, err)
 	before := e.fields(t, a)
@@ -222,7 +288,7 @@ func TestInteractionCorrection_CadenceTaskFollowsAtReconciliation(t *testing.T) 
 	after := e.fields(t, a)
 	today := cadence.Today(accelerated.GetCurrentTime()).Format(todoist.DateFormat)
 	require.Less(t, (*after.ContactBy)[:10], today, "the removal made the contact due")
-	reconcile()
+	todoistSync.reconcile(t)
 
 	redated, err := e.tasks.GetContactTaskByContactCadenceDue(e.ctx, a, todoist.SourceName)
 	require.NoError(t, err)

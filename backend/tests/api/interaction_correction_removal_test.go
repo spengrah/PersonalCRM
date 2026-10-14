@@ -1,8 +1,10 @@
 package api
 
 import (
+	"bytes"
 	"net/http"
 	"testing"
+	"time"
 
 	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/service"
@@ -154,4 +156,87 @@ func participantIDs(t *testing.T, e *correctionEnv, node uuid.UUID) []uuid.UUID 
 		ids[i] = ep.ContactID
 	}
 	return ids
+}
+
+// A removal naming a contact and a concurrent assertion write naming that
+// contact and the interaction serialize on the correction locks without a
+// deadlock (corrections.c11). The removal's not_participant_in names the
+// contact's node, so the removal takes that node's correction lock with the
+// interaction's in one ordered acquisition. With the contact sorting before
+// the interaction, a removal that took the interaction's lock first and the
+// contact's later would hold the interaction while the writer holds the
+// contact and waits for the interaction.
+func TestInteractionRemoval_SerializesWithAssertionWrites(t *testing.T) {
+	// spec: IXN-018.scope-removes-exactly-selected
+	testsupport.RequireDatabase(t)
+	t.Parallel()
+	e := newCorrectionEnv(t)
+	interaction := "interaction"
+	predicate, err := repository.NewPredicateRepository(e.database.Queries).CreateProvisional(e.ctx, repository.CreatePredicateRequest{
+		Key:                 "test_attended_" + uuid.NewString()[:8],
+		Kind:                repository.PredicateKindEdge,
+		SubjectType:         "person",
+		ObjectType:          &interaction,
+		Cardinality:         repository.PredicateCardinalityMulti,
+		TemporalProfile:     repository.PredicateTemporalMutable,
+		DefaultSalience:     50,
+		DefaultReviewPolicy: repository.PredicateReviewAutoIfConfident,
+		PropositionBucket:   repository.PredicateBucketNone,
+		Description:         "test person-to-interaction edge",
+	})
+	require.NoError(t, err)
+
+	// The correction lock is taken in node-id order; both ids are random, so
+	// draw until the contact sorts before the interaction.
+	var contact, node uuid.UUID
+	for {
+		contact = e.contact(t, "monthly")
+		node = e.call(t, contact, e.ref("call"), repository.InteractionDirectionInbound, e.at(0))
+		if bytes.Compare(contact[:], node[:]) < 0 {
+			break
+		}
+	}
+
+	holder, err := e.database.Pool.Begin(e.ctx)
+	require.NoError(t, err)
+	defer func() { _ = holder.Rollback(e.ctx) }()
+	require.NoError(t, e.nodes.AcquireCorrectionLocksTx(e.ctx, holder, node))
+
+	removal := make(chan int, 1)
+	go func() {
+		w := e.post(t, "/api/v1/interactions/"+node.String()+"/removals", removalBody(service.RemovalReasonDidNotAttend, contact))
+		removal <- w.Code
+	}()
+	time.Sleep(500 * time.Millisecond)
+	write := make(chan error, 1)
+	go func() {
+		_, err := e.asserts.Assert(e.ctx, service.AssertRequest{
+			SubjectNodeID: contact,
+			PredicateKey:  predicate.Key,
+			ObjectNodeID:  &node,
+			Confidence:    100,
+			Locators: []service.ProvenanceLocator{{
+				SourceKind:   repository.SourceKindUser,
+				SourceID:     uuid.NewString(),
+				ProducerKind: repository.ProducerKindUser,
+			}},
+		})
+		write <- err
+	}()
+	time.Sleep(500 * time.Millisecond)
+	require.NoError(t, holder.Rollback(e.ctx))
+
+	select {
+	case code := <-removal:
+		require.Equal(t, http.StatusNoContent, code)
+	case <-time.After(10 * time.Second):
+		require.FailNow(t, "the removal did not finish")
+	}
+	select {
+	case err := <-write:
+		require.NoError(t, err)
+	case <-time.After(10 * time.Second):
+		require.FailNow(t, "the assertion write did not finish")
+	}
+	require.Empty(t, e.correctable(t, contact))
 }

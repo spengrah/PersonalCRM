@@ -122,7 +122,7 @@ VALUES (
     $7,
     $8
 )
-RETURNING id, contact_id, source, source_ref, occurred_at, description, created_at, deleted_at, direction, venue_id, interaction_node_id
+RETURNING id, contact_id, source, source_ref, occurred_at, description, created_at, deleted_at, direction, venue_id, interaction_node_id, recorded_at
 `
 
 type CreateInteractionParams struct {
@@ -160,12 +160,13 @@ func (q *Queries) CreateInteraction(ctx context.Context, arg CreateInteractionPa
 		&i.Direction,
 		&i.VenueID,
 		&i.InteractionNodeID,
+		&i.RecordedAt,
 	)
 	return &i, err
 }
 
 const FindInteractionBySourceRef = `-- name: FindInteractionBySourceRef :one
-SELECT id, contact_id, source, source_ref, occurred_at, description, created_at, deleted_at, direction, venue_id, interaction_node_id FROM interaction
+SELECT id, contact_id, source, source_ref, occurred_at, description, created_at, deleted_at, direction, venue_id, interaction_node_id, recorded_at FROM interaction
 WHERE contact_id = $1 AND source = $2 AND source_ref = $3 AND deleted_at IS NULL
 LIMIT 1
 `
@@ -192,12 +193,13 @@ func (q *Queries) FindInteractionBySourceRef(ctx context.Context, arg FindIntera
 		&i.Direction,
 		&i.VenueID,
 		&i.InteractionNodeID,
+		&i.RecordedAt,
 	)
 	return &i, err
 }
 
 const FindInteractionInWindow = `-- name: FindInteractionInWindow :one
-SELECT id, contact_id, source, source_ref, occurred_at, description, created_at, deleted_at, direction, venue_id, interaction_node_id FROM interaction
+SELECT id, contact_id, source, source_ref, occurred_at, description, created_at, deleted_at, direction, venue_id, interaction_node_id, recorded_at FROM interaction
 WHERE contact_id = $1
   AND source = $2
   AND direction = $3
@@ -240,12 +242,13 @@ func (q *Queries) FindInteractionInWindow(ctx context.Context, arg FindInteracti
 		&i.Direction,
 		&i.VenueID,
 		&i.InteractionNodeID,
+		&i.RecordedAt,
 	)
 	return &i, err
 }
 
 const FindRecentInteractionBySourceAndDirection = `-- name: FindRecentInteractionBySourceAndDirection :one
-SELECT id, contact_id, source, source_ref, occurred_at, description, created_at, deleted_at, direction, venue_id, interaction_node_id FROM interaction
+SELECT id, contact_id, source, source_ref, occurred_at, description, created_at, deleted_at, direction, venue_id, interaction_node_id, recorded_at FROM interaction
 WHERE contact_id = $1
   AND source = $2
   AND direction = $3
@@ -305,12 +308,13 @@ func (q *Queries) FindRecentInteractionBySourceAndDirection(ctx context.Context,
 		&i.Direction,
 		&i.VenueID,
 		&i.InteractionNodeID,
+		&i.RecordedAt,
 	)
 	return &i, err
 }
 
 const FindRecentOutboundInteractionBySource = `-- name: FindRecentOutboundInteractionBySource :one
-SELECT id, contact_id, source, source_ref, occurred_at, description, created_at, deleted_at, direction, venue_id, interaction_node_id FROM interaction
+SELECT id, contact_id, source, source_ref, occurred_at, description, created_at, deleted_at, direction, venue_id, interaction_node_id, recorded_at FROM interaction
 WHERE contact_id = $1
   AND source = $2
   AND direction = 'outbound'
@@ -357,12 +361,13 @@ func (q *Queries) FindRecentOutboundInteractionBySource(ctx context.Context, arg
 		&i.Direction,
 		&i.VenueID,
 		&i.InteractionNodeID,
+		&i.RecordedAt,
 	)
 	return &i, err
 }
 
 const FindRecentOutboundTelegramInteraction = `-- name: FindRecentOutboundTelegramInteraction :one
-SELECT id, contact_id, source, source_ref, occurred_at, description, created_at, deleted_at, direction, venue_id, interaction_node_id FROM interaction
+SELECT id, contact_id, source, source_ref, occurred_at, description, created_at, deleted_at, direction, venue_id, interaction_node_id, recorded_at FROM interaction
 WHERE contact_id = $1
   AND source = 'telegram'
   AND direction = 'outbound'
@@ -403,12 +408,13 @@ func (q *Queries) FindRecentOutboundTelegramInteraction(ctx context.Context, arg
 		&i.Direction,
 		&i.VenueID,
 		&i.InteractionNodeID,
+		&i.RecordedAt,
 	)
 	return &i, err
 }
 
 const FindRecentTelegramInteraction = `-- name: FindRecentTelegramInteraction :one
-SELECT id, contact_id, source, source_ref, occurred_at, description, created_at, deleted_at, direction, venue_id, interaction_node_id FROM interaction
+SELECT id, contact_id, source, source_ref, occurred_at, description, created_at, deleted_at, direction, venue_id, interaction_node_id, recorded_at FROM interaction
 WHERE contact_id = $1
   AND source = 'telegram'
   AND direction = $2
@@ -451,6 +457,7 @@ func (q *Queries) FindRecentTelegramInteraction(ctx context.Context, arg FindRec
 		&i.Direction,
 		&i.VenueID,
 		&i.InteractionNodeID,
+		&i.RecordedAt,
 	)
 	return &i, err
 }
@@ -485,7 +492,7 @@ func (q *Queries) GetEffectiveParticipationOfObservation(ctx context.Context, ar
 
 const GetInteraction = `-- name: GetInteraction :one
 
-SELECT id, contact_id, source, source_ref, occurred_at, description, created_at, deleted_at, direction, venue_id, interaction_node_id FROM interaction WHERE id = $1 AND deleted_at IS NULL
+SELECT id, contact_id, source, source_ref, occurred_at, description, created_at, deleted_at, direction, venue_id, interaction_node_id, recorded_at FROM interaction WHERE id = $1 AND deleted_at IS NULL
 `
 
 // Interaction queries
@@ -504,6 +511,7 @@ func (q *Queries) GetInteraction(ctx context.Context, id uuid.UUID) (*Interactio
 		&i.Direction,
 		&i.VenueID,
 		&i.InteractionNodeID,
+		&i.RecordedAt,
 	)
 	return &i, err
 }
@@ -581,8 +589,30 @@ func (q *Queries) HasResponseAfter(ctx context.Context, arg HasResponseAfterPara
 	return has_response, err
 }
 
+const InteractionRecordingSuppressedFollowUp = `-- name: InteractionRecordingSuppressedFollowUp :one
+SELECT EXISTS (
+    SELECT 1
+    FROM interaction i
+    JOIN event e ON e.source = i.source AND e.source_id = i.id::text
+    WHERE i.id = $1
+      AND e.kind = 'interaction.recorded'
+      AND COALESCE((e.payload->>'suppress_follow_up')::boolean, false)
+)::boolean AS suppressed
+`
+
+// Whether the recording of the observation suppressed its follow-up (a send
+// task's completion, CAD-012): read from the interaction.recorded event that
+// recording published, which is keyed by the observation's id under its
+// source. An observation recorded without that event suppressed nothing.
+func (q *Queries) InteractionRecordingSuppressedFollowUp(ctx context.Context, id uuid.UUID) (bool, error) {
+	row := q.db.QueryRow(ctx, InteractionRecordingSuppressedFollowUp, id)
+	var suppressed bool
+	err := row.Scan(&suppressed)
+	return suppressed, err
+}
+
 const ListContactInteractions = `-- name: ListContactInteractions :many
-SELECT id, contact_id, source, source_ref, occurred_at, description, created_at, deleted_at, direction, venue_id, interaction_node_id FROM interaction
+SELECT id, contact_id, source, source_ref, occurred_at, description, created_at, deleted_at, direction, venue_id, interaction_node_id, recorded_at FROM interaction
 WHERE contact_id = $1 AND deleted_at IS NULL
 ORDER BY occurred_at DESC
 LIMIT $2 OFFSET $3
@@ -615,6 +645,7 @@ func (q *Queries) ListContactInteractions(ctx context.Context, arg ListContactIn
 			&i.Direction,
 			&i.VenueID,
 			&i.InteractionNodeID,
+			&i.RecordedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -627,7 +658,7 @@ func (q *Queries) ListContactInteractions(ctx context.Context, arg ListContactIn
 }
 
 const ListContactInteractionsFiltered = `-- name: ListContactInteractionsFiltered :many
-SELECT id, contact_id, source, source_ref, occurred_at, description, created_at, deleted_at, direction, venue_id, interaction_node_id FROM interaction
+SELECT id, contact_id, source, source_ref, occurred_at, description, created_at, deleted_at, direction, venue_id, interaction_node_id, recorded_at FROM interaction
 WHERE contact_id = $1
   AND deleted_at IS NULL
   AND ($2::timestamptz IS NULL OR occurred_at >= $2)
@@ -693,6 +724,7 @@ func (q *Queries) ListContactInteractionsFiltered(ctx context.Context, arg ListC
 			&i.Direction,
 			&i.VenueID,
 			&i.InteractionNodeID,
+			&i.RecordedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -819,8 +851,40 @@ func (q *Queries) ListInteractionParticipants(ctx context.Context, nodeID uuid.U
 	return items, nil
 }
 
+const ListLiveContactsObservedOnNodes = `-- name: ListLiveContactsObservedOnNodes :many
+SELECT DISTINCT i.contact_id
+FROM interaction i
+JOIN live_contact c ON c.id = i.contact_id
+WHERE i.interaction_node_id = ANY($1::uuid[])
+  AND i.deleted_at IS NULL
+ORDER BY i.contact_id
+`
+
+// The live contacts with a live observation on any of the interaction nodes,
+// whether or not a correction excludes it: the contacts a merge of those
+// nodes recomputes.
+func (q *Queries) ListLiveContactsObservedOnNodes(ctx context.Context, nodeIds []uuid.UUID) ([]uuid.UUID, error) {
+	rows, err := q.db.Query(ctx, ListLiveContactsObservedOnNodes, nodeIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []uuid.UUID{}
+	for rows.Next() {
+		var contact_id uuid.UUID
+		if err := rows.Scan(&contact_id); err != nil {
+			return nil, err
+		}
+		items = append(items, contact_id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const ListSessionAttributedInteractions = `-- name: ListSessionAttributedInteractions :many
-SELECT id, contact_id, source, source_ref, occurred_at, description, created_at, deleted_at, direction, venue_id, interaction_node_id FROM interaction
+SELECT id, contact_id, source, source_ref, occurred_at, description, created_at, deleted_at, direction, venue_id, interaction_node_id, recorded_at FROM interaction
 WHERE source = 'anarlog_sessions'
   AND source_ref LIKE $1
   AND deleted_at IS NULL
@@ -853,6 +917,7 @@ func (q *Queries) ListSessionAttributedInteractions(ctx context.Context, sourceR
 			&i.Direction,
 			&i.VenueID,
 			&i.InteractionNodeID,
+			&i.RecordedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -894,7 +959,7 @@ func (q *Queries) SoftDeleteInteraction(ctx context.Context, id uuid.UUID) error
 }
 
 const TestGetInteractionIncludingDeleted = `-- name: TestGetInteractionIncludingDeleted :one
-SELECT id, contact_id, source, source_ref, occurred_at, description, created_at, deleted_at, direction, venue_id, interaction_node_id FROM interaction
+SELECT id, contact_id, source, source_ref, occurred_at, description, created_at, deleted_at, direction, venue_id, interaction_node_id, recorded_at FROM interaction
 WHERE contact_id = $1
   AND source = $2
   AND source_ref = $3
@@ -924,6 +989,7 @@ func (q *Queries) TestGetInteractionIncludingDeleted(ctx context.Context, arg Te
 		&i.Direction,
 		&i.VenueID,
 		&i.InteractionNodeID,
+		&i.RecordedAt,
 	)
 	return &i, err
 }
@@ -953,7 +1019,7 @@ VALUES (
     $6,
     $7
 )
-RETURNING id, contact_id, source, source_ref, occurred_at, description, created_at, deleted_at, direction, venue_id, interaction_node_id
+RETURNING id, contact_id, source, source_ref, occurred_at, description, created_at, deleted_at, direction, venue_id, interaction_node_id, recorded_at
 `
 
 type TestInsertInteractionParams struct {
@@ -995,6 +1061,7 @@ func (q *Queries) TestInsertInteraction(ctx context.Context, arg TestInsertInter
 		&i.Direction,
 		&i.VenueID,
 		&i.InteractionNodeID,
+		&i.RecordedAt,
 	)
 	return &i, err
 }
@@ -1005,7 +1072,7 @@ SET direction = $1,
     occurred_at = $2
 WHERE id = $3
   AND deleted_at IS NULL
-RETURNING id, contact_id, source, source_ref, occurred_at, description, created_at, deleted_at, direction, venue_id, interaction_node_id
+RETURNING id, contact_id, source, source_ref, occurred_at, description, created_at, deleted_at, direction, venue_id, interaction_node_id, recorded_at
 `
 
 type UpdateInteractionDirectionParams struct {
@@ -1030,6 +1097,7 @@ func (q *Queries) UpdateInteractionDirection(ctx context.Context, arg UpdateInte
 		&i.Direction,
 		&i.VenueID,
 		&i.InteractionNodeID,
+		&i.RecordedAt,
 	)
 	return &i, err
 }
@@ -1040,7 +1108,7 @@ SET occurred_at = $1,
     description = $2
 WHERE id = $3
   AND deleted_at IS NULL
-RETURNING id, contact_id, source, source_ref, occurred_at, description, created_at, deleted_at, direction, venue_id, interaction_node_id
+RETURNING id, contact_id, source, source_ref, occurred_at, description, created_at, deleted_at, direction, venue_id, interaction_node_id, recorded_at
 `
 
 type UpdateInteractionTimestampParams struct {
@@ -1065,6 +1133,7 @@ func (q *Queries) UpdateInteractionTimestamp(ctx context.Context, arg UpdateInte
 		&i.Direction,
 		&i.VenueID,
 		&i.InteractionNodeID,
+		&i.RecordedAt,
 	)
 	return &i, err
 }

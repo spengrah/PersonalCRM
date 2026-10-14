@@ -56,6 +56,9 @@ type contactCadenceReader interface {
 // contact.awaiting_reply_until. It is also the sole setter of
 // contact.last_skipped_at, contact.last_skipped_contact_by, and
 // contact.last_skip_reason; every other clock writer clears those columns.
+// It is the sole writer of contact.contact_by_direct_set_at/value (the
+// Todoist deadline edit) and contact.awaiting_reply_skip_ended_at (the CRM
+// skip), which only the correction recompute reads.
 //
 // Entry points (all funnel into applyTx):
 //   - HandleEvent:       envelope-driven (from InteractionRecorder inline
@@ -70,6 +73,8 @@ type contactCadenceReader interface {
 //     semantics across individual fields.
 //   - ApplyContactByOverride: direct-invoke for user cadence edits
 //     (can clear or backdate contact_by unconditionally).
+//   - ApplyContactByDirectSet: direct-invoke for a Todoist deadline edit,
+//     which also records the due date the user set directly.
 //   - ApplySkip / ApplyUndoSkip: direct-invoke CRM skip state setter and undo.
 type CadenceUpdater struct {
 	claims    eventClaimer
@@ -337,20 +342,37 @@ func (h *CadenceUpdater) ApplyUndoSkip(ctx context.Context, tx pgx.Tx, contactID
 	return nil
 }
 
+// ApplyContactByDirectSet is the direct-invoke entry point for a due date the
+// user set directly: a Todoist deadline edit on the contact's cadence task. It
+// sets contact_by like ApplyContactByOverride and records the date and when it
+// was set, which the correction recompute reads (CAD-047). No other path calls
+// it.
+func (h *CadenceUpdater) ApplyContactByDirectSet(ctx context.Context, tx pgx.Tx, contactID uuid.UUID, contactBy time.Time) error {
+	if tx == nil {
+		return errors.New("cadence_updater: nil tx")
+	}
+	if h.mode == CadenceModeOff {
+		return nil
+	}
+	if err := repository.SetDerivedWriterTx(ctx, tx, repository.DerivedWriterCadence); err != nil {
+		return err
+	}
+	return db.New(tx).ApplyContactByDirectSet(ctx, db.ApplyContactByDirectSetParams{ContactBy: contactBy, ID: contactID})
+}
+
 // RecomputeAfterCorrection is the direct-invoke entry point for the
-// interaction correction routes (CAD-047). before and after are the contact's
-// effective participations before and after the correction, each as the
-// recording rules take it, in the order they were recorded. The caller holds
-// the contact's row lock.
+// interaction correction routes (CAD-047). participation is the contact's
+// effective participation after the correction, in the order its effects were
+// recorded; judgedRecordedAt is when the contact's observations the correction
+// judged were last recorded. The caller holds the contact's row lock.
 //
-// Each field becomes what recording after through the normal rules
-// (buildInteractionWrite + applyTx) from the contact's creation state gives.
-// That result is composed with the user's own cadence acts: a contact_by or
-// awaiting_reply_until that differs from what recording before gives was set
-// by hand (a cadence edit, a Todoist deadline edit or skip, a CRM skip) after
-// the last observation that wrote it, and is kept. Skip state is cleared when
-// the result moves last_contacted or contact_by, and kept otherwise.
-func (h *CadenceUpdater) RecomputeAfterCorrection(ctx context.Context, tx pgx.Tx, contactID uuid.UUID, before, after []repository.ApplyInteractionRequest) error {
+// last_contacted, last_interaction_at, last_outreach_at, last_response_at and
+// awaiting_reply_until become what replaying participation through the normal
+// recording rules gives (replayTx). contact_by changes only when that moves
+// last_contacted; it then becomes the replayed date, or the latest due date
+// the user set directly after judgedRecordedAt when that is later. Skip state
+// is withdrawn when last_contacted moves, and kept otherwise.
+func (h *CadenceUpdater) RecomputeAfterCorrection(ctx context.Context, tx pgx.Tx, contactID uuid.UUID, participation []repository.RecordedParticipation, judgedRecordedAt time.Time) error {
 	if tx == nil {
 		return errors.New("cadence_updater: nil tx")
 	}
@@ -361,49 +383,47 @@ func (h *CadenceUpdater) RecomputeAfterCorrection(ctx context.Context, tx pgx.Tx
 	if err != nil {
 		return fmt.Errorf("get contact for correction recompute: %w", err)
 	}
-	recordedBefore, err := h.replayTx(ctx, tx, current, before)
+	replayed, err := h.replayTx(ctx, tx, current, participation)
 	if err != nil {
-		return fmt.Errorf("replay before correction: %w", err)
-	}
-	recordedAfter, err := h.replayTx(ctx, tx, current, after)
-	if err != nil {
-		return fmt.Errorf("replay after correction: %w", err)
+		return fmt.Errorf("replay effective participation: %w", err)
 	}
 
-	contactBy := recordedAfter.ContactBy
-	if !sameInstant(current.ContactBy, recordedBefore.ContactBy) {
-		contactBy = current.ContactBy
-	}
-	awaitingReplyUntil := recordedAfter.AwaitingReplyUntil
-	if !sameInstant(current.AwaitingReplyUntil, recordedBefore.AwaitingReplyUntil) {
-		awaitingReplyUntil = current.AwaitingReplyUntil
+	moved := !sameInstant(current.LastContacted, replayed.LastContacted)
+	contactBy := current.ContactBy
+	if moved {
+		contactBy = replayed.ContactBy
+		if floor := current.ContactByDirectSetValue; floor != nil && current.ContactByDirectSetAt.After(judgedRecordedAt) &&
+			(contactBy == nil || floor.After(*contactBy)) {
+			contactBy = floor
+		}
 	}
 	return h.applyTx(ctx, tx, cadenceWriteRequest{
 		ContactID:               contactID,
 		Branch:                  repository.CadenceBranchUnconditional,
 		ApplyLastContacted:      true,
-		LastContacted:           recordedAfter.LastContacted,
+		LastContacted:           replayed.LastContacted,
 		ApplyLastInteractionAt:  true,
-		LastInteractionAt:       recordedAfter.LastInteractionAt,
+		LastInteractionAt:       replayed.LastInteractionAt,
 		ApplyLastOutreachAt:     true,
-		LastOutreachAt:          recordedAfter.LastOutreachAt,
+		LastOutreachAt:          replayed.LastOutreachAt,
 		ApplyLastResponseAt:     true,
-		LastResponseAt:          recordedAfter.LastResponseAt,
+		LastResponseAt:          replayed.LastResponseAt,
 		ApplyContactBy:          true,
 		ContactBy:               contactBy,
 		ApplyAwaitingReplyUntil: true,
-		AwaitingReplyUntil:      awaitingReplyUntil,
-		ClearSkipState: !sameInstant(current.LastContacted, recordedAfter.LastContacted) ||
-			!sameInstant(current.ContactBy, contactBy),
+		AwaitingReplyUntil:      replayed.AwaitingReplyUntil,
+		ClearSkipState:          moved,
 	})
 }
 
 // replayTx returns the cadence fields contact would hold had exactly
 // participations been recorded, in order, through the normal recording rules,
 // starting from its creation state (no interaction timestamps; contact_by
-// derived from created_at when it has a cadence). The replay writes inside a
-// savepoint it rolls back, so the contact row is unchanged on return.
-func (h *CadenceUpdater) replayTx(ctx context.Context, tx pgx.Tx, contact *repository.Contact, participations []repository.ApplyInteractionRequest) (replayed *repository.Contact, err error) {
+// derived from created_at when it has a cadence). A CRM skip that ended the
+// awaiting-reply window ends it again at its place in that order, so a window
+// the user ended stays ended. The replay writes inside a savepoint it rolls
+// back, so the contact row is unchanged on return.
+func (h *CadenceUpdater) replayTx(ctx context.Context, tx pgx.Tx, contact *repository.Contact, participations []repository.RecordedParticipation) (replayed *repository.Contact, err error) {
 	sp, err := tx.Begin(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("open replay savepoint: %w", err)
@@ -436,7 +456,21 @@ func (h *CadenceUpdater) replayTx(ctx context.Context, tx pgx.Tx, contact *repos
 	}); err != nil {
 		return nil, fmt.Errorf("write creation state: %w", err)
 	}
+	skipEnded := contact.AwaitingReplySkipEndedAt
+	endWindow := func() error {
+		skipEnded = nil
+		return h.applyTx(ctx, sp, cadenceWriteRequest{
+			ContactID:               contact.ID,
+			Branch:                  repository.CadenceBranchUnconditional,
+			ApplyAwaitingReplyUntil: true,
+		})
+	}
 	for _, p := range participations {
+		if skipEnded != nil && p.RecordedAt.After(*skipEnded) {
+			if err := endWindow(); err != nil {
+				return nil, fmt.Errorf("replay skip-ended window: %w", err)
+			}
+		}
 		row, err := h.contacts.GetContactTx(ctx, sp, contact.ID)
 		if err != nil {
 			return nil, fmt.Errorf("read replayed contact: %w", err)
@@ -444,6 +478,11 @@ func (h *CadenceUpdater) replayTx(ctx context.Context, tx pgx.Tx, contact *repos
 		req := h.buildInteractionWrite(contact.ID, p.Direction, p.Source, p.OccurredAt, repository.ContactCadenceFieldsFromContact(row), cadenceStr)
 		if err := h.applyTx(ctx, sp, req); err != nil {
 			return nil, fmt.Errorf("replay participation: %w", err)
+		}
+	}
+	if skipEnded != nil {
+		if err := endWindow(); err != nil {
+			return nil, fmt.Errorf("replay skip-ended window: %w", err)
 		}
 	}
 	return h.contacts.GetContactTx(ctx, sp, contact.ID)

@@ -150,9 +150,17 @@ type Contact struct {
 	LastSkippedAt        *time.Time      `json:"last_skipped_at,omitempty"`
 	LastSkippedContactBy *time.Time      `json:"last_skipped_contact_by,omitempty"`
 	LastSkipReason       *string         `json:"last_skip_reason,omitempty"`
-	ProfilePhoto         *string         `json:"profile_photo,omitempty"`
-	CreatedAt            time.Time       `json:"created_at"`
-	UpdatedAt            time.Time       `json:"updated_at"`
+	// ContactByDirectSetAt and ContactByDirectSetValue are the latest due date
+	// the user set directly (a Todoist deadline edit) and when it was set;
+	// AwaitingReplySkipEndedAt is when a CRM skip last ended the awaiting-reply
+	// window. The correction recompute reads them (CAD-047); no wire carries
+	// them.
+	ContactByDirectSetAt     *time.Time `json:"-"`
+	ContactByDirectSetValue  *time.Time `json:"-"`
+	AwaitingReplySkipEndedAt *time.Time `json:"-"`
+	ProfilePhoto             *string    `json:"profile_photo,omitempty"`
+	CreatedAt                time.Time  `json:"created_at"`
+	UpdatedAt                time.Time  `json:"updated_at"`
 }
 
 // CreateContactRequest represents the request to create a contact
@@ -227,6 +235,9 @@ func convertDbContact(dbContact *db.Contact) Contact {
 	contact.LastSkippedAt = utcPtr(dbContact.LastSkippedAt)
 	contact.LastSkippedContactBy = dbContact.LastSkippedContactBy
 	contact.LastSkipReason = dbContact.LastSkipReason
+	contact.ContactByDirectSetAt = utcPtr(dbContact.ContactByDirectSetAt)
+	contact.ContactByDirectSetValue = dbContact.ContactByDirectSetValue
+	contact.AwaitingReplySkipEndedAt = utcPtr(dbContact.AwaitingReplySkipEndedAt)
 
 	return contact
 }

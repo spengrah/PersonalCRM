@@ -720,12 +720,19 @@ func (h *FollowUpManager) completePending(ctx context.Context, tx pgx.Tx, pendin
 //
 //   - a live follow-up that after does not warrant (after is nil) is completed
 //     and its remote close enqueued, as a reply does (CAD-015);
-//   - a live follow-up after still warrants stays open;
+//   - a live follow-up after still warrants stays open; when the correction
+//     made after the awaited outbound (it differs from before), its deadline
+//     is refreshed to after's, locally and through the durable update op, as
+//     the outbound's recording does (CAD-012);
 //   - when no follow-up is live and the correction made after the awaited
-//     outbound (it differs from before), the creation guards and create run
-//     for it (CAD-011, CAD-012). Its idempotency key names the act, so a task
-//     the same outbound opened earlier, now completed or dismissed, is never
-//     reopened and does not block the new one.
+//     outbound, the creation guards and create run for it (CAD-011, CAD-012).
+//     Its idempotency key names the act, so a task the same outbound opened
+//     earlier, now completed or dismissed, is never reopened and does not
+//     block the new one.
+//
+// before and after are awaited outbounds as the follow-up rules take them: an
+// outbound whose recording suppressed its follow-up (a send's completion) is
+// never one.
 func (h *FollowUpManager) ReconcileAfterCorrection(ctx context.Context, tx pgx.Tx, contactID uuid.UUID, before, after *repository.ApplyInteractionRequest, act uuid.UUID) error {
 	if tx == nil {
 		return errors.New("followup_manager: nil tx")
@@ -740,11 +747,8 @@ func (h *FollowUpManager) ReconcileAfterCorrection(ctx context.Context, tx pgx.T
 	if err != nil && !errors.Is(err, db.ErrNotFound) {
 		return fmt.Errorf("find pending follow-up for correction: %w", err)
 	}
-	if pending != nil {
-		if after == nil {
-			return h.completePending(ctx, tx, pending)
-		}
-		return nil
+	if pending != nil && after == nil {
+		return h.completePending(ctx, tx, pending)
 	}
 	if after == nil || (before != nil && before.Direction == after.Direction &&
 		before.Source == after.Source && before.OccurredAt.Equal(after.OccurredAt)) {
@@ -764,11 +768,6 @@ func (h *FollowUpManager) ReconcileAfterCorrection(ctx context.Context, tx pgx.T
 		h.emit(Decision{Action: repository.FollowUpActionSkip})
 		return nil
 	}
-	if after.Source != repository.InteractionSourceManual &&
-		accelerated.GetCurrentTime().Sub(after.OccurredAt) > time.Duration(days)*24*time.Hour {
-		h.emit(Decision{Action: repository.FollowUpActionSkip, SkipReason: repository.FollowUpSkipReasonBackdated})
-		return nil
-	}
 	payload := events.InteractionRecordedPayload{
 		Version:          2,
 		ContactID:        contactID,
@@ -776,6 +775,14 @@ func (h *FollowUpManager) ReconcileAfterCorrection(ctx context.Context, tx pgx.T
 		Source:           after.Source,
 		OccurredAt:       after.OccurredAt,
 		PrevCadenceValue: &cadenceStr,
+	}
+	if pending != nil {
+		return h.applyRefresh(ctx, tx, pending, payload, days)
+	}
+	if after.Source != repository.InteractionSourceManual &&
+		accelerated.GetCurrentTime().Sub(after.OccurredAt) > time.Duration(days)*24*time.Hour {
+		h.emit(Decision{Action: repository.FollowUpActionSkip, SkipReason: repository.FollowUpSkipReasonBackdated})
+		return nil
 	}
 	return h.applyCreate(ctx, tx, nil, contact, payload, days, buildCorrectionFollowUpIdempotencyKey(contactID, after.OccurredAt, act))
 }

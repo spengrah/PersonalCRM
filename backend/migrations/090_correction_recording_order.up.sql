@@ -1,41 +1,42 @@
--- Recording order for the interaction correction recompute (CAD-047).
+-- Facts the interaction correction recompute needs (CAD-047).
 --
 -- A correction recomputes a contact's cadence fields by replaying its effective
--- participation through the normal recording rules, composed with the user's
--- own cadence acts. Manual recording and hand acts overwrite unconditionally,
--- so the replay needs the order in which effects were recorded. Two facts the
--- schema did not hold:
+-- participation through the normal recording rules, in the order the effects
+-- were recorded, composed with two of the user's own cadence acts. The schema
+-- did not hold any of the three facts that takes:
 --
---   contact.contact_by_hand_set_at / contact_by_hand_set_value
---       when the user last set contact_by by hand (a cadence edit, a Todoist
---       deadline edit or skip, a CRM skip or its undo) and the value it set.
+--   contact.contact_by_direct_set_at / contact_by_direct_set_value
+--       the latest due date the user set directly (a Todoist deadline edit on
+--       the contact's cadence task) and when it was set. Written only by
+--       ApplyContactByDirectSet, in the statement that sets contact_by. A
+--       cadence edit, a profile save, an enrichment update and a skip or undo
+--       from either side never write it. A direct set made before this
+--       migration is absent.
 --
---   contact.awaiting_reply_hand_set_at / awaiting_reply_hand_set_value
---       when the user last set awaiting_reply_until by hand (a CRM skip ends
---       the window) and the value it set.
+--   contact.awaiting_reply_skip_ended_at
+--       when a CRM skip last ended the awaiting-reply window. Written only by
+--       ApplyContactSkip, in the statement that ends the window. Nothing
+--       clears it: an undo does not reopen the window, and a correction keeps
+--       a window the skip ended ended.
 --
---       Each pair is written in the same statement as the column it records,
---       by the hand-act queries only (ApplyContactByHand, ApplyContactSkip,
---       ApplyContactUndoSkip). Like the skip-state columns (migration 083),
---       they are not derived columns and are not in the derived-writer
---       trigger. Hand acts made before this migration are not recorded.
+--       Like the skip-state columns (migration 083), these are not derived
+--       columns and are not in the derived-writer trigger.
 --
 --   interaction.recorded_at
 --       when an observation's effect was last recorded: its insert, and every
 --       later write that changes its direction or occurred_at (extension,
---       promotion to mutual, re-link). A trigger sets it, so no write path can
---       forget it. Existing rows take created_at.
+--       promotion to mutual). A trigger sets it, so no write path can omit
+--       it. Existing rows take created_at.
 --
--- Both use clock_timestamp(), one clock, so a hand act and a recording compare
--- in the order they ran.
+-- All three use clock_timestamp(), one clock, so a recording and a user act
+-- compare in the order they ran.
 
 BEGIN;
 
 ALTER TABLE contact
-    ADD COLUMN contact_by_hand_set_at TIMESTAMPTZ NULL,
-    ADD COLUMN contact_by_hand_set_value DATE NULL,
-    ADD COLUMN awaiting_reply_hand_set_at TIMESTAMPTZ NULL,
-    ADD COLUMN awaiting_reply_hand_set_value DATE NULL;
+    ADD COLUMN contact_by_direct_set_at TIMESTAMPTZ NULL,
+    ADD COLUMN contact_by_direct_set_value DATE NULL,
+    ADD COLUMN awaiting_reply_skip_ended_at TIMESTAMPTZ NULL;
 
 CREATE OR REPLACE VIEW live_contact AS
 SELECT
@@ -58,10 +59,9 @@ SELECT
     last_skipped_at,
     last_skipped_contact_by,
     last_skip_reason,
-    contact_by_hand_set_at,
-    contact_by_hand_set_value,
-    awaiting_reply_hand_set_at,
-    awaiting_reply_hand_set_value
+    contact_by_direct_set_at,
+    contact_by_direct_set_value,
+    awaiting_reply_skip_ended_at
 FROM contact
 WHERE deleted_at IS NULL;
 
