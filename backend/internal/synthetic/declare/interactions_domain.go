@@ -75,14 +75,16 @@ func init() {
 		LinkedMeetingNote("note-b", "noted-meeting"),
 	}})
 
-	// IXN-019: a calendar interaction with a meeting note and a call two days ago,
+	// IXN-019: a calendar interaction with a meeting note and a call seven days ago,
 	// which the test merges through the API, and a second, unmerged calendar
-	// interaction with its own note.
+	// interaction with its own note. A meeting note links to the event that
+	// starts at its meeting time, so each linked note's event takes a day offset
+	// no other declared calendar event uses.
 	Register(Declaration{Behavior: "IXN-019", Entities: []Entity{
 		Contact("subject", Methods(MethodEmail, MethodPhone)),
-		CalendarEvent("merged-meeting", "subject", StartedDaysAgo(2)),
+		CalendarEvent("merged-meeting", "subject", StartedDaysAgo(7)),
 		LinkedMeetingNote("merged-note", "merged-meeting"),
-		PhoneCallInteraction("merged-call", "subject", AgoDays(2)),
+		PhoneCallInteraction("merged-call", "subject", AgoDays(7)),
 		CalendarEvent("solo-meeting", "subject", StartedDaysAgo(5)),
 		LinkedMeetingNote("solo-note", "solo-meeting"),
 	}})
