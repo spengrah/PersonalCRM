@@ -512,7 +512,8 @@ func sameTrees(a, b []*repository.InteractionTree) bool {
 
 // contactBefore is what the recompute needs of a contact from before the
 // correction: when its observations of the judged interactions were last
-// recorded, and the outbound it awaited a reply to.
+// recorded, and the outbound it awaited a reply to, which its live follow-up,
+// when it holds one, tracks.
 type contactBefore struct {
 	contactID        uuid.UUID
 	judgedRecordedAt time.Time

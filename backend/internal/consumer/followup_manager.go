@@ -712,11 +712,12 @@ func (h *FollowUpManager) completePending(ctx context.Context, tx pgx.Tx, pendin
 }
 
 // ReconcileAfterCorrection is the direct-invoke entry point for the
-// interaction correction routes (CAD-048). before and after are the contact's
-// awaited outbound before and after the correction: its latest effective
+// interaction correction routes and the contact merge (CAD-048). after is the
+// contact's awaited outbound after the correction: its latest effective
 // outbound participation with no later effective response, nil when none.
-// act is the correction act's id. The follow-up rules run against the
-// corrected state:
+// before is the outbound the contact's live follow-up tracked before the
+// correction; it is read only when a follow-up is live. act is the
+// correction act's id. The follow-up rules run against the corrected state:
 //
 //   - a live follow-up that after does not warrant (after is nil) is completed
 //     and its remote close enqueued, as a reply does (CAD-015);
@@ -724,9 +725,10 @@ func (h *FollowUpManager) completePending(ctx context.Context, tx pgx.Tx, pendin
 //     made after the awaited outbound (it differs from before), its deadline
 //     is refreshed to after's, locally and through the durable update op, as
 //     the outbound's recording does (CAD-012);
-//   - when no follow-up is live and the correction made after the awaited
-//     outbound, the creation guards and create run for it (CAD-011, CAD-012).
-//     Its idempotency key names the act, so a task the same outbound opened
+//   - when no follow-up is live and after is not nil, the creation guards and
+//     create run for after (CAD-011, CAD-012), whatever ended the earlier
+//     follow-up (a skip, a reply the correction removed, the user). Its
+//     idempotency key names the act, so a task the same outbound opened
 //     earlier, now completed or dismissed, is never reopened and does not
 //     block the new one.
 //
@@ -747,11 +749,14 @@ func (h *FollowUpManager) ReconcileAfterCorrection(ctx context.Context, tx pgx.T
 	if err != nil && !errors.Is(err, db.ErrNotFound) {
 		return fmt.Errorf("find pending follow-up for correction: %w", err)
 	}
-	if pending != nil && after == nil {
-		return h.completePending(ctx, tx, pending)
+	if after == nil {
+		if pending != nil {
+			return h.completePending(ctx, tx, pending)
+		}
+		return nil
 	}
-	if after == nil || (before != nil && before.Direction == after.Direction &&
-		before.Source == after.Source && before.OccurredAt.Equal(after.OccurredAt)) {
+	if pending != nil && before != nil && before.Direction == after.Direction &&
+		before.Source == after.Source && before.OccurredAt.Equal(after.OccurredAt) {
 		return nil
 	}
 

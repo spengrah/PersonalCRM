@@ -129,6 +129,8 @@ func TestInteractionRemoval_SurvivesContactMergeIntoObservedContact(t *testing.T
 	t.Run("an outbound the merge leaves awaiting a reply gets a new follow-up when the merged-away contact's skip ended its own", func(t *testing.T) {
 		// spec: CAD-048.new-follow-up-by-rules, CAD-048.completed-never-reopened
 		removed, survivor := removedFromLaterReply(t)
+		skipped := live(t, removed)
+		require.Len(t, skipped, 1)
 		e.skip(t, removed)
 		require.Empty(t, live(t, removed), "the skip ended the follow-up")
 		require.False(t, e.fields(t, survivor).AwaitingReply)
@@ -136,7 +138,10 @@ func TestInteractionRemoval_SurvivesContactMergeIntoObservedContact(t *testing.T
 		mergeInto(t, survivor, removed)
 
 		require.True(t, e.fields(t, survivor).AwaitingReply)
-		require.Len(t, live(t, survivor), 1)
+		created := live(t, survivor)
+		require.Len(t, created, 1)
+		require.NotEqual(t, skipped[0].ID, created[0].ID)
+		require.Equal(t, repository.ContactTaskStateCompleted, e.task(t, skipped[0].ID).State)
 	})
 
 	t.Run("the survivor's retained follow-up follows the outbound the merge leaves awaiting a reply", func(t *testing.T) {
@@ -153,6 +158,7 @@ func TestInteractionRemoval_SurvivesContactMergeIntoObservedContact(t *testing.T
 
 		retained := live(t, survivor)
 		require.Len(t, retained, 1)
+		require.Equal(t, awaitingZ[0].ID, retained[0].ID, "the survivor's own follow-up stays open")
 		require.Equal(t, awaitingX[0].Metadata["due_date"], retained[0].Metadata["due_date"])
 	})
 
@@ -184,12 +190,15 @@ func TestInteractionRemoval_SurvivesContactMergeIntoObservedContact(t *testing.T
 
 		retained := live(t, survivor)
 		require.Len(t, retained, 1)
+		require.Equal(t, awaitingZ[0].ID, retained[0].ID, "the survivor's own follow-up stays open")
 		require.Equal(t, awaitingX[0].Metadata["due_date"], retained[0].Metadata["due_date"])
 	})
 
 	t.Run("an outbound both awaited gets a new follow-up when the merged-away contact's skip ended its own and the survivor had none", func(t *testing.T) {
 		// spec: CAD-048.new-follow-up-by-rules, CAD-048.completed-never-reopened
 		removed, survivor := removedFromEarlierReply(t)
+		skipped := live(t, removed)
+		require.Len(t, skipped, 1)
 		e.skip(t, removed)
 		require.Empty(t, live(t, removed), "the skip ended the follow-up")
 		require.Empty(t, live(t, survivor))
@@ -197,7 +206,10 @@ func TestInteractionRemoval_SurvivesContactMergeIntoObservedContact(t *testing.T
 		mergeInto(t, survivor, removed)
 
 		require.True(t, e.fields(t, survivor).AwaitingReply)
-		require.Len(t, live(t, survivor), 1)
+		created := live(t, survivor)
+		require.Len(t, created, 1)
+		require.NotEqual(t, skipped[0].ID, created[0].ID)
+		require.Equal(t, repository.ContactTaskStateCompleted, e.task(t, skipped[0].ID).State)
 	})
 
 	t.Run("the survivor's outbound gets a new follow-up when its own skip ended the follow-up and the merge excludes its older reply", func(t *testing.T) {

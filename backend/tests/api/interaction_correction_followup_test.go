@@ -272,6 +272,35 @@ func TestInteractionCorrection_ReconcilesFollowUps(t *testing.T) {
 		require.Contains(t, e.ops(t, created.ID), consumerjobs.TaskOpCreate)
 	})
 
+	t.Run("after a skip ended an outbound's follow-up, removing an older inbound gives the outbound a new follow-up", func(t *testing.T) {
+		// spec: CAD-048.new-follow-up-by-rules, CAD-048.completed-never-reopened
+		a := e.contact(t, "monthly")
+		inbound := e.call(t, a, e.ref("call"), repository.InteractionDirectionInbound, e.at(0))
+		e.call(t, a, e.ref("call"), repository.InteractionDirectionOutbound, e.at(20))
+		opened := e.followUps(t, a)
+		require.Len(t, opened, 1)
+		e.skip(t, a)
+		require.Equal(t, repository.ContactTaskStateCompleted, e.task(t, opened[0].ID).State, "the skip ended the follow-up")
+
+		e.remove(t, inbound, removalBody(service.RemovalReasonDidNotHappen, a))
+
+		require.True(t, e.fields(t, a).AwaitingReply, "the outbound's window is open again")
+		require.Equal(t, repository.ContactTaskStateCompleted, e.task(t, opened[0].ID).State, "a completed task is never reopened")
+		tasks := e.followUps(t, a)
+		require.Len(t, tasks, 2)
+		var created *repository.ContactTask
+		for i := range tasks {
+			if tasks[i].ID != opened[0].ID {
+				created = &tasks[i]
+			}
+		}
+		require.NotNil(t, created)
+		require.Equal(t, repository.ContactTaskStatePendingRemoteCreate, created.State)
+		require.Equal(t, cadence.AwaitingReplyUntil(e.at(20), config.TestConfig().Watchdog.DaysForCadence("monthly")).Format(todoist.DateFormat),
+			created.Metadata["due_date"])
+		require.Contains(t, e.ops(t, created.ID), consumerjobs.TaskOpCreate)
+	})
+
 	t.Run("merging an outbound with its later inbound closes the follow-up the outbound opened", func(t *testing.T) {
 		// spec: CAD-048.unwarranted-follow-up-closed
 		a := e.contact(t, "monthly")
