@@ -40,6 +40,8 @@ type rawMessageE2EEnv struct {
 	messagesRepo    *repository.MessagesMessageRepository
 	interactionRepo *repository.InteractionRepository
 	contactRepo     *repository.ContactRepository
+	contactSvc      *service.ContactService
+	contactMethods  *repository.ContactMethodRepository
 	pair            *service.PairResult
 	contactID       uuid.UUID
 }
@@ -126,6 +128,8 @@ func setupRawMessageE2E(t *testing.T) *rawMessageE2EEnv {
 		database.Pool,
 		consumer.NewRiverInteractionRecorderEnqueuer(riverClient),
 	)
+	groupBursts := service.NewGroupBurstPromoter(messagesRepo, contactSvc)
+	messagesEngine.SetGroupReplyPromoter(groupBursts)
 
 	// Fill the aggregate worker shim now that the engine exists.
 	aggregateShim.engine = messagesEngine
@@ -136,6 +140,7 @@ func setupRawMessageE2E(t *testing.T) *rawMessageE2EEnv {
 		repository.InteractionSourceMessages: repository.NewMessagesStagingProcessor(messagesRepo),
 	})
 	recorder := consumer.NewInteractionRecorder(contactSvc, stagingRegistry, bus, cadenceUpdater, nil, repository.NewCalendarEventRepository(database.Queries))
+	recorder.SetGroupReplyPromoter(groupBursts)
 	recorderShim.real = consumer.NewInteractionRecorderWorker(bus, database.Pool, recorder, nil)
 
 	// Now wire the ingest service + handler.
@@ -159,6 +164,7 @@ func setupRawMessageE2E(t *testing.T) *rawMessageE2EEnv {
 	handlers.RegisterMacHostRoutes(router, handlers.MacHostRouteDeps{
 		HostRepo:    hostRepo,
 		Handler:     macHandler,
+		Enrichment:  handlers.NewMessagesEnrichmentHandler(service.NewMessagesEnrichmentService(messagesRepo)),
 		AuthLimiter: auth.DefaultMacHostAuthLimiterConfig(),
 	})
 
@@ -237,6 +243,8 @@ func setupRawMessageE2E(t *testing.T) *rawMessageE2EEnv {
 		messagesRepo:    messagesRepo,
 		interactionRepo: interactionRepo,
 		contactRepo:     contactRepo,
+		contactSvc:      contactSvc,
+		contactMethods:  contactMethodRepo,
 		pair:            pair,
 		contactID:       contactID,
 	}

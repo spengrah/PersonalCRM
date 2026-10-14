@@ -44,9 +44,15 @@ type Engine struct {
 	eventLookup      EventLookup         // nil → stale-claim recovery degrades to warn-and-yield
 	consumerEnqueuer ConsumerJobEnqueuer // nil → stale-claim recovery degrades to warn-and-yield
 
+	groupReplies GroupReplyPromoter // nil → an extended burst is never checked for a user reply
+
 	burstWindowHours int
 	replyBridgeHours int
 }
+
+// SetGroupReplyPromoter wires the hook that runs after an existing interaction
+// absorbs more messages. Optional: only the messages source sets it.
+func (e *Engine) SetGroupReplyPromoter(p GroupReplyPromoter) { e.groupReplies = p }
 
 // NewEngine builds a source-parametric aggregation engine.
 //
@@ -255,6 +261,8 @@ func (e *Engine) AggregateForContact(ctx context.Context, contactID uuid.UUID, c
 				} else {
 					if err := e.store.MarkProcessed(ctx, sess.messageIDs(), existing.ID); err != nil {
 						log.Warn().Err(err).Str("source", source).Msg("aggregation: failed to mark messages processed after extension")
+					} else {
+						e.promoteIfReplied(ctx, existing.ID)
 					}
 					continue
 				}
@@ -272,6 +280,26 @@ func (e *Engine) AggregateForContact(ctx context.Context, contactID uuid.UUID, c
 	}
 
 	return nil
+}
+
+// promoteIfReplied tells the group-reply hook that an interaction just gained
+// messages, in a transaction of its own. Best-effort like the other
+// post-extension steps: the extension already committed.
+func (e *Engine) promoteIfReplied(ctx context.Context, interactionID uuid.UUID) {
+	if e.groupReplies == nil || e.txBeginner == nil {
+		return
+	}
+	tx, err := e.txBeginner.BeginTx(ctx, pgx.TxOptions{})
+	if err == nil {
+		defer func() { _ = tx.Rollback(ctx) }() // no-op after Commit per pgx idiom
+		if err = e.groupReplies.PromoteIfRepliedTx(ctx, tx, interactionID); err == nil {
+			err = tx.Commit(ctx)
+		}
+	}
+	if err != nil {
+		log.Warn().Err(err).Str("source", e.adapter.SourceName()).Str("interaction_id", interactionID.String()).
+			Msg("aggregation: failed to promote extended burst the user replied inside")
+	}
 }
 
 // tryExplicitReplyBridge checks if any inbound message in the session

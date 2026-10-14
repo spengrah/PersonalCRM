@@ -516,7 +516,7 @@ public actor MessagesSourcePlugin: DataSourcePlugin {
             // Rows below the floor are never emitted.
             let scanSince = max(entry.since, config.backfillFloor)
             let resolver = outboundPeerResolver
-            let resolved: (page: MessagesScanPage, peers: [String: String])
+            let resolved: (page: MessagesScanPage, context: ChatContext)
             do {
                 resolved = try await pool.read { db in
                     let page = try MessagesScanReader.scanPage(
@@ -525,8 +525,7 @@ public actor MessagesSourcePlugin: DataSourcePlugin {
                         since: scanSince,
                         progressBelowRowID: entry.progressBelowRowID,
                         limit: limit)
-                    let peers = try resolver(db, page.rows)
-                    return (page, peers)
+                    return (page, try Self.chatContext(db: db, rows: page.rows, resolver: resolver))
                 }
             } catch let dbError as DatabaseError where isFDAError(dbError) {
                 await markUnhealthy(reason: "fda_required")
@@ -542,7 +541,7 @@ public actor MessagesSourcePlugin: DataSourcePlugin {
             scanBudget -= page.inspected
 
             let publishItems = await filterAndShape(
-                rows: page.rows, outboundPeers: resolved.peers, isBackfill: true)
+                rows: page.rows, context: resolved.context, isBackfill: true)
             let outcome = await publisher.publish(items: publishItems)
 
             let confirmed: Bool
@@ -649,15 +648,14 @@ public actor MessagesSourcePlugin: DataSourcePlugin {
         }
 
         let resolver = outboundPeerResolver
-        let resolved: (page: ChatDBReadPage, peers: [String: String])
+        let resolved: (page: ChatDBReadPage, context: ChatContext)
         do {
             resolved = try await pool.read { db in
                 let page = try ChatDBReader.fetchPage(
                     db: db,
                     direction: .backwardFromExclusive(upperBoundExclusive),
                     limit: limit)
-                let peers = try resolver(db, page.rows)
-                return (page, peers)
+                return (page, try Self.chatContext(db: db, rows: page.rows, resolver: resolver))
             }
         } catch let dbError as DatabaseError where isFDAError(dbError) {
             await markUnhealthy(reason: "fda_required")
@@ -687,7 +685,7 @@ public actor MessagesSourcePlugin: DataSourcePlugin {
         let inRangeRows = page.rows.filter { $0.sentAt >= config.backfillFloor }
         let belowFloor = page.rows.count - inRangeRows.count
         let publishItems = await filterAndShape(
-            rows: inRangeRows, outboundPeers: resolved.peers, isBackfill: true)
+            rows: inRangeRows, context: resolved.context, isBackfill: true)
         let outcome = await publisher.publish(items: publishItems)
 
         budget.consume(rows: page.inspected)
@@ -748,15 +746,14 @@ public actor MessagesSourcePlugin: DataSourcePlugin {
         }
 
         let resolver = outboundPeerResolver
-        let resolved: (page: ChatDBReadPage, peers: [String: String])
+        let resolved: (page: ChatDBReadPage, context: ChatContext)
         do {
             resolved = try await pool.read { db in
                 let page = try ChatDBReader.fetchPage(
                     db: db,
                     direction: .forwardFromExclusive(lower),
                     limit: limit)
-                let peers = try resolver(db, page.rows)
-                return (page, peers)
+                return (page, try Self.chatContext(db: db, rows: page.rows, resolver: resolver))
             }
         } catch let dbError as DatabaseError where isFDAError(dbError) {
             await markUnhealthy(reason: "fda_required")
@@ -781,7 +778,7 @@ public actor MessagesSourcePlugin: DataSourcePlugin {
         }
 
         let publishItems = await filterAndShape(
-            rows: page.rows, outboundPeers: resolved.peers, isBackfill: false)
+            rows: page.rows, context: resolved.context, isBackfill: false)
         let outcome = await publisher.publish(items: publishItems)
 
         budget.consume(rows: page.inspected)
@@ -806,27 +803,45 @@ public actor MessagesSourcePlugin: DataSourcePlugin {
             readFailed: false)
     }
 
-    /// Apply sender filter + shape to publishable form, for inbound AND
-    /// outbound rows.
+    /// What the publish rule needs to know about a page's chats, resolved
+    /// inside the page's read snapshot.
+    private struct ChatContext {
+        /// chat.guid -> peer raw handle for outbound one-to-one rows.
+        let outboundPeers: [String: String]
+        /// chat.guid -> raw handles of every member of a group chat.
+        let groupMembers: [String: [String]]
+    }
+
+    private static func chatContext(
+        db: Database,
+        rows: [ChatDBMessage],
+        resolver: @Sendable (Database, [ChatDBMessage]) throws -> [String: String]
+    ) throws -> ChatContext {
+        ChatContext(
+            outboundPeers: try resolver(db, rows),
+            groupMembers: try ChatDBReader.resolveGroupMembers(db: db, rows: rows))
+    }
+
+    /// The one publish rule for the live tick, the backfill and the scan:
+    /// which rows are published and which peer each carries.
     ///
     /// Per row:
-    ///   1. Effective peer: inbound -> row.peerHandleRaw; outbound ->
-    ///      row.peerHandleRaw if non-empty, else outboundPeers[chatGUID].
-    ///   2. Skip if effective peer is empty (unresolvable outbound).
-    ///   3. Skip if chat.guid is nil/empty (the Pi requires a non-empty
-    ///      chat_id; a persistently-rejected event would wedge the
-    ///      cursor).
-    ///   4. Canonicalize + skip if not in the known-identifiers set. For
-    ///      outbound this filters on the RECIPIENT — only emit messages
-    ///      to known contacts.
-    ///   5. Shape (PayloadShaping branches isFromMe -> .sent / .received).
+    ///   - No chat.guid: skipped (the Pi requires a non-empty chat_id; a
+    ///     persistently-rejected event would wedge the cursor).
+    ///   - Group chat: published, from any sender, exactly when at least
+    ///     one chat member canonicalizes into the known-identifiers set.
+    ///     Inbound carries its sender's raw handle; outbound carries the
+    ///     empty peer — it names no member.
+    ///   - One-to-one: published when its peer canonicalizes into the
+    ///     known-identifiers set. The peer is the sender (inbound) or the
+    ///     chat's one member (outbound).
     ///
     /// Pure over its inputs + the cache. Counts skips by reason and logs
     /// one debug line per non-empty batch (counts only — no handles or
     /// guids logged here).
     private func filterAndShape(
         rows: [ChatDBMessage],
-        outboundPeers: [String: String],
+        context: ChatContext,
         isBackfill: Bool
     ) async -> [PublishItem] {
         var out: [PublishItem] = []
@@ -834,48 +849,66 @@ public actor MessagesSourcePlugin: DataSourcePlugin {
         var unresolvableOutbound = 0
         var emptyChatID = 0
         var unknownPeer = 0
+        var groupWithoutKnownMember = 0
+        var knownGroups: [String: Bool] = [:]
         for row in rows {
-            let effectivePeerRaw: String
-            if row.isFromMe {
-                effectivePeerRaw = row.peerHandleRaw.isEmpty
-                    ? (outboundPeers[row.chatGUID ?? ""] ?? "")
-                    : row.peerHandleRaw
-            } else {
-                effectivePeerRaw = row.peerHandleRaw
-            }
-            if effectivePeerRaw.isEmpty {
-                unresolvableOutbound += 1
-                continue
-            }
-            if row.chatGUID?.isEmpty ?? true {
+            guard let chatGUID = row.chatGUID, !chatGUID.isEmpty else {
                 emptyChatID += 1
                 continue
             }
-            let canonical = HandleNormalization.canonicalize(effectivePeerRaw)
-            if canonical.isEmpty {
-                unresolvableOutbound += 1
-                continue
-            }
-            let inSet = await cache.contains(canonical)
-            if !inSet {
-                unknownPeer += 1
-                continue
+            let peerRaw: String
+            if row.isGroup {
+                var known = knownGroups[chatGUID]
+                if known == nil {
+                    known = await chatHasKnownMember(context.groupMembers[chatGUID] ?? [])
+                    knownGroups[chatGUID] = known
+                }
+                if known != true {
+                    groupWithoutKnownMember += 1
+                    continue
+                }
+                peerRaw = row.isFromMe ? "" : row.peerHandleRaw
+            } else {
+                let effectivePeerRaw = (row.isFromMe && row.peerHandleRaw.isEmpty)
+                    ? (context.outboundPeers[chatGUID] ?? "")
+                    : row.peerHandleRaw
+                let canonical = HandleNormalization.canonicalize(effectivePeerRaw)
+                if canonical.isEmpty {
+                    unresolvableOutbound += 1
+                    continue
+                }
+                if !(await cache.contains(canonical)) {
+                    unknownPeer += 1
+                    continue
+                }
+                peerRaw = effectivePeerRaw
             }
             let (kind, payload) = PayloadShaping.shape(
                 row: row,
-                peerHandle: effectivePeerRaw,
+                peerHandle: peerRaw,
                 hostID: auth.hostID)
             out.append(PublishItem(rowID: row.rowID, direction: kind, payload: payload))
         }
-        if unresolvableOutbound + emptyChatID + unknownPeer > 0 {
+        if unresolvableOutbound + emptyChatID + unknownPeer + groupWithoutKnownMember > 0 {
             logger.debug("messages tick: rows dropped by sender filter", metadata: [
                 "phase": .public(isBackfill ? "backfill" : "live"),
                 "unresolvable_outbound": .public(String(unresolvableOutbound)),
                 "empty_chat_id": .public(String(emptyChatID)),
                 "unknown_peer": .public(String(unknownPeer)),
+                "group_without_known_member": .public(String(groupWithoutKnownMember)),
             ])
         }
         return out
+    }
+
+    /// True when any of `memberHandles` canonicalizes into the
+    /// known-identifiers set — the same canonicalization the set is built with.
+    private func chatHasKnownMember(_ memberHandles: [String]) async -> Bool {
+        for raw in memberHandles {
+            let canonical = HandleNormalization.canonicalize(raw)
+            if !canonical.isEmpty, await cache.contains(canonical) { return true }
+        }
+        return false
     }
 
     // MARK: - schema + pool

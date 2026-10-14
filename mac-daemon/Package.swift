@@ -99,6 +99,19 @@ let package = Package(
                     ],
                     .when(platforms: [.macOS])),
             ]),
+        // One-time operator script (`swift run rescan-messages`): fills the
+        // bodies the Pi lacks from the messages database. Deliberately NOT
+        // in `products`, the `crm-mac` subcommands or the assembled bundle.
+        .executableTarget(
+            name: "rescan-messages",
+            dependencies: [
+                "CRMMacCore",
+                "CRMMacPiClient",
+                "CRMMacMessagesSource",
+                "CRMMacSystem",
+                .product(name: "GRDB", package: "GRDB.swift"),
+            ],
+            path: "Scripts/rescan-messages"),
         .target(name: "CRMMacCore"),
         .target(
             name: "CRMMacPiClient",
@@ -147,6 +160,13 @@ let package = Package(
         .target(
             name: "CRMMacSystem",
             dependencies: ["CRMMacCore", "CRMMacLifecycle"]),
+        .testTarget(name: "RescanMessagesTests",
+                    dependencies: [
+                        "rescan-messages",
+                        "CRMMacCore",
+                        "CRMMacPiClient",
+                        .product(name: "GRDB", package: "GRDB.swift"),
+                    ]),
         .testTarget(name: "CRMMacCoreTests",
                     dependencies: ["CRMMacCore"]),
         .testTarget(name: "CRMMacPiClientTests",

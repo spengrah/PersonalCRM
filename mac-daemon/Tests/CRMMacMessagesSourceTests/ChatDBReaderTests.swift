@@ -526,7 +526,7 @@ final class ChatDBReaderTests: XCTestCase {
                 CREATE TABLE chat (ROWID INTEGER PRIMARY KEY, guid TEXT, style INTEGER, chat_identifier TEXT);
                 CREATE TABLE chat_handle_join (chat_id INTEGER, handle_id INTEGER);
                 CREATE TABLE message (
-                    ROWID INTEGER PRIMARY KEY, guid TEXT, text TEXT,
+                    ROWID INTEGER PRIMARY KEY, guid TEXT, text TEXT, attributedBody BLOB,
                     handle_id INTEGER, date INTEGER, is_from_me INTEGER,
                     item_type INTEGER NOT NULL DEFAULT 0,
                     cache_has_attachments INTEGER, associated_message_guid TEXT

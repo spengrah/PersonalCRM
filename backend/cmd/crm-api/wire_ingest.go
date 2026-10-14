@@ -88,7 +88,8 @@ func buildIngestStack(
 		AddressBookReconciler: domain.AddressBookReconcileService,
 		// Populate interaction.venue_id for phone_calls + anarlog_sessions
 		// interactions the ingest inline handlers write.
-		Venue: venueResolver,
+		Venue:       venueResolver,
+		GroupBursts: service.NewGroupBurstPromoter(messagesMessageRepo, contactService),
 	})
 	ingestHandler := handlers.NewIngestHandler(ingestService)
 

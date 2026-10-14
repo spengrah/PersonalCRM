@@ -193,6 +193,12 @@ type Querier interface {
 	// pgx.ErrNoRows when the row is in neither attention state (terminal,
 	// soft-deleted, or missing).
 	ClearMeetingNoteConflict(ctx context.Context, arg ClearMeetingNoteConflictParams) (*MeetingNote, error)
+	// Removes the member attribution from a stored, non-deleted outbound
+	// group-chat row, leaving the state ingest stores for such a message. Touches
+	// no other column: guid, chat, time, body, interaction link, processing and
+	// claim state stay. Returns 0 rows when the row is absent, deleted, not an
+	// outbound group-chat row, or already without attribution.
+	ClearMessagesMessageOutboundPeer(ctx context.Context, guid string) (int64, error)
 	// Defensive recovery branch: clears claim columns for rows still
 	// carrying the expected stale session_ref. Used when the engine
 	// detected a recovery pass but FindEventBySource returned no row.
@@ -624,9 +630,20 @@ type Querier interface {
 	// InsertEventConsumerClaim's rows-inserted signal instead of polling.
 	ExistsEventConsumerClaim(ctx context.Context, arg ExistsEventConsumerClaimParams) (bool, error)
 	ExistsMeetingNote(ctx context.Context, id uuid.UUID) (bool, error)
+	// Whether a live message that credits a reply was sent inside the closed span
+	// of the chat. This is the one reply-eligibility decision: the ingest path
+	// (the stored row's own time) and the aggregation path (a burst's window) both
+	// read it. Only ingest of the user's own group message sets credits_reply, so
+	// a row the enrichment added or cleared is never eligible, whatever its
+	// processing state or attribution.
+	ExistsMessagesCreditingReply(ctx context.Context, arg ExistsMessagesCreditingReplyParams) (bool, error)
 	ExistsMessagesMessage(ctx context.Context, id uuid.UUID) (bool, error)
 	ExistsPhoneCall(ctx context.Context, id uuid.UUID) (bool, error)
 	ExistsTelegramMessage(ctx context.Context, id uuid.UUID) (bool, error)
+	// Sets the body of a stored, non-deleted row that has none. Touches nothing
+	// else: no processed, claim, interaction or contact column. Returns 0 rows
+	// when the row is absent, deleted, or already has a body.
+	FillMessagesMessageBody(ctx context.Context, arg FillMessagesMessageBodyParams) (int64, error)
 	// Single-cardinality conflict check for an ASYMMETRIC predicate: the accepted,
 	// knowledge-open assertion(s) for (subject, predicate) whose valid-time window
 	// OVERLAPS the new one's effective window. The new-side lower bound is
@@ -1200,6 +1217,12 @@ type Querier interface {
 	// returns ErrNoRows in that case, which the repository translates to
 	// db.ErrNotFound.
 	InsertMeetingNote(ctx context.Context, arg InsertMeetingNoteParams) (*MeetingNote, error)
+	// Adds a group-chat message as evidence only: stored processed with no
+	// interaction link and no contact match, so no aggregation, sweep, promotion
+	// or rematch picks it up, and credits_reply stays false so it is never read as
+	// a reply. The caller leaves peer_handle empty for the user's own message.
+	// Returns 0 rows when the guid is already stored.
+	InsertMessagesGroupEvidenceMessage(ctx context.Context, arg InsertMessagesGroupEvidenceMessageParams) (int64, error)
 	// Assertion provenance queries (graph foundation).
 	//
 	// Provenance carries the corroborating source locators for an assertion. The
@@ -1302,6 +1325,11 @@ type Querier interface {
 	// rewrites loser→winner on each row; oldest-first is a stable, deterministic
 	// order so the live-row collision/supersession steps run reproducibly.
 	ListAssertionsTouchingNode(ctx context.Context, subjectNodeID uuid.UUID) ([]*Assertion, error)
+	// Guids of stored, non-deleted rows with no body (NULL or empty text), in
+	// guid order, keyset-paged by an exclusive @after guid. Whichever host pushed
+	// the row. The caller asks for one row more than a page to learn whether
+	// another page remains.
+	ListBodylessMessagesMessageGuids(ctx context.Context, arg ListBodylessMessagesMessageGuidsParams) ([]string, error)
 	ListCalendarEventsByIDs(ctx context.Context, ids []uuid.UUID) ([]*CalendarEvent, error)
 	// Returns the deduplicated canonicalized value set for the given
 	// contact_method types, scoped to non-deleted contacts. Ordered
@@ -1513,6 +1541,14 @@ type Querier interface {
 	// on the small filtered set is cheap.
 	ListMeetingNotesNeedingAttention(ctx context.Context, hostID *uuid.UUID) ([]*MeetingNote, error)
 	ListMessagesContainersForContact(ctx context.Context, contactID *uuid.UUID) ([]*ListMessagesContainersForContactRow, error)
+	// The one derivation of a group-chat burst's window: the closed span from the
+	// earliest to the latest sent time of the live messages_message rows linked to
+	// one live messages interaction. The group-chats listing, the
+	// add_group_message containment test and the R12 promotion all read windows
+	// through this query and compute none of their own.
+	// Every filter is optional. Chats page by an exclusive @after chat_guid, and
+	// @chat_limit bounds the number of distinct chats returned.
+	ListMessagesGroupBurstWindows(ctx context.Context, arg ListMessagesGroupBurstWindowsParams) ([]*ListMessagesGroupBurstWindowsRow, error)
 	ListMessagesMessagesByChatWindow(ctx context.Context, arg ListMessagesMessagesByChatWindowParams) ([]*MessagesMessage, error)
 	ListMessagesMessagesByInteractionIDs(ctx context.Context, interactionIds []uuid.UUID) ([]*MessagesMessage, error)
 	// Missed calls: unanswered inbound calls that left no voicemail, which ingest
@@ -1807,6 +1843,8 @@ type Querier interface {
 	// Terminal failure, reserved for errors no retry can fix at a phase where no
 	// content was stored. Recoverable only by the explicit operator requeue below.
 	MarkWhatsAppHistoryNotificationFailed(ctx context.Context, arg MarkWhatsAppHistoryNotificationFailedParams) (int64, error)
+	// Whether any row holds the guid, soft-deleted or not.
+	MessagesMessageGuidExists(ctx context.Context, guid string) (bool, error)
 	// TEST-ONLY. Calls the live normalize_contact_method_value function so the
 	// C6 parity test can compare the Go mirror against the actual SQL that the
 	// unique index is enforced over. Raw SQL is banned in Go including tests
@@ -2792,6 +2830,9 @@ type Querier interface {
 	// Test-only read of an interaction node's subtype row, for backfill fixtures
 	// that check a node's source and persisted identity key.
 	TestGetInteractionNode(ctx context.Context, nodeID uuid.UUID) (*InteractionNode, error)
+	// Test-only: reads a messages_message row by guid whether or not it is
+	// soft-deleted. Production code MUST NOT call this.
+	TestGetMessagesMessageIncludingDeleted(ctx context.Context, guid string) (*MessagesMessage, error)
 	// Test assertion — a planted job's disposition: its state, whether it is
 	// finalized, and its attempt counter. `attempt` is the load-bearing one for
 	// queue isolation: River increments it on FETCH, so attempt = 0 says the job was
@@ -3289,7 +3330,9 @@ type Querier interface {
 	UpsertIdentity(ctx context.Context, arg UpsertIdentityParams) (*ExternalIdentity, error)
 	// Insert with no-op on guid conflict. peer_normalized and matched_contact_id
 	// come from the Pi ingest service identity-match path. mac_host_id is
-	// provenance — multi-host dedup is by guid, not by host.
+	// provenance — multi-host dedup is by guid, not by host. credits_reply is set
+	// only when ingest stores the user's own group message; a conflict keeps the
+	// stored row's value, so the RETURNING row is what reply eligibility reads.
 	UpsertMessagesMessage(ctx context.Context, arg UpsertMessagesMessageParams) (*MessagesMessage, error)
 	// Insert or update an OAuth credential.
 	// refresh_token_nonce is kept in sync with refresh_token_encrypted: when a new

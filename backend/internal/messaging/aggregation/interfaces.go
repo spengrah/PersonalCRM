@@ -226,6 +226,14 @@ type InteractionExtender interface {
 	ExtendInteraction(ctx context.Context, interactionID, contactID uuid.UUID, direction string, occurredAt time.Time, description *string) error
 }
 
+// GroupReplyPromoter promotes an inbound group-chat burst to mutual when its
+// window contains the user's own group message (R12). The engine calls it,
+// inside the caller-supplied transaction, after an existing interaction gained
+// messages. Satisfied by *service.GroupBurstPromoter.
+type GroupReplyPromoter interface {
+	PromoteIfRepliedTx(ctx context.Context, tx pgx.Tx, interactionID uuid.UUID) error
+}
+
 // EventPublisher emits domain events.
 //
 // NOTE on nil: callers MUST pass nil literally (not a typed-nil pointer

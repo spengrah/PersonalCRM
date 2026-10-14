@@ -187,6 +187,9 @@ func buildInteractionRecorder(
 	// Populate interaction.venue_id for message.* (telegram/messages/gchat) and
 	// gcal interactions this recorder writes.
 	interactionRecorder.SetVenueResolver(messaging.VenueResolver)
+	// A freshly recorded inbound group burst may already contain a user's group
+	// message (R12).
+	interactionRecorder.SetGroupReplyPromoter(service.NewGroupBurstPromoter(ingest.MessagesMessage, contactService))
 	return interactionRecorder
 }
 
