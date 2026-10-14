@@ -108,6 +108,8 @@ export const interactionKeys = {
   // A merge preview answers in one contact's participation context.
   mergePreview: (contactId: string, interactionIds: string[]) =>
     [...interactionKeys.forContact(contactId), 'merge-preview', interactionIds] as const,
+  timelineAssertions: (contactId: string, kind: string, id: string) =>
+    [...interactionKeys.forContact(contactId), 'assertions', kind, id] as const,
 }
 
 // Rematch job query keys

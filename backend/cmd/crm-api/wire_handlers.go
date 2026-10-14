@@ -12,13 +12,14 @@ import (
 // coreHandlers holds the always-on HTTP handlers consumed by route
 // registration.
 type coreHandlers struct {
-	Contact       *handlers.ContactHandler
-	Note          *handlers.NoteHandler
-	Interaction   *handlers.InteractionHandler
-	Correction    *handlers.InteractionCorrectionHandler
-	System        *handlers.SystemHandler
-	Rematch       *handlers.RematchHandler
-	ContactMethod *handlers.ContactMethodHandler
+	Contact           *handlers.ContactHandler
+	Note              *handlers.NoteHandler
+	Interaction       *handlers.InteractionHandler
+	Correction        *handlers.InteractionCorrectionHandler
+	TimelineAssertion *handlers.TimelineAssertionHandler
+	System            *handlers.SystemHandler
+	Rematch           *handlers.RematchHandler
+	ContactMethod     *handlers.ContactMethodHandler
 }
 
 // buildCoreHandlers constructs the contact / note / interaction / interaction
@@ -69,12 +70,13 @@ func buildCoreHandlers(
 	)
 
 	return coreHandlers{
-		Contact:       handlers.NewContactHandler(contactService),
-		Note:          handlers.NewNoteHandler(noteService),
-		Interaction:   handlers.NewInteractionHandler(manualHandler, contentService),
-		Correction:    handlers.NewInteractionCorrectionHandler(correctionService),
-		System:        handlers.NewSystemHandler(contactRepo, cfg.Runtime),
-		Rematch:       handlers.NewRematchHandler(rematchService, contactService),
-		ContactMethod: handlers.NewContactMethodHandler(contactMethodService),
+		Contact:           handlers.NewContactHandler(contactService),
+		Note:              handlers.NewNoteHandler(noteService),
+		Interaction:       handlers.NewInteractionHandler(manualHandler, contentService),
+		Correction:        handlers.NewInteractionCorrectionHandler(correctionService),
+		TimelineAssertion: handlers.NewTimelineAssertionHandler(service.NewTimelineAssertionService(contentService, graph.GraphAssertion)),
+		System:            handlers.NewSystemHandler(contactRepo, cfg.Runtime),
+		Rematch:           handlers.NewRematchHandler(rematchService, contactService),
+		ContactMethod:     handlers.NewContactMethodHandler(contactMethodService),
 	}
 }

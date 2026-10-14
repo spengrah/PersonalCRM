@@ -94,8 +94,9 @@ func buildGraphCore(database *db.Database, eventBus *events.Bus) graphCore {
 	rematchService := service.NewRematchService()
 
 	// Graph (SP1) write API — the single validated assert() write path over the
-	// node/entity/predicate/assertion store. SP1 ships the service + the daily
-	// rollover worker (registered below); no HTTP handler yet (SP3/SP4 consume it).
+	// node/entity/predicate/assertion store, with the daily rollover worker
+	// (registered below). The one HTTP read of the store is the timeline item
+	// assertions read (KNW-038).
 	graphNodeRepo := repository.NewNodeRepository(database.Queries)
 	graphEntityRepo := repository.NewEntityRepository(database.Queries)
 	graphPredicateRepo := repository.NewPredicateRepository(database.Queries)

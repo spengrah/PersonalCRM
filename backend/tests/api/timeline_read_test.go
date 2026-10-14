@@ -122,14 +122,22 @@ func emailRef(contactID uuid.UUID, thread, day string) string {
 	return contactID.String() + ":" + thread + ":" + day
 }
 
-// linkEmail stores an email message in a thread and links it to an observation.
+// linkEmail stores an email message in a thread, sent when the observation
+// occurred, and links it to the observation.
 func (e *correctionEnv) linkEmail(t *testing.T, observation *repository.Interaction, thread, external string) repository.CommsMessage {
+	t.Helper()
+	return e.linkEmailSentAt(t, observation, thread, external, observation.OccurredAt)
+}
+
+// linkEmailSentAt stores an email message in a thread, sent at sentAt, and links
+// it to an observation.
+func (e *correctionEnv) linkEmailSentAt(t *testing.T, observation *repository.Interaction, thread, external string, sentAt time.Time) repository.CommsMessage {
 	t.Helper()
 	comms := repository.NewCommsMessageRepository(e.database.Queries)
 	subject, body, peer := "Synthetic subject "+thread, "Synthetic body "+external, "synthetic-peer"
 	row, err := comms.UpsertMessage(e.ctx, repository.UpsertCommsMessageParams{
 		Source: repository.InteractionSourceEmail, ExternalID: external, ThreadID: &thread, Subject: &subject, Body: &body,
-		PeerHandle: &peer, Direction: repository.InteractionDirectionInbound, SentAt: observation.OccurredAt, MatchedContactID: observation.ContactID,
+		PeerHandle: &peer, Direction: repository.InteractionDirectionInbound, SentAt: sentAt, MatchedContactID: observation.ContactID,
 	})
 	require.NoError(t, err)
 	require.NoError(t, comms.MarkMessagesProcessed(e.ctx, []uuid.UUID{row.ID}, observation.ID))
@@ -555,6 +563,48 @@ func TestTimelineContent_BurstChannels(t *testing.T) {
 	require.Equal(t, "dm", *directAnswer.Members[0].Messages[0].Channel)
 	require.Equal(t, "messages:"+chat, *directAnswer.Members[0].Messages[0].Container)
 	require.Equal(t, repository.InteractionSourceMessages, directAnswer.Members[0].Messages[0].Source)
+}
+
+// A group thread stores one copy of each message per matched member. The
+// drill-down shows each message once, and the list counts what it shows.
+func TestTimelineContent_GroupThreadShowsEachMessageOnce(t *testing.T) {
+	testsupport.RequireDatabase(t)
+	t.Parallel()
+	e := newCorrectionEnv(t)
+
+	subject, speaker := e.contact(t, "monthly"), e.contact(t, "monthly")
+	subjectBurst := e.record(t, subject, repository.InteractionSourceGChat, e.ref("gchat"), repository.InteractionDirectionInbound, e.at(0))
+	speakerBurst := e.record(t, speaker, repository.InteractionSourceGChat, e.ref("gchat"), repository.InteractionDirectionInbound, e.at(0))
+	space := e.ref("space")
+	comms := repository.NewCommsMessageRepository(e.database.Queries)
+	externals := []string{e.ref("message"), e.ref("message"), e.ref("message")}
+	for i, external := range externals {
+		body, peer := "Synthetic group body "+external, "synthetic-peer"
+		for _, copyOf := range []*repository.Interaction{subjectBurst, speakerBurst} {
+			row, err := comms.UpsertMessage(e.ctx, repository.UpsertCommsMessageParams{
+				Source: repository.InteractionSourceGChat, ExternalID: external, ThreadID: &space, Body: &body, PeerHandle: &peer,
+				Direction: repository.InteractionDirectionInbound, SentAt: e.at(0).Add(time.Duration(i) * time.Minute), MatchedContactID: copyOf.ContactID,
+			})
+			require.NoError(t, err)
+			require.NoError(t, comms.MarkMessagesProcessed(e.ctx, []uuid.UUID{row.ID}, copyOf.ID))
+		}
+	}
+
+	answer := e.content(t, "message_burst", subjectBurst.ID, subject)
+	page := e.timeline(t, subject, "")
+
+	require.Len(t, answer.Members, 1)
+	refs := make([]string, len(answer.Members[0].Messages))
+	for i, message := range answer.Members[0].Messages {
+		refs[i] = message.ContentRef
+	}
+	want := make([]string, len(externals))
+	for i, external := range externals {
+		want[i] = repository.InteractionSourceGChat + ":" + external
+	}
+	require.Equal(t, want, refs, "each message once, in sent order")
+	require.Len(t, page.Items, 1)
+	require.Equal(t, len(externals), page.Items[0].Members[0].MessageCount)
 }
 
 // spec: IXN-034.item-attribution

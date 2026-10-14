@@ -8,6 +8,7 @@ import type {
   InteractionMergeResponse,
   InteractionParticipantsResponse,
   InteractionRemovalRequest,
+  TimelineAssertionsResponse,
   TimelineContentResponse,
   TimelineIdentityResponse,
 } from '@/types/generated/contact'
@@ -86,5 +87,17 @@ export const interactionsApi = {
     body: InteractionRemovalRequest
   ): Promise<void> {
     await apiClient.post<void>(`/api/v1/interactions/${interactionId}/removals`, body)
+  },
+
+  // The assertions whose provenance cites the content the item's drill-down
+  // displays, keyed by content_ref. Read-only.
+  async getTimelineAssertions(
+    identity: TimelineIdentityResponse,
+    contactId: string
+  ): Promise<TimelineAssertionsResponse> {
+    return apiClient.get<TimelineAssertionsResponse>(
+      `/api/v1/timeline-items/${identity.kind}/${identity.id}/assertions`,
+      { contact_id: contactId }
+    )
   },
 }

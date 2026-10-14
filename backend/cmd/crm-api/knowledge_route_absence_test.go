@@ -2,8 +2,9 @@
 
 // Assertion-store route ABSENCE pin against the PRODUCTION route tree.
 //
-// KNW-033 is an invariant over the ENTIRE application route set: no HTTP
-// endpoint exposes assertions, graph nodes, edges, predicates, or provenance.
+// KNW-038 is an invariant over the ENTIRE application route set: no HTTP
+// endpoint other than the timeline item assertions read exposes assertions,
+// graph nodes, edges, predicates, or provenance.
 // A handler-level test cannot prove an absence claim — only enumerating the
 // real router built by the real registerRoutes can. This file reuses the
 // oauth_routes_boundary_test.go wire-chain harness (buildRouterForOAuthWiring)
@@ -24,7 +25,7 @@ import (
 // assertionStoreStems are lowercase substrings that mark a route as exposing
 // the assertion store. Substring (not whole-segment) matching is deliberate:
 // a rename like /graph-nodes or /assertion-list must still trip the scan.
-// Each stem is derived from the KNW-033 statement text and the internal
+// Each stem is derived from the KNW-038 statement text and the internal
 // package surface it names:
 //
 //   - "assert":     assertions themselves (internal/repository/assertion.go,
@@ -34,15 +35,15 @@ import (
 //   - "node":       graph nodes (internal/repository/node.go).
 //   - "edge":       graph edges (assertion subject→object links). This stem
 //     is also a substring of "knowledge", which is intentional: a /knowledge
-//     route would itself violate KNW-033's claim that the only client-visible
-//     projection is the contact payload's derived fields.
+//     route would itself be a second read of the assertion store.
 //   - "predicate":  predicates (internal/repository/predicate.go).
 //   - "provenance": assertion provenance, named directly by the spec text.
 //
 // False-positive audit (why substring matching is safe here): the current
 // production route set was inspected route-by-route and NO legitimate path
-// contains any of these stems. The known-route sanity assertions below keep
-// the scan honest — an empty or gutted route table cannot silently pass.
+// other than assertionStoreRead contains any of these stems. The known-route
+// sanity assertions below keep the scan honest — an empty or gutted route table
+// cannot silently pass, and assertionStoreRead must itself be registered.
 var assertionStoreStems = []string{
 	"assert",
 	"graph",
@@ -52,16 +53,24 @@ var assertionStoreStems = []string{
 	"provenance",
 }
 
-// requireNoAssertionStoreRoutes scans every registered route path for the
-// forbidden stems and fails naming the offending route.
+// assertionStoreRead is the one route allowed to expose the assertion store:
+// the read-only assertions beside a timeline item's displayed content.
+const assertionStoreRead = "GET /api/v1/timeline-items/:kind/:id/assertions"
+
+// requireNoAssertionStoreRoutes scans every registered route path other than
+// assertionStoreRead for the forbidden stems and fails naming the offending
+// route.
 func requireNoAssertionStoreRoutes(t *testing.T, routes gin.RoutesInfo) {
 	t.Helper()
 	for _, route := range routes {
+		if route.Method+" "+route.Path == assertionStoreRead {
+			continue
+		}
 		lower := strings.ToLower(route.Path)
 		for _, stem := range assertionStoreStems {
 			assert.NotContains(t, lower, stem,
-				"route %s %s exposes an assertion-store surface (forbidden stem %q) — the assertion store must be invisible to the API",
-				route.Method, route.Path, stem)
+				"route %s %s exposes an assertion-store surface (forbidden stem %q) — the only HTTP read of the assertion store is %s",
+				route.Method, route.Path, stem, assertionStoreRead)
 		}
 	}
 }
@@ -96,16 +105,16 @@ func requireRouteAbsent(t *testing.T, routes gin.RoutesInfo, wantAbsent string) 
 }
 
 // TestKnowledgeRouteAbsence_AssertionStoreInvisible enumerates the FULL
-// production router per config shape and asserts no route path touches the
-// assertion store. The enabled shape is the maximal route surface (external
+// production router per config shape and asserts no route path but
+// assertionStoreRead touches the assertion store. The enabled shape is the maximal route surface (external
 // sync on, both providers configured — the largest tree run() can serve); the
 // disabled shape pins the invariant on the minimal tree too.
 func TestKnowledgeRouteAbsence_AssertionStoreInvisible(t *testing.T) {
 	t.Parallel()
 	testsupport.RequireDatabase(t)
 
-	t.Run("maximal route surface exposes no assertion-store route", func(t *testing.T) {
-		// spec: KNW-033
+	t.Run("maximal route surface exposes no other assertion-store route", func(t *testing.T) {
+		// spec: KNW-038
 		t.Parallel()
 		cfg := oauthWiringConfig(t)
 		cfg.Features.EnableExternalSync = true
@@ -118,12 +127,13 @@ func TestKnowledgeRouteAbsence_AssertionStoreInvisible(t *testing.T) {
 			// Sync-only route: proves this shape really is the maximal
 			// (external-sync-enabled) surface, not the disabled tree.
 			"GET /api/v1/auth/google/callback",
+			assertionStoreRead,
 		})
 		requireNoAssertionStoreRoutes(t, routes)
 	})
 
-	t.Run("external-sync-disabled surface exposes no assertion-store route", func(t *testing.T) {
-		// spec: KNW-033
+	t.Run("external-sync-disabled surface exposes no other assertion-store route", func(t *testing.T) {
+		// spec: KNW-038
 		t.Parallel()
 		cfg := oauthWiringConfig(t)
 		cfg.Features.EnableExternalSync = false
@@ -133,6 +143,7 @@ func TestKnowledgeRouteAbsence_AssertionStoreInvisible(t *testing.T) {
 		requireKnownRoutes(t, routes, []string{
 			"GET /health",
 			"GET /api/v1/contacts",
+			assertionStoreRead,
 		})
 		// Distinguishability guard: the disabled tree must really be the
 		// minimal shape, not the enabled tree served twice.

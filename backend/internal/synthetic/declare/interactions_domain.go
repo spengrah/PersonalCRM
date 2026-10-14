@@ -122,6 +122,14 @@ func init() {
 	}})
 
 	Register(Declaration{Behavior: "IXN-008", Entities: dateSpreadEntities()})
+
+	// IXN-023: an email interaction whose message an extractor's proposed claim
+	// cites.
+	Register(Declaration{Behavior: "IXN-023", Entities: []Entity{
+		Contact("subject", Methods(MethodEmail)),
+		MessageInteraction("thread", "subject", "email", AgoDays(1)),
+		MessageClaim("claim", "thread"),
+	}})
 }
 
 func pagingInteractionEntities() []Entity {

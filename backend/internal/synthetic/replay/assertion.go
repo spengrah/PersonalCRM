@@ -143,3 +143,27 @@ func (h *Harness) ReplayAssertion(ctx context.Context, subjectNodeID uuid.UUID, 
 		PredicateKey:  a.PredicateKey,
 	}, nil
 }
+
+// ReplayClaim drives an extractor's text-fact claim about subjectNodeID through
+// the REAL AssertService write path, with one extractor provenance locator citing
+// the content row (sourceKind, sourceID). It lands proposed: a claim awaiting the
+// user's review. Cleanup is ReplayAssertion's: the row rides on the subject node.
+func (h *Harness) ReplayClaim(ctx context.Context, subjectNodeID uuid.UUID, predicateKey, value, sourceKind string, sourceID uuid.UUID) (AssertionResult, error) {
+	a, err := h.assertService().Assert(ctx, service.AssertRequest{
+		SubjectNodeID: subjectNodeID,
+		PredicateKey:  predicateKey,
+		ValueText:     &value,
+		Confidence:    80,
+		ForceConfirm:  true,
+		Locators: []service.ProvenanceLocator{{
+			SourceKind:   sourceKind,
+			SourceID:     sourceID.String(),
+			ProducerKind: repository.ProducerKindExtractor,
+		}},
+	})
+	if err != nil {
+		return AssertionResult{}, fmt.Errorf("replay claim %s: %w", predicateKey, err)
+	}
+	h.track(func(c *created) { c.addDirectSource("assertion") })
+	return AssertionResult{AssertionID: a.ID, SubjectNodeID: subjectNodeID, PredicateKey: a.PredicateKey}, nil
+}

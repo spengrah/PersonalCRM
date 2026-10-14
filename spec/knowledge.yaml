@@ -451,11 +451,11 @@ behaviors:
   - id: KNW-033
     title: Knowledge reaches the user only through the contact's derived fields
     type: invariant
-    status: current
+    status: retired
     surface: api
     statement: no HTTP endpoint exposes assertions, graph nodes, edges, predicates, or provenance — the assertion store is invisible to clients, and the only client-visible projection of the knowledge graph is the contact payload's derived location, birthday, and how-met fields.
     provenance: [cmd/crm-api/main.go SP1 no-handler comment, contact_dto.go]
-    notes: Deliberate phasing — the write API exists for later phases to consume over HTTP. how-met is carried on the wire contract but currently has no rendering or editing surface anywhere in the UI (which is why its absence on update is a no-op — KNW-028).
+    notes: Retired when the drill-down began showing the assertions that cite its content. KNW-038 replaces it, naming the one HTTP read of the assertion store.
 
   - id: KNW-034
     title: Contact detail shows knowledge fields only when known
@@ -531,3 +531,12 @@ behaviors:
         text: no correction changes or removes an observation or a content row
     provenance: [.agents/spec/2026-10-13-interaction-review-readiness.md]
     notes: The correction predicates are marked in the predicate catalog, the one source of that set. Effective participation derives from observations, merge aliases and these accepted assertions alone (IXN-016, IXN-017, IXN-018); a proposed, rejected or retracted correction excludes nothing.
+
+  - id: KNW-038
+    title: HTTP reads the assertion store only beside the content a timeline drill-down displays
+    type: invariant
+    status: current
+    surface: api
+    statement: the only HTTP endpoint that exposes assertions, graph nodes, edges, predicates, or provenance is the read-only timeline item assertions read, which returns the non-correction assertions whose provenance cites content a timeline item's drill-down displays; the contact payload's derived location, birthday, and how-met fields remain a client-visible projection of the store.
+    provenance: [TimelineAssertionService, RegisterContactRoutes, contact_dto.go]
+    notes: Supersedes KNW-033. What the read returns is IXN-039; its rendering beside the content is IXN-023.

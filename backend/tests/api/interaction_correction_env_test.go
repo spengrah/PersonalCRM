@@ -34,8 +34,8 @@ import (
 )
 
 // correctionEnv serves the interaction correction routes (POST
-// /api/v1/interactions/merge, /merge/preview, /:id/removals) and GET
-// /api/v1/contacts/:id over real services on one database. Observations are
+// /api/v1/interactions/merge, /merge/preview, /:id/removals), the timeline
+// reads and GET /api/v1/contacts/:id over real services on one database. Observations are
 // recorded through ContactService's recording path. Follow-up tasks run
 // through the real FollowUpManager; Todoist is faked at its client boundary
 // (todoist.Client) and its op jobs are enqueued on a River client that is
@@ -113,18 +113,20 @@ func newCorrectionEnvOn(t *testing.T, database *db.Database) *correctionEnv {
 		func(string) todoist.Client { return fake }, riverClient, database.Pool)
 	opShim.real = opWorker
 
+	content := service.NewInteractionContentService(interactionRepo,
+		repository.NewCommsMessageRepository(database.Queries), repository.NewTelegramMessageRepository(database.Queries),
+		repository.NewMessagesMessageRepository(database.Queries), repository.NewMeetingNoteRepository(database.Queries),
+		repository.NewCalendarEventRepository(database.Queries), repository.NewPhoneCallRepository(database.Queries), contactRepo)
 	router := gin.New()
 	router.Use(api.RequestIDMiddleware())
 	v1 := router.Group("/api/v1")
 	handlers.RegisterContactRoutes(v1, handlers.ContactRouteDeps{
-		Contact: handlers.NewContactHandler(contactService),
-		Interaction: handlers.NewInteractionHandler(nil, service.NewInteractionContentService(interactionRepo,
-			repository.NewCommsMessageRepository(database.Queries), repository.NewTelegramMessageRepository(database.Queries),
-			repository.NewMessagesMessageRepository(database.Queries), repository.NewMeetingNoteRepository(database.Queries),
-			repository.NewCalendarEventRepository(database.Queries), repository.NewPhoneCallRepository(database.Queries), contactRepo)),
-		Correction:    handlers.NewInteractionCorrectionHandler(corrections),
-		Note:          &handlers.NoteHandler{},
-		ContactMethod: &handlers.ContactMethodHandler{},
+		Contact:           handlers.NewContactHandler(contactService),
+		Interaction:       handlers.NewInteractionHandler(nil, content),
+		Correction:        handlers.NewInteractionCorrectionHandler(corrections),
+		TimelineAssertion: handlers.NewTimelineAssertionHandler(service.NewTimelineAssertionService(content, assertionRepo)),
+		Note:              &handlers.NoteHandler{},
+		ContactMethod:     &handlers.ContactMethodHandler{},
 	})
 
 	return &correctionEnv{

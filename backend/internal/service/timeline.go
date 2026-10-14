@@ -67,14 +67,38 @@ type TimelinePage struct {
 }
 
 // timelineEntry is a timeline item before its members are enriched: the
-// representative observations of an interaction or message burst, or the call
-// of a missed call.
+// members of an interaction or message burst, or the call of a missed call.
 type timelineEntry struct {
-	identity     TimelineIdentity
-	direction    string
-	occurredAt   time.Time
-	observations []repository.Interaction
-	call         *repository.PhoneCall
+	identity   TimelineIdentity
+	direction  string
+	occurredAt time.Time
+	members    []observationMember
+	call       *repository.PhoneCall
+}
+
+// observationMember is one member of a timeline item: its representative
+// observation and every observation whose content the member shows, the
+// representative first. A contact merge can leave the context contact several
+// observations of one interaction node, each holding the content its own contact
+// was sent; the member shows all of them, so what it shows does not depend on
+// which one represents it.
+type observationMember struct {
+	representative repository.Interaction
+	observations   []repository.Interaction
+}
+
+// singleMember is the member of one observation alone.
+func singleMember(row repository.Interaction) observationMember {
+	return observationMember{representative: row, observations: []repository.Interaction{row}}
+}
+
+// ids returns the ids of the member's observations.
+func (m observationMember) ids() []uuid.UUID {
+	ids := make([]uuid.UUID, len(m.observations))
+	for i, row := range m.observations {
+		ids[i] = row.ID
+	}
+	return ids
 }
 
 // ListTimeline returns one page of a contact's interaction history: the
@@ -95,11 +119,11 @@ func (s *InteractionContentService) ListTimeline(ctx context.Context, p reposito
 	start := min(int(p.Offset), total)
 	entries = entries[start:min(start+int(p.Limit), total)]
 
-	var rows []repository.Interaction
+	var members []observationMember
 	for _, entry := range entries {
-		rows = append(rows, entry.observations...)
+		members = append(members, entry.members...)
 	}
-	enrichment, err := s.EnrichPage(ctx, rows)
+	enrichment, err := s.enrichMembers(ctx, members)
 	if err != nil {
 		return nil, err
 	}
@@ -109,7 +133,8 @@ func (s *InteractionContentService) ListTimeline(ctx context.Context, p reposito
 		if entry.call != nil {
 			item.Members = []TimelineMember{missedCallMember(*entry.call)}
 		}
-		for _, row := range entry.observations {
+		for _, member := range entry.members {
+			row := member.representative
 			item.Members = append(item.Members, TimelineMember{Source: row.Source, SourceRef: row.SourceRef, Enrichment: enrichment[row.ID]})
 		}
 		items[i] = item
@@ -161,7 +186,7 @@ func (s *InteractionContentService) timelineEntries(ctx context.Context, p repos
 		entry := timelineEntry{direction: ep.Direction, occurredAt: ep.OccurredAt}
 		if ep.InteractionNodeID != nil {
 			entry.identity = TimelineIdentity{Kind: TimelineKindInteraction, ID: *ep.InteractionNodeID}
-			entry.observations = representatives(trees[*ep.InteractionNodeID], p.ContactID)
+			entry.members = representatives(trees[*ep.InteractionNodeID], p.ContactID)
 		} else {
 			id := ep.Members[0].ObservationID
 			row, ok := burstRows[id]
@@ -169,7 +194,7 @@ func (s *InteractionContentService) timelineEntries(ctx context.Context, p repos
 				return nil, fmt.Errorf("message burst %s left the page between reads", id)
 			}
 			entry.identity = TimelineIdentity{Kind: TimelineKindMessageBurst, ID: id}
-			entry.observations = []repository.Interaction{row}
+			entry.members = []observationMember{singleMember(row)}
 		}
 		entries = append(entries, entry)
 	}
@@ -192,12 +217,12 @@ func (s *InteractionContentService) timelineEntries(ctx context.Context, p repos
 }
 
 // entriesInVenue keeps the entries that the base venue filter would keep for
-// the row of any of their members' representative observations.
+// the row of any of their members' observations.
 func (s *InteractionContentService) entriesInVenue(ctx context.Context, entries []timelineEntry, source, container string) ([]timelineEntry, error) {
 	var ids []uuid.UUID
 	for _, entry := range entries {
-		for _, row := range entry.observations {
-			ids = append(ids, row.ID)
+		for _, member := range entry.members {
+			ids = append(ids, member.ids()...)
 		}
 	}
 	inVenue, err := s.interactions.ListObservationsInVenue(ctx, ids, source, container)
@@ -206,39 +231,44 @@ func (s *InteractionContentService) entriesInVenue(ctx context.Context, entries 
 	}
 	kept := entries[:0]
 	for _, entry := range entries {
-		if slices.ContainsFunc(entry.observations, func(row repository.Interaction) bool { return inVenue[row.ID] }) {
+		if slices.ContainsFunc(entry.members, func(member observationMember) bool {
+			return slices.ContainsFunc(member.observations, func(row repository.Interaction) bool { return inVenue[row.ID] })
+		}) {
 			kept = append(kept, entry)
 		}
 	}
 	return kept, nil
 }
 
-// representatives returns the members of a merged interaction as their
-// representative observations, from the live observations, of any contact, on
-// the nodes of its merge-alias tree: one per node, earliest first, then by node.
-// A node's representative is the context contact's own latest observation of it,
-// otherwise the node's earliest observation.
-func representatives(observations []repository.Interaction, contactID uuid.UUID) []repository.Interaction {
+// representatives returns the members of a merged interaction, from the live
+// observations, of any contact, on the nodes of its merge-alias tree: one per
+// node, earliest representative first, then by node. A node's representative is
+// the context contact's own latest observation of it, and the member shows every
+// one of the contact's own observations of it; a node the contact has no
+// observation of is represented and shown by its earliest observation.
+func representatives(observations []repository.Interaction, contactID uuid.UUID) []observationMember {
 	byNode := map[uuid.UUID][]repository.Interaction{}
 	for _, row := range observations {
 		byNode[*row.InteractionNodeID] = append(byNode[*row.InteractionNodeID], row)
 	}
-	reps := make([]repository.Interaction, 0, len(byNode))
+	members := make([]observationMember, 0, len(byNode))
 	for _, rows := range byNode {
 		own := slices.DeleteFunc(slices.Clone(rows), func(row repository.Interaction) bool { return row.ContactID != contactID })
-		if len(own) > 0 {
-			reps = append(reps, slices.MaxFunc(own, compareObservations))
-		} else {
-			reps = append(reps, slices.MinFunc(rows, compareObservations))
+		if len(own) == 0 {
+			members = append(members, singleMember(slices.MinFunc(rows, compareObservations)))
+			continue
 		}
+		// Latest first, so the representative leads its observations.
+		slices.SortFunc(own, func(a, b repository.Interaction) int { return compareObservations(b, a) })
+		members = append(members, observationMember{representative: own[0], observations: own})
 	}
-	slices.SortFunc(reps, func(a, b repository.Interaction) int {
-		if c := a.OccurredAt.Compare(b.OccurredAt); c != 0 {
+	slices.SortFunc(members, func(a, b observationMember) int {
+		if c := a.representative.OccurredAt.Compare(b.representative.OccurredAt); c != 0 {
 			return c
 		}
-		return bytes.Compare(a.InteractionNodeID[:], b.InteractionNodeID[:])
+		return bytes.Compare(a.representative.InteractionNodeID[:], b.representative.InteractionNodeID[:])
 	})
-	return reps
+	return members
 }
 
 // compareObservations orders observations by time, then id.
@@ -295,17 +325,17 @@ func (s *InteractionContentService) interactionContent(ctx context.Context, node
 	if err != nil {
 		return nil, err
 	}
-	reps := representatives(trees[tree.Root], contactID)
-	if len(reps) == 0 {
+	members := representatives(trees[tree.Root], contactID)
+	if len(members) == 0 {
 		return nil, db.ErrNotFound
 	}
 	content := &TimelineContent{Identity: TimelineIdentity{Kind: TimelineKindInteraction, ID: tree.Root}}
-	for _, row := range reps {
-		member, err := s.observationMemberContent(ctx, row)
+	for _, member := range members {
+		memberContent, err := s.observationMemberContent(ctx, member)
 		if err != nil {
 			return nil, err
 		}
-		content.Members = append(content.Members, member)
+		content.Members = append(content.Members, memberContent)
 	}
 	return content, nil
 }
@@ -318,19 +348,19 @@ func (s *InteractionContentService) burstContent(ctx context.Context, observatio
 	if row.InteractionNodeID != nil {
 		return nil, db.ErrNotFound
 	}
-	member, err := s.observationMemberContent(ctx, *row)
+	member, err := s.observationMemberContent(ctx, singleMember(*row))
 	if err != nil {
 		return nil, err
 	}
 	return &TimelineContent{Identity: TimelineIdentity{Kind: TimelineKindMessageBurst, ID: row.ID}, Members: []TimelineContentMember{member}}, nil
 }
 
-func (s *InteractionContentService) observationMemberContent(ctx context.Context, row repository.Interaction) (TimelineContentMember, error) {
-	content, err := s.contentOf(ctx, row)
+func (s *InteractionContentService) observationMemberContent(ctx context.Context, member observationMember) (TimelineContentMember, error) {
+	content, err := s.contentOf(ctx, member)
 	if err != nil {
 		return TimelineContentMember{}, err
 	}
-	return TimelineContentMember{Source: row.Source, Content: *content}, nil
+	return TimelineContentMember{Source: member.representative.Source, Content: *content}, nil
 }
 
 func (s *InteractionContentService) missedCallContent(ctx context.Context, callID uuid.UUID) (*TimelineContent, error) {

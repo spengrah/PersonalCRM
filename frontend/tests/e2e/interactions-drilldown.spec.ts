@@ -132,7 +132,11 @@ test.describe('Interactions Drill-down @area:interactions', () => {
     expect([...senderCounts.values()].sort()).toEqual([1, 2])
     expect(senderCounts.size).toBe(2)
     for (const [sender, count] of senderCounts) {
-      await expect(region.locator('[data-message-sender]', { hasText: sender })).toHaveCount(
+      // Match the whole sender text: hasText alone is a substring match, and the
+      // generator suffixes a repeated name ("X" and "X 2").
+      const escaped = sender.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+      const exactSender = new RegExp(`^${escaped}$`)
+      await expect(region.locator('[data-message-sender]', { hasText: exactSender })).toHaveCount(
         count,
         {
           timeout: SLOW_TIMEOUT_MS,

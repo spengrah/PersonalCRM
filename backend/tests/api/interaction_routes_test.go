@@ -17,11 +17,12 @@ func TestInteractionRoutes_RegisteredSet(t *testing.T) {
 	router := gin.New()
 	v1 := router.Group("/api/v1")
 	handlers.RegisterContactRoutes(v1, handlers.ContactRouteDeps{
-		Contact:       &handlers.ContactHandler{},
-		Interaction:   &handlers.InteractionHandler{},
-		Correction:    &handlers.InteractionCorrectionHandler{},
-		Note:          &handlers.NoteHandler{},
-		ContactMethod: &handlers.ContactMethodHandler{},
+		Contact:           &handlers.ContactHandler{},
+		Interaction:       &handlers.InteractionHandler{},
+		Correction:        &handlers.InteractionCorrectionHandler{},
+		TimelineAssertion: &handlers.TimelineAssertionHandler{},
+		Note:              &handlers.NoteHandler{},
+		ContactMethod:     &handlers.ContactMethodHandler{},
 	})
 
 	actual := make([]string, 0)
@@ -34,6 +35,7 @@ func TestInteractionRoutes_RegisteredSet(t *testing.T) {
 		"GET /api/v1/contacts/:id/interactions",
 		"POST /api/v1/contacts/:id/interactions",
 		"GET /api/v1/timeline-items/:kind/:id/content",
+		"GET /api/v1/timeline-items/:kind/:id/assertions",
 		"POST /api/v1/interactions/merge",
 		"POST /api/v1/interactions/merge/preview",
 		"POST /api/v1/interactions/:id/removals",

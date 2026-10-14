@@ -7,6 +7,7 @@ package db
 
 import (
 	"context"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -157,6 +158,105 @@ func (q *Queries) InsertProvenance(ctx context.Context, arg InsertProvenancePara
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const ListAssertionsCitingContent = `-- name: ListAssertionsCitingContent :many
+WITH displayed AS (
+    SELECT
+        unnest($1::text[])::text AS source_kind,
+        unnest($2::uuid[])::uuid AS row_id,
+        unnest($3::text[])::text AS content_ref
+), citable AS (
+    SELECT d.source_kind, d.row_id, d.content_ref FROM displayed d
+    UNION
+    SELECT d.source_kind, sibling.id, d.content_ref
+    FROM displayed d
+    JOIN comms_message shown ON d.source_kind = 'comms_message' AND shown.id = d.row_id
+    JOIN comms_message sibling ON sibling.source = shown.source
+        AND sibling.external_id = shown.external_id
+), cited AS (
+    SELECT DISTINCT c.content_ref, p.assertion_id
+    FROM citable c
+    JOIN assertion_provenance p ON p.source_kind = c.source_kind AND p.source_id = c.row_id::text
+)
+SELECT
+    cited.content_ref::text AS content_ref,
+    a.id,
+    a.predicate_key,
+    subject.canonical_label AS subject_label,
+    object.canonical_label AS object_label,
+    a.value_text,
+    a.value_num,
+    a.value_date,
+    a.value_bool,
+    a.status
+FROM cited
+JOIN assertion a ON a.id = cited.assertion_id
+JOIN predicate pr ON pr.key = a.predicate_key AND NOT pr.correction
+JOIN node subject ON subject.id = a.subject_node_id AND subject.deleted_at IS NULL
+LEFT JOIN node object ON object.id = a.object_node_id
+WHERE a.object_node_id IS NULL OR object.deleted_at IS NULL
+ORDER BY cited.content_ref, a.created_at, a.id
+`
+
+type ListAssertionsCitingContentParams struct {
+	SourceKinds []string    `json:"source_kinds"`
+	RowIds      []uuid.UUID `json:"row_ids"`
+	ContentRefs []string    `json:"content_refs"`
+}
+
+type ListAssertionsCitingContentRow struct {
+	ContentRef   string     `json:"content_ref"`
+	ID           uuid.UUID  `json:"id"`
+	PredicateKey string     `json:"predicate_key"`
+	SubjectLabel string     `json:"subject_label"`
+	ObjectLabel  *string    `json:"object_label"`
+	ValueText    *string    `json:"value_text"`
+	ValueNum     *float64   `json:"value_num"`
+	ValueDate    *time.Time `json:"value_date"`
+	ValueBool    *bool      `json:"value_bool"`
+	Status       string     `json:"status"`
+}
+
+// The non-correction assertions whose provenance cites a displayed content item,
+// one row per (content item, assertion), in recording order. Each displayed item
+// is named by its row (source_kinds[i], row_ids[i]) and keyed by content_refs[i].
+// A comms message is stored once per matched contact, so provenance citing any
+// copy of a displayed comms message, the same (source, external_id), cites that
+// item. A copy's liveness does not matter: contact merge and unmatched-row
+// reconciliation tombstone a duplicate copy while the surviving copy carries the
+// same message, and only a live displayed row reaches this query. The correction
+// predicates come from the catalog's correction marker (migration 089). An
+// assertion naming a soft-deleted node is not returned.
+func (q *Queries) ListAssertionsCitingContent(ctx context.Context, arg ListAssertionsCitingContentParams) ([]*ListAssertionsCitingContentRow, error) {
+	rows, err := q.db.Query(ctx, ListAssertionsCitingContent, arg.SourceKinds, arg.RowIds, arg.ContentRefs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []*ListAssertionsCitingContentRow{}
+	for rows.Next() {
+		var i ListAssertionsCitingContentRow
+		if err := rows.Scan(
+			&i.ContentRef,
+			&i.ID,
+			&i.PredicateKey,
+			&i.SubjectLabel,
+			&i.ObjectLabel,
+			&i.ValueText,
+			&i.ValueNum,
+			&i.ValueDate,
+			&i.ValueBool,
+			&i.Status,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const ListProvenance = `-- name: ListProvenance :many

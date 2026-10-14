@@ -1,7 +1,8 @@
 import { TimelineDrillDown } from '@/components/timeline'
 import type { ParticipationContext, TimelineIdentity, TimelineItem } from '@/components/timeline'
 import { visibleMessages } from '@/components/timeline/visible-messages'
-import { useTimelineContent } from '@/hooks/use-interactions'
+import { useTimelineAssertions, useTimelineContent } from '@/hooks/use-interactions'
+import { assertionAnnotations } from './content-assertions'
 
 interface InteractionDrillDownProps {
   item: TimelineItem
@@ -13,7 +14,9 @@ interface InteractionDrillDownProps {
 // The contact page's drill-down: the timeline drill-down plus, above it, the
 // disclosure that the thread window shown and the messages recorded against the
 // interaction are drawn from different sets. The recorded count is the row's;
-// the shown count is what the drill-down displays (the same cached read).
+// the shown count is what the drill-down displays (the same cached read). The
+// assertions citing a displayed content item show beside it (IXN-023); a failed
+// assertions read says so rather than looking like an item no assertion cites.
 export function InteractionDrillDown({
   item,
   identity,
@@ -21,6 +24,7 @@ export function InteractionDrillDown({
   venueFilter,
 }: InteractionDrillDownProps) {
   const content = useTimelineContent(identity, context.contactId)
+  const assertions = useTimelineAssertions(identity, context.contactId)
   const messageMembers = content.data?.members.filter(member => member.kind === 'messages') ?? []
   const shown = messageMembers.reduce(
     (total, member) => total + visibleMessages(member.messages, venueFilter).length,
@@ -35,7 +39,17 @@ export function InteractionDrillDown({
           recorded for this interaction
         </p>
       )}
-      <TimelineDrillDown identity={identity} context={context} venueFilter={venueFilter} />
+      <TimelineDrillDown
+        identity={identity}
+        context={context}
+        venueFilter={venueFilter}
+        annotations={assertions.data && assertionAnnotations(assertions.data.items)}
+      />
+      {assertions.isError && (
+        <p data-assertions-error className="mt-2 text-xs text-gray-500">
+          Failed to load assertions.
+        </p>
+      )}
     </>
   )
 }

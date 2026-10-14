@@ -8,11 +8,12 @@ import "github.com/gin-gonic/gin"
 // distinct handlers; the interaction correction routes live under
 // /interactions.
 type ContactRouteDeps struct {
-	Contact       *ContactHandler
-	Interaction   *InteractionHandler
-	Correction    *InteractionCorrectionHandler
-	Note          *NoteHandler
-	ContactMethod *ContactMethodHandler
+	Contact           *ContactHandler
+	Interaction       *InteractionHandler
+	Correction        *InteractionCorrectionHandler
+	TimelineAssertion *TimelineAssertionHandler
+	Note              *NoteHandler
+	ContactMethod     *ContactMethodHandler
 }
 
 // RegisterContactRoutes wires the unconditional contact + interaction
@@ -35,6 +36,7 @@ type ContactRouteDeps struct {
 //   - GET    /api/v1/contacts/:id/merge/preview
 //   - POST   /api/v1/contacts/:id/merge
 //   - GET    /api/v1/timeline-items/:kind/:id/content
+//   - GET    /api/v1/timeline-items/:kind/:id/assertions
 //   - POST   /api/v1/interactions/merge
 //   - POST   /api/v1/interactions/merge/preview
 //   - POST   /api/v1/interactions/:id/removals
@@ -67,6 +69,8 @@ func RegisterContactRoutes(v1 *gin.RouterGroup, deps ContactRouteDeps) {
 	}
 
 	v1.GET("/timeline-items/:kind/:id/content", deps.Interaction.GetTimelineItemContent)
+	// The one HTTP read of the assertion store (KNW-038).
+	v1.GET("/timeline-items/:kind/:id/assertions", deps.TimelineAssertion.GetTimelineItemAssertions)
 
 	// Interaction routes (non-contact-scoped)
 	interactions := v1.Group("/interactions")

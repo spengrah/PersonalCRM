@@ -88,3 +88,12 @@ export function useRemoveParticipations() {
     onSuccess: () => invalidateFor('interaction:corrected'),
   })
 }
+
+export function useTimelineAssertions(identity: TimelineIdentityResponse, contactId: string) {
+  return useQuery({
+    queryKey: interactionKeys.timelineAssertions(contactId, identity.kind, identity.id),
+    queryFn: () => interactionsApi.getTimelineAssertions(identity, contactId),
+    enabled: !!identity.id && !!contactId,
+    staleTime: staleTime(1000 * 60 * 5),
+  })
+}

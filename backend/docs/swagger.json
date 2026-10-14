@@ -4918,6 +4918,81 @@
                 }
             }
         },
+        "/timeline-items/{kind}/{id}/assertions": {
+            "get": {
+                "description": "Read-only. Each entry is one assertion beside one displayed content item, keyed by that item's content_ref. Correction assertions are never returned.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "interactions"
+                ],
+                "summary": "Get timeline item assertions",
+                "parameters": [
+                    {
+                        "enum": [
+                            "interaction",
+                            "message_burst",
+                            "upcoming_event",
+                            "missed_call"
+                        ],
+                        "type": "string",
+                        "description": "Timeline item kind",
+                        "name": "kind",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "format": "uuid",
+                        "description": "Timeline item ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "format": "uuid",
+                        "description": "Participation context contact ID",
+                        "name": "contact_id",
+                        "in": "query",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/api.APIResponse"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/handlers.TimelineAssertionsResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/api.APIResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/api.APIResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/timeline-items/{kind}/{id}/content": {
             "get": {
                 "produces": [
@@ -7360,6 +7435,52 @@
                 },
                 "suggestion": {
                     "$ref": "#/definitions/handlers.MethodSuggestionResponse"
+                }
+            }
+        },
+        "handlers.TimelineAssertionResponse": {
+            "type": "object",
+            "properties": {
+                "assertion_id": {
+                    "type": "string"
+                },
+                "content_ref": {
+                    "type": "string"
+                },
+                "object": {
+                    "type": "string"
+                },
+                "predicate": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "subject": {
+                    "type": "string"
+                },
+                "value_bool": {
+                    "type": "boolean"
+                },
+                "value_date": {
+                    "type": "string"
+                },
+                "value_num": {
+                    "type": "number"
+                },
+                "value_text": {
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.TimelineAssertionsResponse": {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/handlers.TimelineAssertionResponse"
+                    }
                 }
             }
         },
