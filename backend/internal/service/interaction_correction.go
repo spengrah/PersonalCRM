@@ -512,11 +512,15 @@ func sameTrees(a, b []*repository.InteractionTree) bool {
 
 // contactBefore is what the recompute needs of a contact from before the
 // correction: when its observations of the judged interactions were last
-// recorded, and the outbound it awaited a reply to.
+// recorded, and the outbound it awaited a reply to. skipEnded is set only by a
+// contact merge (MergeContacts): the observations whose awaiting-reply window
+// a skip of the merged contact that recorded them ended. When it is nil, the
+// contact's own skip decides.
 type contactBefore struct {
 	contactID        uuid.UUID
 	judgedRecordedAt time.Time
 	awaited          *repository.ApplyInteractionRequest
+	skipEnded        map[uuid.UUID]bool
 }
 
 // lockAndRead locks the cadence row of each contact, in id order, and reads
@@ -530,7 +534,7 @@ func (s *InteractionCorrectionService) lockAndRead(ctx context.Context, tx pgx.T
 		if err := s.contacts.LockContactForDateRecomputeTx(ctx, tx, id); err != nil {
 			return nil, fmt.Errorf("lock contact %s: %w", id, err)
 		}
-		_, awaited, judgedRecordedAt, err := s.recordedParticipation(ctx, tx, id, judged)
+		_, awaited, judgedRecordedAt, err := s.recordedParticipation(ctx, tx, id, judged, nil)
 		if err != nil {
 			return nil, err
 		}
@@ -543,7 +547,7 @@ func (s *InteractionCorrectionService) lockAndRead(ctx context.Context, tx pgx.T
 // its effective participation after the correction.
 func (s *InteractionCorrectionService) recompute(ctx context.Context, tx pgx.Tx, act uuid.UUID, before []contactBefore) error {
 	for _, b := range before {
-		participation, awaited, _, err := s.recordedParticipation(ctx, tx, b.contactID, nil)
+		participation, awaited, _, err := s.recordedParticipation(ctx, tx, b.contactID, nil, b.skipEnded)
 		if err != nil {
 			return err
 		}
@@ -560,11 +564,13 @@ func (s *InteractionCorrectionService) recompute(ctx context.Context, tx pgx.Tx,
 // recordedParticipation reads the contact's effective participation as the
 // recording rules take it: each entry at its own direction and time, with the
 // source of the member observation recorded last, in the order the entries
-// were recorded (an entry is recorded when its last member was). It also
-// returns the awaited outbound (see awaitedOutbound) and when the contact's
-// entries under the root nodes judged were last recorded.
+// were recorded (an entry is recorded when its last member was). An entry's
+// awaiting-reply window was ended by a skip when its last member's was: per
+// skipEnded when set, else by the contact's own skip. It also returns the
+// awaited outbound (see awaitedOutbound) and when the contact's entries under
+// the root nodes judged were last recorded.
 func (s *InteractionCorrectionService) recordedParticipation(
-	ctx context.Context, tx pgx.Tx, contactID uuid.UUID, judged []uuid.UUID,
+	ctx context.Context, tx pgx.Tx, contactID uuid.UUID, judged []uuid.UUID, skipEnded map[uuid.UUID]bool,
 ) ([]repository.RecordedParticipation, *repository.ApplyInteractionRequest, time.Time, error) {
 	contact, err := s.contacts.GetContactTx(ctx, tx, contactID)
 	if err != nil {
@@ -595,13 +601,17 @@ func (s *InteractionCorrectionService) recordedParticipation(
 			Source:     last.Source,
 			OccurredAt: entry.OccurredAt,
 		}
-		recorded = append(recorded, repository.RecordedParticipation{ApplyInteractionRequest: req, RecordedAt: last.RecordedAt})
+		endedBySkip := contact.AwaitingReplyEndedBySkip(last.RecordedAt)
+		if skipEnded != nil {
+			endedBySkip = skipEnded[last.ID]
+		}
+		recorded = append(recorded, repository.RecordedParticipation{ApplyInteractionRequest: req, RecordedAt: last.RecordedAt, WindowEndedBySkip: endedBySkip})
 		if entry.InteractionNodeID != nil && slices.Contains(judged, *entry.InteractionNodeID) && last.RecordedAt.After(judgedRecordedAt) {
 			judgedRecordedAt = last.RecordedAt
 		}
 		switch entry.Direction {
 		case repository.InteractionDirectionOutbound:
-			outbounds = append(outbounds, awaitCandidate{req: req, observationID: last.ID, recordedAt: last.RecordedAt})
+			outbounds = append(outbounds, awaitCandidate{req: req, observationID: last.ID, endedBySkip: endedBySkip})
 		default:
 			if latestResponse == nil || req.OccurredAt.After(latestResponse.OccurredAt) {
 				r := req
@@ -615,7 +625,7 @@ func (s *InteractionCorrectionService) recordedParticipation(
 		}
 		return recorded[i].OccurredAt.Before(recorded[j].OccurredAt)
 	})
-	awaited, err := s.awaitedOutbound(ctx, tx, contact, outbounds, latestResponse)
+	awaited, err := s.awaitedOutbound(ctx, tx, outbounds, latestResponse)
 	if err != nil {
 		return nil, nil, time.Time{}, err
 	}
@@ -623,28 +633,28 @@ func (s *InteractionCorrectionService) recordedParticipation(
 }
 
 // awaitCandidate is an outbound entry and the member observation whose
-// recording gave the entry its effect, with when it was recorded.
+// recording gave the entry its effect, with whether a skip ended its window.
 type awaitCandidate struct {
 	req           repository.ApplyInteractionRequest
 	observationID uuid.UUID
-	recordedAt    time.Time
+	endedBySkip   bool
 }
 
 // awaitedOutbound is the outbound a follow-up awaits a reply to under the
 // follow-up rules: the latest outbound entry whose recording did not suppress
 // its follow-up (a send's completion never opens or moves one, CAD-012) and
-// whose window no CRM skip of contact ended (a window the user ended with a
-// skip stays ended, as the cadence replay keeps it), when no inbound or mutual
-// entry is later. Nil when there is none.
+// whose window no CRM skip ended (a window the user ended with a skip stays
+// ended, as the cadence replay keeps it), when no inbound or mutual entry is
+// later. Nil when there is none.
 func (s *InteractionCorrectionService) awaitedOutbound(
-	ctx context.Context, tx pgx.Tx, contact *repository.Contact, outbounds []awaitCandidate, latestResponse *repository.ApplyInteractionRequest,
+	ctx context.Context, tx pgx.Tx, outbounds []awaitCandidate, latestResponse *repository.ApplyInteractionRequest,
 ) (*repository.ApplyInteractionRequest, error) {
 	sort.SliceStable(outbounds, func(i, j int) bool { return outbounds[i].req.OccurredAt.After(outbounds[j].req.OccurredAt) })
 	for _, candidate := range outbounds {
 		if latestResponse != nil && latestResponse.OccurredAt.After(candidate.req.OccurredAt) {
 			return nil, nil
 		}
-		if contact.AwaitingReplyEndedBySkip(candidate.recordedAt) {
+		if candidate.endedBySkip {
 			continue
 		}
 		suppressed, err := s.interactions.RecordingSuppressedFollowUpTx(ctx, tx, candidate.observationID)

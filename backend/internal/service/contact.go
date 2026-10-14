@@ -45,6 +45,7 @@ type OverdueContact struct {
 // follow-up behavior without building the full consumer graph.
 type FollowUpConsumer interface {
 	ApplyInteraction(ctx context.Context, tx pgx.Tx, req repository.ApplyInteractionRequest) error
+	correctionFollowUp
 }
 
 // cadenceWriter abstracts the direct-invoke write surface of
@@ -64,6 +65,7 @@ type cadenceWriter interface {
 	ApplyContactByOverride(ctx context.Context, tx pgx.Tx, contactID uuid.UUID, contactBy *time.Time) error
 	ApplySkip(ctx context.Context, tx pgx.Tx, contactID uuid.UUID, nextContactBy, skippedAt time.Time, reason string) error
 	ApplyUndoSkip(ctx context.Context, tx pgx.Tx, contactID uuid.UUID) error
+	correctionCadence
 }
 
 // SkipReasonUI is the only skip reason the CRM writes (#212).
@@ -116,6 +118,12 @@ type ContactService struct {
 	// rather than silently dropping a location/birthday/how_met write (the
 	// columns are no longer written by the contact SQL).
 	knowledge *knowledgeWriter
+	// corrections recomputes a merge survivor's cadence fields and follow-up
+	// tasks from its effective participation, as a correction of interactions
+	// does, when the merge makes a correction cover an observation it did not
+	// cover before (MergeContacts). Only its participation reads and recompute
+	// are used, so it holds only their dependencies.
+	corrections *InteractionCorrectionService
 	// commsRepo carries the savepoint-wrapped comms_message merge repoint
 	// (dedup soft-delete + repoint with one scoped retry). Constructed
 	// internally from database.Queries — no new constructor arg.
@@ -181,6 +189,12 @@ func NewContactService(
 		cadence:           cadence,
 		knowledge:         buildKnowledgeWriter(assertSvc, knowledgeCache),
 		followUp:          followUp,
+		corrections: &InteractionCorrectionService{
+			interactions: interactionRepo,
+			contacts:     contactRepo,
+			cadence:      cadence,
+			followUp:     followUp,
+		},
 	}
 }
 
@@ -1410,6 +1424,29 @@ func (s *ContactService) MergeContacts(ctx context.Context, req MergeContactsReq
 		return nil, fmt.Errorf("lock source and target nodes for merge: %w", err)
 	}
 
+	// Both contacts' effective observations, those whose awaiting-reply window
+	// the contact's own skip ended, and the later of their awaited outbounds,
+	// read before anything moves; 7b compares them with the survivor's after
+	// the merge.
+	effectiveBefore, err := s.effectiveObservationsTx(ctx, tx, req.SourceContactID, req.TargetContactID)
+	if err != nil {
+		return nil, fmt.Errorf("read participation before merge: %w", err)
+	}
+	skipEndedBefore, err := s.skipEndedObservationsTx(ctx, tx, req.SourceContactID, req.TargetContactID)
+	if err != nil {
+		return nil, fmt.Errorf("read skip-ended windows before merge: %w", err)
+	}
+	var awaitedBefore *repository.ApplyInteractionRequest
+	for _, contactID := range []uuid.UUID{req.SourceContactID, req.TargetContactID} {
+		_, awaited, _, err := s.corrections.recordedParticipation(ctx, tx, contactID, nil, nil)
+		if err != nil {
+			return nil, fmt.Errorf("read awaited outbound before merge: %w", err)
+		}
+		if awaited != nil && (awaitedBefore == nil || awaited.OccurredAt.After(awaitedBefore.OccurredAt)) {
+			awaitedBefore = awaited
+		}
+	}
+
 	// 1. Delete duplicate contact methods (same normalized value and type)
 	if err := txQueries.DeleteDuplicateContactMethods(ctx, db.DeleteDuplicateContactMethodsParams{
 		SourceContactID: sourceUUID,
@@ -1691,6 +1728,17 @@ func (s *ContactService) MergeContacts(ctx context.Context, req MergeContactsReq
 		return nil, fmt.Errorf("bulk apply merged cadence: %w", err)
 	}
 
+	// 7b. The graph merge re-points each contact's corrections onto the
+	// survivor, so a removal of one contact now covers the other's
+	// observation of the same interaction. When the merge excludes an
+	// observation that was effective before it, the survivor's cadence fields
+	// and follow-up tasks are recomputed from its effective participation as
+	// a correction recomputes them (CAD-047, CAD-048), taking the merged
+	// state above as the state before the correction.
+	if err := s.recomputeMergeExclusionsTx(ctx, tx, req.TargetContactID, effectiveBefore, skipEndedBefore, awaitedBefore); err != nil {
+		return nil, err
+	}
+
 	// BulkApply is a second UPDATE on the contact row, so the profile-
 	// only UpdateContact's RETURNING values (updated_at + the four
 	// cadence columns) are stale. Re-fetch inside the tx so the struct
@@ -1738,6 +1786,94 @@ func (s *ContactService) MergeContacts(ctx context.Context, req MergeContactsReq
 	}
 
 	return mergedContact, nil
+}
+
+// effectiveObservationsTx returns the set of observations in the contacts'
+// effective participation.
+func (s *ContactService) effectiveObservationsTx(ctx context.Context, tx pgx.Tx, contactIDs ...uuid.UUID) (map[uuid.UUID]bool, error) {
+	observations := map[uuid.UUID]bool{}
+	for _, contactID := range contactIDs {
+		entries, err := s.interactionRepo.ListEffectiveParticipationTx(ctx, tx, contactID)
+		if err != nil {
+			return nil, err
+		}
+		for _, entry := range entries {
+			for _, member := range entry.Members {
+				observations[member.ObservationID] = true
+			}
+		}
+	}
+	return observations, nil
+}
+
+// skipEndedObservationsTx returns the set of observations in the contacts'
+// effective participation whose awaiting-reply window the skip of the contact
+// that recorded them ended. A skip ends only its own contact's windows, so the
+// merge reads it before the observations move to the survivor.
+func (s *ContactService) skipEndedObservationsTx(ctx context.Context, tx pgx.Tx, contactIDs ...uuid.UUID) (map[uuid.UUID]bool, error) {
+	ended := map[uuid.UUID]bool{}
+	for _, contactID := range contactIDs {
+		contact, err := s.contactRepo.GetContactTx(ctx, tx, contactID)
+		if err != nil {
+			return nil, err
+		}
+		entries, err := s.interactionRepo.ListEffectiveParticipationTx(ctx, tx, contactID)
+		if err != nil {
+			return nil, err
+		}
+		for _, entry := range entries {
+			for _, member := range entry.Members {
+				row, err := s.interactionRepo.GetInteractionTx(ctx, tx, member.ObservationID)
+				if err != nil {
+					return nil, fmt.Errorf("read member observation %s: %w", member.ObservationID, err)
+				}
+				if contact.AwaitingReplyEndedBySkip(row.RecordedAt) {
+					ended[member.ObservationID] = true
+				}
+			}
+		}
+	}
+	return ended, nil
+}
+
+// recomputeMergeExclusionsTx recomputes the merge survivor from its effective
+// participation when the merge excluded an observation in effectiveBefore.
+// The corrected observations are the excluded ones. skipEndedBefore are the
+// observations whose window a skip of their own contact ended, which stay
+// ended. awaitedBefore is the later of the two contacts' awaited outbounds, as
+// the merge keeps the later awaiting-reply window.
+func (s *ContactService) recomputeMergeExclusionsTx(
+	ctx context.Context, tx pgx.Tx, survivorID uuid.UUID, effectiveBefore, skipEndedBefore map[uuid.UUID]bool, awaitedBefore *repository.ApplyInteractionRequest,
+) error {
+	effectiveAfter, err := s.effectiveObservationsTx(ctx, tx, survivorID)
+	if err != nil {
+		return fmt.Errorf("read participation after merge: %w", err)
+	}
+	before := contactBefore{contactID: survivorID, awaited: awaitedBefore, skipEnded: skipEndedBefore}
+	excluded := false
+	for observationID := range effectiveBefore {
+		if effectiveAfter[observationID] {
+			continue
+		}
+		excluded = true
+		row, err := s.interactionRepo.GetInteractionTx(ctx, tx, observationID)
+		if err != nil {
+			return fmt.Errorf("read observation %s excluded by merge: %w", observationID, err)
+		}
+		if row.RecordedAt.After(before.judgedRecordedAt) {
+			before.judgedRecordedAt = row.RecordedAt
+		}
+	}
+	if !excluded {
+		return nil
+	}
+	if s.followUp == nil {
+		return errors.New("merge contacts: follow-up consumer not wired (pass followUp to NewContactService)")
+	}
+	if err := s.corrections.recompute(ctx, tx, uuid.New(), []contactBefore{before}); err != nil {
+		return fmt.Errorf("recompute merged contact from effective participation: %w", err)
+	}
+	return nil
 }
 
 // repointMergedAttributionSecondPass re-runs the merge's identity +

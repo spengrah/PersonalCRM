@@ -421,10 +421,10 @@ func (h *CadenceUpdater) RecomputeAfterCorrection(ctx context.Context, tx pgx.Tx
 // replayTx returns the cadence fields contact would hold had exactly
 // participations been recorded, in order, through the normal recording rules,
 // starting from its creation state (no interaction timestamps; contact_by
-// derived from created_at when it has a cadence). A CRM skip that ended the
-// awaiting-reply window ends it again at its place in that order, so a window
-// the user ended stays ended. The replay writes inside a savepoint it rolls
-// back, so the contact row is unchanged on return.
+// derived from created_at when it has a cadence). A participation whose
+// awaiting-reply window a CRM skip ended opens no window, so a window the user
+// ended stays ended. The replay writes inside a savepoint it rolls back, so the
+// contact row is unchanged on return.
 func (h *CadenceUpdater) replayTx(ctx context.Context, tx pgx.Tx, contact *repository.Contact, participations []repository.RecordedParticipation) (replayed *repository.Contact, err error) {
 	sp, err := tx.Begin(ctx)
 	if err != nil {
@@ -458,33 +458,18 @@ func (h *CadenceUpdater) replayTx(ctx context.Context, tx pgx.Tx, contact *repos
 	}); err != nil {
 		return nil, fmt.Errorf("write creation state: %w", err)
 	}
-	skipPending := contact.AwaitingReplySkipEndedAt != nil
-	endWindow := func() error {
-		skipPending = false
-		return h.applyTx(ctx, sp, cadenceWriteRequest{
-			ContactID:               contact.ID,
-			Branch:                  repository.CadenceBranchUnconditional,
-			ApplyAwaitingReplyUntil: true,
-		})
-	}
 	for _, p := range participations {
-		if skipPending && !contact.AwaitingReplyEndedBySkip(p.RecordedAt) {
-			if err := endWindow(); err != nil {
-				return nil, fmt.Errorf("replay skip-ended window: %w", err)
-			}
-		}
 		row, err := h.contacts.GetContactTx(ctx, sp, contact.ID)
 		if err != nil {
 			return nil, fmt.Errorf("read replayed contact: %w", err)
 		}
 		req := h.buildInteractionWrite(contact.ID, p.Direction, p.Source, p.OccurredAt, repository.ContactCadenceFieldsFromContact(row), cadenceStr)
+		if p.WindowEndedBySkip {
+			req.ApplyAwaitingReplyUntil = false
+			req.AwaitingReplyUntil = nil
+		}
 		if err := h.applyTx(ctx, sp, req); err != nil {
 			return nil, fmt.Errorf("replay participation: %w", err)
-		}
-	}
-	if skipPending {
-		if err := endWindow(); err != nil {
-			return nil, fmt.Errorf("replay skip-ended window: %w", err)
 		}
 	}
 	return h.contacts.GetContactTx(ctx, sp, contact.ID)

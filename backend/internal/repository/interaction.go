@@ -65,10 +65,12 @@ type ApplyInteractionRequest struct {
 // RecordedParticipation is one effective participation as the recording rules
 // take it, with when its effect was last recorded: the latest RecordedAt of its
 // member observations. The correction recompute replays these in RecordedAt
-// order (CAD-047).
+// order (CAD-047). WindowEndedBySkip reports that a CRM skip of the contact
+// that recorded it ended its awaiting-reply window, so the replay opens none.
 type RecordedParticipation struct {
 	ApplyInteractionRequest
-	RecordedAt time.Time
+	RecordedAt        time.Time
+	WindowEndedBySkip bool
 }
 
 // RecordInteractionResult bundles the non-error returns of
