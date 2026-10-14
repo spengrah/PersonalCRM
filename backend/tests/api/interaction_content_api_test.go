@@ -32,10 +32,7 @@ func getInteractionContent(t *testing.T, e *interactionAPIDB, row repository.Int
 // contact.
 func getInteractionContentAs(t *testing.T, e *interactionAPIDB, row repository.Interaction, contactID uuid.UUID) (int, map[string]any) {
 	t.Helper()
-	kind, id := "message_burst", row.ID
-	if row.InteractionNodeID != nil {
-		kind, id = "interaction", *row.InteractionNodeID
-	}
+	kind, id := timelineIdentityOf(&row)
 	return getTimelineContentAs(t, e, kind, id, contactID)
 }
 

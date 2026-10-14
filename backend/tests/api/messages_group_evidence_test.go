@@ -56,11 +56,27 @@ type contentRow struct {
 	Body       string    `json:"body"`
 }
 
+// timelineIdentityOf is the timeline identity an interaction row reads under:
+// its interaction node when it has one, else the row itself as a message burst.
+func timelineIdentityOf(row *repository.Interaction) (string, uuid.UUID) {
+	if row.InteractionNodeID != nil {
+		return "interaction", *row.InteractionNodeID
+	}
+	return "message_burst", row.ID
+}
+
+// timelineContentPath is the content route of an interaction row's timeline
+// item, read in that row's own contact's participation context.
+func timelineContentPath(row *repository.Interaction) string {
+	kind, id := timelineIdentityOf(row)
+	return "/api/v1/timeline-items/" + kind + "/" + id.String() + "/content?contact_id=" + row.ContactID.String()
+}
+
 // content reads the drill-down messages of an interaction in its own
 // contact's participation context.
 func (g *groupEnv) content(t *testing.T, interaction *repository.Interaction) []contentRow {
 	t.Helper()
-	path := "/api/v1/timeline-items/interaction/" + interaction.ID.String() + "/content?contact_id=" + interaction.ContactID.String()
+	path := timelineContentPath(interaction)
 	w := macHTTP(t, g.macHostTestEnv, http.MethodGet, path, nil, nil)
 	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
 	var data struct {

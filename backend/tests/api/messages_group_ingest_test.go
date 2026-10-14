@@ -228,7 +228,7 @@ func (g *groupIngestEnv) interaction(t *testing.T, id uuid.UUID) *repository.Int
 // contact's participation context.
 func (g *groupIngestEnv) content(t *testing.T, id uuid.UUID) []contentRow {
 	t.Helper()
-	path := "/api/v1/timeline-items/interaction/" + id.String() + "/content?contact_id=" + g.interaction(t, id).ContactID.String()
+	path := timelineContentPath(g.interaction(t, id))
 	w := httptest.NewRecorder()
 	g.router.ServeHTTP(w, httptest.NewRequest(http.MethodGet, path, nil))
 	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
