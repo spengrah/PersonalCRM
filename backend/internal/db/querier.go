@@ -107,8 +107,6 @@ type Querier interface {
 	// skipped-to date (cadence.NextAfterSkip), ends the awaiting-reply window,
 	// and records the skip state in the SAME statement — last_skipped_contact_by
 	// captures the pre-skip contact_by because SET expressions read the old row.
-	// awaiting_reply_skip_ended_at records when the skip ended the window, for
-	// the correction recompute (CAD-047); this is its only writer.
 	// Cadence-owned: the caller declares crm.derived_writer=cadence first.
 	ApplyContactSkip(ctx context.Context, arg ApplyContactSkipParams) error
 	// Undo (CAD-045): restores the recorded pre-skip contact_by and clears the

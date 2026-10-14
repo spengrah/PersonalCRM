@@ -57,8 +57,7 @@ type contactCadenceReader interface {
 // contact.last_skipped_at, contact.last_skipped_contact_by, and
 // contact.last_skip_reason; every other clock writer clears those columns.
 // It is the sole writer of contact.contact_by_direct_set_at/value (the
-// Todoist deadline edit) and contact.awaiting_reply_skip_ended_at (the CRM
-// skip), which only the correction recompute reads.
+// Todoist deadline edit), which only the correction recompute reads.
 //
 // Entry points (all funnel into applyTx):
 //   - HandleEvent:       envelope-driven (from InteractionRecorder inline
@@ -421,10 +420,10 @@ func (h *CadenceUpdater) RecomputeAfterCorrection(ctx context.Context, tx pgx.Tx
 // replayTx returns the cadence fields contact would hold had exactly
 // participations been recorded, in order, through the normal recording rules,
 // starting from its creation state (no interaction timestamps; contact_by
-// derived from created_at when it has a cadence). A participation whose
-// awaiting-reply window a CRM skip ended opens no window, so a window the user
-// ended stays ended. The replay writes inside a savepoint it rolls back, so the
-// contact row is unchanged on return.
+// derived from created_at when it has a cadence). Skip state takes no part:
+// the awaiting-reply window derives from participation alone. The replay
+// writes inside a savepoint it rolls back, so the contact row is unchanged on
+// return.
 func (h *CadenceUpdater) replayTx(ctx context.Context, tx pgx.Tx, contact *repository.Contact, participations []repository.RecordedParticipation) (replayed *repository.Contact, err error) {
 	sp, err := tx.Begin(ctx)
 	if err != nil {
@@ -464,10 +463,6 @@ func (h *CadenceUpdater) replayTx(ctx context.Context, tx pgx.Tx, contact *repos
 			return nil, fmt.Errorf("read replayed contact: %w", err)
 		}
 		req := h.buildInteractionWrite(contact.ID, p.Direction, p.Source, p.OccurredAt, repository.ContactCadenceFieldsFromContact(row), cadenceStr)
-		if p.WindowEndedBySkip {
-			req.ApplyAwaitingReplyUntil = false
-			req.AwaitingReplyUntil = nil
-		}
 		if err := h.applyTx(ctx, sp, req); err != nil {
 			return nil, fmt.Errorf("replay participation: %w", err)
 		}

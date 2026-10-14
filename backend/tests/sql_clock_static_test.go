@@ -43,11 +43,10 @@ var infraClockColumns = map[string]string{
 	// family, so the TTL never mixes clocks. Go readers only copy the column.
 	"claimed_at": "ingest and whatsapp claim lease; stamped and TTL-compared on the DB clock inside the claim queries",
 	// Recording order: the correction recompute (CAD-047) orders a user's due
-	// date set directly and a skip's end of the awaiting-reply window against
-	// interaction.recorded_at, which a trigger stamps from the DB clock. They
-	// are compared only with each other, never with accelerated time.
-	"contact.contact_by_direct_set_at":     "recording-order stamp; compared only with interaction.recorded_at (DB clock)",
-	"contact.awaiting_reply_skip_ended_at": "recording-order stamp; compared only with interaction.recorded_at (DB clock)",
+	// date set directly against interaction.recorded_at, which a trigger stamps
+	// from the DB clock. They are compared only with each other, never with
+	// accelerated time.
+	"contact.contact_by_direct_set_at": "recording-order stamp; compared only with interaction.recorded_at (DB clock)",
 	// River's own table: River runs on the real clock (no TimeGenerator stub in
 	// this repo), so fixtures must use the DB clock to match its fetch query.
 	"river_job.created_at":   "River fixture row; River fetches on the real clock",

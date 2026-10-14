@@ -151,26 +151,13 @@ type Contact struct {
 	LastSkippedContactBy *time.Time      `json:"last_skipped_contact_by,omitempty"`
 	LastSkipReason       *string         `json:"last_skip_reason,omitempty"`
 	// ContactByDirectSetAt and ContactByDirectSetValue are the latest due date
-	// the user set directly (a Todoist deadline edit) and when it was set;
-	// AwaitingReplySkipEndedAt is when a CRM skip last ended the awaiting-reply
-	// window. The correction recompute reads them (CAD-047); no wire carries
-	// them.
-	ContactByDirectSetAt     *time.Time `json:"-"`
-	ContactByDirectSetValue  *time.Time `json:"-"`
-	AwaitingReplySkipEndedAt *time.Time `json:"-"`
-	ProfilePhoto             *string    `json:"profile_photo,omitempty"`
-	CreatedAt                time.Time  `json:"created_at"`
-	UpdatedAt                time.Time  `json:"updated_at"`
-}
-
-// AwaitingReplyEndedBySkip reports whether the CRM skip recorded on the
-// contact ended the awaiting-reply window of a participation recorded at
-// recordedAt: the skip came at or after that recording. A participation
-// recorded after the skip opens a window of its own. The correction
-// recompute's cadence replay and its follow-up reconciliation both place the
-// skip by this rule.
-func (c *Contact) AwaitingReplyEndedBySkip(recordedAt time.Time) bool {
-	return c.AwaitingReplySkipEndedAt != nil && !recordedAt.After(*c.AwaitingReplySkipEndedAt)
+	// the user set directly (a Todoist deadline edit) and when it was set.
+	// The correction recompute reads them (CAD-047); no wire carries them.
+	ContactByDirectSetAt    *time.Time `json:"-"`
+	ContactByDirectSetValue *time.Time `json:"-"`
+	ProfilePhoto            *string    `json:"profile_photo,omitempty"`
+	CreatedAt               time.Time  `json:"created_at"`
+	UpdatedAt               time.Time  `json:"updated_at"`
 }
 
 // CreateContactRequest represents the request to create a contact
@@ -247,7 +234,6 @@ func convertDbContact(dbContact *db.Contact) Contact {
 	contact.LastSkipReason = dbContact.LastSkipReason
 	contact.ContactByDirectSetAt = utcPtr(dbContact.ContactByDirectSetAt)
 	contact.ContactByDirectSetValue = dbContact.ContactByDirectSetValue
-	contact.AwaitingReplySkipEndedAt = utcPtr(dbContact.AwaitingReplySkipEndedAt)
 
 	return contact
 }

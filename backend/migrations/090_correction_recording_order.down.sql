@@ -8,8 +8,7 @@ DROP VIEW live_contact;
 
 ALTER TABLE contact
     DROP COLUMN contact_by_direct_set_at,
-    DROP COLUMN contact_by_direct_set_value,
-    DROP COLUMN awaiting_reply_skip_ended_at;
+    DROP COLUMN contact_by_direct_set_value;
 
 CREATE VIEW live_contact AS
 SELECT

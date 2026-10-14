@@ -512,15 +512,11 @@ func sameTrees(a, b []*repository.InteractionTree) bool {
 
 // contactBefore is what the recompute needs of a contact from before the
 // correction: when its observations of the judged interactions were last
-// recorded, and the outbound it awaited a reply to. skipEnded is set only by a
-// contact merge (MergeContacts): the observations whose awaiting-reply window
-// a skip of the merged contact that recorded them ended. When it is nil, the
-// contact's own skip decides.
+// recorded, and the outbound it awaited a reply to.
 type contactBefore struct {
 	contactID        uuid.UUID
 	judgedRecordedAt time.Time
 	awaited          *repository.ApplyInteractionRequest
-	skipEnded        map[uuid.UUID]bool
 }
 
 // lockAndRead locks the cadence row of each contact, in id order, and reads
@@ -534,7 +530,7 @@ func (s *InteractionCorrectionService) lockAndRead(ctx context.Context, tx pgx.T
 		if err := s.contacts.LockContactForDateRecomputeTx(ctx, tx, id); err != nil {
 			return nil, fmt.Errorf("lock contact %s: %w", id, err)
 		}
-		_, awaited, judgedRecordedAt, err := s.recordedParticipation(ctx, tx, id, judged, nil)
+		_, awaited, judgedRecordedAt, err := s.recordedParticipation(ctx, tx, judged, id)
 		if err != nil {
 			return nil, err
 		}
@@ -547,7 +543,7 @@ func (s *InteractionCorrectionService) lockAndRead(ctx context.Context, tx pgx.T
 // its effective participation after the correction.
 func (s *InteractionCorrectionService) recompute(ctx context.Context, tx pgx.Tx, act uuid.UUID, before []contactBefore) error {
 	for _, b := range before {
-		participation, awaited, _, err := s.recordedParticipation(ctx, tx, b.contactID, nil, b.skipEnded)
+		participation, awaited, _, err := s.recordedParticipation(ctx, tx, nil, b.contactID)
 		if err != nil {
 			return err
 		}
@@ -561,29 +557,23 @@ func (s *InteractionCorrectionService) recompute(ctx context.Context, tx pgx.Tx,
 	return nil
 }
 
-// recordedParticipation reads the contact's effective participation as the
-// recording rules take it: each entry at its own direction and time, with the
-// source of the member observation recorded last, in the order the entries
-// were recorded (an entry is recorded when its last member was). An entry's
-// awaiting-reply window was ended by a skip when its last member's was: per
-// skipEnded when set, else by the contact's own skip. It also returns the
-// awaited outbound (see awaitedOutbound) and when the contact's entries under
-// the root nodes judged were last recorded.
+// recordedParticipation reads the effective participation of the contact as
+// the recording rules take it: each entry at its own direction and time, with
+// the source of the member observation recorded last, in the order the entries
+// were recorded (an entry is recorded when its last member was). It also
+// returns the awaited outbound across all the entries (see awaitedOutbound)
+// and when the entries under the root nodes judged were last recorded.
 func (s *InteractionCorrectionService) recordedParticipation(
-	ctx context.Context, tx pgx.Tx, contactID uuid.UUID, judged []uuid.UUID, skipEnded map[uuid.UUID]bool,
+	ctx context.Context, tx pgx.Tx, judged []uuid.UUID, contactID uuid.UUID,
 ) ([]repository.RecordedParticipation, *repository.ApplyInteractionRequest, time.Time, error) {
-	contact, err := s.contacts.GetContactTx(ctx, tx, contactID)
-	if err != nil {
-		return nil, nil, time.Time{}, err
-	}
+	var recorded []repository.RecordedParticipation
+	var outbounds []awaitCandidate
+	var latestResponse *repository.ApplyInteractionRequest
+	var judgedRecordedAt time.Time
 	entries, err := s.interactions.ListEffectiveParticipationTx(ctx, tx, contactID)
 	if err != nil {
 		return nil, nil, time.Time{}, err
 	}
-	recorded := make([]repository.RecordedParticipation, 0, len(entries))
-	var outbounds []awaitCandidate
-	var latestResponse *repository.ApplyInteractionRequest
-	var judgedRecordedAt time.Time
 	for _, entry := range entries {
 		var last *repository.Interaction
 		for _, member := range entry.Members {
@@ -601,17 +591,13 @@ func (s *InteractionCorrectionService) recordedParticipation(
 			Source:     last.Source,
 			OccurredAt: entry.OccurredAt,
 		}
-		endedBySkip := contact.AwaitingReplyEndedBySkip(last.RecordedAt)
-		if skipEnded != nil {
-			endedBySkip = skipEnded[last.ID]
-		}
-		recorded = append(recorded, repository.RecordedParticipation{ApplyInteractionRequest: req, RecordedAt: last.RecordedAt, WindowEndedBySkip: endedBySkip})
+		recorded = append(recorded, repository.RecordedParticipation{ApplyInteractionRequest: req, RecordedAt: last.RecordedAt})
 		if entry.InteractionNodeID != nil && slices.Contains(judged, *entry.InteractionNodeID) && last.RecordedAt.After(judgedRecordedAt) {
 			judgedRecordedAt = last.RecordedAt
 		}
 		switch entry.Direction {
 		case repository.InteractionDirectionOutbound:
-			outbounds = append(outbounds, awaitCandidate{req: req, observationID: last.ID, endedBySkip: endedBySkip})
+			outbounds = append(outbounds, awaitCandidate{req: req, observationID: last.ID})
 		default:
 			if latestResponse == nil || req.OccurredAt.After(latestResponse.OccurredAt) {
 				r := req
@@ -633,19 +619,17 @@ func (s *InteractionCorrectionService) recordedParticipation(
 }
 
 // awaitCandidate is an outbound entry and the member observation whose
-// recording gave the entry its effect, with whether a skip ended its window.
+// recording gave the entry its effect.
 type awaitCandidate struct {
 	req           repository.ApplyInteractionRequest
 	observationID uuid.UUID
-	endedBySkip   bool
 }
 
 // awaitedOutbound is the outbound a follow-up awaits a reply to under the
 // follow-up rules: the latest outbound entry whose recording did not suppress
-// its follow-up (a send's completion never opens or moves one, CAD-012) and
-// whose window no CRM skip ended (a window the user ended with a skip stays
-// ended, as the cadence replay keeps it), when no inbound or mutual entry is
-// later. Nil when there is none.
+// its follow-up (a send's completion never opens or moves one, CAD-012), when
+// no inbound or mutual entry is later. Skip state takes no part, as in the
+// cadence replay. Nil when there is none.
 func (s *InteractionCorrectionService) awaitedOutbound(
 	ctx context.Context, tx pgx.Tx, outbounds []awaitCandidate, latestResponse *repository.ApplyInteractionRequest,
 ) (*repository.ApplyInteractionRequest, error) {
@@ -653,9 +637,6 @@ func (s *InteractionCorrectionService) awaitedOutbound(
 	for _, candidate := range outbounds {
 		if latestResponse != nil && latestResponse.OccurredAt.After(candidate.req.OccurredAt) {
 			return nil, nil
-		}
-		if candidate.endedBySkip {
-			continue
 		}
 		suppressed, err := s.interactions.RecordingSuppressedFollowUpTx(ctx, tx, candidate.observationID)
 		if err != nil {

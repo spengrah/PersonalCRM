@@ -680,8 +680,8 @@ behaviors:
         text: a skip in effect is withdrawn, and undo no longer offered, when the correction changes last_contacted
       - key: skip-kept-when-clock-unmoved
         text: a skip in effect, and contact_by, stay when the correction leaves last_contacted unchanged
-      - key: skip-ended-window-stays-ended
-        text: an awaiting-reply window the user ended with a skip stays ended, also when the correction removes a later response and leaves the earlier outbound unanswered
+      - key: window-from-effective-participation
+        text: the awaiting-reply window derives from effective participation alone, so a correction that removes a later response and leaves an earlier outbound unanswered gives the window the normal recording rules give for that outbound, also when a skip ended the window before
       - key: only-affected-contacts-recomputed
         text: only the contacts whose effective participation the correction can change are recomputed — for a merge the contacts observed in a merged interaction, for a removal the contacts it removes — and every other contact keeps every field
       - key: merge-recomputes-observed-contacts

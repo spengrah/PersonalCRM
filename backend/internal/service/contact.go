@@ -10,6 +10,7 @@ import (
 	"personal-crm/backend/internal/accelerated"
 	"personal-crm/backend/internal/cadence"
 	"personal-crm/backend/internal/consumer/consumerjobs"
+	"personal-crm/backend/internal/contacttask"
 	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/events"
 	"personal-crm/backend/internal/logger"
@@ -1424,27 +1425,20 @@ func (s *ContactService) MergeContacts(ctx context.Context, req MergeContactsReq
 		return nil, fmt.Errorf("lock source and target nodes for merge: %w", err)
 	}
 
-	// Both contacts' effective observations, those whose awaiting-reply window
-	// the contact's own skip ended, and the later of their awaited outbounds,
-	// read before anything moves; 7b compares them with the survivor's after
-	// the merge.
+	// Both contacts' effective observations, and the outbound each contact's
+	// own participation awaits a reply to, read before anything moves; 7a
+	// compares them with the survivor's after the merge.
 	effectiveBefore, err := s.effectiveObservationsTx(ctx, tx, req.SourceContactID, req.TargetContactID)
 	if err != nil {
 		return nil, fmt.Errorf("read participation before merge: %w", err)
 	}
-	skipEndedBefore, err := s.skipEndedObservationsTx(ctx, tx, req.SourceContactID, req.TargetContactID)
+	_, sourceAwaited, _, err := s.corrections.recordedParticipation(ctx, tx, nil, req.SourceContactID)
 	if err != nil {
-		return nil, fmt.Errorf("read skip-ended windows before merge: %w", err)
+		return nil, fmt.Errorf("read source awaited outbound before merge: %w", err)
 	}
-	var awaitedBefore *repository.ApplyInteractionRequest
-	for _, contactID := range []uuid.UUID{req.SourceContactID, req.TargetContactID} {
-		_, awaited, _, err := s.corrections.recordedParticipation(ctx, tx, contactID, nil, nil)
-		if err != nil {
-			return nil, fmt.Errorf("read awaited outbound before merge: %w", err)
-		}
-		if awaited != nil && (awaitedBefore == nil || awaited.OccurredAt.After(awaitedBefore.OccurredAt)) {
-			awaitedBefore = awaited
-		}
+	_, awaitedBefore, _, err := s.corrections.recordedParticipation(ctx, tx, nil, req.TargetContactID)
+	if err != nil {
+		return nil, fmt.Errorf("read target awaited outbound before merge: %w", err)
 	}
 
 	// 1. Delete duplicate contact methods (same normalized value and type)
@@ -1631,6 +1625,14 @@ func (s *ContactService) MergeContacts(ctx context.Context, req MergeContactsReq
 		Str("target_contact_id", req.TargetContactID.String()).
 		Int("transferred_tasks", len(transferredRefs)).
 		Msg("merge: transferred automated contact tasks to survivor")
+	// The survivor's live follow-up is the source's when the transfer moved
+	// it, and the target's own otherwise, so the outbound that follow-up
+	// tracks is the awaited outbound of the contact it came from.
+	for _, ref := range transferredRefs {
+		if ref.Lifecycle == contacttask.LifecycleFollowUpLoop {
+			awaitedBefore = sourceAwaited
+		}
+	}
 	closedRefs, err := s.contactTaskRepo.CompleteLiveTasksForContactTx(ctx, tx, req.SourceContactID, todoist.MetadataKeyPendingTempID)
 	if err != nil {
 		return nil, fmt.Errorf("close live contact tasks: %w", err)
@@ -1714,32 +1716,34 @@ func (s *ContactService) MergeContacts(ctx context.Context, req MergeContactsReq
 		return nil, fmt.Errorf("apply merged contact knowledge: %w", err)
 	}
 
-	// 7a. Forward-max merged cadence columns through
+	if s.cadence == nil {
+		return nil, errors.New("merge contacts: cadence updater not wired (pass cadence to NewContactService)")
+	}
+	// 7a. The graph merge re-points each contact's corrections onto the
+	// survivor, so a removal of one contact now covers the other's
+	// observation of the same interaction. When the merge excludes an
+	// observation that was effective before it, the survivor's cadence fields
+	// and follow-up tasks are recomputed from its effective participation as
+	// a correction recomputes them (CAD-047, CAD-048), in place of 7b.
+	recomputed, err := s.recomputeMergeExclusionsTx(ctx, tx, req.TargetContactID, effectiveBefore, awaitedBefore)
+	if err != nil {
+		return nil, err
+	}
+
+	// 7b. Otherwise forward-max merged cadence columns through
 	// CadenceUpdater.BulkApply. The merged cadence string may come from
 	// the source (when FieldSelections.Cadence == "source"), so
 	// contact_by is derived from the CHOSEN cadence value — not from
 	// the pre-merge target.cadence, which might have been overwritten
 	// above.
-	if s.cadence == nil {
-		return nil, errors.New("merge contacts: cadence updater not wired (pass cadence to NewContactService)")
-	}
-	mergedFields := buildMergeCadenceFields(targetContact, sourceContact, updateReq.Cadence)
-	if err := s.cadence.BulkApply(ctx, tx, req.TargetContactID, mergedFields); err != nil {
-		return nil, fmt.Errorf("bulk apply merged cadence: %w", err)
-	}
-
-	// 7b. The graph merge re-points each contact's corrections onto the
-	// survivor, so a removal of one contact now covers the other's
-	// observation of the same interaction. When the merge excludes an
-	// observation that was effective before it, the survivor's cadence fields
-	// and follow-up tasks are recomputed from its effective participation as
-	// a correction recomputes them (CAD-047, CAD-048), taking the merged
-	// state above as the state before the correction.
-	if err := s.recomputeMergeExclusionsTx(ctx, tx, req.TargetContactID, effectiveBefore, skipEndedBefore, awaitedBefore); err != nil {
-		return nil, err
+	if !recomputed {
+		mergedFields := buildMergeCadenceFields(targetContact, sourceContact, updateReq.Cadence)
+		if err := s.cadence.BulkApply(ctx, tx, req.TargetContactID, mergedFields); err != nil {
+			return nil, fmt.Errorf("bulk apply merged cadence: %w", err)
+		}
 	}
 
-	// BulkApply is a second UPDATE on the contact row, so the profile-
+	// 7a or 7b is a second UPDATE on the contact row, so the profile-
 	// only UpdateContact's RETURNING values (updated_at + the four
 	// cadence columns) are stale. Re-fetch inside the tx so the struct
 	// the caller receives matches the committed row bit-for-bit.
@@ -1806,50 +1810,21 @@ func (s *ContactService) effectiveObservationsTx(ctx context.Context, tx pgx.Tx,
 	return observations, nil
 }
 
-// skipEndedObservationsTx returns the set of observations in the contacts'
-// effective participation whose awaiting-reply window the skip of the contact
-// that recorded them ended. A skip ends only its own contact's windows, so the
-// merge reads it before the observations move to the survivor.
-func (s *ContactService) skipEndedObservationsTx(ctx context.Context, tx pgx.Tx, contactIDs ...uuid.UUID) (map[uuid.UUID]bool, error) {
-	ended := map[uuid.UUID]bool{}
-	for _, contactID := range contactIDs {
-		contact, err := s.contactRepo.GetContactTx(ctx, tx, contactID)
-		if err != nil {
-			return nil, err
-		}
-		entries, err := s.interactionRepo.ListEffectiveParticipationTx(ctx, tx, contactID)
-		if err != nil {
-			return nil, err
-		}
-		for _, entry := range entries {
-			for _, member := range entry.Members {
-				row, err := s.interactionRepo.GetInteractionTx(ctx, tx, member.ObservationID)
-				if err != nil {
-					return nil, fmt.Errorf("read member observation %s: %w", member.ObservationID, err)
-				}
-				if contact.AwaitingReplyEndedBySkip(row.RecordedAt) {
-					ended[member.ObservationID] = true
-				}
-			}
-		}
-	}
-	return ended, nil
-}
-
 // recomputeMergeExclusionsTx recomputes the merge survivor from its effective
-// participation when the merge excluded an observation in effectiveBefore.
-// The corrected observations are the excluded ones. skipEndedBefore are the
-// observations whose window a skip of their own contact ended, which stay
-// ended. awaitedBefore is the later of the two contacts' awaited outbounds, as
-// the merge keeps the later awaiting-reply window.
+// participation when the merge excluded an observation in effectiveBefore,
+// and reports whether it did. The corrected observations are the excluded
+// ones. The state before the correction is the survivor's own cadence row,
+// which the merge has not yet written, and awaitedBefore, the outbound the
+// survivor's live follow-up tracked before the merge: the awaited outbound of
+// the contact whose follow-up the survivor holds.
 func (s *ContactService) recomputeMergeExclusionsTx(
-	ctx context.Context, tx pgx.Tx, survivorID uuid.UUID, effectiveBefore, skipEndedBefore map[uuid.UUID]bool, awaitedBefore *repository.ApplyInteractionRequest,
-) error {
+	ctx context.Context, tx pgx.Tx, survivorID uuid.UUID, effectiveBefore map[uuid.UUID]bool, awaitedBefore *repository.ApplyInteractionRequest,
+) (bool, error) {
 	effectiveAfter, err := s.effectiveObservationsTx(ctx, tx, survivorID)
 	if err != nil {
-		return fmt.Errorf("read participation after merge: %w", err)
+		return false, fmt.Errorf("read participation after merge: %w", err)
 	}
-	before := contactBefore{contactID: survivorID, awaited: awaitedBefore, skipEnded: skipEndedBefore}
+	before := contactBefore{contactID: survivorID, awaited: awaitedBefore}
 	excluded := false
 	for observationID := range effectiveBefore {
 		if effectiveAfter[observationID] {
@@ -1858,22 +1833,22 @@ func (s *ContactService) recomputeMergeExclusionsTx(
 		excluded = true
 		row, err := s.interactionRepo.GetInteractionTx(ctx, tx, observationID)
 		if err != nil {
-			return fmt.Errorf("read observation %s excluded by merge: %w", observationID, err)
+			return false, fmt.Errorf("read observation %s excluded by merge: %w", observationID, err)
 		}
 		if row.RecordedAt.After(before.judgedRecordedAt) {
 			before.judgedRecordedAt = row.RecordedAt
 		}
 	}
 	if !excluded {
-		return nil
+		return false, nil
 	}
 	if s.followUp == nil {
-		return errors.New("merge contacts: follow-up consumer not wired (pass followUp to NewContactService)")
+		return false, errors.New("merge contacts: follow-up consumer not wired (pass followUp to NewContactService)")
 	}
 	if err := s.corrections.recompute(ctx, tx, uuid.New(), []contactBefore{before}); err != nil {
-		return fmt.Errorf("recompute merged contact from effective participation: %w", err)
+		return false, fmt.Errorf("recompute merged contact from effective participation: %w", err)
 	}
-	return nil
+	return true, nil
 }
 
 // repointMergedAttributionSecondPass re-runs the merge's identity +

@@ -183,9 +183,10 @@ func TestInteractionCorrection_RecomputesCadence(t *testing.T) {
 	})
 
 	for _, direction := range []string{repository.InteractionDirectionInbound, repository.InteractionDirectionMutual} {
-		t.Run("after a skip ended the awaiting-reply window, removing a later "+direction+" participation does not reopen it", func(t *testing.T) {
-			// spec: CAD-047.skip-ended-window-stays-ended
-			a := e.contact(t, "monthly")
+		t.Run("after a skip ended the awaiting-reply window, removing a later "+direction+" participation gives the window the recording rules give the outbound", func(t *testing.T) {
+			// spec: CAD-047.window-from-effective-participation
+			a, twin := e.contact(t, "monthly"), e.contact(t, "monthly")
+			e.call(t, twin, e.ref("call"), repository.InteractionDirectionOutbound, e.at(-24))
 			e.call(t, a, e.ref("call"), repository.InteractionDirectionOutbound, e.at(-24))
 			require.True(t, e.fields(t, a).AwaitingReply)
 			require.Nil(t, e.skip(t, a).AwaitingReplyUntil, "the skip ended the window")
@@ -193,10 +194,11 @@ func TestInteractionCorrection_RecomputesCadence(t *testing.T) {
 
 			e.remove(t, response, removalBody(service.RemovalReasonDidNotHappen, a))
 
-			got := e.fields(t, a)
+			got, want := e.fields(t, a), e.fields(t, twin)
 			require.Nil(t, got.LastResponseAt, "the outbound is unanswered again")
-			require.Nil(t, got.AwaitingReplyUntil)
-			require.False(t, got.AwaitingReply)
+			require.NotNil(t, want.AwaitingReplyUntil)
+			require.Equal(t, want.AwaitingReplyUntil, got.AwaitingReplyUntil)
+			require.Equal(t, want.AwaitingReply, got.AwaitingReply)
 		})
 	}
 

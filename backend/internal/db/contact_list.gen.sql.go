@@ -130,7 +130,7 @@ func (q *Queries) ListContactIDs(ctx context.Context, arg ListContactIDsParams) 
 
 const ListContacts = `-- name: ListContacts :many
 
-SELECT c.id, c.full_name, c.location, c.birthday, c.how_met, c.cadence, c.last_contacted, c.profile_photo, c.deleted_at, c.created_at, c.updated_at, c.contact_by, c.last_interaction_at, c.last_outreach_at, c.last_response_at, c.awaiting_reply_until, c.last_skipped_at, c.last_skipped_contact_by, c.last_skip_reason, c.contact_by_direct_set_at, c.contact_by_direct_set_value, c.awaiting_reply_skip_ended_at
+SELECT c.id, c.full_name, c.location, c.birthday, c.how_met, c.cadence, c.last_contacted, c.profile_photo, c.deleted_at, c.created_at, c.updated_at, c.contact_by, c.last_interaction_at, c.last_outreach_at, c.last_response_at, c.awaiting_reply_until, c.last_skipped_at, c.last_skipped_contact_by, c.last_skip_reason, c.contact_by_direct_set_at, c.contact_by_direct_set_value
 FROM contact c
 WHERE c.deleted_at IS NULL
   AND ($1::text = '' OR
@@ -236,7 +236,6 @@ func (q *Queries) ListContacts(ctx context.Context, arg ListContactsParams) ([]*
 			&i.LastSkipReason,
 			&i.ContactByDirectSetAt,
 			&i.ContactByDirectSetValue,
-			&i.AwaitingReplySkipEndedAt,
 		); err != nil {
 			return nil, err
 		}

@@ -150,28 +150,27 @@ type CommsMessage struct {
 }
 
 type Contact struct {
-	ID                       uuid.UUID  `json:"id"`
-	FullName                 string     `json:"full_name"`
-	Location                 *string    `json:"location"`
-	Birthday                 *time.Time `json:"birthday"`
-	HowMet                   *string    `json:"how_met"`
-	Cadence                  *string    `json:"cadence"`
-	LastContacted            *time.Time `json:"last_contacted"`
-	ProfilePhoto             *string    `json:"profile_photo"`
-	DeletedAt                *time.Time `json:"deleted_at"`
-	CreatedAt                *time.Time `json:"created_at"`
-	UpdatedAt                *time.Time `json:"updated_at"`
-	ContactBy                *time.Time `json:"contact_by"`
-	LastInteractionAt        *time.Time `json:"last_interaction_at"`
-	LastOutreachAt           *time.Time `json:"last_outreach_at"`
-	LastResponseAt           *time.Time `json:"last_response_at"`
-	AwaitingReplyUntil       *time.Time `json:"awaiting_reply_until"`
-	LastSkippedAt            *time.Time `json:"last_skipped_at"`
-	LastSkippedContactBy     *time.Time `json:"last_skipped_contact_by"`
-	LastSkipReason           *string    `json:"last_skip_reason"`
-	ContactByDirectSetAt     *time.Time `json:"contact_by_direct_set_at"`
-	ContactByDirectSetValue  *time.Time `json:"contact_by_direct_set_value"`
-	AwaitingReplySkipEndedAt *time.Time `json:"awaiting_reply_skip_ended_at"`
+	ID                      uuid.UUID  `json:"id"`
+	FullName                string     `json:"full_name"`
+	Location                *string    `json:"location"`
+	Birthday                *time.Time `json:"birthday"`
+	HowMet                  *string    `json:"how_met"`
+	Cadence                 *string    `json:"cadence"`
+	LastContacted           *time.Time `json:"last_contacted"`
+	ProfilePhoto            *string    `json:"profile_photo"`
+	DeletedAt               *time.Time `json:"deleted_at"`
+	CreatedAt               *time.Time `json:"created_at"`
+	UpdatedAt               *time.Time `json:"updated_at"`
+	ContactBy               *time.Time `json:"contact_by"`
+	LastInteractionAt       *time.Time `json:"last_interaction_at"`
+	LastOutreachAt          *time.Time `json:"last_outreach_at"`
+	LastResponseAt          *time.Time `json:"last_response_at"`
+	AwaitingReplyUntil      *time.Time `json:"awaiting_reply_until"`
+	LastSkippedAt           *time.Time `json:"last_skipped_at"`
+	LastSkippedContactBy    *time.Time `json:"last_skipped_contact_by"`
+	LastSkipReason          *string    `json:"last_skip_reason"`
+	ContactByDirectSetAt    *time.Time `json:"contact_by_direct_set_at"`
+	ContactByDirectSetValue *time.Time `json:"contact_by_direct_set_value"`
 }
 
 type ContactEnrichment struct {
@@ -396,28 +395,27 @@ type JobExecSample struct {
 }
 
 type LiveContact struct {
-	ID                       uuid.UUID  `json:"id"`
-	FullName                 string     `json:"full_name"`
-	Location                 *string    `json:"location"`
-	Birthday                 *time.Time `json:"birthday"`
-	HowMet                   *string    `json:"how_met"`
-	Cadence                  *string    `json:"cadence"`
-	LastContacted            *time.Time `json:"last_contacted"`
-	ProfilePhoto             *string    `json:"profile_photo"`
-	DeletedAt                *time.Time `json:"deleted_at"`
-	CreatedAt                *time.Time `json:"created_at"`
-	UpdatedAt                *time.Time `json:"updated_at"`
-	ContactBy                *time.Time `json:"contact_by"`
-	LastInteractionAt        *time.Time `json:"last_interaction_at"`
-	LastOutreachAt           *time.Time `json:"last_outreach_at"`
-	LastResponseAt           *time.Time `json:"last_response_at"`
-	AwaitingReplyUntil       *time.Time `json:"awaiting_reply_until"`
-	LastSkippedAt            *time.Time `json:"last_skipped_at"`
-	LastSkippedContactBy     *time.Time `json:"last_skipped_contact_by"`
-	LastSkipReason           *string    `json:"last_skip_reason"`
-	ContactByDirectSetAt     *time.Time `json:"contact_by_direct_set_at"`
-	ContactByDirectSetValue  *time.Time `json:"contact_by_direct_set_value"`
-	AwaitingReplySkipEndedAt *time.Time `json:"awaiting_reply_skip_ended_at"`
+	ID                      uuid.UUID  `json:"id"`
+	FullName                string     `json:"full_name"`
+	Location                *string    `json:"location"`
+	Birthday                *time.Time `json:"birthday"`
+	HowMet                  *string    `json:"how_met"`
+	Cadence                 *string    `json:"cadence"`
+	LastContacted           *time.Time `json:"last_contacted"`
+	ProfilePhoto            *string    `json:"profile_photo"`
+	DeletedAt               *time.Time `json:"deleted_at"`
+	CreatedAt               *time.Time `json:"created_at"`
+	UpdatedAt               *time.Time `json:"updated_at"`
+	ContactBy               *time.Time `json:"contact_by"`
+	LastInteractionAt       *time.Time `json:"last_interaction_at"`
+	LastOutreachAt          *time.Time `json:"last_outreach_at"`
+	LastResponseAt          *time.Time `json:"last_response_at"`
+	AwaitingReplyUntil      *time.Time `json:"awaiting_reply_until"`
+	LastSkippedAt           *time.Time `json:"last_skipped_at"`
+	LastSkippedContactBy    *time.Time `json:"last_skipped_contact_by"`
+	LastSkipReason          *string    `json:"last_skip_reason"`
+	ContactByDirectSetAt    *time.Time `json:"contact_by_direct_set_at"`
+	ContactByDirectSetValue *time.Time `json:"contact_by_direct_set_value"`
 }
 
 type MacHost struct {

@@ -2,8 +2,8 @@
 --
 -- A correction recomputes a contact's cadence fields by replaying its effective
 -- participation through the normal recording rules, in the order the effects
--- were recorded, composed with two of the user's own cadence acts. The schema
--- did not hold any of the three facts that takes:
+-- were recorded, composed with the due date the user set directly. The schema
+-- did not hold either of the two facts that takes:
 --
 --   contact.contact_by_direct_set_at / contact_by_direct_set_value
 --       the latest due date the user set directly (a Todoist deadline edit on
@@ -12,12 +12,6 @@
 --       cadence edit, a profile save, an enrichment update and a skip or undo
 --       from either side never write it. A direct set made before this
 --       migration is absent.
---
---   contact.awaiting_reply_skip_ended_at
---       when a CRM skip last ended the awaiting-reply window. Written only by
---       ApplyContactSkip, in the statement that ends the window. Nothing
---       clears it: an undo does not reopen the window, and a correction keeps
---       a window the skip ended ended.
 --
 --       Like the skip-state columns (migration 083), these are not derived
 --       columns and are not in the derived-writer trigger.
@@ -28,15 +22,14 @@
 --       promotion to mutual). A trigger sets it, so no write path can omit
 --       it. Existing rows take created_at.
 --
--- All three use clock_timestamp(), one clock, so a recording and a user act
+-- Both use clock_timestamp(), one clock, so a recording and a user act
 -- compare in the order they ran.
 
 BEGIN;
 
 ALTER TABLE contact
     ADD COLUMN contact_by_direct_set_at TIMESTAMPTZ NULL,
-    ADD COLUMN contact_by_direct_set_value DATE NULL,
-    ADD COLUMN awaiting_reply_skip_ended_at TIMESTAMPTZ NULL;
+    ADD COLUMN contact_by_direct_set_value DATE NULL;
 
 CREATE OR REPLACE VIEW live_contact AS
 SELECT
@@ -60,8 +53,7 @@ SELECT
     last_skipped_contact_by,
     last_skip_reason,
     contact_by_direct_set_at,
-    contact_by_direct_set_value,
-    awaiting_reply_skip_ended_at
+    contact_by_direct_set_value
 FROM contact
 WHERE deleted_at IS NULL;
 
