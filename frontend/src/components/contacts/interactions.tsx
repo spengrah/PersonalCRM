@@ -5,7 +5,15 @@ import { useContactInteractions } from '@/hooks/use-interactions'
 import { useUpcomingEventsForContact } from '@/hooks/use-calendar'
 import { useAcceleratedTime } from '@/hooks/use-accelerated-time'
 import type { CalendarEvent } from '@/types/calendar'
-import { TimelineRow, type ParticipationContext } from '@/components/timeline'
+import {
+  TimelineRow,
+  type ParticipationContext,
+  type TimelineIdentity,
+  type TimelineItem,
+  type TimelineRowAction,
+} from '@/components/timeline'
+import { RemoveInteractionDialog } from '@/components/corrections/remove-interaction-dialog'
+import { MergeInteractionsDialog } from '@/components/corrections/merge-interactions-dialog'
 import { InteractionDrillDown } from './interaction-content'
 import {
   InteractionFilters,
@@ -84,6 +92,39 @@ export function Interactions({ contactId }: { contactId: string }) {
   const boundedEvents = showUpcoming ? boundUpcomingEvents(events, selection) : []
   const displayedEvents = showAllUpcoming ? boundedEvents : boundedEvents.slice(0, 3)
 
+  // Corrections. The row offers them only for correctable items; merge
+  // selection is null until the user starts a merge from a row.
+  const [removing, setRemoving] = useState<TimelineItem | null>(null)
+  const [mergeSelection, setMergeSelection] = useState<string[] | null>(null)
+  const [reviewingMerge, setReviewingMerge] = useState(false)
+  const toggleMergeSelection = (identity: TimelineIdentity) =>
+    setMergeSelection(current =>
+      current?.includes(identity.id)
+        ? current.filter(id => id !== identity.id)
+        : [...(current ?? []), identity.id]
+    )
+  const actions: TimelineRowAction[] = [
+    {
+      key: 'remove',
+      label: 'Remove',
+      onSelect: identity =>
+        setRemoving(items.find(item => item.identity.id === identity.id) ?? null),
+    },
+    {
+      key: 'merge',
+      label: 'Merge',
+      onSelect: identity =>
+        setMergeSelection(current =>
+          current?.includes(identity.id) ? current : [...(current ?? []), identity.id]
+        ),
+    },
+  ]
+  const mergeItems = items.filter(item => mergeSelection?.includes(item.identity.id))
+  const endMerge = () => {
+    setReviewingMerge(false)
+    setMergeSelection(null)
+  }
+
   return (
     <section aria-label="Interactions" className="bg-white shadow overflow-hidden sm:rounded-lg">
       <div className="border-b border-gray-200 px-4 py-5 sm:px-6">
@@ -128,6 +169,32 @@ export function Interactions({ contactId }: { contactId: string }) {
         </p>
       ) : (
         <>
+          {mergeSelection && (
+            <div
+              role="region"
+              aria-label="Merge selection"
+              className="flex flex-wrap items-center gap-3 border-t border-gray-200 bg-blue-50 px-4 py-3 sm:px-6"
+            >
+              <p className="flex-1 text-sm text-blue-900">
+                Select the interactions to merge. {mergeItems.length} selected.
+              </p>
+              <button
+                type="button"
+                onClick={endMerge}
+                className="rounded border border-gray-300 bg-white px-3 py-1.5 text-sm font-medium text-gray-700"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={mergeItems.length < 2}
+                onClick={() => setReviewingMerge(true)}
+                className="rounded bg-blue-600 px-3 py-1.5 text-sm font-medium text-white disabled:opacity-50"
+              >
+                Review merge
+              </button>
+            </div>
+          )}
           {items.length > 0 && (
             <div role="list" aria-label="Interaction history" className="divide-y divide-gray-200">
               {items.map(item => (
@@ -135,6 +202,15 @@ export function Interactions({ contactId }: { contactId: string }) {
                   key={`${item.identity.kind}:${item.identity.id}`}
                   item={item}
                   context={context}
+                  actions={actions}
+                  selection={
+                    mergeSelection
+                      ? {
+                          selected: mergeSelection.includes(item.identity.id),
+                          onToggle: toggleMergeSelection,
+                        }
+                      : undefined
+                  }
                   renderDrillDown={(identity, ctx) => (
                     <InteractionDrillDown
                       item={item}
@@ -160,6 +236,21 @@ export function Interactions({ contactId }: { contactId: string }) {
             </div>
           )}
         </>
+      )}
+      {removing && (
+        <RemoveInteractionDialog
+          item={removing}
+          context={context}
+          onClose={() => setRemoving(null)}
+        />
+      )}
+      {reviewingMerge && mergeItems.length >= 2 && (
+        <MergeInteractionsDialog
+          items={mergeItems}
+          context={context}
+          onClose={() => setReviewingMerge(false)}
+          onMerged={endMerge}
+        />
       )}
     </section>
   )

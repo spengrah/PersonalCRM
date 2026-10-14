@@ -618,6 +618,20 @@ definitions:
       participation:
         $ref: '#/definitions/handlers.InteractionParticipationResponse'
     type: object
+  handlers.InteractionParticipantResponse:
+    properties:
+      contact_id:
+        type: string
+      name:
+        type: string
+    type: object
+  handlers.InteractionParticipantsResponse:
+    properties:
+      participants:
+        items:
+          $ref: '#/definitions/handlers.InteractionParticipantResponse'
+        type: array
+    type: object
   handlers.InteractionParticipationResponse:
     properties:
       direction:
@@ -3859,6 +3873,41 @@ paths:
       summary: Resolve method suggestions
       tags:
       - imports
+  /interactions/{id}/participants:
+    get:
+      description: 'Lists the contacts with an effective participation in the interaction
+        that holds the id (its merged interaction when the id was merged away), ordered
+        by name: the contacts a removal can name.'
+      parameters:
+      - description: Interaction ID
+        format: uuid
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                data:
+                  $ref: '#/definitions/handlers.InteractionParticipantsResponse'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.APIResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.APIResponse'
+      summary: List an interaction's participants
+      tags:
+      - interactions
   /interactions/{id}/removals:
     post:
       consumes:

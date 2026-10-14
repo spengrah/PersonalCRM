@@ -406,6 +406,43 @@ func (s *InteractionCorrectionService) Remove(ctx context.Context, req Interacti
 	return tx.Commit(ctx)
 }
 
+// InteractionParticipant is one effective participant of an interaction: the
+// contacts a removal can name.
+type InteractionParticipant struct {
+	ContactID uuid.UUID
+	Name      string
+}
+
+// Participants returns the effective participants of the interaction that
+// holds id, ordered by name. Returns ErrInteractionNotFound when id names no
+// interaction node.
+func (s *InteractionCorrectionService) Participants(ctx context.Context, id uuid.UUID) ([]InteractionParticipant, error) {
+	if _, err := s.interactions.GetInteractionTree(ctx, id); err != nil {
+		if errors.Is(err, db.ErrNotFound) {
+			return nil, fmt.Errorf("%w: %s", ErrInteractionNotFound, id)
+		}
+		return nil, err
+	}
+	entries, err := s.interactions.ListInteractionParticipants(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	ids := make([]uuid.UUID, len(entries))
+	for i, entry := range entries {
+		ids[i] = entry.ContactID
+	}
+	names, err := s.contacts.ListContactNamesByIDs(ctx, ids)
+	if err != nil {
+		return nil, fmt.Errorf("list participant names: %w", err)
+	}
+	participants := make([]InteractionParticipant, len(ids))
+	for i, contactID := range ids {
+		participants[i] = InteractionParticipant{ContactID: contactID, Name: names[contactID]}
+	}
+	sort.SliceStable(participants, func(i, j int) bool { return participants[i].Name < participants[j].Name })
+	return participants, nil
+}
+
 // lockTrees takes the correction lock on every node of the alias trees that
 // hold ids, and on each node of also, and returns those trees, aligned with
 // ids, as they stand under the lock. A correction passes in also every other

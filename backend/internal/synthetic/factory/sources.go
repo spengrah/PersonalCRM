@@ -263,6 +263,9 @@ type GCalEventShape struct {
 	// a one-attendee meeting is one the account ORGANIZES without being on the
 	// attendee list, from which the provider synthesizes the accepted response.
 	SoleAttendee bool
+	// CoAttendees are further attendee emails, each an accepted attendee beside
+	// the peer, so every contact owning one is matched to the same event.
+	CoAttendees []string
 }
 
 // GCalEvent builds a past meeting the account attended together with the target
@@ -312,17 +315,21 @@ func (g *Generator) GCalEventWithShape(target ContactSpec, intent MatchIntent, s
 		Start:    &calendarapi.EventDateTime{DateTime: start.Format(time.RFC3339)},
 		End:      &calendarapi.EventDateTime{DateTime: end.Format(time.RFC3339)},
 	}
+	coAttendees := make([]*calendarapi.EventAttendee, len(shape.CoAttendees))
+	for i, email := range shape.CoAttendees {
+		coAttendees[i] = &calendarapi.EventAttendee{Email: email, ResponseStatus: "accepted", DisplayName: "Synthetic Attendee"}
+	}
 	if shape.SoleAttendee {
 		// Organizer-not-attendee: getUserResponse falls through to the organizer
 		// and synthesizes "accepted", and buildAttendeeList skips appending an
 		// organizer that is self — so the stored list is the peer alone.
-		ev.Attendees = []*calendarapi.EventAttendee{peer}
+		ev.Attendees = append([]*calendarapi.EventAttendee{peer}, coAttendees...)
 		ev.Organizer = &calendarapi.EventOrganizer{Email: account, Self: true}
 	} else {
-		ev.Attendees = []*calendarapi.EventAttendee{
+		ev.Attendees = append([]*calendarapi.EventAttendee{
 			{Email: account, Self: true, ResponseStatus: "accepted"},
 			peer,
-		}
+		}, coAttendees...)
 	}
 	return GCalEventSpec{
 		AccountID: account, Event: ev, GcalEventID: gcalEventID, Intent: intent, PeerEmail: attendeeEmail,

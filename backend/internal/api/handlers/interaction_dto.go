@@ -164,3 +164,16 @@ type InteractionRemovalRequest struct {
 	Scope  InteractionRemovalScope `json:"scope"`
 	Reason string                  `json:"reason" tstype:"'duplicate' | 'did_not_attend' | 'did_not_happen'"`
 }
+
+// InteractionParticipantResponse is one effective participant of an
+// interaction: a contact the removal dialog lists.
+type InteractionParticipantResponse struct {
+	ContactID string `json:"contact_id"`
+	Name      string `json:"name"`
+}
+
+// InteractionParticipantsResponse lists an interaction's effective
+// participants, ordered by name.
+type InteractionParticipantsResponse struct {
+	Participants []InteractionParticipantResponse `json:"participants"`
+}

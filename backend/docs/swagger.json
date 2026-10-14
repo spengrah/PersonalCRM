@@ -3902,6 +3902,60 @@
                 }
             }
         },
+        "/interactions/{id}/participants": {
+            "get": {
+                "description": "Lists the contacts with an effective participation in the interaction that holds the id (its merged interaction when the id was merged away), ordered by name: the contacts a removal can name.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "interactions"
+                ],
+                "summary": "List an interaction's participants",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "format": "uuid",
+                        "description": "Interaction ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/api.APIResponse"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/handlers.InteractionParticipantsResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/api.APIResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/api.APIResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/interactions/{id}/removals": {
             "post": {
                 "description": "Removes exactly the selected attendees' participations (scope contact_ids, or everyone) of the interaction that holds the id, whatever the reason.",
@@ -6636,6 +6690,28 @@
                 },
                 "participation": {
                     "$ref": "#/definitions/handlers.InteractionParticipationResponse"
+                }
+            }
+        },
+        "handlers.InteractionParticipantResponse": {
+            "type": "object",
+            "properties": {
+                "contact_id": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.InteractionParticipantsResponse": {
+            "type": "object",
+            "properties": {
+                "participants": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/handlers.InteractionParticipantResponse"
+                    }
                 }
             }
         },

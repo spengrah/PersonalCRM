@@ -404,3 +404,18 @@ export interface InteractionRemovalRequest {
   scope: InteractionRemovalScope;
   reason: 'duplicate' | 'did_not_attend' | 'did_not_happen';
 }
+/**
+ * InteractionParticipantResponse is one effective participant of an
+ * interaction: a contact the removal dialog lists.
+ */
+export interface InteractionParticipantResponse {
+  contact_id: string;
+  name: string;
+}
+/**
+ * InteractionParticipantsResponse lists an interaction's effective
+ * participants, ordered by name.
+ */
+export interface InteractionParticipantsResponse {
+  participants: InteractionParticipantResponse[];
+}

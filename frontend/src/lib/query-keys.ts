@@ -103,6 +103,11 @@ export const interactionKeys = {
   // the contact's key and contact-scoped invalidation reaches it.
   timelineContent: (contactId: string, kind: string, id: string) =>
     [...interactionKeys.forContact(contactId), 'content', kind, id] as const,
+  participants: (interactionId: string) =>
+    [...interactionKeys.all, 'participants', interactionId] as const,
+  // A merge preview answers in one contact's participation context.
+  mergePreview: (contactId: string, interactionIds: string[]) =>
+    [...interactionKeys.forContact(contactId), 'merge-preview', interactionIds] as const,
 }
 
 // Rematch job query keys

@@ -42,7 +42,7 @@ behaviors:
       - key: group-marker
         text: the row visibly distinguishes group interactions from direct interactions
       - key: overflow-affordance-reserved
-        text: a row of a correctable interaction reserves an action affordance for later interaction workflows without enabling writes, and a row that is not correctable shows none
+        text: a row of a correctable interaction carries an action affordance for interaction workflows, and a row that is not correctable shows none
       - key: calendar-row-event-details
         text: a calendar row summarizes its event time, place, attendee size, and link when available
       - key: call-row-details
@@ -556,3 +556,70 @@ behaviors:
         text: an id that names no item of its kind, and a contact that does not exist, are refused as not found
     provenance: [.agents/spec/2026-10-13-interaction-review-readiness.md, InteractionContentService.GetTimelineContent]
     notes: The content a member holds is what the per-interaction content read of IXN-014 gives for that member.
+
+  - id: IXN-036
+    title: An interaction's effective participants are readable, the contacts a removal can name
+    type: api
+    status: current
+    surface: api
+    given: an interaction whose participations may have been merged or removed
+    when: its participants are read
+    then:
+      - key: lists-effective-participants
+        text: the answer lists every contact with an effective participation in the interaction, each by contact id and display name
+      - key: removed-absent
+        text: a contact whose participation was removed is absent
+      - key: merged-reads-merged
+        text: naming an interaction that was merged into another, or the one it was merged into, reads the participants of the merged interaction
+      - key: no-interaction-not-found
+        text: an id that names no interaction, such as a message burst or a contact, is refused as not found
+    provenance: [.agents/spec/2026-10-13-interaction-review-readiness.md, InteractionCorrectionService.Participants]
+    notes: The read derives nothing of its own; it reads the effective participation the correction requests (IXN-029) act on.
+
+  - id: IXN-037
+    title: The user removes participations of an interaction from its row
+    type: ux
+    status: current
+    surface: ui
+    given: a contact's history holds a correctable interaction that the contact and another attendee took part in
+    when: the user removes it from its row's action menu
+    then:
+      - key: menu-offers-remove
+        text: a correctable interaction's row offers Remove, and a message burst, upcoming event or missed call offers no correction
+      - key: names-interaction
+        text: the removal names the interaction it acts on
+      - key: attendees-current-preselected
+        text: the removal lists the interaction's attendees with the current contact pre-selected, and offers everyone
+      - key: reason-required
+        text: the removal asks for a reason of duplicate, did not attend or did not happen, and cannot be submitted without one
+      - key: default-removes-current-only
+        text: submitting the default removes the interaction from the current contact's history only, and the other attendee keeps it
+      - key: everyone-removes-every-attendee
+        text: choosing everyone removes the interaction from every attendee's history
+      - key: cadence-refreshes-without-reload
+        text: after submitting, the row leaves the history and the contact's recent activity shows the recomputed values without a reload
+    provenance: [.agents/spec/2026-10-13-interaction-review-readiness.md]
+    notes: The removal is the request of IXN-018; the attendees it lists are IXN-036's.
+
+  - id: IXN-038
+    title: The user merges interactions selected on a contact's history
+    type: ux
+    status: current
+    surface: ui
+    given: a contact's history holds two correctable interactions, one of them shared with another attendee, beside items that are not correctable
+    when: the user selects interactions and confirms a merge
+    then:
+      - key: menu-offers-merge
+        text: a correctable interaction's row offers Merge, which starts selecting interactions with that one selected
+      - key: only-correctable-selectable
+        text: only correctable interactions can be selected; a message burst or missed call cannot
+      - key: two-needed
+        text: the merge cannot be confirmed with fewer than two interactions selected
+      - key: confirmation-side-by-side
+        text: the confirmation shows the selected interactions side by side and says the merge applies to every attendee
+      - key: states-preview-result
+        text: the confirmation states the current contact's resulting direction and time as the merge preview answers them
+      - key: one-row-as-stated
+        text: after confirming, the history shows one row in place of the selected interactions, with the direction and time the confirmation stated
+    provenance: [.agents/spec/2026-10-13-interaction-review-readiness.md]
+    notes: The merge is the request of IXN-016 and IXN-017; the frontend computes no merged direction or time of its own.

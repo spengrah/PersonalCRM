@@ -15,7 +15,8 @@ import (
 
 // InteractionCorrectionHandler serves the correction routes: the only HTTP
 // way to merge interactions or remove participations (IXN-016, IXN-017,
-// IXN-018, IXN-029). No route returns an assertion, predicate or provenance.
+// IXN-018, IXN-029), and the participants read a removal names its scope
+// from (IXN-036). No route returns an assertion, predicate or provenance.
 type InteractionCorrectionHandler struct {
 	corrections *service.InteractionCorrectionService
 }
@@ -135,6 +136,33 @@ func (h *InteractionCorrectionHandler) RemoveParticipations(c *gin.Context) {
 		return
 	}
 	c.Status(http.StatusNoContent)
+}
+
+// ListParticipants lists the effective participants of an interaction
+// @Summary List an interaction's participants
+// @Description Lists the contacts with an effective participation in the interaction that holds the id (its merged interaction when the id was merged away), ordered by name: the contacts a removal can name.
+// @Tags interactions
+// @Produce json
+// @Param id path string true "Interaction ID" format(uuid)
+// @Success 200 {object} api.APIResponse{data=InteractionParticipantsResponse}
+// @Failure 400 {object} api.APIResponse
+// @Failure 404 {object} api.APIResponse
+// @Router /interactions/{id}/participants [get]
+func (h *InteractionCorrectionHandler) ListParticipants(c *gin.Context) {
+	id, ok := api.ParseUUIDParam(c, "id", "interaction")
+	if !ok {
+		return
+	}
+	participants, err := h.corrections.Participants(c.Request.Context(), id)
+	if err != nil {
+		respondCorrectionError(c, err)
+		return
+	}
+	resp := InteractionParticipantsResponse{Participants: make([]InteractionParticipantResponse, len(participants))}
+	for i, p := range participants {
+		resp.Participants[i] = InteractionParticipantResponse{ContactID: p.ContactID.String(), Name: p.Name}
+	}
+	api.SendSuccess(c, http.StatusOK, resp, nil)
 }
 
 // respondCorrectionError maps a correction's refusal: a request naming no

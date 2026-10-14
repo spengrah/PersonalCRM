@@ -37,6 +37,7 @@ func TestInteractionRoutes_RegisteredSet(t *testing.T) {
 		"POST /api/v1/interactions/merge",
 		"POST /api/v1/interactions/merge/preview",
 		"POST /api/v1/interactions/:id/removals",
+		"GET /api/v1/interactions/:id/participants",
 	}, actual)
 }
 

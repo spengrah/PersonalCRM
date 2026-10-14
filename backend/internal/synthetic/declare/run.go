@@ -961,6 +961,13 @@ func runCalendarEvent(ctx context.Context, h *replay.Harness, p *calendarEventPl
 			return Seeded{}, fmt.Errorf("calendar event %q: no such contact in this run: %q", p.name, p.contact)
 		}
 		target = spec
+		for _, co := range p.coAttendees {
+			coSpec, ok := st.specs[co]
+			if !ok || coSpec.Email == "" {
+				return Seeded{}, fmt.Errorf("calendar event %q: co-attendee %q is no contact with an email in this run", p.name, co)
+			}
+			shape.CoAttendees = append(shape.CoAttendees, coSpec.Email)
+		}
 	}
 
 	event := gen.GCalEventWithShape(target, intent, shape)

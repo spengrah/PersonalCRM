@@ -140,7 +140,7 @@ test.describe('Interactions Section @area:interactions', () => {
       await expect(row.getByText(item.members[0].label, { exact: true }).first()).toBeVisible()
       // spec: IXN-002.overflow-affordance-reserved
       if (item.identity.kind === 'interaction') {
-        await expect(row.getByRole('button', { name: 'More actions' })).toBeDisabled()
+        await expect(row.getByRole('button', { name: 'More actions' })).toBeEnabled()
       } else {
         await expect(row.getByRole('button', { name: 'More actions' })).toHaveCount(0)
       }
@@ -491,7 +491,7 @@ test.describe('Call evidence @area:interactions', () => {
     // spec: IXN-020.no-row-actions
     // spec: IXN-002.overflow-affordance-reserved
     await expect(missedRow.getByRole('button')).toHaveCount(0)
-    await expect(rows.nth(0).getByRole('button', { name: 'More actions' })).toBeDisabled()
+    await expect(rows.nth(0).getByRole('button', { name: 'More actions' })).toBeEnabled()
   })
 
   test('IXN-021: a call the user placed never shows as missed', async ({ page, request }) => {

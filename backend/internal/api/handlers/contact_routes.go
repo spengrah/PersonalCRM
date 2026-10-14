@@ -38,6 +38,7 @@ type ContactRouteDeps struct {
 //   - POST   /api/v1/interactions/merge
 //   - POST   /api/v1/interactions/merge/preview
 //   - POST   /api/v1/interactions/:id/removals
+//   - GET    /api/v1/interactions/:id/participants
 //
 // Caller must pass the same /api/v1 group it has applied
 // auth.APIKeyMiddleware on; this helper does NOT add the middleware.
@@ -75,5 +76,7 @@ func RegisterContactRoutes(v1 *gin.RouterGroup, deps ContactRouteDeps) {
 		interactions.POST("/merge", deps.Correction.MergeInteractions)
 		interactions.POST("/merge/preview", deps.Correction.PreviewMergeInteractions)
 		interactions.POST("/:id/removals", deps.Correction.RemoveParticipations)
+		// The attendees a removal can name (IXN-036).
+		interactions.GET("/:id/participants", deps.Correction.ListParticipants)
 	}
 }

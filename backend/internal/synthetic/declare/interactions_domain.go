@@ -89,6 +89,31 @@ func init() {
 		LinkedMeetingNote("solo-note", "solo-meeting"),
 	}})
 
+	// IXN-037: a meeting two days ago that the subject and a co-attendee both
+	// attended, the subject's latest interaction, beside an older manual entry and
+	// burst, a missed call and an upcoming meeting, which offer no correction.
+	Register(Declaration{Behavior: "IXN-037", Entities: []Entity{
+		Contact("subject", Cadence("monthly"), Methods(MethodEmail, MethodPhone)),
+		Contact("co-attendee", Methods(MethodEmail)),
+		LoggedInteraction("older-row", "subject", "manual", AgoDays(6)),
+		MessageInteraction("burst-row", "subject", "messages", AgoDays(8), Burst(2)),
+		PhoneCall("missed-call", "subject", CallMissed, AgoDays(3)),
+		CalendarEvent("shared-meeting", "subject", StartedDaysAgo(2), CoAttendee("co-attendee")),
+		CalendarEvent("upcoming-meeting", "subject", StartsInDays(1)),
+	}})
+
+	// IXN-038: a meeting two days ago that the subject and a co-attendee both
+	// attended and a call with the subject alone a day later, which the test
+	// merges, beside a burst and a missed call, which cannot be selected.
+	Register(Declaration{Behavior: "IXN-038", Entities: []Entity{
+		Contact("subject", Methods(MethodEmail, MethodPhone)),
+		Contact("co-attendee", Methods(MethodEmail)),
+		MessageInteraction("burst-row", "subject", "messages", AgoDays(5), Burst(2)),
+		PhoneCall("missed-call", "subject", CallMissed, AgoDays(3)),
+		CalendarEvent("meeting", "subject", StartedDaysAgo(2), CoAttendee("co-attendee")),
+		PhoneCallInteraction("call", "subject", AgoDays(1)),
+	}})
+
 	Register(Declaration{Behavior: "IXN-007", Entities: []Entity{
 		Contact("subject", Methods(MethodEmail)),
 		MessageInteraction("gchat-thread", "subject", "gchat", AgoDays(1)),
