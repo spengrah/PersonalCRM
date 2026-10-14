@@ -1,7 +1,10 @@
 import type { ReactNode } from 'react'
+import type { AssertionStatus } from '@/types/generated/assertion'
 import type { TimelineAssertionResponse } from '@/types/generated/contact'
 
-const STATUS_LABELS: Record<TimelineAssertionResponse['status'], string> = {
+// Exhaustive over the store's status vocabulary, which the generated union
+// carries: a new status fails the type check here until it has a label.
+const STATUS_LABELS: Record<AssertionStatus, string> = {
   proposed: 'Proposed',
   accepted: 'Accepted',
   rejected: 'Rejected',

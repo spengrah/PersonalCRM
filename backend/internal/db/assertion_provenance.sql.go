@@ -174,7 +174,6 @@ WITH displayed AS (
     JOIN comms_message shown ON d.source_kind = 'comms_message' AND shown.id = d.row_id
     JOIN comms_message sibling ON sibling.source = shown.source
         AND sibling.external_id = shown.external_id
-        AND sibling.deleted_at IS NULL
 ), cited AS (
     SELECT DISTINCT c.content_ref, p.assertion_id
     FROM citable c
@@ -223,7 +222,10 @@ type ListAssertionsCitingContentRow struct {
 // one row per (content item, assertion), in recording order. Each displayed item
 // is named by its row (source_kinds[i], row_ids[i]) and keyed by content_refs[i].
 // A comms message is stored once per matched contact, so provenance citing any
-// live copy of a displayed comms message cites that item. The correction
+// copy of a displayed comms message, the same (source, external_id), cites that
+// item. A copy's liveness does not matter: contact merge and unmatched-row
+// reconciliation tombstone a duplicate copy while the surviving copy carries the
+// same message, and only a live displayed row reaches this query. The correction
 // predicates come from the catalog's correction marker (migration 089). An
 // assertion naming a soft-deleted node is not returned.
 func (q *Queries) ListAssertionsCitingContent(ctx context.Context, arg ListAssertionsCitingContentParams) ([]*ListAssertionsCitingContentRow, error) {

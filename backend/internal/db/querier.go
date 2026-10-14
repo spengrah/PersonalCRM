@@ -1290,7 +1290,10 @@ type Querier interface {
 	// one row per (content item, assertion), in recording order. Each displayed item
 	// is named by its row (source_kinds[i], row_ids[i]) and keyed by content_refs[i].
 	// A comms message is stored once per matched contact, so provenance citing any
-	// live copy of a displayed comms message cites that item. The correction
+	// copy of a displayed comms message, the same (source, external_id), cites that
+	// item. A copy's liveness does not matter: contact merge and unmatched-row
+	// reconciliation tombstone a duplicate copy while the surviving copy carries the
+	// same message, and only a live displayed row reaches this query. The correction
 	// predicates come from the catalog's correction marker (migration 089). An
 	// assertion naming a soft-deleted node is not returned.
 	ListAssertionsCitingContent(ctx context.Context, arg ListAssertionsCitingContentParams) ([]*ListAssertionsCitingContentRow, error)

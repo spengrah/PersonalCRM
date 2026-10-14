@@ -169,7 +169,8 @@ type InteractionRemovalRequest struct {
 // item's drill-down displays, keyed by that item's content_ref. Subject is the
 // subject node's label. An edge carries its object node's label in Object; a
 // fact carries exactly one Value field (ValueDate as YYYY-MM-DD). Status is the
-// assertion's recorded review status.
+// assertion's recorded review status; its TypeScript type is generated from the
+// store's status constants (repository/assertion_status.go).
 type TimelineAssertionResponse struct {
 	ContentRef  string   `json:"content_ref"`
 	AssertionID string   `json:"assertion_id"`
@@ -180,7 +181,7 @@ type TimelineAssertionResponse struct {
 	ValueNum    *float64 `json:"value_num,omitempty"`
 	ValueDate   *string  `json:"value_date,omitempty"`
 	ValueBool   *bool    `json:"value_bool,omitempty"`
-	Status      string   `json:"status" tstype:"'proposed' | 'accepted' | 'rejected' | 'superseded' | 'retracted'"`
+	Status      string   `json:"status" tstype:"AssertionStatus"`
 }
 
 // TimelineAssertionsResponse is the assertions beside a timeline item's

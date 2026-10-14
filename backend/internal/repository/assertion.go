@@ -11,17 +11,6 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// Assertion status constants. The state machine is proposed → accepted | rejected
-// and accepted → superseded | retracted; the terminal-knowledge_to CHECK enforces
-// that a terminal status carries a knowledge_to.
-const (
-	AssertionStatusProposed   = "proposed"
-	AssertionStatusAccepted   = "accepted"
-	AssertionStatusRejected   = "rejected"
-	AssertionStatusSuperseded = "superseded"
-	AssertionStatusRetracted  = "retracted"
-)
-
 // Assertion closure-reason constants (nullable; set when a row is closed).
 const (
 	ClosureReasonEnded      = "ended"
@@ -746,7 +735,8 @@ type CitedAssertion struct {
 
 // ListAssertionsCitingContent returns, per displayed content item, the
 // assertions whose provenance cites it, excluding the correction predicates.
-// Provenance citing any live copy of a displayed comms message cites that item.
+// Provenance citing any copy of a displayed comms message, live or tombstoned
+// as a duplicate, cites that item.
 func (r *AssertionRepository) ListAssertionsCitingContent(ctx context.Context, items []ContentCitation) ([]CitedAssertion, error) {
 	params := db.ListAssertionsCitingContentParams{
 		SourceKinds: make([]string, len(items)),

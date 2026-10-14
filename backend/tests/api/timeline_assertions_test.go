@@ -244,3 +244,36 @@ func TestTimelineAssertions_CitingAnotherContactsCopy(t *testing.T) {
 	require.Equal(t, claim.ID, got[0].AssertionID)
 	require.Equal(t, shown[0].ContentRef, got[0].ContentRef)
 }
+
+// spec: IXN-039.cites-displayed-content
+func TestTimelineAssertions_CitationSurvivesContactMergeDedup(t *testing.T) {
+	testsupport.RequireDatabase(t)
+	t.Parallel()
+	e := newCorrectionEnv(t)
+
+	// A and B each hold a copy of one email message, and a claim cites A's
+	// copy. Merging A into B tombstones A's duplicate copy and keeps B's, which
+	// B's drill-down displays: the claim still cites that message.
+	a, b := e.contact(t, "monthly"), e.contact(t, "monthly")
+	thread, day, external := e.ref("thread"), "2026-01-02", e.ref("message")
+	aObservation := e.record(t, a, repository.InteractionSourceEmail, emailRef(a, thread, day), repository.InteractionDirectionInbound, e.at(0))
+	bObservation := e.record(t, b, repository.InteractionSourceEmail, emailRef(b, thread, day), repository.InteractionDirectionInbound, e.at(0))
+	aCopy := e.linkEmail(t, aObservation, thread, external)
+	bCopy := e.linkEmail(t, bObservation, thread, external)
+	claim := e.claim(t, a, repository.SourceKindCommsMessage, aCopy.ID, true)
+	_, err := e.contacts.MergeContacts(e.ctx, service.MergeContactsRequest{SourceContactID: a, TargetContactID: b})
+	require.NoError(t, err)
+	node := *bObservation.InteractionNodeID
+	var shown []contentMessage
+	for _, member := range e.content(t, "interaction", node, b).Members {
+		shown = append(shown, member.Messages...)
+	}
+	require.Len(t, shown, 1)
+	require.Equal(t, bCopy.ID, shown[0].ID, "B's drill-down displays B's surviving copy")
+
+	got := e.timelineAssertions(t, "interaction", node, b)
+
+	require.Len(t, got, 1)
+	require.Equal(t, claim.ID, got[0].AssertionID)
+	require.Equal(t, shown[0].ContentRef, got[0].ContentRef)
+}

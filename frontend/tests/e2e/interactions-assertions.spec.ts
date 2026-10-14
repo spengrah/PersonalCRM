@@ -50,10 +50,10 @@ test.describe('Interaction assertions beside evidence @area:interactions', () =>
     await expect(entry.locator('[data-assertion-value]')).toHaveText(claim.name)
     await expect(entry.locator('[data-assertion-status]')).toHaveText('Proposed')
 
-    // Read-only: the entry is the claim's statement and status and nothing
-    // else, with no control to accept or reject it and no link into the graph.
+    // Read-only: no control to accept or reject the claim, no link into the
+    // graph, and no baseline or verdict beside it.
     await expect(cited.getByRole('listitem')).toHaveCount(1)
-    await expect(entry).toHaveText(`${subjectName} · preference · ${claim.name}Proposed`)
+    await expect(cited).not.toContainText(/baseline|verdict/i)
     await expect(cited.locator('button, a, input, select, textarea')).toHaveCount(0)
   })
 })

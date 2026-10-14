@@ -13,13 +13,17 @@ import { TimelineDrillDown, TimelineRow } from '@/components/timeline'
 import { formatDateTime } from '@/components/timeline/format'
 import { InteractionDrillDown } from '../interaction-content'
 
-const mocks = vi.hoisted(() => ({ getTimelineContent: vi.fn() }))
+const mocks = vi.hoisted(() => ({ getTimelineContent: vi.fn(), getTimelineAssertions: vi.fn() }))
 vi.mock('@/lib/interactions-api', () => ({
-  interactionsApi: { getTimelineContent: mocks.getTimelineContent },
+  interactionsApi: {
+    getTimelineContent: mocks.getTimelineContent,
+    getTimelineAssertions: mocks.getTimelineAssertions,
+  },
 }))
 
 beforeEach(() => {
   mocks.getTimelineContent.mockReset().mockReturnValue(new Promise(() => {}))
+  mocks.getTimelineAssertions.mockReset().mockResolvedValue({ items: [] })
 })
 
 type RowOverrides = Partial<TimelineMemberResponse> & {
@@ -447,5 +451,38 @@ describe('InteractionDrillDown evidence scope', () => {
     // Agreement is silent: no note when the counts already match.
     view.rerenderUi(drillDown(3))
     expect(scope()).not.toBeInTheDocument()
+  })
+})
+
+describe('InteractionDrillDown assertions read', () => {
+  const drillDown = (
+    <InteractionDrillDown
+      item={{ ...baseItem({ content_kind: 'messages', message_count: 1 }), identity }}
+      identity={identity}
+      context={context}
+    />
+  )
+  const content = messagesContent([
+    message('message-a', 'Sender A', '2026-01-02T03:04:00Z', 'A', 'venue-a'),
+  ])
+  const failure = () => document.querySelector('[data-assertions-error]')
+
+  // A failed read of the assertions beside the content (IXN-023) must not
+  // look like content no assertion cites.
+  it('says a failed assertions read failed, and stays silent on an empty one', async () => {
+    mocks.getTimelineAssertions.mockRejectedValue(new Error('unavailable'))
+    const view = renderWithContent(content, () => drillDown)
+    await waitFor(() => expect(failure()).toHaveTextContent('Failed to load assertions.'))
+    expect(document.querySelector('[data-message-id]')).toHaveAttribute(
+      'data-message-id',
+      'message-a'
+    )
+    view.unmount()
+
+    mocks.getTimelineAssertions.mockReset().mockResolvedValue({ items: [] })
+    renderWithContent(content, () => drillDown)
+    await waitFor(() => expect(document.querySelector('[data-message-id]')).toBeInTheDocument())
+    await waitFor(() => expect(mocks.getTimelineAssertions).toHaveBeenCalled())
+    expect(failure()).not.toBeInTheDocument()
   })
 })

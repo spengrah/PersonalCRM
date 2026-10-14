@@ -15,7 +15,8 @@ interface InteractionDrillDownProps {
 // disclosure that the thread window shown and the messages recorded against the
 // interaction are drawn from different sets. The recorded count is the row's;
 // the shown count is what the drill-down displays (the same cached read). The
-// assertions citing a displayed content item show beside it (IXN-023).
+// assertions citing a displayed content item show beside it (IXN-023); a failed
+// assertions read says so rather than looking like an item no assertion cites.
 export function InteractionDrillDown({
   item,
   identity,
@@ -44,6 +45,11 @@ export function InteractionDrillDown({
         venueFilter={venueFilter}
         annotations={assertions.data && assertionAnnotations(assertions.data.items)}
       />
+      {assertions.isError && (
+        <p data-assertions-error className="mt-2 text-xs text-gray-500">
+          Failed to load assertions.
+        </p>
+      )}
     </>
   )
 }
