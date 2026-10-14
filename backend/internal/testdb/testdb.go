@@ -232,8 +232,11 @@ func NewEphemeralClone(t testing.TB) (cloneConnURL string, drop func()) {
 		t.Fatalf("testdb.NewEphemeralClone: %v", err)
 	}
 
+	// Callers register drop with t.Cleanup, and t.Context() is already
+	// canceled when cleanup functions run, so the drop keeps its values but not
+	// its cancellation.
 	drop = func() {
-		if err := dropDatabase(t.Context(), originalBaseURL, cloneName); err != nil {
+		if err := dropDatabase(context.WithoutCancel(t.Context()), originalBaseURL, cloneName); err != nil {
 			t.Logf("testdb.NewEphemeralClone: drop %s (non-fatal): %v", cloneName, err)
 		}
 	}
