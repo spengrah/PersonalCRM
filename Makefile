@@ -1,6 +1,6 @@
 # Personal CRM Makefile
 
-.PHONY: help setup dev dev-seed staging-reset tours qa-sanity build crm-admin mac-daemon test test-daemon-local clean docker-up docker-down docker-reset test-cadence-ultra test-cadence-fast model-prices-sync model-prices-apply qa-cost-assert prod staging accelerated testing start start-local stop restart reload status dev-stop dev-restart dev-api-stop dev-api-start dev-api-restart ci-build-backend ci-build-frontend ci-build ci-test test-e2e test-e2e-local e2e-db e2e-pg-ensure e2e-ports-free deploy-mac promote setup-pi setup-mac-deploy dev-native postgres-native sqlc smoke-test test-deploy-scripts worktree-env worktree-deps test-integration-fast test-integration-slow test-clean-clones worktree-test-pg-ensure test-pg-stop test-pg-teardown test-pg-reap test-pg-smoke lint-ingest-registry spec-lint spec-coverage spec-drift api-types api-types-check api-docs api-docs-check contact-queries contact-queries-check sqlc-params-check
+.PHONY: help setup dev dev-seed staging-reset tours qa-sanity build crm-admin mac-daemon test test-daemon-local clean docker-up docker-down docker-reset test-cadence-ultra test-cadence-fast model-prices-sync model-prices-apply qa-cost-assert prod staging accelerated testing start start-local stop restart reload status dev-stop dev-restart dev-api-stop dev-api-start dev-api-restart ci-build-backend ci-build-frontend ci-build ci-test test-e2e test-e2e-local e2e-db e2e-pg-ensure e2e-ports-free deploy-mac promote setup-pi setup-mac-deploy dev-native postgres-native sqlc smoke-test test-deploy-scripts worktree-env worktree-deps test-integration-fast test-integration-slow test-clean-clones worktree-test-pg-ensure test-pg-teardown test-pg-reap test-pg-smoke lint-ingest-registry spec-lint spec-coverage spec-drift api-types api-types-check api-docs api-docs-check contact-queries contact-queries-check sqlc-params-check
 
 # Repo root (supports running make from subdirectories).
 REPO_ROOT := $(shell git rev-parse --show-toplevel)
@@ -29,6 +29,17 @@ STAMP_GIT_COMMIT ?= $(shell git rev-parse HEAD 2>/dev/null || echo unknown)
 STAMP_BUILD_TIME ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 STAMP_LDFLAGS := -X personal-crm/backend/internal/health.Version=$(STAMP_VERSION) -X personal-crm/backend/internal/health.GitCommit=$(STAMP_GIT_COMMIT) -X personal-crm/backend/internal/health.BuildTime=$(STAMP_BUILD_TIME)
 
+# The process whose exit ends every cluster scripts/worktree-test-pg.sh starts
+# for this run: this make, unless the caller names a longer-lived owner. A
+# $(shell ...) runs as make's child, so its $$PPID is make. Exported for
+# recipes; make 3.81's $(shell ...) does not see exported variables, so those
+# calls pass $(WORKTREE_PG_OWNER_ENV) explicitly.
+ifndef CRM_WORKTREE_PG_OWNER
+  CRM_WORKTREE_PG_OWNER := $(shell echo $$PPID)
+endif
+export CRM_WORKTREE_PG_OWNER
+WORKTREE_PG_OWNER_ENV := CRM_WORKTREE_PG_OWNER=$(CRM_WORKTREE_PG_OWNER)
+
 # Per-checkout test Postgres (gh #433). In a linked git worktree, and in the
 # main checkout when no Docker daemon answers, scripts/worktree-test-pg.sh url
 # emits that checkout's TEST_DATABASE_URL (an isolated cluster on a derived
@@ -39,7 +50,7 @@ STAMP_LDFLAGS := -X personal-crm/backend/internal/health.Version=$(STAMP_VERSION
 # `make`, and ONLY when a default that references it is expanded — never on
 # `make help`/`make build`. Provisioning (the side-effecting part) is the
 # worktree-test-pg-ensure prerequisite below, not this variable.
-WORKTREE_TEST_DB_URL = $(eval WORKTREE_TEST_DB_URL := $(shell bash scripts/worktree-test-pg.sh url))$(WORKTREE_TEST_DB_URL)
+WORKTREE_TEST_DB_URL = $(eval WORKTREE_TEST_DB_URL := $(shell $(WORKTREE_PG_OWNER_ENV) bash scripts/worktree-test-pg.sh url))$(WORKTREE_TEST_DB_URL)
 
 # The provisioning command for the worktree-test-pg-ensure prereq, computed
 # lazily + memoized. It is EMPTY (so `make -n` prints NO ensure line and the
@@ -93,8 +104,8 @@ endif
 # `$(eval ...)` memo: the script runs at most once per variable, and only when
 # e2e-db's recipe expands, which is after its e2e-pg-ensure prerequisite has
 # started that PostgreSQL. An explicit env/CLI value wins.
-E2E_DATABASE_NAME ?= $(eval E2E_DATABASE_NAME := $(shell bash "$(REPO_ROOT)/scripts/e2e-pg.sh" e2e-db-name))$(E2E_DATABASE_NAME)
-E2E_DATABASE_URL ?= $(eval E2E_DATABASE_URL := $(shell bash "$(REPO_ROOT)/scripts/e2e-pg.sh" url "$(E2E_DATABASE_NAME)"))$(E2E_DATABASE_URL)
+E2E_DATABASE_NAME ?= $(eval E2E_DATABASE_NAME := $(shell $(WORKTREE_PG_OWNER_ENV) bash "$(REPO_ROOT)/scripts/e2e-pg.sh" e2e-db-name))$(E2E_DATABASE_NAME)
+E2E_DATABASE_URL ?= $(eval E2E_DATABASE_URL := $(shell $(WORKTREE_PG_OWNER_ENV) bash "$(REPO_ROOT)/scripts/e2e-pg.sh" url "$(E2E_DATABASE_NAME)"))$(E2E_DATABASE_URL)
 E2E_FRONTEND_PORT ?= 3000
 E2E_BACKEND_PORT ?= 8080
 BACKEND_SLOW_TESTS_REGEX := TestSyncWorker_LoadNoDuplicateConcurrentSyncs|TestPeriodicTick_FiresOnStart|TestSyncWorker_RescueOnCrash|TestSynthetic|TestTestdb|TestInteractionsDeclare|TestSeedDeclaredEndpoint|TestCleanupEndpoint
@@ -444,18 +455,14 @@ test-integration-slow: worktree-test-pg-ensure ## Run only LONG_TESTS-gated back
 	@echo "Running backend slow integration tests..."
 	@cd backend && DATABASE_URL="$(TEST_DATABASE_URL)" LONG_TESTS=1 go test -tags integration_testdb -count=1 -timeout $(LONG_TESTS_TIMEOUT) -parallel $(TEST_PARALLEL) -p $(TEST_P) $(INTEGRATION_PKGS) $(GOTEST_VERBOSE) -run '$(BACKEND_SLOW_TESTS_REGEX)'
 
-# Per-worktree test-Postgres lifecycle (gh #433). All operate ONLY on
-# this checkout's own instance under $CRM_WORKTREE_PG_HOME — never the shared
-# Docker crm-postgres:5432, never Docker.
-test-pg-stop: ## Stop this checkout's own test Postgres (keep data dir)
-	@bash scripts/worktree-test-pg.sh stop
-
-test-pg-teardown: ## Stop + delete this checkout's own test Postgres data dir
+# Per-checkout test-Postgres lifecycle (gh #433). Each run's cluster stops and
+# is deleted when its owner (the make that started it) exits; these targets are
+# for recovery. All operate ONLY on instances under $CRM_WORKTREE_PG_HOME —
+# never the shared Docker crm-postgres:5432, never Docker.
+test-pg-teardown: ## Stop + delete every test Postgres cluster of this checkout
 	@bash scripts/worktree-test-pg.sh teardown
 
-# reap prunes per-worktree instances whose worktree no longer exists (run
-# between sessions). Cross-references `git worktree list`; safe to run anytime.
-test-pg-reap: ## Prune per-worktree test Postgres instances whose worktree is gone
+test-pg-reap: ## Stop + delete test Postgres clusters whose owning run has exited
 	@bash scripts/worktree-test-pg.sh reap
 
 # Real-cluster smoke for the per-worktree mechanism (NOT pre-push: it owns a DB

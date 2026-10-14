@@ -204,14 +204,20 @@ set_main() {
 # postmaster.pid that pid_alive() sees as a live server across invocations.
 # CRM_WORKTREE_PG_BINDIR confines binary discovery to the fake bindir so a real
 # pg16 install on the host can't defeat the wrong-major / missing-binary fakes.
+# The owner defaults to the test runner too, so instances outlive each call;
+# set OWNER to give a call another owner.
 run() {
   local d="$1"; shift
   PATH="$d/bin:$PATH" \
   CRM_WORKTREE_PG_HOME="$d/pghome" \
   CRM_WORKTREE_PG_BINDIR="$d/bin" \
+  CRM_WORKTREE_PG_OWNER="${OWNER-$$}" \
   FAKE_PG_PID="$$" \
     bash "$SCRIPT" "$@"
 }
+
+# A pid that is certainly not alive: a child that has exited and been reaped.
+dead_pid() { sh -c 'exit 0' & local p=$!; wait "$p"; echo "$p"; }
 
 # ---------------------------------------------------------------------------
 # 1. Detection: main checkout -> url empty
@@ -275,8 +281,8 @@ p=$(run "$d" port)
 # 6. Two distinct worktrees -> two distinct ids (=> distinct data dirs/seeds)
 d1=$(make_env | tail -1); set_linked "$d1" alpha
 d2=$(make_env | tail -1); set_linked "$d2" beta
-id1=$(run "$d1" status | grep -oE 'id=[0-9a-f]+' | head -1)
-id2=$(run "$d2" status | grep -oE 'id=[0-9a-f]+' | head -1)
+id1=$(run "$d1" status | grep -oE 'id=[0-9a-f-]+' | head -1)
+id2=$(run "$d2" status | grep -oE 'id=[0-9a-f-]+' | head -1)
 [ -n "$id1" ] && [ "$id1" != "$id2" ] && ok "distinct worktrees -> distinct ids ($id1 != $id2)" \
   || bad "ids collided or empty: '$id1' vs '$id2'"
 
@@ -344,7 +350,7 @@ run "$d" teardown >/dev/null 2>&1
 # live server (which would defeat manual `pg_ctl -D` recovery).
 d=$(make_env | tail -1); set_linked "$d"
 run "$d" ensure >/dev/null 2>&1
-id=$(run "$d" status | grep -oE 'id=[0-9a-f]+' | sed 's/id=//')
+id=$(run "$d" status | grep -oE 'id=[0-9a-f-]+' | sed 's/id=//')
 touch "$d/pgctl_fail"                       # every pg_ctl (incl. stop) now fails
 run "$d" teardown 2>"$d/err"
 [ -d "$d/pghome/$id" ] && ok "8e: teardown kept data dir when server could not be stopped" || bad "8e: teardown deleted data dir under a live server"
@@ -353,23 +359,57 @@ rm -f "$d/pgctl_fail"                        # allow the follow-up teardown to c
 run "$d" teardown >/dev/null 2>&1
 [ ! -d "$d/pghome/$id" ] && ok "8e: teardown removes the instance once stoppable again" || bad "8e: instance dir left after recoverable teardown"
 
-# 9. Port reuse: a genuinely stopped instance keeps its persisted meta port
-# (STATE=claimed, server down). Fresh env + real warm instance so this isn't a
-# torn-down instance falling back to the deterministic seed.
+# 9. release stops and deletes the owner's instance, and only that one.
 d=$(make_env | tail -1); set_linked "$d"
-run "$d" ensure >/dev/null 2>&1            # cold -> warm (real running instance)
-port_before=$(run "$d" port)
-run "$d" stop >/dev/null 2>&1              # graceful stop: meta demoted to claimed, port persisted
-port_after=$(run "$d" port)
-[ "$port_before" = "$port_after" ] && ok "port persists across stop ($port_after)" || bad "port changed on stop: $port_before -> $port_after"
-id=$(run "$d" status | grep -oE 'id=[0-9a-f]+' | sed 's/id=//')
-grep -q '^STATE=claimed' "$d/pghome/$id/meta" && ok "stop persists meta as claimed (port held for restart)" || bad "stop did not persist claimed meta: $(cat "$d/pghome/$id/meta" 2>/dev/null)"
+run "$d" ensure >/dev/null 2>&1
+mine=$(run "$d" status | grep -oE 'id=[0-9a-f-]+' | sed 's/id=//'); myport=$(run "$d" port)
+sleep 60 & other_owner=$!
+other=$(OWNER=$other_owner run "$d" status | grep -oE 'id=[0-9a-f-]+' | sed 's/id=//')
+OWNER=$other_owner run "$d" ensure >/dev/null 2>&1
+run "$d" release 2>"$d/err"; rc=$?
+[ "$rc" -eq 0 ] && [ ! -d "$d/pghome/$mine" ] && ok "release deleted the owner's instance" || bad "release rc=$rc, left $d/pghome/$mine ($(cat "$d/err"))"
+! grep -qx "$myport" "$d/port_busy" && ok "release stopped the owner's server" || bad "release left the server on $myport running"
+[ -d "$d/pghome/$other" ] && ok "release kept another owner's instance in the same checkout" || bad "release deleted another owner's instance"
+[ -z "$(run "$d" url)" ] && ok "url empty after release" || bad "url still set after release"
+kill "$other_owner"; wait "$other_owner" 2>/dev/null
+
+# 9b. ensure without an owner fails in every mode and starts nothing.
+for m in "" strict; do
+  d=$(make_env | tail -1); set_linked "$d"
+  OWNER= CRM_WORKTREE_PG="$m" run "$d" ensure 2>"$d/err"; rc=$?
+  [ "$rc" -ne 0 ] && [ ! -s "$d/calls" ] && ok "no owner (mode '${m:-auto}'): ensure fails ($rc) and starts nothing" \
+    || bad "no owner (mode '${m:-auto}'): ensure rc=$rc calls=$(cat "$d/calls" 2>/dev/null)"
+  grep -q 'CRM_WORKTREE_PG_OWNER' "$d/err" && ok "no owner: error names CRM_WORKTREE_PG_OWNER" || bad "no owner: unhelpful error ($(cat "$d/err"))"
+done
+
+# 9c. The watcher deletes the instance once its owner exits. The owner is a
+# background sleep; after it is killed the instance must go within seconds.
+d=$(make_env | tail -1); set_linked "$d"
+sleep 60 & owner=$!
+OWNER=$owner run "$d" ensure >/dev/null 2>&1
+wid=$(OWNER=$owner run "$d" status | grep -oE 'id=[0-9a-f-]+' | sed 's/id=//'); wport=$(OWNER=$owner run "$d" port)
+[ -d "$d/pghome/$wid" ] && grep -qx "$wport" "$d/port_busy" && ok "9c setup: owner's instance running" || bad "9c setup: no running instance"
+kill "$owner"; wait "$owner" 2>/dev/null
+for _ in $(seq 1 50); do [ -d "$d/pghome/$wid" ] || break; sleep 0.2; done
+[ ! -d "$d/pghome/$wid" ] && ok "watcher deleted the instance after its owner exited" || bad "instance $wid left after its owner exited"
+! grep -qx "$wport" "$d/port_busy" && ok "watcher stopped the server after its owner exited" || bad "server on $wport left running after its owner exited"
+
+# 9d. ensure deletes instances whose owner has exited (here: one whose watcher
+# never ran), including a running server, before provisioning its own.
+d=$(make_env | tail -1); set_linked "$d"
+orphan="$d/pghome/0123456789abcdef-$(dead_pid)"; mkdir -p "$orphan/data"
+echo 16 > "$orphan/data/PG_VERSION"; echo "$$" > "$orphan/data/postmaster.pid"
+echo 5699 > "$orphan/data/.fakeport"; echo 5699 >> "$d/port_busy"
+printf 'PORT=5699\nPID=%s\nSTATE=running\n' "$$" > "$orphan/meta"
+run "$d" ensure >/dev/null 2>&1
+[ ! -d "$orphan" ] && ok "ensure deleted an exited owner's instance" || bad "ensure left an exited owner's instance"
+! grep -qx 5699 "$d/port_busy" && ok "ensure stopped an exited owner's server" || bad "ensure left an exited owner's server running"
 
 # 10. Port collision: a sibling already on the seed -> probe advances
 d=$(make_env | tail -1); set_linked "$d" gamma
 seed=$(run "$d" port)
 # Pre-claim the seed port via a sibling meta (running pid) + mark port busy.
-sib="$d/pghome/ffffffffffffffff"; mkdir -p "$sib"
+sib="$d/pghome/ffffffffffffffff-$$"; mkdir -p "$sib"
 printf 'PORT=%s\nPID=%s\nSTATE=running\n' "$seed" "$$" > "$sib/meta"
 echo "$seed" > "$d/port_busy"
 run "$d" ensure >/dev/null 2>&1
@@ -382,7 +422,7 @@ chosen=$(run "$d" port)
 # conservative allocator must not opportunistically steal it.
 d=$(make_env | tail -1); set_linked "$d" delta
 seed=$(run "$d" port)
-sib="$d/pghome/aaaaaaaaaaaaaaaa"; mkdir -p "$sib"
+sib="$d/pghome/aaaaaaaaaaaaaaaa-$$"; mkdir -p "$sib"
 printf 'PORT=%s\nDATADIR=%s\nSTATE=claimed\n' "$seed" "$sib/data" > "$sib/meta"  # no PID, port does NOT answer
 run "$d" ensure >/dev/null 2>&1
 chosen=$(run "$d" port)
@@ -417,79 +457,33 @@ grep -qi 'initdb' "$d/err" && ok "initdb-fail: loud warning" || bad "initdb-fail
 d=$(make_env | tail -1); set_linked "$d"; touch "$d/pgctl_fail"
 run "$d" ensure 2>"$d/err"; rc=$?
 [ "$rc" -eq 0 ] && ok "start-fail non-strict: exit 0" || bad "start-fail exit=$rc"
-id=$(run "$d" status | grep -oE 'id=[0-9a-f]+' | sed 's/id=//')
+id=$(run "$d" status | grep -oE 'id=[0-9a-f-]+' | sed 's/id=//')
 [ ! -f "$d/pghome/$id/meta" ] && ok "start-fail: meta cleared (port released)" || bad "start-fail: meta left: $(cat "$d/pghome/$id/meta" 2>/dev/null)"
 
-# 16. Reaper: dead-worktree meta pruned; live-worktree meta kept; never outside HOME
-d=$(make_env | tail -1); set_linked "$d" reaplive
-# Make the live worktree's own instance + record it in the fake worktree list.
-livegd=$(cat "$d/git-dir")
-liveid=$(printf '%s' "$livegd" | { command -v sha256sum >/dev/null && sha256sum || shasum -a 256; } | awk '{print $1}' | head -c 16)
-printf 'worktree %s\n' "$d/repo" > "$d/worktrees"
-# Patch fake git so `git -C <wt> rev-parse --absolute-git-dir` returns the live
-# git-dir. CRITICAL: mimic real git's FATAL handling of an empty GIT_DIR='' env
-# (rc=128, "not a git repository: ''") so the old buggy `GIT_DIR= git -C ...`
-# line CANNOT pass this test vacuously — only the `env -u GIT_DIR` form (no
-# GIT_DIR in env) resolves the live id and keeps the instance.
-cat > "$d/bin/git" <<EOF
-#!/usr/bin/env bash
-# Real git: a set-but-empty GIT_DIR is fatal.
-if [ "\${GIT_DIR+set}" = set ] && [ -z "\$GIT_DIR" ]; then
-  echo "fatal: not a git repository: ''" >&2; exit 128
-fi
-case "\$*" in
-  "rev-parse --git-dir")          cat "$d/git-dir" ;;
-  "rev-parse --git-common-dir")   cat "$d/common-dir" ;;
-  "rev-parse --absolute-git-dir") cat "$d/git-dir" ;;
-  "rev-parse --show-toplevel")    echo "$d/repo" ;;
-  "worktree list --porcelain")    cat "$d/worktrees" ;;
-  "-C $d/repo rev-parse --absolute-git-dir") cat "$d/git-dir" ;;
-  *"rev-parse --absolute-git-dir") echo "/nonexistent/.git" ;;
-  *) exit 0 ;;
-esac
-EOF
-chmod +x "$d/bin/git"
-mkdir -p "$d/pghome/$liveid" "$d/pghome/deadbeefdeadbeef"
-printf 'PORT=5599\nPID=1\nSTATE=running\nDATADIR=%s\n' "$d/pghome/$liveid/data" > "$d/pghome/$liveid/meta"
-printf 'PORT=5600\nPID=1\nSTATE=running\nDATADIR=%s\n' "$d/pghome/deadbeefdeadbeef/data" > "$d/pghome/deadbeefdeadbeef/meta"
-# A sentinel OUTSIDE the home to prove reap never touches it.
+# 16. Reaper: an instance is kept while its keeper lives and deleted after.
+# The keeper is the owner in the name, or for a bare (pre-owner) id its own
+# postmaster. Nothing outside the home is touched.
+d=$(make_env | tail -1); set_linked "$d"
+h="$d/pghome"; gone=$(dead_pid)
+mkdir -p "$h/1111111111111111-$$" "$h/2222222222222222-$gone" "$h/3333333333333333/data" "$h/4444444444444444/data"
+echo 16 > "$h/3333333333333333/data/PG_VERSION"; echo "$$" > "$h/3333333333333333/data/postmaster.pid"
+echo 5602 > "$h/3333333333333333/data/.fakeport"; echo 5602 >> "$d/port_busy"
+echo 16 > "$h/4444444444444444/data/PG_VERSION"           # bare id, server down
 sentinel="$d/SENTINEL"; touch "$sentinel"
 run "$d" reap >/dev/null 2>&1
-[ -d "$d/pghome/$liveid" ] && ok "reap kept live-worktree instance" || bad "reap removed live instance"
-[ ! -d "$d/pghome/deadbeefdeadbeef" ] && ok "reap pruned dead-worktree instance" || bad "reap left dead instance"
+[ -d "$h/1111111111111111-$$" ] && ok "reap kept an instance whose owner lives" || bad "reap removed a live owner's instance"
+[ ! -d "$h/2222222222222222-$gone" ] && ok "reap deleted an instance whose owner exited" || bad "reap left an exited owner's instance"
+[ -d "$h/3333333333333333" ] && ok "reap kept a bare-id instance whose server runs" || bad "reap removed a running bare-id instance"
+[ ! -d "$h/4444444444444444" ] && ok "reap deleted a bare-id instance whose server is down" || bad "reap left a stopped bare-id instance"
 [ -f "$sentinel" ] && ok "reap never touched anything outside HOME" || bad "reap removed the sentinel!"
 
-# 16b. Reap must KEEP a dead-worktree instance's data dir + warn when its
-# postmaster can't be stopped (the reap-path analogue of 8e). The dead instance
-# has an initialized data dir with a LIVE postmaster.pid; pgctl_fail makes every
-# pg_ctl stop fail, so force_stop_instance verifies the server still up and
-# _reap_one keeps the data dir instead of deleting it under a live server. Once
-# stoppable again, a follow-up reap prunes it.
-d=$(make_env | tail -1); set_linked "$d" reapstuck
-livegd=$(cat "$d/git-dir")
-liveid=$(printf '%s' "$livegd" | { command -v sha256sum >/dev/null && sha256sum || shasum -a 256; } | awk '{print $1}' | head -c 16)
-printf 'worktree %s\n' "$d/repo" > "$d/worktrees"
-cat > "$d/bin/git" <<EOF
-#!/usr/bin/env bash
-if [ "\${GIT_DIR+set}" = set ] && [ -z "\$GIT_DIR" ]; then
-  echo "fatal: not a git repository: ''" >&2; exit 128
-fi
-case "\$*" in
-  "rev-parse --git-dir")          cat "$d/git-dir" ;;
-  "rev-parse --git-common-dir")   cat "$d/common-dir" ;;
-  "rev-parse --absolute-git-dir") cat "$d/git-dir" ;;
-  "rev-parse --show-toplevel")    echo "$d/repo" ;;
-  "worktree list --porcelain")    cat "$d/worktrees" ;;
-  "-C $d/repo rev-parse --absolute-git-dir") cat "$d/git-dir" ;;
-  *"rev-parse --absolute-git-dir") echo "/nonexistent/.git" ;;
-  *) exit 0 ;;
-esac
-EOF
-chmod +x "$d/bin/git"
-mkdir -p "$d/pghome/$liveid"
-printf 'PORT=5591\nPID=1\nSTATE=running\nDATADIR=%s\n' "$d/pghome/$liveid/data" > "$d/pghome/$liveid/meta"
-# Dead-worktree instance: initialized + LIVE postmaster + port marked busy.
-dead="$d/pghome/deadbeefdeadbeef"; ddir="$dead/data"; mkdir -p "$ddir"
+# 16b. Reap must KEEP an exited owner's data dir + warn when its postmaster
+# can't be stopped (the reap-path analogue of 8e). pgctl_fail makes every
+# pg_ctl stop fail, so force_stop_instance sees the server still up and
+# destroy_instance keeps the data dir instead of deleting it under a live
+# server. Once stoppable again, a follow-up reap deletes it.
+d=$(make_env | tail -1); set_linked "$d"
+dead="$d/pghome/deadbeefdeadbeef-$(dead_pid)"; ddir="$dead/data"; mkdir -p "$ddir"
 echo 16 > "$ddir/PG_VERSION"
 echo "$$" > "$ddir/postmaster.pid"
 echo 5601 > "$ddir/.fakeport"
@@ -497,11 +491,11 @@ echo 5601 >> "$d/port_busy"
 printf 'PORT=5601\nPID=%s\nSTATE=running\nDATADIR=%s\n' "$$" "$ddir" > "$dead/meta"
 touch "$d/pgctl_fail"                        # every pg_ctl stop fails
 run "$d" reap 2>"$d/err"
-[ -d "$dead" ] && ok "16b: reap kept dead instance's data dir when server could not be stopped" || bad "16b: reap deleted data dir under a live server"
+[ -d "$dead" ] && ok "16b: reap kept the data dir when the server could not be stopped" || bad "16b: reap deleted data dir under a live server"
 grep -qi 'could not stop' "$d/err" && ok "16b: reap warned about the un-stoppable instance" || bad "16b: no warning on un-stoppable reap ($(cat "$d/err"))"
 rm -f "$d/pgctl_fail"                         # now stoppable
 run "$d" reap >/dev/null 2>&1
-[ ! -d "$dead" ] && ok "16b: reap prunes the dead instance once stoppable again" || bad "16b: dead instance left after recoverable reap"
+[ ! -d "$dead" ] && ok "16b: reap deletes the instance once stoppable again" || bad "16b: instance left after recoverable reap"
 
 # 18. fd 200 NOT leaked into the daemonized postmaster (#600). The fake pg_ctl
 # backgrounds a child one level deep (the pg_ctl -> postmaster edge) that records
@@ -516,11 +510,11 @@ for _ in 1 2 3 4 5 6 7 8 9 10; do [ -s "$d/fd200" ] && break; sleep 0.2; done
 
 # 18b. Functional lock-liveness pin (the actual #600 symptom): with that child
 # STILL alive (sleeping), a second lock-taking command must acquire the lock
-# promptly. If fd 200 leaked into the child, `stop`'s flock -w would expire and
+# promptly. If fd 200 leaked into the child, `release`'s flock -w would expire and
 # with_lock returns 124 (non-zero). A low timeout keeps the regression fast.
-CRM_WORKTREE_PG_LOCK_TIMEOUT=4 run "$d" stop 2>"$d/err"; rc=$?
-[ "$rc" -eq 0 ] && ok "instance lock live after the daemonized-child spawn (stop acquired promptly)" \
-  || bad "stop rc=$rc after child spawn — fd 200 leaked and wedged the lock"
+CRM_WORKTREE_PG_LOCK_TIMEOUT=4 run "$d" release 2>"$d/err"; rc=$?
+[ "$rc" -eq 0 ] && ok "instance lock live after the daemonized-child spawn (release acquired promptly)" \
+  || bad "release rc=$rc after child spawn — fd 200 leaked and wedged the lock"
 
 # 19. Lock timeout, NOT-running branch: hold an UNPROVISIONED worktree's instance
 # lock from the background, then ensure with a 1s timeout. Non-strict fails LOUD
@@ -529,7 +523,7 @@ CRM_WORKTREE_PG_LOCK_TIMEOUT=4 run "$d" stop 2>"$d/err"; rc=$?
 # ceiling is already covered and can't be held this precisely from a subshell).
 if command -v flock >/dev/null 2>&1; then
   d=$(make_env | tail -1); set_linked "$d" locknone
-  id=$(run "$d" status | grep -oE 'id=[0-9a-f]+' | sed 's/id=//')
+  id=$(run "$d" status | grep -oE 'id=[0-9a-f-]+' | sed 's/id=//')
   lockdir="$d/pghome/$id"; mkdir -p "$lockdir"; lockfile="$lockdir/lock"
   start_lock_holder "$lockfile"
   CRM_WORKTREE_PG_LOCK_TIMEOUT=1 run "$d" ensure 2>"$d/err"; rc=$?
@@ -549,7 +543,7 @@ if command -v flock >/dev/null 2>&1; then
   # fallback claim); strict fails. Exercises both mode routings of this branch.
   d=$(make_env | tail -1); set_linked "$d" lockrun
   run "$d" ensure >/dev/null 2>&1                       # cold -> warm
-  id=$(run "$d" status | grep -oE 'id=[0-9a-f]+' | sed 's/id=//')
+  id=$(run "$d" status | grep -oE 'id=[0-9a-f-]+' | sed 's/id=//')
   runurl=$(run "$d" url)
   lockfile="$d/pghome/$id/lock"
   start_lock_holder "$lockfile"

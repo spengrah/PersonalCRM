@@ -85,6 +85,8 @@ SMOKE_WT="$TMP/wt"
 git -C "$REPO_ROOT" worktree add --detach "$SMOKE_WT" HEAD >/dev/null 2>&1
 trap 'git -C "$REPO_ROOT" worktree remove --force "$SMOKE_WT" >/dev/null 2>&1 || true; cleanup' EXIT
 
+# This script owns the Phase B/D instance, so it lives until the script exits.
+export CRM_WORKTREE_PG_OWNER=$$
 run_in_wt() { ( cd "$SMOKE_WT" && CRM_WORKTREE_PG_HOME="$SMOKE_PG_HOME" "$@" ); }
 
 # ---------------------------------------------------------------------------
@@ -162,6 +164,8 @@ run_in_wt env CRM_WORKTREE_PG=strict bash "$RESOLVER" ensure \
 # A FRESH worktree (no instance yet) drives `make test-integration-fast` so the
 # worktree-test-pg-ensure prereq must bring the server up before
 # $(TEST_DATABASE_URL) resolves. We narrow to one collation-sensitive test.
+# CRM_WORKTREE_PG_OWNER (exported above) names this script as the owner, so
+# the instance outlives make for the assertions; Phase C2 drops the override.
 # ---------------------------------------------------------------------------
 note "end-to-end: make test-integration-fast through the real recipe (cold)"
 COLD_WT="$TMP/wt-cold"
@@ -205,6 +209,30 @@ fi
 
 # teardown the cold instance
 ( cd "$COLD_WT" && CRM_WORKTREE_PG_HOME="$COLD_PG_HOME" bash "$RESOLVER" teardown >/dev/null 2>&1 ) || true
+
+# ---------------------------------------------------------------------------
+# Phase C2: with no owner override, make owns the instance, so nothing of it
+# survives the run: the watcher stops the server and deletes the data dir once
+# make exits.
+# ---------------------------------------------------------------------------
+note "make-owned instance is gone after make exits"
+set +e
+OUT2=$( cd "$COLD_WT" && env -u CRM_WORKTREE_PG_OWNER CRM_WORKTREE_PG_HOME="$COLD_PG_HOME" CRM_WORKTREE_PG=strict \
+  make test-integration-fast \
+    INTEGRATION_RUN='TestFindSimilarContactsBatch_Integration' \
+    INTEGRATION_PKGS='./tests/...' 2>&1 )
+rc2=$?
+set -e
+[ "$rc2" -eq 0 ] && ok "make-owned run passed" || { bad "make-owned run failed (rc=$rc2)"; echo "$OUT2" | tail -20; }
+left=""
+for _ in $(seq 1 30); do
+  left=$(find "$COLD_PG_HOME" -mindepth 1 -maxdepth 1 -type d 2>/dev/null)
+  [ -z "$left" ] && break
+  sleep 0.5
+done
+[ -z "$left" ] && ok "no instance left under the pg home after make exited" || bad "instance(s) left after make exited: $left"
+pgrep -f "postgres -D $COLD_PG_HOME" >/dev/null && bad "a postmaster under $COLD_PG_HOME is still running" \
+  || ok "no postmaster left running after make exited"
 git -C "$REPO_ROOT" worktree remove --force "$COLD_WT" >/dev/null 2>&1 || true
 
 # ---------------------------------------------------------------------------
@@ -215,14 +243,23 @@ run_in_wt bash "$RESOLVER" ensure   # second ensure: no-op
 PORT2=$(run_in_wt bash "$RESOLVER" port)
 [ "$PORT" = "$PORT2" ] && ok "reuse: same port after second ensure ($PORT2)" || bad "port changed on reuse: $PORT -> $PORT2"
 
-run_in_wt bash "$RESOLVER" stop
-run_in_wt bash "$RESOLVER" ensure   # restart on same port + datadir
-PORT3=$(run_in_wt bash "$RESOLVER" port)
-[ "$PORT" = "$PORT3" ] && ok "stop+ensure restarts on same port ($PORT3)" || bad "restart changed port: $PORT -> $PORT3"
-
 DD=$(cd "$SMOKE_WT" && CRM_WORKTREE_PG_HOME="$SMOKE_PG_HOME" bash "$RESOLVER" status | grep -oE 'datadir=[^ ]+' | sed 's/datadir=//')
 run_in_wt bash "$RESOLVER" teardown
 [ ! -d "$DD" ] && ok "teardown removed the datadir" || bad "teardown left datadir: $DD"
+
+# Phase E: the watcher stops a real postmaster and deletes its data dir once
+# the owner exits.
+note "watcher: owner exit ends the instance"
+sleep 300 & SHORT_OWNER=$!
+run_in_wt env CRM_WORKTREE_PG_OWNER=$SHORT_OWNER CRM_WORKTREE_PG=strict bash "$RESOLVER" ensure
+DDE=$(run_in_wt env CRM_WORKTREE_PG_OWNER=$SHORT_OWNER bash "$RESOLVER" status | grep -oE 'datadir=[^ ]+' | sed 's/datadir=//')
+PMPID_E=$(head -1 "$DDE/postmaster.pid" 2>/dev/null || true)
+[ -n "$PMPID_E" ] && kill -0 "$PMPID_E" 2>/dev/null && ok "watcher setup: postmaster $PMPID_E running" || bad "watcher setup: no running postmaster"
+kill "$SHORT_OWNER"; wait "$SHORT_OWNER" 2>/dev/null || true
+for _ in $(seq 1 30); do [ -d "$DDE" ] || break; sleep 0.5; done
+[ ! -d "$DDE" ] && ok "watcher deleted the data dir after the owner exited" || bad "data dir left after the owner exited: $DDE"
+{ [ -n "$PMPID_E" ] && kill -0 "$PMPID_E" 2>/dev/null; } && bad "postmaster $PMPID_E still running after the owner exited" \
+  || ok "watcher stopped the postmaster after the owner exited"
 
 echo ""
 [ "$fail" -eq 0 ] && { echo "ALL PASS (worktree-test-pg smoke)"; exit 0; } || { echo "FAILURES (worktree-test-pg smoke)"; exit 1; }
