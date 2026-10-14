@@ -4,10 +4,12 @@ package api
 
 import (
 	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
 	"personal-crm/backend/internal/consumer/consumerjobs"
+	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/service"
 	"personal-crm/backend/internal/todoist"
@@ -81,6 +83,25 @@ func TestInteractionRemoval_SurvivesContactMergeIntoObservedContact(t *testing.T
 		require.Len(t, entries, 1)
 		require.NotEqual(t, node, *entries[0].InteractionNodeID)
 		require.Equal(t, e.fields(t, want), e.fields(t, removed))
+	})
+
+	t.Run("a merge that selects the removed contact's cadence derives the due date from that cadence", func(t *testing.T) {
+		// spec: CON-034, IXN-018.survives-contact-merge
+		removed, survivor, want := e.contact(t, "quarterly"), e.contact(t, "weekly"), e.contact(t, "quarterly")
+		e.call(t, want, e.ref("call"), repository.InteractionDirectionInbound, e.at(0))
+		e.call(t, survivor, e.ref("call"), repository.InteractionDirectionInbound, e.at(0))
+		thread := e.ref("thread")
+		node := email(t, survivor, thread, repository.InteractionDirectionInbound, -20)
+		require.Equal(t, node, email(t, removed, thread, repository.InteractionDirectionInbound, -20))
+		e.remove(t, node, removalBody(service.RemovalReasonDidNotAttend, removed))
+
+		w := e.post(t, "/api/v1/contacts/"+survivor.String()+"/merge", map[string]any{
+			"source_contact_id": removed.String(),
+			"field_selections":  map[string]any{"cadence": "source"},
+		})
+		require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+
+		require.Equal(t, e.fields(t, want), e.fields(t, survivor))
 	})
 
 	t.Run("the survivor's follow-up for an outbound the merge excludes is closed", func(t *testing.T) {
@@ -266,4 +287,53 @@ func TestInteractionRemoval_ContactMergeComposesWithDueDatesSetDirectly(t *testi
 
 		require.Equal(t, before, e.fields(t, survivor))
 	})
+}
+
+// A contact merge that selects the source's cadence derives the survivor's
+// due date from the survivor's last_contacted as the merge's transaction reads
+// it, so a recording that commits while the merge waits for its correction
+// locks moves the due date the selected cadence derives.
+func TestInteractionRemoval_ContactMergeSelectedCadenceFollowsConcurrentRecording(t *testing.T) {
+	// spec: CON-034, IXN-018.survives-contact-merge
+	testsupport.RequireDatabase(t)
+	t.Parallel()
+	e := newCorrectionEnv(t)
+	removed, survivor, want := e.contact(t, "quarterly"), e.contact(t, "weekly"), e.contact(t, "quarterly")
+	e.call(t, survivor, e.ref("call"), repository.InteractionDirectionInbound, e.at(-120))
+	e.call(t, want, e.ref("call"), repository.InteractionDirectionInbound, e.at(-120))
+	thread := e.ref("thread")
+	email := func(contactID uuid.UUID) uuid.UUID {
+		ref := uuid.NewString() + ":" + thread + ":" + e.at(-240).Format("2006-01-02")
+		ix := e.record(t, contactID, repository.InteractionSourceEmail, ref, repository.InteractionDirectionInbound, e.at(-240))
+		require.NotNil(t, ix.InteractionNodeID)
+		return *ix.InteractionNodeID
+	}
+	node := email(survivor)
+	require.Equal(t, node, email(removed))
+	e.remove(t, node, removalBody(service.RemovalReasonDidNotAttend, removed))
+
+	holder, err := e.database.Pool.Begin(e.ctx)
+	require.NoError(t, err)
+	defer func() { _ = holder.Rollback(e.ctx) }()
+	require.NoError(t, e.nodes.AcquireCorrectionLocksTx(e.ctx, holder, removed))
+	holderPID, err := db.New(holder).TestBackendPID(e.ctx)
+	require.NoError(t, err)
+	merge := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		merge <- e.post(t, "/api/v1/contacts/"+survivor.String()+"/merge", map[string]any{
+			"source_contact_id": removed.String(),
+			"field_selections":  map[string]any{"cadence": "source"},
+		})
+	}()
+	require.Eventually(t, func() bool {
+		got, err := e.database.Queries.TestCountBackendsWaitingOn(e.ctx, holderPID)
+		return err == nil && got == 1
+	}, 10*time.Second, 10*time.Millisecond, "the contact merge never queued on a correction lock")
+	e.call(t, survivor, e.ref("call"), repository.InteractionDirectionInbound, e.at(0))
+	e.call(t, want, e.ref("call"), repository.InteractionDirectionInbound, e.at(0))
+	require.NoError(t, holder.Rollback(e.ctx))
+
+	w := responseWithin(t, merge, "contact merge")
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	require.Equal(t, e.fields(t, want), e.fields(t, survivor))
 }

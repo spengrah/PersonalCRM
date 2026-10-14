@@ -572,17 +572,7 @@ func (s *ContactService) UpdateContact(ctx context.Context, id uuid.UUID, req re
 	// accepts backdate/clear semantics, which is required for "user
 	// switched from weekly to annual" or "user removed cadence
 	// entirely".
-	var newContactBy *time.Time
-	if req.Cadence != nil && *req.Cadence != "" {
-		if cadenceType, parseErr := cadence.ParseCadence(*req.Cadence); parseErr == nil {
-			base := existingContact.CreatedAt
-			if existingContact.LastContacted != nil {
-				base = *existingContact.LastContacted
-			}
-			t := cadence.CalculateContactBy(base, cadenceType)
-			newContactBy = &t
-		}
-	}
+	newContactBy := cadenceEditContactBy(req.Cadence, existingContact)
 	// The DTO's ContactBy field is ignored — contact_by is
 	// always recomputed from the cadence string to preserve the
 	// invariant "cadence drives contact_by". Zero it explicitly on the
@@ -1718,7 +1708,7 @@ func (s *ContactService) MergeContacts(ctx context.Context, req MergeContactsReq
 	// observation that was effective before it, the survivor's cadence fields
 	// and follow-up tasks are recomputed from its effective participation as
 	// a correction recomputes them (CAD-047, CAD-048), in place of 7b.
-	recomputed, err := s.recomputeMergeExclusionsTx(ctx, tx, req.TargetContactID, effectiveBefore, awaitedBefore)
+	recomputed, err := s.recomputeMergeExclusionsTx(ctx, tx, req.TargetContactID, targetContact.Cadence, updateReq.Cadence, effectiveBefore, awaitedBefore)
 	if err != nil {
 		return nil, err
 	}
@@ -1823,8 +1813,16 @@ func liveFollowUpAwaited(transferred []repository.TransferredTaskRef, sourceAwai
 // ones. The state before the correction is the survivor's own cadence row,
 // which the merge has not yet written, and awaitedBefore, the outbound the
 // survivor's live follow-up tracks (see liveFollowUpAwaited).
+//
+// priorCadence is the survivor's cadence before the merge and mergedCadence
+// the cadence the merge selected. When the selection changes the survivor's
+// cadence, the change applies as a cadence edit before the recompute, so
+// contact_by derives from the selected cadence whether or not the
+// correction moves last_contacted. The edit derives from the survivor's row
+// as this transaction reads it, which the merge's profile write has locked,
+// so a recording committed before the merge took its locks counts.
 func (s *ContactService) recomputeMergeExclusionsTx(
-	ctx context.Context, tx pgx.Tx, survivorID uuid.UUID, effectiveBefore map[uuid.UUID]bool, awaitedBefore *repository.ApplyInteractionRequest,
+	ctx context.Context, tx pgx.Tx, survivorID uuid.UUID, priorCadence, mergedCadence *string, effectiveBefore map[uuid.UUID]bool, awaitedBefore *repository.ApplyInteractionRequest,
 ) (bool, error) {
 	effectiveAfter, err := s.effectiveObservationsTx(ctx, tx, survivorID)
 	if err != nil {
@@ -1850,6 +1848,15 @@ func (s *ContactService) recomputeMergeExclusionsTx(
 	}
 	if s.followUp == nil {
 		return false, errors.New("merge contacts: follow-up consumer not wired (pass followUp to NewContactService)")
+	}
+	if !stringPtrEqual(priorCadence, mergedCadence) {
+		survivor, err := s.contactRepo.GetContactTx(ctx, tx, survivorID)
+		if err != nil {
+			return false, fmt.Errorf("read survivor before applying merged cadence: %w", err)
+		}
+		if err := s.cadence.ApplyContactByOverride(ctx, tx, survivorID, cadenceEditContactBy(mergedCadence, survivor)); err != nil {
+			return false, fmt.Errorf("apply merged cadence contact_by: %w", err)
+		}
 	}
 	if err := s.corrections.recompute(ctx, tx, uuid.New(), []contactBefore{before}); err != nil {
 		return false, fmt.Errorf("recompute merged contact from effective participation: %w", err)
@@ -1904,6 +1911,26 @@ func (s *ContactService) repointMergedAttributionSecondPass(ctx context.Context,
 	}); err != nil {
 		logSecondPassErr("comms_message", err)
 	}
+}
+
+// cadenceEditContactBy returns the contact_by a cadence edit derives
+// (CON-007): cadenceStr's interval after the contact's last_contacted, or
+// after its creation when it has none. An empty or unparseable cadence
+// derives none.
+func cadenceEditContactBy(cadenceStr *string, contact *repository.Contact) *time.Time {
+	if cadenceStr == nil || *cadenceStr == "" {
+		return nil
+	}
+	cadenceType, err := cadence.ParseCadence(*cadenceStr)
+	if err != nil {
+		return nil
+	}
+	base := contact.CreatedAt
+	if contact.LastContacted != nil {
+		base = *contact.LastContacted
+	}
+	t := cadence.CalculateContactBy(base, cadenceType)
+	return &t
 }
 
 // buildMergeUpdateRequest creates an UpdateContactRequest based on field selections
