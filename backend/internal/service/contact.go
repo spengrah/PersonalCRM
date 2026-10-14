@@ -1436,7 +1436,7 @@ func (s *ContactService) MergeContacts(ctx context.Context, req MergeContactsReq
 	if err != nil {
 		return nil, fmt.Errorf("read source awaited outbound before merge: %w", err)
 	}
-	_, awaitedBefore, _, err := s.corrections.recordedParticipation(ctx, tx, nil, req.TargetContactID)
+	_, targetAwaited, _, err := s.corrections.recordedParticipation(ctx, tx, nil, req.TargetContactID)
 	if err != nil {
 		return nil, fmt.Errorf("read target awaited outbound before merge: %w", err)
 	}
@@ -1625,13 +1625,9 @@ func (s *ContactService) MergeContacts(ctx context.Context, req MergeContactsReq
 		Str("target_contact_id", req.TargetContactID.String()).
 		Int("transferred_tasks", len(transferredRefs)).
 		Msg("merge: transferred automated contact tasks to survivor")
-	// The survivor's live follow-up is the source's when the transfer moved
-	// it, and the target's own otherwise, so the outbound that follow-up
-	// tracks is the awaited outbound of the contact it came from.
-	for _, ref := range transferredRefs {
-		if ref.Lifecycle == contacttask.LifecycleFollowUpLoop {
-			awaitedBefore = sourceAwaited
-		}
+	awaitedBefore, err := s.liveFollowUpAwaitedTx(ctx, tx, req.TargetContactID, transferredRefs, sourceAwaited, targetAwaited)
+	if err != nil {
+		return nil, err
 	}
 	closedRefs, err := s.contactTaskRepo.CompleteLiveTasksForContactTx(ctx, tx, req.SourceContactID, todoist.MetadataKeyPendingTempID)
 	if err != nil {
@@ -1810,13 +1806,37 @@ func (s *ContactService) effectiveObservationsTx(ctx context.Context, tx pgx.Tx,
 	return observations, nil
 }
 
+// liveFollowUpAwaitedTx returns the outbound the merge survivor's live
+// follow-up tracks, after the merge moved the source's automated tasks: the
+// awaited outbound of the source when the transfer moved the source's
+// follow-up, of the target when the survivor kept its own, and nil when the
+// survivor holds no live follow-up (one a skip, a reply or the user completed
+// is not live). A correction's follow-up reconciliation creates a follow-up
+// only when the outbound it awaits differs from this one, so a follow-up that
+// is not live never stands in for one.
+func (s *ContactService) liveFollowUpAwaitedTx(
+	ctx context.Context, tx pgx.Tx, survivorID uuid.UUID, transferred []repository.TransferredTaskRef, sourceAwaited, targetAwaited *repository.ApplyInteractionRequest,
+) (*repository.ApplyInteractionRequest, error) {
+	if _, err := s.contactTaskRepo.FindPendingFollowUpTx(ctx, tx, survivorID); err != nil {
+		if errors.Is(err, db.ErrNotFound) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("find survivor's live follow-up: %w", err)
+	}
+	for _, ref := range transferred {
+		if ref.Lifecycle == contacttask.LifecycleFollowUpLoop {
+			return sourceAwaited, nil
+		}
+	}
+	return targetAwaited, nil
+}
+
 // recomputeMergeExclusionsTx recomputes the merge survivor from its effective
 // participation when the merge excluded an observation in effectiveBefore,
 // and reports whether it did. The corrected observations are the excluded
 // ones. The state before the correction is the survivor's own cadence row,
 // which the merge has not yet written, and awaitedBefore, the outbound the
-// survivor's live follow-up tracked before the merge: the awaited outbound of
-// the contact whose follow-up the survivor holds.
+// survivor's live follow-up tracks (see liveFollowUpAwaitedTx).
 func (s *ContactService) recomputeMergeExclusionsTx(
 	ctx context.Context, tx pgx.Tx, survivorID uuid.UUID, effectiveBefore map[uuid.UUID]bool, awaitedBefore *repository.ApplyInteractionRequest,
 ) (bool, error) {

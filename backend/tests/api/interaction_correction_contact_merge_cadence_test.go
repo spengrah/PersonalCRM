@@ -199,6 +199,29 @@ func TestInteractionRemoval_SurvivesContactMergeIntoObservedContact(t *testing.T
 		require.True(t, e.fields(t, survivor).AwaitingReply)
 		require.Len(t, live(t, survivor), 1)
 	})
+
+	t.Run("the survivor's outbound gets a new follow-up when its own skip ended the follow-up and the merge excludes its older reply", func(t *testing.T) {
+		// spec: CAD-048.new-follow-up-by-rules, CAD-048.completed-never-reopened
+		removed, survivor := e.contact(t, "monthly"), e.contact(t, "monthly")
+		thread := e.ref("thread")
+		node := email(t, survivor, thread, repository.InteractionDirectionInbound, -48)
+		require.Equal(t, node, email(t, removed, thread, repository.InteractionDirectionInbound, -48))
+		e.remove(t, node, removalBody(service.RemovalReasonDidNotAttend, removed))
+		e.call(t, survivor, e.ref("call"), repository.InteractionDirectionOutbound, e.at(20))
+		skipped := e.followUps(t, survivor)
+		require.Len(t, skipped, 1)
+		e.skip(t, survivor)
+		require.Empty(t, live(t, survivor), "the skip ended the follow-up")
+		require.False(t, e.fields(t, survivor).AwaitingReply)
+
+		mergeInto(t, survivor, removed)
+
+		require.True(t, e.fields(t, survivor).AwaitingReply)
+		created := live(t, survivor)
+		require.Len(t, created, 1)
+		require.NotEqual(t, skipped[0].ID, created[0].ID)
+		require.Equal(t, repository.ContactTaskStateCompleted, e.task(t, skipped[0].ID).State)
+	})
 }
 
 // TestInteractionRemoval_ContactMergeComposesWithDueDatesSetDirectly makes a
