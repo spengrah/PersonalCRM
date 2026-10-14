@@ -458,6 +458,6 @@ func TestIntegration_CadenceUpdater_ContactBy_DerivedFromCadence(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, got.ContactBy)
 	expectedContactBy := cadence.CalculateContactBy(newer, cadence.CadenceMonthly)
-	assert.Equal(t, expectedContactBy.UTC().Format("2006-01-02"), got.ContactBy.UTC().Format("2006-01-02"),
+	assert.Equal(t, cadence.CalendarDate(expectedContactBy), cadence.CalendarDate(*got.ContactBy),
 		"mutual apply should recompute contact_by = occurred_at + monthly")
 }
