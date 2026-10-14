@@ -325,3 +325,84 @@ func responseWithin(t *testing.T, done <-chan *httptest.ResponseRecorder, what s
 		return nil
 	}
 }
+
+// A contact merge and a concurrent profile update of its target serialize
+// without a deadlock (corrections.c15). The source's how_met re-points into
+// the target's how_met slot. The profile update locks the target's contact
+// row, then its person-node row, then that slot. The merge takes its
+// correction locks before any row write and its slot locks only after its row
+// writes, as the profile writer does; taking the slot locks with the
+// correction locks would hold the slot while waiting for the contact row the
+// profile update holds while it waits for the slot. A held person-node row
+// keeps the profile update between its row locks and its slot lock until the
+// merge has queued behind it.
+func TestContactMerge_SerializesWithProfileUpdate(t *testing.T) {
+	testsupport.RequireDatabase(t)
+	t.Parallel()
+	e := newCorrectionEnv(t)
+	source, target := e.contact(t, "monthly"), e.contact(t, "monthly")
+	sourceHowMet, targetHowMet := "met at a synthetic meetup", "met at a synthetic workshop"
+	e.updateProfile(t, source, &sourceHowMet)
+
+	holder, err := e.database.Pool.Begin(e.ctx)
+	require.NoError(t, err)
+	defer func() { _ = holder.Rollback(e.ctx) }()
+	require.NoError(t, e.nodes.UpdateNodeCanonicalLabelTx(e.ctx, holder, target, "held"))
+	holderPID, err := db.New(holder).TestBackendPID(e.ctx)
+	require.NoError(t, err)
+	waiting := func(n int64) func() bool {
+		return func() bool {
+			got, err := e.database.Queries.TestCountBackendsWaitingOn(e.ctx, holderPID)
+			return err == nil && got == n
+		}
+	}
+
+	update := make(chan error, 1)
+	go func() {
+		_, err := e.contacts.UpdateContact(e.ctx, target, e.profileRequest(t, target, &targetHowMet))
+		update <- err
+	}()
+	require.Eventually(t, waiting(1), 10*time.Second, 10*time.Millisecond, "the profile update never queued on the target's node row")
+	merge := make(chan error, 1)
+	go func() {
+		_, err := e.contacts.MergeContacts(e.ctx, service.MergeContactsRequest{SourceContactID: source, TargetContactID: target})
+		merge <- err
+	}()
+	require.Eventually(t, waiting(2), 10*time.Second, 10*time.Millisecond, "the contact merge never queued behind the profile update")
+	require.NoError(t, holder.Rollback(e.ctx))
+
+	require.NoError(t, errWithin(t, update, "profile update"))
+	require.NoError(t, errWithin(t, merge, "contact merge"))
+}
+
+// updateProfile sets a contact's how_met through UpdateContact, keeping its
+// other profile fields.
+func (e *correctionEnv) updateProfile(t *testing.T, contactID uuid.UUID, howMet *string) {
+	t.Helper()
+	_, err := e.contacts.UpdateContact(e.ctx, contactID, e.profileRequest(t, contactID, howMet))
+	require.NoError(t, err)
+}
+
+// profileRequest is the contact's current profile with how_met replaced.
+func (e *correctionEnv) profileRequest(t *testing.T, contactID uuid.UUID, howMet *string) repository.UpdateContactRequest {
+	t.Helper()
+	c, err := e.contacts.GetContact(e.ctx, contactID)
+	require.NoError(t, err)
+	return repository.UpdateContactRequest{
+		FullName: c.FullName, Location: c.Location, Birthday: c.Birthday,
+		HowMet: howMet, Cadence: c.Cadence, ProfilePhoto: c.ProfilePhoto,
+	}
+}
+
+// errWithin returns the error done delivers, failing the test when none
+// arrives within ten seconds.
+func errWithin(t *testing.T, done <-chan error, what string) error {
+	t.Helper()
+	select {
+	case err := <-done:
+		return err
+	case <-time.After(10 * time.Second):
+		require.FailNowf(t, "call did not finish", "the %s did not finish", what)
+		return nil
+	}
+}
