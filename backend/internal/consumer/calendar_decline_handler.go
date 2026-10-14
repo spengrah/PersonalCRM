@@ -20,19 +20,37 @@ import (
 
 // declineInteractionRepo is the subset of *repository.InteractionRepository
 // the decline handler depends on: find the derived gcal interaction by its
-// source_ref (the internal calendar_event.ID UUID string) and soft-delete
-// it. Interface defined here (consumer-side pattern) so unit tests can stub
-// without a DB.
+// source_ref (the internal calendar_event.ID UUID string), read the alias tree
+// of its interaction node and the contact's recorded participation, and
+// soft-delete it. Interface
+// defined here (consumer-side pattern) so unit tests can stub without a DB.
 type declineInteractionRepo interface {
 	FindBySourceRefTx(ctx context.Context, tx pgx.Tx, contactID uuid.UUID, source, sourceRef string) (*repository.Interaction, error)
+	GetInteractionTreeTx(ctx context.Context, tx pgx.Tx, nodeID uuid.UUID) (*repository.InteractionTree, error)
+	ListRecordedParticipationTx(ctx context.Context, tx pgx.Tx, contactID uuid.UUID) ([]repository.RecordedEntry, error)
 	SoftDeleteInteractionTx(ctx context.Context, tx pgx.Tx, id uuid.UUID) error
 }
 
 // declineContactRepo is the subset of *repository.ContactRepository the
-// decline handler depends on: surgically recompute the contact's date
-// columns after the derived interaction is soft-deleted.
+// decline handler depends on: take the contact's cadence row lock, and
+// surgically recompute the contact's date columns after the derived
+// interaction is soft-deleted.
 type declineContactRepo interface {
+	LockContactForDateRecomputeTx(ctx context.Context, tx pgx.Tx, contactID uuid.UUID) error
 	RecomputeContactDatesAfterDeleteTx(ctx context.Context, tx pgx.Tx, contactID uuid.UUID, deletedAt time.Time, watchdog config.WatchdogConfig) error
+}
+
+// declineNodeRepo is the subset of *repository.NodeRepository the decline
+// handler depends on: the correction lock on the observation's interaction
+// node.
+type declineNodeRepo interface {
+	AcquireCorrectionLocksTx(ctx context.Context, tx pgx.Tx, nodeIDs ...uuid.UUID) error
+}
+
+// declineCadence is the subset of *CadenceUpdater the decline handler
+// recomputes a merged participation's cadence fields through.
+type declineCadence interface {
+	RecomputeAfterCorrection(ctx context.Context, tx pgx.Tx, contactID uuid.UUID, participation []repository.RecordedParticipation, judgedRecordedAt time.Time) error
 }
 
 // CalendarDeclineHandler is the event-bus consumer for calendar.declined.
@@ -49,14 +67,16 @@ type declineContactRepo interface {
 type CalendarDeclineHandler struct {
 	interactions declineInteractionRepo
 	contacts     declineContactRepo
+	nodes        declineNodeRepo
+	cadence      declineCadence
 	watchdog     config.WatchdogConfig
 }
 
 // NewCalendarDeclineHandler builds the consumer with narrow repository
 // interfaces so unit tests can stub them. Production wires the concrete
-// interaction + contact repositories.
-func NewCalendarDeclineHandler(interactions declineInteractionRepo, contacts declineContactRepo, watchdog config.WatchdogConfig) *CalendarDeclineHandler {
-	return &CalendarDeclineHandler{interactions: interactions, contacts: contacts, watchdog: watchdog}
+// interaction, contact and node repositories and the CadenceUpdater.
+func NewCalendarDeclineHandler(interactions declineInteractionRepo, contacts declineContactRepo, nodes declineNodeRepo, cadence declineCadence, watchdog config.WatchdogConfig) *CalendarDeclineHandler {
+	return &CalendarDeclineHandler{interactions: interactions, contacts: contacts, nodes: nodes, cadence: cadence, watchdog: watchdog}
 }
 
 // HandleEvent processes a calendar.declined envelope inside the caller's tx.
@@ -66,10 +86,19 @@ func NewCalendarDeclineHandler(interactions declineInteractionRepo, contacts dec
 //  2. Find the live derived interaction by (ContactID, "gcal", EventID).
 //     ErrNotFound → no live interaction to remove (the common future-decline
 //     case + an already-cleaned replay). Return nil; no recompute.
-//  3. Capture its occurred_at, soft-delete it.
-//  4. Recompute the contact's date columns keyed on the deleted occurred_at.
-//     A db.ErrNotFound here (contact soft-deleted between publish and
-//     consume) is a benign no-op — the interaction is already gone and a
+//  3. Take the correction lock on its interaction node, before reading its
+//     alias tree, so no correction changes the tree until commit. Then take
+//     the contact's cadence row lock, before reading the contact's
+//     participation, so no recording of the contact commits between that
+//     read and the recompute decided from it.
+//  4. Soft-delete it and recompute the contact. When the observation's alias
+//     tree holds more than one interaction node (a merged interaction), the
+//     correction recompute replays the contact's remaining effective
+//     participation (CAD-047), however many of the merged members the
+//     contact still has. Otherwise the contact's date columns are recomputed
+//     keyed on the deleted occurred_at (CAL-008).
+//     A db.ErrNotFound from the contact lock or the recompute (contact
+//     soft-deleted between publish and consume) is a benign no-op — the interaction is already gone and a
 //     deleted contact needs no recompute; do NOT propagate (would poison
 //     River retries).
 func (h *CalendarDeclineHandler) HandleEvent(ctx context.Context, tx pgx.Tx, env *events.Envelope) error {
@@ -103,12 +132,52 @@ func (h *CalendarDeclineHandler) HandleEvent(ctx context.Context, tx pgx.Tx, env
 		return fmt.Errorf("find gcal interaction for decline: %w", err)
 	}
 
-	deletedOccurredAt := found.OccurredAt
+	// A live gcal observation always has an interaction node
+	// (interaction_node_representable_check).
+	if err := h.nodes.AcquireCorrectionLocksTx(ctx, tx, *found.InteractionNodeID); err != nil {
+		return fmt.Errorf("lock declined interaction node: %w", err)
+	}
+	if err := h.contacts.LockContactForDateRecomputeTx(ctx, tx, p.ContactID); err != nil {
+		if errors.Is(err, db.ErrNotFound) {
+			// Contact soft-deleted between publish and consume: remove the
+			// interaction; a deleted contact needs no recompute.
+			if err := h.interactions.SoftDeleteInteractionTx(ctx, tx, found.ID); err != nil {
+				return fmt.Errorf("soft-delete gcal interaction: %w", err)
+			}
+			return nil
+		}
+		return fmt.Errorf("lock contact for decline: %w", err)
+	}
+	tree, err := h.interactions.GetInteractionTreeTx(ctx, tx, *found.InteractionNodeID)
+	if err != nil {
+		return fmt.Errorf("read alias tree of declined interaction: %w", err)
+	}
+	merged := len(tree.Nodes) > 1
+	// The merged participation the decline judges was recorded no earlier
+	// than the declined observation, and as late as its latest member.
+	judgedRecordedAt := found.RecordedAt
+	if merged {
+		before, err := h.interactions.ListRecordedParticipationTx(ctx, tx, p.ContactID)
+		if err != nil {
+			return fmt.Errorf("read participation before decline: %w", err)
+		}
+		for _, entry := range before {
+			if entry.InteractionNodeID != nil && *entry.InteractionNodeID == tree.Root && entry.RecordedAt.After(judgedRecordedAt) {
+				judgedRecordedAt = entry.RecordedAt
+			}
+		}
+	}
+
 	if err := h.interactions.SoftDeleteInteractionTx(ctx, tx, found.ID); err != nil {
 		return fmt.Errorf("soft-delete gcal interaction: %w", err)
 	}
 
-	if err := h.contacts.RecomputeContactDatesAfterDeleteTx(ctx, tx, p.ContactID, deletedOccurredAt, h.watchdog); err != nil {
+	if merged {
+		err = h.recomputeMerged(ctx, tx, p.ContactID, judgedRecordedAt)
+	} else {
+		err = h.contacts.RecomputeContactDatesAfterDeleteTx(ctx, tx, p.ContactID, found.OccurredAt, h.watchdog)
+	}
+	if err != nil {
 		if errors.Is(err, db.ErrNotFound) {
 			// Contact soft-deleted between publish and consume. The
 			// interaction is already soft-deleted; a deleted contact needs
@@ -119,6 +188,22 @@ func (h *CalendarDeclineHandler) HandleEvent(ctx context.Context, tx pgx.Tx, env
 		return fmt.Errorf("recompute contact dates after decline: %w", err)
 	}
 	return nil
+}
+
+// recomputeMerged recomputes the contact's cadence fields from its effective
+// participation after the decline, through the correction recompute.
+// judgedRecordedAt is when the merged participation that held the declined
+// observation was last recorded.
+func (h *CalendarDeclineHandler) recomputeMerged(ctx context.Context, tx pgx.Tx, contactID uuid.UUID, judgedRecordedAt time.Time) error {
+	entries, err := h.interactions.ListRecordedParticipationTx(ctx, tx, contactID)
+	if err != nil {
+		return err
+	}
+	participation := make([]repository.RecordedParticipation, len(entries))
+	for i, entry := range entries {
+		participation[i] = entry.RecordedParticipation
+	}
+	return h.cadence.RecomputeAfterCorrection(ctx, tx, contactID, participation, judgedRecordedAt)
 }
 
 // --------------------------------------------------------------------------

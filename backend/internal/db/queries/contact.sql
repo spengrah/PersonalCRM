@@ -319,12 +319,15 @@ FOR UPDATE NOWAIT;
 -- concurrent writer that committed while waiting for the contact lock (the
 -- FOR UPDATE retained below re-takes the held lock; the load-bearing
 -- serialization is the prior LockContactForDateRecompute statement).
+-- The aggregate reads effective participation (migration 089), so a
+-- participation a correction removed is never a remaining one, and a merged
+-- participation counts once at its own direction and time.
 WITH agg AS (
   SELECT
     MAX(occurred_at) FILTER (WHERE direction IN ('inbound','mutual'))  AS new_non_outbound,
     MAX(occurred_at) FILTER (WHERE direction IN ('outbound','mutual')) AS new_outreach
-  FROM interaction
-  WHERE contact_id = sqlc.arg(id) AND deleted_at IS NULL
+  FROM effective_participation
+  WHERE contact_id = sqlc.arg(id)
 ),
 locked AS (
   SELECT id, last_contacted, last_interaction_at, last_response_at,
@@ -374,6 +377,23 @@ UPDATE contact SET
     awaiting_reply_until    = NULL,
     last_skipped_at         = sqlc.arg(skipped_at)::timestamptz,
     last_skip_reason        = sqlc.arg(reason)::text,
+    updated_at = NOW()
+WHERE id = sqlc.arg(id) AND deleted_at IS NULL;
+
+-- name: ApplyContactByDirectSet :exec
+-- A due date the user set directly: a Todoist deadline edit on the contact's
+-- cadence task. Sets contact_by unconditionally, clears skip state like every
+-- other writer of the clock (CAD-045), and records the date and when it was
+-- set in the SAME statement, for the correction recompute (CAD-047). This is
+-- the only writer of contact_by_direct_set_at and contact_by_direct_set_value.
+-- Cadence-owned: the caller declares crm.derived_writer=cadence first.
+UPDATE contact SET
+    contact_by                  = sqlc.arg(contact_by)::date,
+    contact_by_direct_set_value = sqlc.arg(contact_by)::date,
+    contact_by_direct_set_at    = clock_timestamp(),
+    last_skipped_at             = NULL,
+    last_skipped_contact_by     = NULL,
+    last_skip_reason            = NULL,
     updated_at = NOW()
 WHERE id = sqlc.arg(id) AND deleted_at IS NULL;
 

@@ -630,7 +630,9 @@ func runEntity(
 	case *meetingNotePlan:
 		return runMeetingNote(ctx, h, p)
 	case *linkedMeetingNotePlan:
-		return runLinkedMeetingNote(ctx, h, p, st)
+		return runLinkedMeetingNote(ctx, h, support, p, st)
+	case *messageClaimPlan:
+		return runMessageClaim(ctx, h, p, st)
 	case *notePlan:
 		return runNote(ctx, h, p, st)
 	case *mergePlan:
@@ -961,6 +963,13 @@ func runCalendarEvent(ctx context.Context, h *replay.Harness, p *calendarEventPl
 			return Seeded{}, fmt.Errorf("calendar event %q: no such contact in this run: %q", p.name, p.contact)
 		}
 		target = spec
+		for _, co := range p.coAttendees {
+			coSpec, ok := st.specs[co]
+			if !ok || coSpec.Email == "" {
+				return Seeded{}, fmt.Errorf("calendar event %q: co-attendee %q is no contact with an email in this run", p.name, co)
+			}
+			shape.CoAttendees = append(shape.CoAttendees, coSpec.Email)
+		}
 	}
 
 	event := gen.GCalEventWithShape(target, intent, shape)

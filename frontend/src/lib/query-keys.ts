@@ -99,7 +99,17 @@ export const interactionKeys = {
   forContact: (contactId: string) => [...interactionKeys.all, 'contact', contactId] as const,
   list: (contactId: string, filters: InteractionListFilters) =>
     [...interactionKeys.forContact(contactId), 'list', filters] as const,
-  content: (interactionId: string) => [...interactionKeys.all, 'content', interactionId] as const,
+  // Content is read in one contact's participation context, so it lives under
+  // the contact's key and contact-scoped invalidation reaches it.
+  timelineContent: (contactId: string, kind: string, id: string) =>
+    [...interactionKeys.forContact(contactId), 'content', kind, id] as const,
+  participants: (interactionId: string) =>
+    [...interactionKeys.all, 'participants', interactionId] as const,
+  // A merge preview answers in one contact's participation context.
+  mergePreview: (contactId: string, interactionIds: string[]) =>
+    [...interactionKeys.forContact(contactId), 'merge-preview', interactionIds] as const,
+  timelineAssertions: (contactId: string, kind: string, id: string) =>
+    [...interactionKeys.forContact(contactId), 'assertions', kind, id] as const,
 }
 
 // Rematch job query keys

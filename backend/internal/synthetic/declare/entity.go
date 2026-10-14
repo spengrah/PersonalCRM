@@ -987,6 +987,7 @@ type calendarEventPlan struct {
 	location                bool
 	sourceLink              bool
 	soleAttendee            bool
+	coAttendees             []string
 }
 
 func (p *calendarEventPlan) handle() string { return p.name }
@@ -995,7 +996,7 @@ func (p *calendarEventPlan) refs() []string {
 	if p.contact == "" {
 		return nil
 	}
-	return []string{p.contact}
+	return append([]string{p.contact}, p.coAttendees...)
 }
 
 func (p *calendarEventPlan) validate() error {
@@ -1038,6 +1039,11 @@ func (p *calendarEventPlan) validate() error {
 	if n := p.startedDaysAgo; n != nil && (*n < 1 || *n > maxCalendarDaysAgo) {
 		return fmt.Errorf("calendar event %q: StartedDaysAgo(%d) is outside 1..%d — the calendar provider's initial fetch reaches %d days back, so an older event is a row no sync could produce",
 			p.name, *n, maxCalendarDaysAgo, google.CalendarPastSyncDays)
+	}
+	for _, co := range p.coAttendees {
+		if p.unmatched || co == p.contact {
+			return fmt.Errorf("calendar event %q: co-attendee %q must be a contact other than the event's own, on a matched event", p.name, co)
+		}
 	}
 	if p.untitled && p.sourceLink {
 		// The title IS the link (the unified Interactions surface renders the anchor
@@ -1168,6 +1174,13 @@ func SourceLink() CalendarEventProp {
 // ORGANIZES without being on the attendee list.
 func SoleAttendee() CalendarEventProp {
 	return func(p *calendarEventPlan) { p.soleAttendee = true }
+}
+
+// CoAttendee adds an earlier contact handle as a further accepted attendee, so
+// the calendar sync matches that contact to the same event and records its
+// observation of the same interaction.
+func CoAttendee(contactHandle string) CalendarEventProp {
+	return func(p *calendarEventPlan) { p.coAttendees = append(p.coAttendees, contactHandle) }
 }
 
 // --- paired Mac host --------------------------------------------------------

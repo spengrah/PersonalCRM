@@ -150,9 +150,14 @@ type Contact struct {
 	LastSkippedAt        *time.Time      `json:"last_skipped_at,omitempty"`
 	LastSkippedContactBy *time.Time      `json:"last_skipped_contact_by,omitempty"`
 	LastSkipReason       *string         `json:"last_skip_reason,omitempty"`
-	ProfilePhoto         *string         `json:"profile_photo,omitempty"`
-	CreatedAt            time.Time       `json:"created_at"`
-	UpdatedAt            time.Time       `json:"updated_at"`
+	// ContactByDirectSetAt and ContactByDirectSetValue are the latest due date
+	// the user set directly (a Todoist deadline edit) and when it was set.
+	// The correction recompute reads them (CAD-047); no wire carries them.
+	ContactByDirectSetAt    *time.Time `json:"-"`
+	ContactByDirectSetValue *time.Time `json:"-"`
+	ProfilePhoto            *string    `json:"profile_photo,omitempty"`
+	CreatedAt               time.Time  `json:"created_at"`
+	UpdatedAt               time.Time  `json:"updated_at"`
 }
 
 // CreateContactRequest represents the request to create a contact
@@ -227,6 +232,8 @@ func convertDbContact(dbContact *db.Contact) Contact {
 	contact.LastSkippedAt = utcPtr(dbContact.LastSkippedAt)
 	contact.LastSkippedContactBy = dbContact.LastSkippedContactBy
 	contact.LastSkipReason = dbContact.LastSkipReason
+	contact.ContactByDirectSetAt = utcPtr(dbContact.ContactByDirectSetAt)
+	contact.ContactByDirectSetValue = dbContact.ContactByDirectSetValue
 
 	return contact
 }
@@ -776,10 +783,21 @@ func (r *ContactRepository) RecomputeContactDatesAfterDeleteTx(ctx context.Conte
 }
 
 // LockContactForDateRecomputeTx acquires the contact-row FOR UPDATE lock
-// inside the caller's tx. Exposed so the recompute lock-ordering regression
-// test can hold the lock from a concurrent tx. Returns db.ErrNotFound when
+// inside the caller's tx (LockContactCadenceTx). Returns db.ErrNotFound when
 // the contact is soft-deleted.
 func (r *ContactRepository) LockContactForDateRecomputeTx(ctx context.Context, tx pgx.Tx, contactID uuid.UUID) error {
+	return LockContactCadenceTx(ctx, tx, contactID)
+}
+
+// LockContactCadenceTx takes the contact's cadence row lock (FOR UPDATE on
+// the contact row) in the caller's tx and holds it until the tx ends. Every
+// cadence write that decides its values from the contact's current cadence
+// state takes it before that read, and after any correction lock its tx
+// takes: a correction recompute holds the same lock, so the read sees either
+// the state before the correction, with the correction waiting for this tx,
+// or the state the committed correction left. Returns db.ErrNotFound when
+// the contact is soft-deleted.
+func LockContactCadenceTx(ctx context.Context, tx pgx.Tx, contactID uuid.UUID) error {
 	if _, err := db.New(tx).LockContactForDateRecompute(ctx, contactID); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return db.ErrNotFound

@@ -651,3 +651,112 @@ behaviors:
     surface: none
     statement: the Anarlog people source never sends a person deletion; an identity the CRM holds is kept when the person's last session is deleted, when they are removed from a session, or when they stop appearing in the CLI's output.
     provenance: [.agents/spec/2026-09-29-anarlog-cli-source.md]
+
+  # --- iMessage body capture and re-scan (spec: .agents/spec/2026-10-13-interaction-review-readiness.md) ---
+
+  - id: MAC-056
+    title: The daemon captures an iMessage body from either stored representation
+    type: business-logic
+    status: current
+    surface: none
+    given: a message in the Mac's messages database whose body is stored as plain text, as rich text, or as both
+    when: the daemon reads the message to publish it
+    then:
+      - the published body is the plain text when it holds body text, else the body decoded from the rich text
+      - a body made only of attachment placeholders or whitespace is published as no body
+      - a rich-text body that cannot be decoded is published as no body
+      - every daemon read of the messages database, whether a live tick, a backfill, or an operator scan, decides a message's body through the same single step
+    provenance: [MessageBodyExtractor.extract, ChatDBReader, .agents/spec/2026-10-13-interaction-review-readiness.md]
+    notes: Group-chat capture is outside this behavior.
+
+  - id: MAC-057
+    title: A paired host lists stored body-less messages and fills their missing bodies
+    type: api
+    status: current
+    surface: api
+    given: a paired host presenting its bearer key
+    when: it lists body-less messages and submits fill_body items for them
+    then:
+      - key: lists-body-less-rows
+        text: the listing returns the guids of stored, non-deleted messages whose body is empty or absent, whichever host pushed them, in guid order, one page at a time, with a cursor to the next page when more remain
+      - key: fills-missing-body
+        text: a fill_body item sets the body of a named stored message that has none, and the answer reports that item as filled
+      - key: keeps-existing-body
+        text: a fill_body item for a message that already has a body leaves that body as it is, and the answer reports the item as unchanged
+      - key: unknown-guid-not-created
+        text: a fill_body item naming a guid with no stored non-deleted message creates nothing, and the answer reports the item as unknown
+      - key: row-identity-preserved
+        text: filling a body changes no other column of the row, so its identity, interaction links, and processing state stay as they were
+      - key: no-cadence-or-event-effect
+        text: filling a body replays no ingest, so it changes no contact cadence field, creates no follow-up, and emits no event
+      - key: second-run-unchanged
+        text: submitting the same items again changes nothing, and the answer reports each item as unchanged
+      - key: invalid-request-writes-nothing
+        text: a request with an unknown op, an item missing its guid or body, more than the per-request item cap, or a body over the request size cap is rejected whole, and none of its items is written
+    provenance: [MessagesEnrichmentHandler.ListMissingBodies/FillBodies, MessagesEnrichmentService, messages_enrichment_test.go, .agents/spec/2026-10-13-interaction-review-readiness.md]
+    notes: Group-chat messages are outside this behavior.
+
+  - id: MAC-058
+    title: A one-time operator re-scan fills stored body-less messages and classifies the rest
+    type: business-logic
+    status: current
+    surface: none
+    given: the operator runs the re-scan script on the Mac against a paired Pi
+    when: it walks every stored body-less message the Pi lists
+    then:
+      - each listed message whose body the messages database holds, in either representation, is submitted to the Pi as a fill_body item
+      - each listed message not submitted is classified against its source record as body-less by nature (attachment-only, reaction, or none stored), unavailable at the source, or a capture failure
+      - the output holds only counts per outcome and per classification, plus the guid of each capture failure, and no body, name, or other message content
+      - the script reads the messages database read-only and writes no file, so a body exists only in memory and in the request that carries it to the Pi
+      - a second run submits nothing the first run filled and reports the same classification
+      - a Pi that rejects a request, cannot be reached, or cannot hold a body in one request ends the run non-zero with no report
+    provenance: [rescan-messages, RescanMessagesTests, .agents/spec/2026-10-13-interaction-review-readiness.md]
+    notes: The script is an operator tool run from the source tree. It is not part of the shipped daemon, its subcommands, or its assembled bundle.
+
+  # --- Group-chat capture and re-scan (spec: .agents/spec/2026-10-13-interaction-review-readiness.md) ---
+
+  - id: MAC-060
+    title: The daemon publishes group-chat messages from non-contacts and the user's own, naming no member for the user's
+    type: business-logic
+    status: current
+    surface: none
+    given: a group chat in the Mac's messages database with at least one member who is a known contact
+    when: the daemon reads a message of the chat to publish it
+    then:
+      - key: non-contact-sender-published
+        text: an inbound message from a sender who is not a known contact is published with that sender's raw handle
+      - key: users-message-without-member-peer
+        text: the user's own message is published with the empty peer, naming no member
+      - key: group-without-known-member-not-published
+        text: a group chat with no known-contact member publishes nothing
+      - key: one-to-one-unchanged
+        text: a one-to-one message is still published only when its peer is a known contact, and an outbound one still names that peer
+      - key: every-read-path-same-rule
+        text: the live tick, the backfill and the scan decide which messages are published and which peer each carries through the same single step
+    provenance: [MessagesSourcePlugin.filterAndShape, ChatDBReader.resolveGroupMembers, GroupChatCaptureTests, .agents/spec/2026-10-13-interaction-review-readiness.md]
+    notes: What the Pi does with these messages is ING-041 and ING-043.
+
+  - id: MAC-061
+    title: The one-time re-scan's group pass submits in-window group messages and clears outbound attribution
+    type: business-logic
+    status: current
+    surface: none
+    given: the operator runs the re-scan script on the Mac against a paired Pi
+    when: it walks the group chats the Pi lists
+    then:
+      - key: submits-in-window-messages
+        text: each message of a listed chat sent inside one of the chat's windows, at or between its bounds, is submitted as an add_group_message item, an inbound one with its sender's raw handle and the user's own with none
+      - key: clears-each-outbound-message
+        text: a clear_outbound_peer item follows each add of the user's own message
+      - key: group-pass-before-body-pass
+        text: the group pass runs before the body pass, so a message it adds without a body is classified by the same run's body pass
+      - key: report-content-free
+        text: the output adds only counts, per outcome the Pi answers and for the chats listed, and no body, sender, or other message content
+      - key: reads-read-only-writes-no-file
+        text: the script reads the messages database read-only and writes no file, so a body or sender exists only in memory and in the request that carries it to the Pi
+      - key: second-run-no-change
+        text: a second run against the state the first left reports no add and no clear
+      - key: failure-ends-run-non-zero
+        text: a Pi that rejects the listing or a submission, or cannot be reached, ends the run non-zero with no further submission and no body pass
+    provenance: [rescan-messages, ChatDBReader.fetchChatWindow, GroupPassTests, ChatWindowReadTests, .agents/spec/2026-10-13-interaction-review-readiness.md]
+    notes: Like the body pass (MAC-058), the group pass is an operator tool run from the source tree. It is not part of the shipped daemon, its subcommands, or its assembled bundle.

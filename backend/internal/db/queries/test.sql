@@ -1031,6 +1031,7 @@ TRUNCATE TABLE
     external_sync_log,
     external_sync_state,
     interaction,
+    interaction_node,
     job_exec_sample,
     mac_host,
     mac_host_pairing_token,
@@ -1151,6 +1152,23 @@ FROM pg_stat_activity
 WHERE state = 'active'
   AND pid <> sqlc.arg(blocker_pid)::int
   AND pg_blocking_pids(pid) @> ARRAY[sqlc.arg(blocker_pid)::int];
+
+-- name: TestCountBackendsWaitingOn :one
+-- Race-test only: how many active backends wait on the given backend, directly
+-- or behind another waiter. Two transactions that queue for one row lock the
+-- given backend holds wait in line: the second is blocked by the first waiter,
+-- not by the holder, so TestCountBackendsBlockedBy counts only the first.
+WITH RECURSIVE waiting(pid) AS (
+    SELECT a.pid FROM pg_stat_activity a
+    WHERE a.state = 'active'
+      AND a.pid <> sqlc.arg(blocker_pid)::int
+      AND pg_blocking_pids(a.pid) @> ARRAY[sqlc.arg(blocker_pid)::int]
+  UNION
+    SELECT a.pid FROM pg_stat_activity a
+    JOIN waiting w ON pg_blocking_pids(a.pid) @> ARRAY[w.pid]
+    WHERE a.state = 'active'
+)
+SELECT count(*)::bigint FROM waiting;
 
 -- name: TestInsertNonFinalRiverJob :exec
 -- Reset/additive-seed test only: plant ONE queued (non-finalized) river_job so a
@@ -1634,3 +1652,30 @@ WHERE table_schema = 'public'
   AND is_nullable = 'YES'
   AND column_default ILIKE '%now()%'
 ORDER BY table_name, column_name;
+
+-- name: TestInsertBackfillObservation :exec
+-- Test-only: inserts an interaction observation with a caller-supplied id, the
+-- way the identity-backfill (migration 088) fixture stands up rows that carry no
+-- interaction node. The column list is explicit and names only columns that
+-- exist from schema 087 onward, so the fixture keeps working as later migrations
+-- add columns to interaction. Production code MUST NOT call this.
+INSERT INTO interaction (id, contact_id, source, source_ref, occurred_at, direction)
+VALUES (
+    sqlc.arg('id'),
+    sqlc.arg('contact_id'),
+    sqlc.arg('source'),
+    sqlc.narg('source_ref'),
+    sqlc.arg('occurred_at'),
+    sqlc.arg('direction')
+);
+
+-- name: TestListBackfillObservations :many
+-- Test-only: reads every observation of a contact, soft-deleted ones included,
+-- for the identity-backfill (migration 088) fixture. The column list is explicit
+-- and names only columns that exist from schema 087 onward, so the same read
+-- runs at 087 and at the latest schema. Production code MUST NOT call this.
+SELECT id, contact_id, source, source_ref, occurred_at, description, created_at,
+       deleted_at, direction, venue_id, interaction_node_id
+FROM interaction
+WHERE contact_id = sqlc.arg('contact_id')
+ORDER BY id;

@@ -452,17 +452,16 @@ func (h *FollowUpManager) applyOutbound(
 	if pending != nil {
 		return h.applyRefresh(ctx, tx, pending, p, days)
 	}
-	return h.applyCreate(ctx, tx, env, contact, p, days)
+	return h.applyCreate(ctx, tx, env, contact, p, days, buildFollowUpIdempotencyKey(p.ContactID, p.OccurredAt))
 }
 
-// applyCreate inserts a pending_remote_create row + enqueues the
-// TodoistFollowUpCreateJob.
+// applyCreate inserts a pending_remote_create row keyed by idemKey +
+// enqueues the TodoistFollowUpCreateJob.
 func (h *FollowUpManager) applyCreate(
 	ctx context.Context, tx pgx.Tx, env *events.Envelope,
-	contact *repository.Contact, p events.InteractionRecordedPayload, days int,
+	contact *repository.Contact, p events.InteractionRecordedPayload, days int, idemKey string,
 ) error {
 	deadline := cadence.AwaitingReplyUntil(p.OccurredAt, days)
-	idemKey := buildFollowUpIdempotencyKey(p.ContactID, p.OccurredAt)
 
 	// Guard against a prior step-1 insert that raced us (crash-retry of
 	// a queued worker, or duplicate inline call). If the idempotency-key
@@ -674,7 +673,12 @@ func (h *FollowUpManager) applyInboundMutual(
 		h.emit(Decision{Action: repository.FollowUpActionSkip})
 		return nil
 	}
+	return h.completePending(ctx, tx, pending)
+}
 
+// completePending completes the live follow-up pending in tx and enqueues its
+// remote close.
+func (h *FollowUpManager) completePending(ctx context.Context, tx pgx.Tx, pending *repository.ContactTask) error {
 	// Transition to completed in tx. Use the RETURNING row so the
 	// close-enqueue decision reads post-update state. The create op
 	// executor can finalize (pending_remote_create → managed + external
@@ -705,6 +709,98 @@ func (h *FollowUpManager) applyInboundMutual(
 		ContactTaskID: &taskID,
 	})
 	return nil
+}
+
+// ReconcileAfterCorrection is the direct-invoke entry point for the
+// interaction correction routes and the contact merge (CAD-048). after is the
+// contact's awaited outbound after the correction: its latest effective
+// outbound participation with no later effective response, nil when none.
+// before is the outbound the contact's live follow-up tracked before the
+// correction; it is read only when a follow-up is live. act is the
+// correction act's id. The follow-up rules run against the corrected state:
+//
+//   - a live follow-up that after does not warrant (after is nil) is completed
+//     and its remote close enqueued, as a reply does (CAD-015);
+//   - a live follow-up after still warrants stays open; when the correction
+//     made after the awaited outbound (it differs from before), its deadline
+//     is refreshed to after's, locally and through the durable update op, as
+//     the outbound's recording does (CAD-012);
+//   - when no follow-up is live and after is not nil, the creation guards and
+//     create run for after (CAD-011, CAD-012), whatever ended the earlier
+//     follow-up (a skip, a reply the correction removed, the user). Its
+//     idempotency key names the act, so a task the same outbound opened
+//     earlier, now completed or dismissed, is never reopened and does not
+//     block the new one.
+//
+// before and after are awaited outbounds as the follow-up rules take them: an
+// outbound whose recording suppressed its follow-up (a send's completion) is
+// never one.
+func (h *FollowUpManager) ReconcileAfterCorrection(ctx context.Context, tx pgx.Tx, contactID uuid.UUID, before, after *repository.ApplyInteractionRequest, act uuid.UUID) error {
+	if tx == nil {
+		return errors.New("followup_manager: nil tx")
+	}
+	if h.mode == FollowUpModeOff {
+		return nil
+	}
+	if err := h.validateCutoverDeps(); err != nil {
+		return err
+	}
+	pending, err := h.taskRepo.FindPendingFollowUpTx(ctx, tx, contactID)
+	if err != nil && !errors.Is(err, db.ErrNotFound) {
+		return fmt.Errorf("find pending follow-up for correction: %w", err)
+	}
+	if after == nil {
+		if pending != nil {
+			return h.completePending(ctx, tx, pending)
+		}
+		return nil
+	}
+	if pending != nil && before != nil && before.Direction == after.Direction &&
+		before.Source == after.Source && before.OccurredAt.Equal(after.OccurredAt) {
+		return nil
+	}
+
+	contact, err := h.contacts.GetContactTx(ctx, tx, contactID)
+	if err != nil {
+		return fmt.Errorf("get contact for correction follow-up: %w", err)
+	}
+	var cadenceStr string
+	if contact.Cadence != nil {
+		cadenceStr = *contact.Cadence
+	}
+	days := h.watchdog.DaysForCadence(cadenceStr)
+	if days == 0 {
+		h.emit(Decision{Action: repository.FollowUpActionSkip})
+		return nil
+	}
+	payload := events.InteractionRecordedPayload{
+		Version:          2,
+		ContactID:        contactID,
+		Direction:        repository.InteractionDirectionOutbound,
+		Source:           after.Source,
+		OccurredAt:       after.OccurredAt,
+		PrevCadenceValue: &cadenceStr,
+	}
+	if pending != nil {
+		return h.applyRefresh(ctx, tx, pending, payload, days)
+	}
+	if after.Source != repository.InteractionSourceManual &&
+		accelerated.GetCurrentTime().Sub(after.OccurredAt) > time.Duration(days)*24*time.Hour {
+		h.emit(Decision{Action: repository.FollowUpActionSkip, SkipReason: repository.FollowUpSkipReasonBackdated})
+		return nil
+	}
+	return h.applyCreate(ctx, tx, nil, contact, payload, days, buildCorrectionFollowUpIdempotencyKey(contactID, after.OccurredAt, act))
+}
+
+// buildCorrectionFollowUpIdempotencyKey is the idempotency key of a follow-up
+// a correction act opens: the outbound's key plus the act, so it never
+// collides with the key the outbound's own recording used.
+func buildCorrectionFollowUpIdempotencyKey(contactID uuid.UUID, occurredAt time.Time, act uuid.UUID) string {
+	h := sha256.New()
+	h.Write([]byte(buildFollowUpIdempotencyKey(contactID, occurredAt)))
+	h.Write([]byte{'|'})
+	h.Write([]byte(act.String()))
+	return hex.EncodeToString(h.Sum(nil))
 }
 
 // buildFollowUpIdempotencyKey derives the deterministic local idempotency

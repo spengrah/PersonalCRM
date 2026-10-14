@@ -5,12 +5,15 @@ import "github.com/gin-gonic/gin"
 // ContactRouteDeps bundles the handlers backing the contact-scoped route
 // surface. Contact CRUD, per-contact interactions and notes, and the
 // merge preview/apply pair all live under /contacts and are served by
-// three distinct handlers, so the deps struct carries all three.
+// distinct handlers; the interaction correction routes live under
+// /interactions.
 type ContactRouteDeps struct {
-	Contact       *ContactHandler
-	Interaction   *InteractionHandler
-	Note          *NoteHandler
-	ContactMethod *ContactMethodHandler
+	Contact           *ContactHandler
+	Interaction       *InteractionHandler
+	Correction        *InteractionCorrectionHandler
+	TimelineAssertion *TimelineAssertionHandler
+	Note              *NoteHandler
+	ContactMethod     *ContactMethodHandler
 }
 
 // RegisterContactRoutes wires the unconditional contact + interaction
@@ -32,8 +35,12 @@ type ContactRouteDeps struct {
 //   - PUT    /api/v1/contacts/:id/notes
 //   - GET    /api/v1/contacts/:id/merge/preview
 //   - POST   /api/v1/contacts/:id/merge
-//   - DELETE /api/v1/interactions/:id
-//   - GET    /api/v1/interactions/:id/content
+//   - GET    /api/v1/timeline-items/:kind/:id/content
+//   - GET    /api/v1/timeline-items/:kind/:id/assertions
+//   - POST   /api/v1/interactions/merge
+//   - POST   /api/v1/interactions/merge/preview
+//   - POST   /api/v1/interactions/:id/removals
+//   - GET    /api/v1/interactions/:id/participants
 //
 // Caller must pass the same /api/v1 group it has applied
 // auth.APIKeyMiddleware on; this helper does NOT add the middleware.
@@ -61,10 +68,19 @@ func RegisterContactRoutes(v1 *gin.RouterGroup, deps ContactRouteDeps) {
 		contacts.POST("/:id/merge", deps.Contact.MergeContacts)
 	}
 
+	v1.GET("/timeline-items/:kind/:id/content", deps.Interaction.GetTimelineItemContent)
+	// The one HTTP read of the assertion store (KNW-038).
+	v1.GET("/timeline-items/:kind/:id/assertions", deps.TimelineAssertion.GetTimelineItemAssertions)
+
 	// Interaction routes (non-contact-scoped)
 	interactions := v1.Group("/interactions")
 	{
-		interactions.GET("/:id/content", deps.Interaction.GetInteractionContent)
-		interactions.DELETE("/:id", deps.Interaction.DeleteInteraction)
+		// Corrections (IXN-016, IXN-017, IXN-018): the only HTTP way to merge
+		// interactions or remove a participation.
+		interactions.POST("/merge", deps.Correction.MergeInteractions)
+		interactions.POST("/merge/preview", deps.Correction.PreviewMergeInteractions)
+		interactions.POST("/:id/removals", deps.Correction.RemoveParticipations)
+		// The attendees a removal can name (IXN-036).
+		interactions.GET("/:id/participants", deps.Correction.ListParticipants)
 	}
 }

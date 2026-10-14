@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"sort"
 	"testing"
 	"time"
 
@@ -53,7 +54,7 @@ func newInteractionAPITest(t *testing.T) *interactionAPIDB {
 	phoneRepo := repository.NewPhoneCallRepository(database.Queries)
 	noteRepo := repository.NewMeetingNoteRepository(database.Queries)
 	content := service.NewInteractionContentService(interactionRepo, commsRepo, telegramRepo, messagesRepo, noteRepo, eventRepo, phoneRepo, repository.NewContactRepository(database.Queries))
-	handler := handlers.NewInteractionHandler(interactionRepo, nil, content)
+	handler := handlers.NewInteractionHandler(nil, content)
 	router := gin.New()
 	handlers.RegisterContactRoutes(router.Group("/api/v1"), handlers.ContactRouteDeps{
 		Contact: &handlers.ContactHandler{}, Interaction: handler, Note: &handlers.NoteHandler{}, ContactMethod: &handlers.ContactMethodHandler{},
@@ -150,6 +151,20 @@ func seedAPIEvent(t *testing.T, e *interactionAPIDB, at time.Time, title, locati
 	return *event
 }
 
+// itemIdentityID is the id of a list item's typed identity.
+func itemIdentityID(item any) string {
+	return item.(map[string]any)["identity"].(map[string]any)["id"].(string)
+}
+
+// itemMember is the one member of a list item that has no merged members.
+func itemMember(item any) map[string]any {
+	members := item.(map[string]any)["members"].([]any)
+	if len(members) != 1 {
+		panic("list item does not have exactly one member")
+	}
+	return members[0].(map[string]any)
+}
+
 func getInteractionList(t *testing.T, e *interactionAPIDB, query string) (int, map[string]any) {
 	t.Helper()
 	w := httptest.NewRecorder()
@@ -207,8 +222,14 @@ func TestInteractionListAPI_EnrichedRows(t *testing.T) {
 	require.Len(t, items, 12)
 	bySource := map[string][]map[string]any{}
 	for _, raw := range items {
-		row := raw.(map[string]any)
-		for _, key := range []string{"id", "contact_id", "source", "occurred_at", "direction", "created_at", "label", "content_kind", "message_count", "is_group", "venue_tags"} {
+		item := raw.(map[string]any)
+		for _, key := range []string{"identity", "occurred_at", "direction", "cadence_inert", "members"} {
+			assert.Contains(t, item, key)
+		}
+		members := item["members"].([]any)
+		require.Len(t, members, 1)
+		row := members[0].(map[string]any)
+		for _, key := range []string{"source", "label", "content_kind", "message_count", "is_group", "venue_tags"} {
 			assert.Contains(t, row, key)
 		}
 		bySource[row["source"].(string)] = append(bySource[row["source"].(string)], row)
@@ -370,10 +391,10 @@ func TestInteractionListAPI_Filters(t *testing.T) {
 	assert.Equal(t, float64(2), pagination["pages"])
 	assert.True(t, reflect.DeepEqual(allOptions, data["venue_options"]))
 	// Equality at from is included, equality at to is excluded.
-	assert.NotEqual(t, atTo.ID.String(), data["items"].([]any)[0].(map[string]any)["id"])
+	assert.NotEqual(t, atTo.InteractionNodeID.String(), itemIdentityID(data["items"].([]any)[0]))
 	status, filteredPage2 := getInteractionList(t, e, "?venue=email:filter-thread&from=2026-08-02T12:00:00Z&to=2026-08-02T12:02:00Z&limit=1&page=2")
 	require.Equal(t, http.StatusOK, status)
-	assert.Equal(t, atFrom.ID.String(), filteredPage2["data"].(map[string]any)["items"].([]any)[0].(map[string]any)["id"])
+	assert.Equal(t, atFrom.InteractionNodeID.String(), itemIdentityID(filteredPage2["data"].(map[string]any)["items"].([]any)[0]))
 	status, unknown := getInteractionList(t, e, "?venue=email:no-such-thread")
 	require.Equal(t, http.StatusOK, status)
 	assert.Empty(t, unknown["data"].(map[string]any)["items"])
@@ -420,8 +441,10 @@ func TestInteractionListAPI_OrderAndSoftDelete(t *testing.T) {
 		uuid.MustParse("00000000-0000-0000-0000-000000000005"),
 		uuid.MustParse("00000000-0000-0000-0000-000000000006"),
 	}
+	nodes := make([]uuid.UUID, 0, len(ids))
 	for _, id := range ids {
-		seedAPIInteractionWithID(t, e, id, repository.InteractionSourceManual, when, nil)
+		row := seedAPIInteractionWithID(t, e, id, repository.InteractionSourceManual, when, nil)
+		nodes = append(nodes, *row.InteractionNodeID)
 	}
 	deleted := ids[5]
 	require.NoError(t, e.interactionRepo.SoftDeleteInteraction(e.ctx, deleted))
@@ -429,18 +452,26 @@ func TestInteractionListAPI_OrderAndSoftDelete(t *testing.T) {
 	require.Equal(t, http.StatusOK, status)
 	items := envelope["data"].(map[string]any)["items"].([]any)
 	require.Len(t, items, 2)
-	pageIDs := []string{items[0].(map[string]any)["id"].(string), items[1].(map[string]any)["id"].(string)}
+	pageIDs := []string{itemIdentityID(items[0]), itemIdentityID(items[1])}
 	status, page2 := getInteractionList(t, e, "?from=2026-08-03T11:59:00Z&to=2026-08-03T12:01:00Z&limit=2&page=2")
 	require.Equal(t, http.StatusOK, status)
 	for _, raw := range page2["data"].(map[string]any)["items"].([]any) {
-		pageIDs = append(pageIDs, raw.(map[string]any)["id"].(string))
+		pageIDs = append(pageIDs, itemIdentityID(raw))
 	}
 	status, page3 := getInteractionList(t, e, "?from=2026-08-03T11:59:00Z&to=2026-08-03T12:01:00Z&limit=2&page=3")
 	require.Equal(t, http.StatusOK, status)
 	for _, raw := range page3["data"].(map[string]any)["items"].([]any) {
-		pageIDs = append(pageIDs, raw.(map[string]any)["id"].(string))
+		pageIDs = append(pageIDs, itemIdentityID(raw))
 	}
-	require.Equal(t, []string{ids[4].String(), ids[3].String(), ids[2].String(), ids[1].String(), ids[0].String()}, pageIDs)
+	// Items at one time order by identity id, descending. The deleted
+	// observation's node holds no live observation, so it has no item.
+	liveNodes := nodes[:5]
+	sort.Slice(liveNodes, func(i, j int) bool { return liveNodes[i].String() > liveNodes[j].String() })
+	want := make([]string, len(liveNodes))
+	for i, node := range liveNodes {
+		want[i] = node.String()
+	}
+	require.Equal(t, want, pageIDs)
 	meta := envelope["meta"].(map[string]any)["pagination"].(map[string]any)
 	assert.Equal(t, float64(5), meta["total"])
 	assert.Equal(t, float64(3), meta["pages"])
@@ -452,7 +483,7 @@ func TestInteractionListAPI_OrderAndSoftDelete(t *testing.T) {
 	dead := seedAPIComms(t, e, burst.ID, repository.InteractionSourceEmail, "burst-thread", "burst-dead", when.Add(-time.Hour).Add(time.Second))
 	require.NoError(t, e.commsRepo.SoftDeleteByID(e.ctx, dead.ID))
 	_, burstEnvelope := getInteractionList(t, e, "?venue=email:burst-thread")
-	burstRow := burstEnvelope["data"].(map[string]any)["items"].([]any)[0].(map[string]any)
+	burstRow := itemMember(burstEnvelope["data"].(map[string]any)["items"].([]any)[0])
 	_ = live
 	assert.Equal(t, float64(1), burstRow["message_count"])
 
@@ -469,4 +500,85 @@ func TestInteractionListAPI_OrderAndSoftDelete(t *testing.T) {
 	status, deadFilter := getInteractionList(t, e, "?venue=email:dead-only-thread")
 	assert.Equal(t, http.StatusOK, status)
 	assert.Empty(t, deadFilter["data"].(map[string]any)["items"])
+}
+
+func seedAPIMissedCall(t *testing.T, e *interactionAPIDB, contactID uuid.UUID, uniqueID string, at time.Time) repository.PhoneCall {
+	t.Helper()
+	answered := false
+	row, err := e.phoneRepo.UpsertCall(e.ctx, repository.UpsertPhoneCallParams{CallUniqueID: "synthetic-missed-" + uniqueID, PeerHandle: "synthetic-peer", PeerNormalized: "synthetic-peer", Service: repository.PhoneCallServiceVoice, Direction: repository.PhoneCallDirectionInbound, Answered: &answered, HasVoicemail: false, DurationSeconds: 0, StartedAt: at, MatchedContactID: &contactID})
+	require.NoError(t, err)
+	// Ingest marks a missed call without voicemail processed with no interaction.
+	require.NoError(t, e.phoneRepo.MarkProcessed(e.ctx, repository.MarkProcessedParams{ID: row.ID, InteractionID: nil}))
+	return *row
+}
+
+func seedAPIVoicemailCall(t *testing.T, e *interactionAPIDB, interactionID uuid.UUID, at time.Time) repository.PhoneCall {
+	t.Helper()
+	answered := false
+	row, err := e.phoneRepo.UpsertCall(e.ctx, repository.UpsertPhoneCallParams{CallUniqueID: "synthetic-voicemail-" + interactionID.String(), PeerHandle: "synthetic-peer", PeerNormalized: "synthetic-peer", Service: repository.PhoneCallServiceVoice, Direction: repository.PhoneCallDirectionInbound, Answered: &answered, HasVoicemail: true, DurationSeconds: 12, StartedAt: at, MatchedContactID: &e.contact.ID})
+	require.NoError(t, err)
+	require.NoError(t, e.phoneRepo.MarkProcessed(e.ctx, repository.MarkProcessedParams{ID: row.ID, InteractionID: &interactionID}))
+	return *row
+}
+
+// spec: IXN-024.missed-call-item
+// spec: IXN-024.cadence-inert-marked
+// spec: IXN-024.missed-call-summary
+// spec: IXN-024.ordered-among-items
+// spec: IXN-024.voicemail-stays-interaction
+// spec: IXN-024.own-calls-only
+func TestInteractionListAPI_MissedCallItems(t *testing.T) {
+	e := newInteractionAPITest(t)
+	when := time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC)
+	older := seedAPIInteraction(t, e, repository.InteractionSourceManual, when.Add(-time.Hour), nil)
+	missed := seedAPIMissedCall(t, e, e.contact.ID, "subject", when)
+	voicemail := seedAPIInteraction(t, e, repository.InteractionSourcePhoneCalls, when.Add(time.Hour), nil)
+	seedAPIVoicemailCall(t, e, voicemail.ID, when.Add(time.Hour))
+	other, err := repository.NewContactRepository(e.database.Queries).CreateContact(e.ctx, repository.CreateContactRequest{FullName: "Synthetic other contact"})
+	require.NoError(t, err)
+	otherMissed := seedAPIMissedCall(t, e, other.ID, "other", when.Add(30*time.Minute))
+
+	status, envelope := getInteractionList(t, e, "")
+	require.Equal(t, http.StatusOK, status)
+	items := envelope["data"].(map[string]any)["items"].([]any)
+	ids := make([]string, len(items))
+	for i, raw := range items {
+		ids[i] = itemIdentityID(raw)
+	}
+	require.Equal(t, []string{voicemail.InteractionNodeID.String(), missed.ID.String(), older.InteractionNodeID.String()}, ids, "items order by time across kinds")
+	assert.NotContains(t, ids, otherMissed.ID.String())
+	assert.Equal(t, float64(3), envelope["meta"].(map[string]any)["pagination"].(map[string]any)["total"])
+
+	voicemailItem, missedItem, olderItem := items[0].(map[string]any), items[1].(map[string]any), items[2].(map[string]any)
+	missedRow := itemMember(missedItem)
+	assert.Equal(t, "missed_call", missedItem["identity"].(map[string]any)["kind"])
+	assert.Equal(t, true, missedItem["cadence_inert"])
+	assert.Equal(t, repository.InteractionSourcePhoneCalls, missedRow["source"])
+	occurredAt, err := time.Parse(time.RFC3339, missedItem["occurred_at"].(string))
+	require.NoError(t, err)
+	assert.True(t, when.Equal(occurredAt), "a missed call occurs at the call's start")
+	assert.Equal(t, repository.InteractionDirectionInbound, missedItem["direction"])
+	assert.Equal(t, "call", missedRow["content_kind"])
+	assert.Equal(t, []any{}, missedRow["venue_tags"])
+	call := missedRow["call"].(map[string]any)
+	assert.Equal(t, "voice", call["service"])
+	assert.Equal(t, "inbound", call["direction"])
+	assert.Equal(t, false, call["answered"])
+	assert.Equal(t, false, call["has_voicemail"])
+	assert.Equal(t, float64(0), call["duration_seconds"])
+
+	assert.Equal(t, "interaction", voicemailItem["identity"].(map[string]any)["kind"])
+	assert.Equal(t, false, voicemailItem["cadence_inert"])
+	assert.Equal(t, true, itemMember(voicemailItem)["call"].(map[string]any)["has_voicemail"])
+	assert.Equal(t, "interaction", olderItem["identity"].(map[string]any)["kind"])
+	assert.Equal(t, false, olderItem["cadence_inert"])
+
+	// Pagination runs over the same time order, so the missed call is the
+	// second page of one-item pages.
+	status, page2 := getInteractionList(t, e, "?limit=1&page=2")
+	require.Equal(t, http.StatusOK, status)
+	page2Items := page2["data"].(map[string]any)["items"].([]any)
+	require.Len(t, page2Items, 1)
+	assert.Equal(t, missed.ID.String(), itemIdentityID(page2Items[0]))
+	assert.Equal(t, float64(3), page2["meta"].(map[string]any)["pagination"].(map[string]any)["total"])
 }

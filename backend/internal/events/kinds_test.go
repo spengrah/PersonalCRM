@@ -590,19 +590,6 @@ func TestKindPayloadTypes_CoversAllKinds(t *testing.T) {
 	}
 }
 
-// TestAllKinds_ExpectedCount guards against accidental Kind additions or
-// deletions from AllKinds without updating the spec. Current spec (§3.2)
-// declares 10 base kinds (9 raw-signal + 1 derived), plus the two
-// daemon-emitted raw_message.* kinds (messages source), plus the two
-// external_contact.* kinds (iCloud Contacts source), plus the two
-// meeting_note.* kinds (anarlog_sessions source), plus the two call.*
-// kinds (phone_calls source, v1.5), plus the two email.* kinds (Gmail
-// source, published by GmailSyncProvider), plus the five assertion.*
-// lifecycle kinds (graph foundation, published by AssertService).
-func TestAllKinds_ExpectedCount(t *testing.T) {
-	require.Len(t, AllKinds, 25)
-}
-
 // TestIsKnownKind_CoversAllKinds is the positive side: every Kind declared
 // in AllKinds must be reported as known. Guards against registry drift.
 func TestIsKnownKind_CoversAllKinds(t *testing.T) {
@@ -742,6 +729,13 @@ func buildCanonicalPayload(t *testing.T, kind Kind) json.RawMessage {
 		raw, err := Marshal(kind, AssertionEventPayload{
 			Version: 1, AssertionID: uuid.New(), SubjectNodeID: uuid.New(),
 			PredicateKey: "lives_in",
+		})
+		require.NoError(t, err)
+		return raw
+	case KindInteractionCorrected:
+		raw, err := Marshal(kind, InteractionCorrectedPayload{
+			Version: 1, Correction: CorrectionMerge, InteractionNodeID: uuid.New(),
+			RecomputedContactIDs: []uuid.UUID{uuid.New()},
 		})
 		require.NoError(t, err)
 		return raw

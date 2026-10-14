@@ -242,6 +242,11 @@ func (c *EmailInteractionConsumer) HandleEvent(ctx context.Context, tx pgx.Tx, e
 				return aggErr
 			}
 			interactionID = res.Interaction.ID
+		} else if res.Verdict.Excluded {
+			// A correction excludes the observation (ING-040): it stays
+			// recorded and its content row linked below, with no cadence or
+			// follow-up effect, so nothing is published.
+			interactionID = res.Interaction.ID
 		} else {
 			// Fresh write: emit interaction.recorded atomically + inline-apply
 			// cadence + follow-up, exactly as InteractionRecorder does. The
@@ -321,7 +326,7 @@ func (c *EmailInteractionConsumer) emitRecorded(
 	res *repository.RecordInteractionResult, req repository.RecordInteractionRequest,
 ) error {
 	// Email never suppresses follow-ups (only kind=send task completions do).
-	recordedPayload, err := marshalRecordedPayload(res.Interaction, p.Direction, req, res.PrevCadence, res.CadenceAtEmit, false)
+	recordedPayload, err := marshalRecordedPayload(res.Interaction, res.Verdict.Entry, req, res.PrevCadence, res.CadenceAtEmit, false)
 	if err != nil {
 		return fmt.Errorf("marshal interaction.recorded: %w", err)
 	}

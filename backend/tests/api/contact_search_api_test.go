@@ -58,7 +58,7 @@ func newContactSearchAPITest(t *testing.T) (*gin.Engine, *repository.ContactRepo
 	// The interaction handler's manual write path is likewise unwired (nil
 	// ManualInteractionHandler); no search subtest touches an interaction
 	// write route.
-	interactionHandler := handlers.NewInteractionHandler(interactionRepo, nil, contentService)
+	interactionHandler := handlers.NewInteractionHandler(nil, contentService)
 
 	noteHandler := handlers.NewNoteHandler(service.NewNoteService(repository.NewNoteRepository(database.Queries), contactRepo))
 

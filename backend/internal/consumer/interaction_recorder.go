@@ -136,6 +136,13 @@ type followUpDispatcher interface {
 	HandleEvent(ctx context.Context, tx pgx.Tx, env *events.Envelope) error
 }
 
+// groupReplyPromoter promotes an inbound group-chat burst to mutual when its
+// window contains the user's own group message (R12). Satisfied by
+// *service.GroupBurstPromoter; nil in tests that do not exercise group chats.
+type groupReplyPromoter interface {
+	PromoteIfRepliedTx(ctx context.Context, tx pgx.Tx, interactionID uuid.UUID) error
+}
+
 // InteractionRecorder is the event-bus consumer that turns raw provider
 // events into interaction rows + emits interaction.recorded. See spec
 // §3.4.1 for the atomicity contract.
@@ -155,6 +162,7 @@ type InteractionRecorder struct {
 	followUp     followUpDispatcher
 	calendarLock calendarEventLocker
 	venue        venueResolver
+	groupReplies groupReplyPromoter
 }
 
 // NewInteractionRecorder builds the consumer. staging may be nil for
@@ -187,6 +195,10 @@ func NewInteractionRecorder(
 	}
 }
 
+// SetGroupReplyPromoter wires the R12 check that runs after a messages burst is
+// recorded: a new inbound burst may already contain a user's group message.
+func (r *InteractionRecorder) SetGroupReplyPromoter(p groupReplyPromoter) { r.groupReplies = p }
+
 // SetVenueResolver wires the venue resolver used to populate interaction.venue_id
 // for message.* and gcal interactions. Optional: when unset the recorder records
 // interactions with a NULL venue_id (tests that don't assert on venues leave it
@@ -216,7 +228,7 @@ func (r *InteractionRecorder) HandleEvent(ctx context.Context, tx pgx.Tx, env *e
 		return nil, errors.New("consumer: nil tx")
 	}
 
-	req, direction, suppressFollowUp, err := r.extractRequest(env)
+	req, suppressFollowUp, err := r.extractRequest(env)
 	if err != nil {
 		return nil, fmt.Errorf("extract %s: %w", env.Kind, err)
 	}
@@ -329,6 +341,13 @@ func (r *InteractionRecorder) HandleEvent(ctx context.Context, tx pgx.Tx, env *e
 		return res.Interaction, nil
 	}
 
+	// A correction excludes the observation (ING-040): the raw observation
+	// stays recorded and its staging rows linked, but it has no cadence or
+	// follow-up effect, inline or queued, so nothing is published.
+	if res.Verdict.Excluded {
+		return res.Interaction, nil
+	}
+
 	// Fresh-write: emit interaction.recorded atomically in the same tx.
 	// SourceID = interaction.ID so the event table's partial unique
 	// index (source, source_id) dedupes any retry that reaches this
@@ -336,7 +355,7 @@ func (r *InteractionRecorder) HandleEvent(ctx context.Context, tx pgx.Tx, env *e
 	// PrevCadenceValue so CadenceUpdater can replay the pre-cadence
 	// state deterministically, plus SuppressFollowUp propagated from
 	// task.completed V2 for FollowUpManager.
-	recordedPayload, err := marshalRecordedPayload(res.Interaction, direction, req, res.PrevCadence, res.CadenceAtEmit, suppressFollowUp)
+	recordedPayload, err := marshalRecordedPayload(res.Interaction, res.Verdict.Entry, req, res.PrevCadence, res.CadenceAtEmit, suppressFollowUp)
 	if err != nil {
 		return nil, fmt.Errorf("marshal interaction.recorded: %w", err)
 	}
@@ -371,6 +390,15 @@ func (r *InteractionRecorder) HandleEvent(ctx context.Context, tx pgx.Tx, env *e
 	if r.followUp != nil {
 		if followUpErr := r.followUp.HandleEvent(ctx, tx, recordedEnv); followUpErr != nil {
 			return nil, fmt.Errorf("inline apply follow-up: %w", followUpErr)
+		}
+	}
+
+	// R12: a freshly recorded inbound group burst may already contain a user's
+	// group message that arrived first. Runs last so the promotion applies on
+	// top of the burst's own inbound cadence effect.
+	if r.groupReplies != nil && env.Source == repository.InteractionSourceMessages && env.Kind == events.KindMessageReceived {
+		if err := r.groupReplies.PromoteIfRepliedTx(ctx, tx, res.Interaction.ID); err != nil {
+			return nil, fmt.Errorf("promote burst the user replied inside: %w", err)
 		}
 	}
 
@@ -411,22 +439,22 @@ func (r *InteractionRecorder) resolveVenue(ctx context.Context, tx pgx.Tx, env *
 }
 
 // extractRequest dispatches on env.Kind to build a RecordInteractionRequest
-// + the effective direction + the SuppressFollowUp flag. Per-kind direction
+// + the SuppressFollowUp flag. Per-kind direction
 // derivation: message.* defaults to the kind's natural direction
 // (inbound / outbound); calendar is mutual; task.completed defaults to
 // mutual; task.outreach_detected is always outbound; interaction.manual
 // defaults to mutual. Callers may override direction via the payload's
 // Direction field where applicable. SuppressFollowUp is non-zero only for
 // task.completed (V2+) where the publisher set it to true (kind=send).
-func (r *InteractionRecorder) extractRequest(env *events.Envelope) (repository.RecordInteractionRequest, string, bool, error) {
+func (r *InteractionRecorder) extractRequest(env *events.Envelope) (repository.RecordInteractionRequest, bool, error) {
 	switch env.Kind {
 	case events.KindMessageReceived:
 		var p events.MessageReceivedPayload
 		if err := events.Unmarshal(env, &p); err != nil {
-			return repository.RecordInteractionRequest{}, "", false, err
+			return repository.RecordInteractionRequest{}, false, err
 		}
 		if p.ExternalMessageID == "" {
-			return repository.RecordInteractionRequest{}, "", false, errors.New("message.received: empty external_message_id (source_ref required)")
+			return repository.RecordInteractionRequest{}, false, errors.New("message.received: empty external_message_id (source_ref required)")
 		}
 		direction := p.Direction
 		if direction == "" {
@@ -434,17 +462,17 @@ func (r *InteractionRecorder) extractRequest(env *events.Envelope) (repository.R
 		}
 		req, err := makeMessageRequest(env.Source, p.ContactID, p.ExternalMessageID, p.MessageAt, p.Description, direction)
 		if err != nil {
-			return repository.RecordInteractionRequest{}, "", false, err
+			return repository.RecordInteractionRequest{}, false, err
 		}
-		return req, direction, false, nil
+		return req, false, nil
 
 	case events.KindMessageSent:
 		var p events.MessageSentPayload
 		if err := events.Unmarshal(env, &p); err != nil {
-			return repository.RecordInteractionRequest{}, "", false, err
+			return repository.RecordInteractionRequest{}, false, err
 		}
 		if p.ExternalMessageID == "" {
-			return repository.RecordInteractionRequest{}, "", false, errors.New("message.sent: empty external_message_id (source_ref required)")
+			return repository.RecordInteractionRequest{}, false, errors.New("message.sent: empty external_message_id (source_ref required)")
 		}
 		direction := p.Direction
 		if direction == "" {
@@ -452,17 +480,17 @@ func (r *InteractionRecorder) extractRequest(env *events.Envelope) (repository.R
 		}
 		req, err := makeMessageRequest(env.Source, p.ContactID, p.ExternalMessageID, p.MessageAt, p.Description, direction)
 		if err != nil {
-			return repository.RecordInteractionRequest{}, "", false, err
+			return repository.RecordInteractionRequest{}, false, err
 		}
-		return req, direction, false, nil
+		return req, false, nil
 
 	case events.KindCalendarAttended:
 		var p events.CalendarAttendedPayload
 		if err := events.Unmarshal(env, &p); err != nil {
-			return repository.RecordInteractionRequest{}, "", false, err
+			return repository.RecordInteractionRequest{}, false, err
 		}
 		if p.EventID == "" {
-			return repository.RecordInteractionRequest{}, "", false, errors.New("calendar.attended: empty event_id (source_ref required)")
+			return repository.RecordInteractionRequest{}, false, errors.New("calendar.attended: empty event_id (source_ref required)")
 		}
 		ref := p.EventID
 		return repository.RecordInteractionRequest{
@@ -472,15 +500,15 @@ func (r *InteractionRecorder) extractRequest(env *events.Envelope) (repository.R
 			OccurredAt:  p.OccurredAt,
 			Description: p.Title,
 			Direction:   repository.InteractionDirectionMutual,
-		}, repository.InteractionDirectionMutual, false, nil
+		}, false, nil
 
 	case events.KindTaskCompleted:
 		var p events.TaskCompletedPayload
 		if err := events.Unmarshal(env, &p); err != nil {
-			return repository.RecordInteractionRequest{}, "", false, err
+			return repository.RecordInteractionRequest{}, false, err
 		}
 		if p.TaskID == "" {
-			return repository.RecordInteractionRequest{}, "", false, errors.New("task.completed: empty task_id (source_ref required)")
+			return repository.RecordInteractionRequest{}, false, errors.New("task.completed: empty task_id (source_ref required)")
 		}
 		direction := p.Direction
 		if direction == "" {
@@ -493,15 +521,15 @@ func (r *InteractionRecorder) extractRequest(env *events.Envelope) (repository.R
 			SourceRef:  &ref,
 			OccurredAt: p.CompletedAt,
 			Direction:  direction,
-		}, direction, p.SuppressFollowUp, nil
+		}, p.SuppressFollowUp, nil
 
 	case events.KindTaskOutreachDetected:
 		var p events.TaskOutreachDetectedPayload
 		if err := events.Unmarshal(env, &p); err != nil {
-			return repository.RecordInteractionRequest{}, "", false, err
+			return repository.RecordInteractionRequest{}, false, err
 		}
 		if p.TaskID == "" {
-			return repository.RecordInteractionRequest{}, "", false, errors.New("task.outreach_detected: empty task_id (source_ref required)")
+			return repository.RecordInteractionRequest{}, false, errors.New("task.outreach_detected: empty task_id (source_ref required)")
 		}
 		ref := p.TaskID
 		return repository.RecordInteractionRequest{
@@ -510,12 +538,12 @@ func (r *InteractionRecorder) extractRequest(env *events.Envelope) (repository.R
 			SourceRef:  &ref,
 			OccurredAt: p.DetectedAt,
 			Direction:  repository.InteractionDirectionOutbound,
-		}, repository.InteractionDirectionOutbound, false, nil
+		}, false, nil
 
 	case events.KindInteractionManual:
 		var p events.InteractionManualPayload
 		if err := events.Unmarshal(env, &p); err != nil {
-			return repository.RecordInteractionRequest{}, "", false, err
+			return repository.RecordInteractionRequest{}, false, err
 		}
 		direction := p.Direction
 		if direction == "" {
@@ -533,10 +561,10 @@ func (r *InteractionRecorder) extractRequest(env *events.Envelope) (repository.R
 			OccurredAt:  p.OccurredAt,
 			Description: desc,
 			Direction:   direction,
-		}, direction, false, nil
+		}, false, nil
 	}
 
-	return repository.RecordInteractionRequest{}, "", false, fmt.Errorf("unsupported kind %q", env.Kind)
+	return repository.RecordInteractionRequest{}, false, fmt.Errorf("unsupported kind %q", env.Kind)
 }
 
 // extractMessageIDs pulls the MessageIDs slice from the envelope
@@ -607,19 +635,23 @@ func makeMessageRequest(source string, contactID *uuid.UUID, externalMessageID s
 // CadenceUpdater can deterministically replay the pre-cadence state, plus
 // SuppressFollowUp propagated from upstream task.completed (V2+) so
 // FollowUpManager can short-circuit on kind=send completions.
+// Direction and OccurredAt are those of effect, the contact's effective
+// participation the observation belongs to (its verdict entry): the
+// observation's own direction and time unless a merge combines it with
+// other members, so the consumers apply the merged participation's effect.
 // prev may be nil when the service wrapper was called without an
 // eventID (non-event-bus callers); in that case the snapshot fields stay
 // nil and downstream consumers fall back to a live re-read.
 func marshalRecordedPayload(
-	interaction *repository.Interaction, direction string, req repository.RecordInteractionRequest,
+	interaction *repository.Interaction, effect *repository.EffectiveParticipation, req repository.RecordInteractionRequest,
 	prev *repository.ContactCadenceFields, cadenceAtEmit *string, suppressFollowUp bool,
 ) (json.RawMessage, error) {
 	payload := events.InteractionRecordedPayload{
 		Version:          3,
 		ContactID:        interaction.ContactID,
 		InteractionID:    interaction.ID,
-		Direction:        direction,
-		OccurredAt:       interaction.OccurredAt,
+		Direction:        effect.Direction,
+		OccurredAt:       effect.OccurredAt,
 		Source:           interaction.Source,
 		SourceRef:        req.SourceRef,
 		PrevCadenceValue: cadenceAtEmit,

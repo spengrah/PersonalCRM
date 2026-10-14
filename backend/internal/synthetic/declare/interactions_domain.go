@@ -19,6 +19,20 @@ func init() {
 
 	Register(Declaration{Behavior: "IXN-001", Entities: pagingInteractionEntities()})
 
+	Register(Declaration{Behavior: "IXN-020", Entities: []Entity{
+		Contact("subject", Methods(MethodPhone)),
+		LoggedInteraction("older-row", "subject", "manual", AgoDays(3)),
+		PhoneCall("missed-call", "subject", CallMissed, AgoDays(2)),
+		LoggedInteraction("newer-row", "subject", "manual", AgoDays(1)),
+	}})
+
+	Register(Declaration{Behavior: "IXN-021", Entities: []Entity{
+		Contact("subject", Methods(MethodPhone)),
+		PhoneCall("outbound-connected", "subject", CallOutboundConnected, AgoDays(1)),
+		PhoneCall("outbound-no-answer", "subject", CallOutboundNoAnswer, AgoDays(2)),
+		PhoneCall("inbound-voicemail", "subject", CallVoicemail, AgoDays(3)),
+	}})
+
 	Register(Declaration{Behavior: "IXN-006", Entities: []Entity{
 		Contact("subject", Methods(MethodEmail)),
 		LoggedInteraction("past-row", "subject", "manual", AgoDays(1)),
@@ -61,6 +75,45 @@ func init() {
 		LinkedMeetingNote("note-b", "noted-meeting"),
 	}})
 
+	// IXN-019: a calendar interaction with a meeting note and a call two days ago,
+	// which the test merges through the API, and a second, unmerged calendar
+	// interaction with its own note. Each linked note tags its event's attendee, so
+	// it links to its own event whatever else starts at the same instant; the call
+	// follows its note so that the note's window holds only the event.
+	Register(Declaration{Behavior: "IXN-019", Entities: []Entity{
+		Contact("subject", Methods(MethodEmail, MethodPhone)),
+		CalendarEvent("merged-meeting", "subject", StartedDaysAgo(2)),
+		LinkedMeetingNote("merged-note", "merged-meeting"),
+		PhoneCallInteraction("merged-call", "subject", AgoDays(2)),
+		CalendarEvent("solo-meeting", "subject", StartedDaysAgo(5)),
+		LinkedMeetingNote("solo-note", "solo-meeting"),
+	}})
+
+	// IXN-037: a meeting two days ago that the subject and a co-attendee both
+	// attended, the subject's latest interaction, beside an older manual entry and
+	// burst, a missed call and an upcoming meeting, which offer no correction.
+	Register(Declaration{Behavior: "IXN-037", Entities: []Entity{
+		Contact("subject", Cadence("monthly"), Methods(MethodEmail, MethodPhone)),
+		Contact("co-attendee", Methods(MethodEmail)),
+		LoggedInteraction("older-row", "subject", "manual", AgoDays(6)),
+		MessageInteraction("burst-row", "subject", "messages", AgoDays(8), Burst(2)),
+		PhoneCall("missed-call", "subject", CallMissed, AgoDays(3)),
+		CalendarEvent("shared-meeting", "subject", StartedDaysAgo(2), CoAttendee("co-attendee")),
+		CalendarEvent("upcoming-meeting", "subject", StartsInDays(1)),
+	}})
+
+	// IXN-038: a meeting two days ago that the subject and a co-attendee both
+	// attended and a call with the subject alone a day later, which the test
+	// merges, beside a burst and a missed call, which cannot be selected.
+	Register(Declaration{Behavior: "IXN-038", Entities: []Entity{
+		Contact("subject", Methods(MethodEmail, MethodPhone)),
+		Contact("co-attendee", Methods(MethodEmail)),
+		MessageInteraction("burst-row", "subject", "messages", AgoDays(5), Burst(2)),
+		PhoneCall("missed-call", "subject", CallMissed, AgoDays(3)),
+		CalendarEvent("meeting", "subject", StartedDaysAgo(2), CoAttendee("co-attendee")),
+		PhoneCallInteraction("call", "subject", AgoDays(1)),
+	}})
+
 	Register(Declaration{Behavior: "IXN-007", Entities: []Entity{
 		Contact("subject", Methods(MethodEmail)),
 		MessageInteraction("gchat-thread", "subject", "gchat", AgoDays(1)),
@@ -69,6 +122,14 @@ func init() {
 	}})
 
 	Register(Declaration{Behavior: "IXN-008", Entities: dateSpreadEntities()})
+
+	// IXN-023: an email interaction whose message an extractor's proposed claim
+	// cites.
+	Register(Declaration{Behavior: "IXN-023", Entities: []Entity{
+		Contact("subject", Methods(MethodEmail)),
+		MessageInteraction("thread", "subject", "email", AgoDays(1)),
+		MessageClaim("claim", "thread"),
+	}})
 }
 
 func pagingInteractionEntities() []Entity {

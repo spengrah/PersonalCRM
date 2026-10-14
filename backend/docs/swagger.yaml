@@ -78,6 +78,8 @@ definitions:
     properties:
       answered:
         type: boolean
+      direction:
+        type: string
       duration_seconds:
         type: integer
       has_voicemail:
@@ -396,6 +398,12 @@ definitions:
     properties:
       body:
         type: string
+      channel:
+        type: string
+      container:
+        type: string
+      content_ref:
+        type: string
       id:
         type: string
       is_outgoing:
@@ -403,6 +411,8 @@ definitions:
       sender:
         type: string
       sent_at:
+        type: string
+      source:
         type: string
       venue_key:
         type: string
@@ -563,55 +573,20 @@ definitions:
           $ref: '#/definitions/handlers.SelectedMethodInput'
         type: array
     type: object
-  handlers.InteractionContentResponse:
-    properties:
-      interaction_id:
-        type: string
-      kind:
-        type: string
-      meeting_notes:
-        items:
-          $ref: '#/definitions/handlers.MeetingNoteContentResponse'
-        type: array
-      messages:
-        items:
-          $ref: '#/definitions/handlers.ContentMessageResponse'
-        type: array
-    type: object
   handlers.InteractionListItemResponse:
     properties:
-      call:
-        $ref: '#/definitions/handlers.CallSummaryResponse'
-      contact_id:
-        type: string
-      content_kind:
-        type: string
-      created_at:
-        type: string
-      description:
-        type: string
+      cadence_inert:
+        type: boolean
       direction:
         type: string
-      event:
-        $ref: '#/definitions/handlers.EventSummaryResponse'
-      id:
-        type: string
-      is_group:
-        type: boolean
-      label:
-        type: string
-      message_count:
-        type: integer
+      identity:
+        $ref: '#/definitions/handlers.TimelineIdentityResponse'
+      members:
+        items:
+          $ref: '#/definitions/handlers.TimelineMemberResponse'
+        type: array
       occurred_at:
         type: string
-      source:
-        type: string
-      source_ref:
-        type: string
-      venue_tags:
-        items:
-          $ref: '#/definitions/handlers.VenueTagResponse'
-        type: array
     type: object
   handlers.InteractionListResponse:
     properties:
@@ -623,6 +598,62 @@ definitions:
         items:
           $ref: '#/definitions/handlers.VenueTagResponse'
         type: array
+    type: object
+  handlers.InteractionMergeRequest:
+    properties:
+      contact_id:
+        type: string
+      interaction_ids:
+        items:
+          type: string
+        type: array
+    required:
+    - contact_id
+    - interaction_ids
+    type: object
+  handlers.InteractionMergeResponse:
+    properties:
+      interaction_id:
+        type: string
+      participation:
+        $ref: '#/definitions/handlers.InteractionParticipationResponse'
+    type: object
+  handlers.InteractionParticipantResponse:
+    properties:
+      contact_id:
+        type: string
+      name:
+        type: string
+    type: object
+  handlers.InteractionParticipantsResponse:
+    properties:
+      participants:
+        items:
+          $ref: '#/definitions/handlers.InteractionParticipantResponse'
+        type: array
+    type: object
+  handlers.InteractionParticipationResponse:
+    properties:
+      direction:
+        type: string
+      occurred_at:
+        type: string
+    type: object
+  handlers.InteractionRemovalRequest:
+    properties:
+      reason:
+        type: string
+      scope:
+        $ref: '#/definitions/handlers.InteractionRemovalScope'
+    type: object
+  handlers.InteractionRemovalScope:
+    properties:
+      contact_ids:
+        items:
+          type: string
+        type: array
+      everyone:
+        type: boolean
     type: object
   handlers.InteractionResponse:
     properties:
@@ -691,7 +722,15 @@ definitions:
     type: object
   handlers.MeetingNoteContentResponse:
     properties:
+      channel:
+        type: string
+      container:
+        type: string
+      content_ref:
+        type: string
       memo:
+        type: string
+      source:
         type: string
       summary:
         type: string
@@ -1071,6 +1110,90 @@ definitions:
         type: string
       suggestion:
         $ref: '#/definitions/handlers.MethodSuggestionResponse'
+    type: object
+  handlers.TimelineAssertionResponse:
+    properties:
+      assertion_id:
+        type: string
+      content_ref:
+        type: string
+      object:
+        type: string
+      predicate:
+        type: string
+      status:
+        type: string
+      subject:
+        type: string
+      value_bool:
+        type: boolean
+      value_date:
+        type: string
+      value_num:
+        type: number
+      value_text:
+        type: string
+    type: object
+  handlers.TimelineAssertionsResponse:
+    properties:
+      items:
+        items:
+          $ref: '#/definitions/handlers.TimelineAssertionResponse'
+        type: array
+    type: object
+  handlers.TimelineContentMemberResponse:
+    properties:
+      kind:
+        type: string
+      meeting_notes:
+        items:
+          $ref: '#/definitions/handlers.MeetingNoteContentResponse'
+        type: array
+      messages:
+        items:
+          $ref: '#/definitions/handlers.ContentMessageResponse'
+        type: array
+      source:
+        type: string
+    type: object
+  handlers.TimelineContentResponse:
+    properties:
+      identity:
+        $ref: '#/definitions/handlers.TimelineIdentityResponse'
+      members:
+        items:
+          $ref: '#/definitions/handlers.TimelineContentMemberResponse'
+        type: array
+    type: object
+  handlers.TimelineIdentityResponse:
+    properties:
+      id:
+        type: string
+      kind:
+        type: string
+    type: object
+  handlers.TimelineMemberResponse:
+    properties:
+      call:
+        $ref: '#/definitions/handlers.CallSummaryResponse'
+      content_kind:
+        type: string
+      event:
+        $ref: '#/definitions/handlers.EventSummaryResponse'
+      is_group:
+        type: boolean
+      label:
+        type: string
+      message_count:
+        type: integer
+      source:
+        type: string
+      source_ref:
+        type: string
+      venue_tags:
+        items:
+          $ref: '#/definitions/handlers.VenueTagResponse'
+        type: array
     type: object
   handlers.TodoistAccountResponse:
     properties:
@@ -3780,23 +3903,11 @@ paths:
       summary: Resolve method suggestions
       tags:
       - imports
-  /interactions/{id}:
-    delete:
-      parameters:
-      - description: Interaction ID
-        format: uuid
-        in: path
-        name: id
-        required: true
-        type: string
-      responses:
-        "204":
-          description: Interaction deleted
-      summary: Delete interaction
-      tags:
-      - interactions
-  /interactions/{id}/content:
+  /interactions/{id}/participants:
     get:
+      description: 'Lists the contacts with an effective participation in the interaction
+        that holds the id (its merged interaction when the id was merged away), ordered
+        by name: the contacts a removal can name.'
       parameters:
       - description: Interaction ID
         format: uuid
@@ -3814,13 +3925,122 @@ paths:
             - $ref: '#/definitions/api.APIResponse'
             - properties:
                 data:
-                  $ref: '#/definitions/handlers.InteractionContentResponse'
+                  $ref: '#/definitions/handlers.InteractionParticipantsResponse'
               type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.APIResponse'
         "404":
           description: Not Found
           schema:
             $ref: '#/definitions/api.APIResponse'
-      summary: Get interaction content
+      summary: List an interaction's participants
+      tags:
+      - interactions
+  /interactions/{id}/removals:
+    post:
+      consumes:
+      - application/json
+      description: Removes exactly the selected attendees' participations (scope contact_ids,
+        or everyone) of the interaction that holds the id, whatever the reason.
+      parameters:
+      - description: Interaction ID
+        format: uuid
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Removal scope and reason
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/handlers.InteractionRemovalRequest'
+      responses:
+        "204":
+          description: Participations removed
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.APIResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.APIResponse'
+      summary: Remove participations of an interaction
+      tags:
+      - interactions
+  /interactions/merge:
+    post:
+      consumes:
+      - application/json
+      description: Declares the listed interactions one interaction for every attendee.
+        Answers with contact_id's resulting participation.
+      parameters:
+      - description: Interactions to merge
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/handlers.InteractionMergeRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                data:
+                  $ref: '#/definitions/handlers.InteractionMergeResponse'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.APIResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.APIResponse'
+      summary: Merge interactions
+      tags:
+      - interactions
+  /interactions/merge/preview:
+    post:
+      consumes:
+      - application/json
+      description: Answers exactly what POST /interactions/merge would answer for
+        the same body, and writes nothing.
+      parameters:
+      - description: Interactions to merge
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/handlers.InteractionMergeRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                data:
+                  $ref: '#/definitions/handlers.InteractionMergeResponse'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.APIResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.APIResponse'
+      summary: Preview an interaction merge
       tags:
       - interactions
   /rematch/contacts/{id}/rescan:
@@ -4336,6 +4556,104 @@ paths:
       summary: Seed a spec behavior's declared fixture
       tags:
       - test
+  /timeline-items/{kind}/{id}/assertions:
+    get:
+      description: Read-only. Each entry is one assertion beside one displayed content
+        item, keyed by that item's content_ref. Correction assertions are never returned.
+      parameters:
+      - description: Timeline item kind
+        enum:
+        - interaction
+        - message_burst
+        - upcoming_event
+        - missed_call
+        in: path
+        name: kind
+        required: true
+        type: string
+      - description: Timeline item ID
+        format: uuid
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Participation context contact ID
+        format: uuid
+        in: query
+        name: contact_id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                data:
+                  $ref: '#/definitions/handlers.TimelineAssertionsResponse'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.APIResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.APIResponse'
+      summary: Get timeline item assertions
+      tags:
+      - interactions
+  /timeline-items/{kind}/{id}/content:
+    get:
+      parameters:
+      - description: Timeline item kind
+        enum:
+        - interaction
+        - message_burst
+        - upcoming_event
+        - missed_call
+        in: path
+        name: kind
+        required: true
+        type: string
+      - description: Timeline item ID
+        format: uuid
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Participation context contact ID
+        format: uuid
+        in: query
+        name: contact_id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                data:
+                  $ref: '#/definitions/handlers.TimelineContentResponse'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.APIResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.APIResponse'
+      summary: Get timeline item content
+      tags:
+      - interactions
   /todoist/labels:
     get:
       description: Get all labels from the connected Todoist account

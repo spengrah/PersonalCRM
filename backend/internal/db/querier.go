@@ -17,6 +17,12 @@ type Querier interface {
 	// can insert a fresh log row without leaving orphan 'running' rows behind.
 	// Requires migration 037 (widens the status CHECK).
 	AbandonRunningLogsForState(ctx context.Context, arg AbandonRunningLogsForStateParams) error
+	// The correction lock: a transaction-scoped advisory lock keyed by interaction
+	// node id, taken in id order so two holders of several never deadlock. The
+	// observation step, every assertion write naming an interaction node, and the
+	// corrections take it. The key namespace prefix keeps it apart from the other
+	// hashtextextended advisory keys; a hash collision only over-serializes.
+	AcquireInteractionCorrectionLocks(ctx context.Context, nodeIds []uuid.UUID) error
 	// The transaction-scoped advisory lock guarding the single-cardinality conflict
 	// check. The caller passes the Go-computed int64 slot key (e.g.
 	// hashtextextended of the slot identity); the lock auto-releases at tx end. This
@@ -48,6 +54,13 @@ type Querier interface {
 	// the five legal edges (recorded -> downloaded -> projected -> acked ->
 	// deleted) ever change a row.
 	AdvanceWhatsAppHistoryPhase(ctx context.Context, arg AdvanceWhatsAppHistoryPhaseParams) (int64, error)
+	// The interaction-node merge write: aliases root interaction node loser_id to
+	// the distinct root interaction node winner_id, and nothing else. The loser
+	// keeps no tombstone (it stays its source object's identity) and no assertion,
+	// observation or content row changes. Only a root (merged_into IS NULL) is
+	// aliased, so an alias, once written, is never rewritten. Zero rows when the
+	// pair is not two distinct live root interaction nodes.
+	AliasInteractionNode(ctx context.Context, arg AliasInteractionNodeParams) (int64, error)
 	// Atomically appends a contact to an event's matched_contact_ids iff it isn't
 	// already present. Does NOT reset last_contacted_updated — the rematch handler
 	// records interactions directly for past events (see rematch plan Design
@@ -83,6 +96,13 @@ type Querier interface {
 	// value), then keep the first 3 elements (newest-first). A NULL current body is
 	// not pushed (nothing to preserve).
 	ApplyCommsMessageEditByExternalID(ctx context.Context, arg ApplyCommsMessageEditByExternalIDParams) (int64, error)
+	// A due date the user set directly: a Todoist deadline edit on the contact's
+	// cadence task. Sets contact_by unconditionally, clears skip state like every
+	// other writer of the clock (CAD-045), and records the date and when it was
+	// set in the SAME statement, for the correction recompute (CAD-047). This is
+	// the only writer of contact_by_direct_set_at and contact_by_direct_set_value.
+	// Cadence-owned: the caller declares crm.derived_writer=cadence first.
+	ApplyContactByDirectSet(ctx context.Context, arg ApplyContactByDirectSetParams) error
 	// The CRM skip (CAD-044): advances contact_by to the caller-computed
 	// skipped-to date (cadence.NextAfterSkip), ends the awaiting-reply window,
 	// and records the skip state in the SAME statement — last_skipped_contact_by
@@ -94,6 +114,10 @@ type Querier interface {
 	// undo is not the inverse of skip. Affects zero rows when no skip state is
 	// present; the caller has already checked cadence.UndoSkipAvailable.
 	ApplyContactUndoSkip(ctx context.Context, id uuid.UUID) (int64, error)
+	// Gives a row that has no interaction node its node, when a source observes it
+	// again. The IS NULL guard makes an assigned node permanent: this is the only
+	// statement besides the create insert that writes interaction_node_id.
+	AssignInteractionNode(ctx context.Context, arg AssignInteractionNodeParams) error
 	// Retroactive attach: binds a source's remaining unmatched rows for one peer to
 	// a contact. Matches on peer_handle (always present) OR peer_normalized
 	// (present only when the peer's phone was resolvable) so a LID-only peer
@@ -167,6 +191,12 @@ type Querier interface {
 	// pgx.ErrNoRows when the row is in neither attention state (terminal,
 	// soft-deleted, or missing).
 	ClearMeetingNoteConflict(ctx context.Context, arg ClearMeetingNoteConflictParams) (*MeetingNote, error)
+	// Removes the member attribution from a stored, non-deleted outbound
+	// group-chat row, leaving the state ingest stores for such a message. Touches
+	// no other column: guid, chat, time, body, interaction link, processing and
+	// claim state stay. Returns 0 rows when the row is absent, deleted, not an
+	// outbound group-chat row, or already without attribution.
+	ClearMessagesMessageOutboundPeer(ctx context.Context, guid string) (int64, error)
 	// Defensive recovery branch: clears claim columns for rows still
 	// carrying the expected stale session_ref. Used when the engine
 	// detected a recovery pass but FindEventBySource returned no row.
@@ -218,6 +248,9 @@ type Querier interface {
 	// concurrent writer that committed while waiting for the contact lock (the
 	// FOR UPDATE retained below re-takes the held lock; the load-bearing
 	// serialization is the prior LockContactForDateRecompute statement).
+	// The aggregate reads effective participation (migration 089), so a
+	// participation a correction removed is never a remaining one, and a merged
+	// participation counts once at its own direction and time.
 	ComputeContactDatesAfterDelete(ctx context.Context, id uuid.UUID) (*ComputeContactDatesAfterDeleteRow, error)
 	// Liveness probe for the identity-match guard: a cached
 	// external_identity.contact_id pointing at a soft-deleted (e.g. merged-away)
@@ -237,7 +270,6 @@ type Querier interface {
 	CountActiveRiverJobsByStateBySourceForTest(ctx context.Context, source string) ([]*CountActiveRiverJobsByStateBySourceForTestRow, error)
 	CountAllUnmatchedExternalContacts(ctx context.Context, includeUnresolvedTelegram bool) (int64, error)
 	CountContactInteractions(ctx context.Context, contactID uuid.UUID) (int64, error)
-	CountContactInteractionsFiltered(ctx context.Context, arg CountContactInteractionsFilteredParams) (int64, error)
 	CountContactNotes(ctx context.Context, contactID uuid.UUID) (int64, error)
 	// CountContactTagsWithDeletedContact counts the contact_tag rows the migration
 	// SKIPS because their contact is soft-deleted, so the `--migrate-tags` summary can
@@ -596,9 +628,20 @@ type Querier interface {
 	// InsertEventConsumerClaim's rows-inserted signal instead of polling.
 	ExistsEventConsumerClaim(ctx context.Context, arg ExistsEventConsumerClaimParams) (bool, error)
 	ExistsMeetingNote(ctx context.Context, id uuid.UUID) (bool, error)
+	// Whether a live message that credits a reply was sent inside the closed span
+	// of the chat. This is the one reply-eligibility decision: the ingest path
+	// (the stored row's own time) and the aggregation path (a burst's window) both
+	// read it. Only ingest of the user's own group message sets credits_reply, so
+	// a row the enrichment added or cleared is never eligible, whatever its
+	// processing state or attribution.
+	ExistsMessagesCreditingReply(ctx context.Context, arg ExistsMessagesCreditingReplyParams) (bool, error)
 	ExistsMessagesMessage(ctx context.Context, id uuid.UUID) (bool, error)
 	ExistsPhoneCall(ctx context.Context, id uuid.UUID) (bool, error)
 	ExistsTelegramMessage(ctx context.Context, id uuid.UUID) (bool, error)
+	// Sets the body of a stored, non-deleted row that has none. Touches nothing
+	// else: no processed, claim, interaction or contact column. Returns 0 rows
+	// when the row is absent, deleted, or already has a body.
+	FillMessagesMessageBody(ctx context.Context, arg FillMessagesMessageBodyParams) (int64, error)
 	// Single-cardinality conflict check for an ASYMMETRIC predicate: the accepted,
 	// knowledge-open assertion(s) for (subject, predicate) whose valid-time window
 	// OVERLAPS the new one's effective window. The new-side lower bound is
@@ -854,6 +897,9 @@ type Querier interface {
 	// A soft-deleted subject node (or, for an edge, a soft-deleted object node) drops
 	// from this live read — a merged-away or deleted contact has no current value.
 	GetCurrentAccepted(ctx context.Context, arg GetCurrentAcceptedParams) (*Assertion, error)
+	// The contact's effective entry that holds the observation as a member. The
+	// root qual (NULL for a message burst) narrows the derivation to that entry.
+	GetEffectiveParticipationOfObservation(ctx context.Context, arg GetEffectiveParticipationOfObservationParams) (*EffectiveParticipation, error)
 	GetEmbedding(ctx context.Context, arg GetEmbeddingParams) (*Embedding, error)
 	GetEnrichmentByField(ctx context.Context, arg GetEnrichmentByFieldParams) (*ContactEnrichment, error)
 	// Contact Enrichment queries
@@ -947,6 +993,9 @@ type Querier interface {
 	GetOAuthCredentialByID(ctx context.Context, id uuid.UUID) (*OauthCredential, error)
 	// Get non-sensitive credential info for display
 	GetOAuthCredentialStatus(ctx context.Context, id uuid.UUID) (*GetOAuthCredentialStatusRow, error)
+	// Whether a correction excludes the live observation, with the contact and
+	// root its effective entry is keyed by.
+	GetObservationVerdict(ctx context.Context, observationID uuid.UUID) (*GetObservationVerdictRow, error)
 	// Oldest staged sent_at for one source, over live rows (matched or not). Backs
 	// the WhatsApp status endpoint's observed backfill floor — the empirical answer
 	// to "how deep did the one-shot history actually reach". Returns NULL when the
@@ -1072,10 +1121,12 @@ type Querier interface {
 	// not clear deleted_at on conflict).
 	HardDeleteTelegramMessagesByChatIDRange(ctx context.Context, arg HardDeleteTelegramMessagesByChatIDRangeParams) error
 	HasEnrichmentForField(ctx context.Context, arg HasEnrichmentForFieldParams) (bool, error)
-	// Returns TRUE if any later inbound/mutual interaction exists for the
-	// contact after the given outreach time. Used by the FollowUpManager's
+	// Returns TRUE if any later inbound/mutual effective participation exists for
+	// the contact after the given outreach time. Used by the FollowUpManager's
 	// out-of-order guard: an outbound event arriving after a response has
 	// already landed must not produce a stale follow-up.
+	// Reads effective participation (migration 089), so a response a correction
+	// removed is no response, and a merged participation answers as one.
 	HasResponseAfter(ctx context.Context, arg HasResponseAfterParams) (bool, error)
 	IgnoreExternalContact(ctx context.Context, id uuid.UUID) error
 	// Assertion store queries (graph foundation).
@@ -1164,6 +1215,12 @@ type Querier interface {
 	// returns ErrNoRows in that case, which the repository translates to
 	// db.ErrNotFound.
 	InsertMeetingNote(ctx context.Context, arg InsertMeetingNoteParams) (*MeetingNote, error)
+	// Adds a group-chat message as evidence only: stored processed with no
+	// interaction link and no contact match, so no aggregation, sweep, promotion
+	// or rematch picks it up, and credits_reply stays false so it is never read as
+	// a reply. The caller leaves peer_handle empty for the user's own message.
+	// Returns 0 rows when the guid is already stored.
+	InsertMessagesGroupEvidenceMessage(ctx context.Context, arg InsertMessagesGroupEvidenceMessageParams) (int64, error)
 	// Assertion provenance queries (graph foundation).
 	//
 	// Provenance carries the corroborating source locators for an assertion. The
@@ -1179,6 +1236,11 @@ type Querier interface {
 	// the atomic-claim dedup path observes count>0. Mirrors the row a real
 	// enqueue would insert; the worker never runs in these tests.
 	InsertRiverJobForTest(ctx context.Context, args []byte) error
+	// Whether the recording of the observation suppressed its follow-up (a send
+	// task's completion, CAD-012): read from the interaction.recorded event that
+	// recording published, which is keyed by the observation's id under its
+	// source. An observation recorded without that event suppressed nothing.
+	InteractionRecordingSuppressedFollowUp(ctx context.Context, id uuid.UUID) (bool, error)
 	// Metric 1: peak concurrency over [@window_start,@window_end]. Intervals are selected by
 	// OVERLAP with the window and clamped to it (so a job spanning the whole window
 	// still contributes); deltas are netted per timestamp before the running sum
@@ -1221,6 +1283,12 @@ type Querier interface {
 	// *time.Time ("watchdog not running"); generated as interface{} (see above).
 	LatestCompletedRiverJobByKind(ctx context.Context, kind string) (interface{}, error)
 	LinkIdentityToContact(ctx context.Context, arg LinkIdentityToContactParams) (*ExternalIdentity, error)
+	// The nodes the accepted, knowledge-open rows of a single-cardinality slot name,
+	// at any valid time and without a row lock: a write takes the correction lock
+	// on them before the slot lock and the FindAcceptedForSlot row locks. An
+	// asymmetric slot is (subject, predicate); a symmetric slot holds a row where
+	// any participant appears in either position.
+	ListAcceptedSlotNodes(ctx context.Context, arg ListAcceptedSlotNodesParams) ([]*ListAcceptedSlotNodesRow, error)
 	ListActiveMacHosts(ctx context.Context) ([]*MacHost, error)
 	// List all OAuth credentials
 	ListAllOAuthCredentials(ctx context.Context) ([]*OauthCredential, error)
@@ -1239,11 +1307,27 @@ type Querier interface {
 	// All assertions for a subject node (any status), newest first — the review /
 	// history surface.
 	ListAssertionsBySubject(ctx context.Context, subjectNodeID uuid.UUID) ([]*Assertion, error)
+	// The non-correction assertions whose provenance cites a displayed content item,
+	// one row per (content item, assertion), in recording order. Each displayed item
+	// is named by its row (source_kinds[i], row_ids[i]) and keyed by content_refs[i].
+	// A comms message is stored once per matched contact, so provenance citing any
+	// copy of a displayed comms message, the same (source, external_id), cites that
+	// item. A copy's liveness does not matter: contact merge and unmatched-row
+	// reconciliation tombstone a duplicate copy while the surviving copy carries the
+	// same message, and only a live displayed row reaches this query. The correction
+	// predicates come from the catalog's correction marker (migration 089). An
+	// assertion naming a soft-deleted node is not returned.
+	ListAssertionsCitingContent(ctx context.Context, arg ListAssertionsCitingContentParams) ([]*ListAssertionsCitingContentRow, error)
 	// All assertions touching a node in EITHER position (subject OR object), any
 	// status, oldest first — the node-merge re-point scan. The merge procedure
 	// rewrites loser→winner on each row; oldest-first is a stable, deterministic
 	// order so the live-row collision/supersession steps run reproducibly.
 	ListAssertionsTouchingNode(ctx context.Context, subjectNodeID uuid.UUID) ([]*Assertion, error)
+	// Guids of stored, non-deleted rows with no body (NULL or empty text), in
+	// guid order, keyset-paged by an exclusive @after guid. Whichever host pushed
+	// the row. The caller asks for one row more than a page to learn whether
+	// another page remains.
+	ListBodylessMessagesMessageGuids(ctx context.Context, arg ListBodylessMessagesMessageGuidsParams) ([]string, error)
 	ListCalendarEventsByIDs(ctx context.Context, ids []uuid.UUID) ([]*CalendarEvent, error)
 	// Returns the deduplicated canonicalized value set for the given
 	// contact_method types, scoped to non-deleted contacts. Ordered
@@ -1272,7 +1356,6 @@ type Querier interface {
 	// same WHERE + ORDER BY shape as ListContacts.
 	ListContactIDs(ctx context.Context, arg ListContactIDsParams) ([]uuid.UUID, error)
 	ListContactInteractions(ctx context.Context, arg ListContactInteractionsParams) ([]*Interaction, error)
-	ListContactInteractionsFiltered(ctx context.Context, arg ListContactInteractionsFilteredParams) ([]*Interaction, error)
 	// Contact method queries
 	ListContactMethodsByContact(ctx context.Context, contactID uuid.UUID) ([]*ContactMethod, error)
 	// Display-name lookup for a set of contacts, used to render message senders as
@@ -1316,6 +1399,9 @@ type Querier interface {
 	// write API rejects a deleted subject node, matching the tag migration's
 	// permanent skip). Deterministic order keeps a re-run's logs comparable.
 	ListContactsWithKnowledgeColumns(ctx context.Context) ([]*ListContactsWithKnowledgeColumnsRow, error)
+	// The correction predicates (predicate.correction, migration 089): the one
+	// source of the set.
+	ListCorrectionPredicates(ctx context.Context) ([]*ListCorrectionPredicatesRow, error)
 	ListCuratedPredicates(ctx context.Context) ([]*ListCuratedPredicatesRow, error)
 	// Prefer rows with username/phone for identity matching, then rows with
 	// populated names so a single aggregation pass picks the most-populated row
@@ -1324,12 +1410,21 @@ type Querier interface {
 	// NULL for entity fields on outbound private chats, and those rows must not
 	// outrank a row with a real name.
 	ListDistinctUnmatchedPeers(ctx context.Context) ([]*ListDistinctUnmatchedPeersRow, error)
+	// The rollover job's candidates: the rows RolloverDueBoundedSuccessors would
+	// terminalize, read without a row lock so the job can take their correction
+	// locks before it updates them.
+	ListDueBoundedSuccessors(ctx context.Context, now time.Time) ([]*Assertion, error)
 	// The 'syncing' status value stays in the CHECK constraint for
 	// down-migration safety but is no longer written by any code path.
 	// River job state (available/running/completed/retryable) is the
 	// source of truth for "in-flight" — this query only needs to filter
 	// out 'disabled' rows whose next_sync_at has come due.
 	ListDueSyncStates(ctx context.Context, nextSyncAt *time.Time) ([]*ExternalSyncState, error)
+	// Effective participation reads (arc seam S4). Each reads the one derivation,
+	// the effective_participation and interaction_observation_verdict views of
+	// migration 089; none derives participation of its own.
+	// One row per effective participation of the contact, latest first.
+	ListEffectiveParticipationForContact(ctx context.Context, contactID uuid.UUID) ([]*EffectiveParticipation, error)
 	// Returns (value_normalized, contact_id) for every email contact_method of a
 	// non-deleted contact. MANY-TO-ONE allowed: a shared address (joint inbox /
 	// collision) maps to multiple contacts and each pair is returned so the Gmail
@@ -1369,6 +1464,19 @@ type Querier interface {
 	ListGChatIdentitiesForSync(ctx context.Context) ([]*ListGChatIdentitiesForSyncRow, error)
 	ListIdentitiesBySource(ctx context.Context, arg ListIdentitiesBySourceParams) ([]*ExternalIdentity, error)
 	ListIdentitiesForContact(ctx context.Context, contactID *uuid.UUID) ([]*ExternalIdentity, error)
+	// Every node of the alias tree that holds node_id, each with its own alias
+	// (NULL for the root). No row when node_id names no interaction node.
+	ListInteractionAliasTree(ctx context.Context, nodeID uuid.UUID) ([]*ListInteractionAliasTreeRow, error)
+	// The effective participants of the interaction whose alias tree holds
+	// node_id (the root or any node merged into it), each with its entry for the
+	// root. Only the contacts observed on the tree are derived.
+	ListInteractionParticipants(ctx context.Context, nodeID uuid.UUID) ([]*EffectiveParticipation, error)
+	// The live observations, of any contact, on every node of the alias tree under
+	// each root, with the root they belong to: the members of each merged
+	// interaction. The alias is read only to find the tree.
+	ListInteractionTreeObservations(ctx context.Context, rootIds []uuid.UUID) ([]*ListInteractionTreeObservationsRow, error)
+	// Live interactions with the given ids, in no particular order.
+	ListInteractionsByIDs(ctx context.Context, ids []uuid.UUID) ([]*Interaction, error)
 	// Test-only read of sample rows by river_job_id (raw SQL is banned in Go tests,
 	// so the real-Subscribe integration test reads rows back through this query).
 	ListJobExecSamplesByRiverJobIDForTest(ctx context.Context, riverJobIds []int64) ([]*ListJobExecSamplesByRiverJobIDForTestRow, error)
@@ -1406,6 +1514,10 @@ type Querier interface {
 	// telegram / gcal_attendee / anarlog_* are out of scope (their own
 	// match/enrich flows). ORDER BY ec.id keeps the catchup deterministic.
 	ListLinkedAddressBookExternalContactsForReconcile(ctx context.Context, sources []string) ([]*ListLinkedAddressBookExternalContactsForReconcileRow, error)
+	// The live contacts with a live observation on any of the interaction nodes,
+	// whether or not a correction excludes it: the contacts a merge of those
+	// nodes recomputes.
+	ListLiveContactsObservedOnNodes(ctx context.Context, nodeIds []uuid.UUID) ([]uuid.UUID, error)
 	// Live edges (or facts) of a predicate touching a node in EITHER orientation (the
 	// symmetric two-direction read): a node may be subject or object of a stored edge.
 	// Returns proposed + accepted, knowledge-open rows. A live row requires its
@@ -1427,12 +1539,29 @@ type Querier interface {
 	// on the small filtered set is cheap.
 	ListMeetingNotesNeedingAttention(ctx context.Context, hostID *uuid.UUID) ([]*MeetingNote, error)
 	ListMessagesContainersForContact(ctx context.Context, contactID *uuid.UUID) ([]*ListMessagesContainersForContactRow, error)
+	// The one derivation of a group-chat burst's window: the closed span from the
+	// earliest to the latest sent time of the live messages_message rows linked to
+	// one live messages interaction. The group-chats listing, the
+	// add_group_message containment test and the R12 promotion all read windows
+	// through this query and compute none of their own.
+	// Every filter is optional. Chats page by an exclusive @after chat_guid, and
+	// @chat_limit bounds the number of distinct chats returned.
+	ListMessagesGroupBurstWindows(ctx context.Context, arg ListMessagesGroupBurstWindowsParams) ([]*ListMessagesGroupBurstWindowsRow, error)
 	ListMessagesMessagesByChatWindow(ctx context.Context, arg ListMessagesMessagesByChatWindowParams) ([]*MessagesMessage, error)
 	ListMessagesMessagesByInteractionIDs(ctx context.Context, interactionIds []uuid.UUID) ([]*MessagesMessage, error)
+	// Missed calls: unanswered inbound calls that left no voicemail, which ingest
+	// records with no interaction (migration 055). Narrowed by the contact the call
+	// matched, by the call's id, and to the half-open range of its start; each
+	// narrowing is absent when its argument is NULL. Latest first.
+	ListMissedCalls(ctx context.Context, arg ListMissedCallsParams) ([]*PhoneCall, error)
 	// List non-sensitive credential info for all credentials of a provider
 	ListOAuthCredentialStatuses(ctx context.Context, provider string) ([]*ListOAuthCredentialStatusesRow, error)
 	// List all OAuth credentials for a provider
 	ListOAuthCredentials(ctx context.Context, provider string) ([]*OauthCredential, error)
+	// The given live observations whose content sits in the venue: the base venue
+	// filter of a contact's interaction list. A source that has no content
+	// container matches nothing.
+	ListObservationsInVenue(ctx context.Context, arg ListObservationsInVenueParams) ([]uuid.UUID, error)
 	// All currently-open breaches, deterministically ordered for stable log
 	// output and the reconcile diff. Used both by the watchdog (to compute the
 	// resolve set) and by the read endpoint (active breaches only).
@@ -1442,6 +1571,7 @@ type Querier interface {
 	ListOverdueContacts(ctx context.Context, arg ListOverdueContactsParams) ([]*Contact, error)
 	// List past events that haven't updated last_contacted yet
 	ListPastEventsNeedingUpdate(ctx context.Context, arg ListPastEventsNeedingUpdateParams) ([]*CalendarEvent, error)
+	ListPhoneCallsByIDs(ctx context.Context, ids []uuid.UUID) ([]*PhoneCall, error)
 	ListPhoneCallsByInteractionIDs(ctx context.Context, interactionIds []uuid.UUID) ([]*PhoneCall, error)
 	ListPredicatesByStatus(ctx context.Context, status string) ([]*ListPredicatesByStatusRow, error)
 	// All locators for an assertion, oldest first.
@@ -1711,6 +1841,8 @@ type Querier interface {
 	// Terminal failure, reserved for errors no retry can fix at a phase where no
 	// content was stored. Recoverable only by the explicit operator requeue below.
 	MarkWhatsAppHistoryNotificationFailed(ctx context.Context, arg MarkWhatsAppHistoryNotificationFailedParams) (int64, error)
+	// Whether any row holds the guid, soft-deleted or not.
+	MessagesMessageGuidExists(ctx context.Context, guid string) (bool, error)
 	// TEST-ONLY. Calls the live normalize_contact_method_value function so the
 	// C6 parity test can compare the Go mirror against the actual SQL that the
 	// unique index is enforced over. Raw SQL is banned in Go including tests
@@ -1851,6 +1983,10 @@ type Querier interface {
 	// SyntheticDelete*ByKeyPrefix for its own provisional rows.)
 	ResetSyntheticData(ctx context.Context) error
 	ResetTelegramChatConfigBackfill(ctx context.Context, telegramChatID int64) error
+	// The observation step's resolution: finds or creates the interaction node of
+	// an observation by the per-source identity rule (resolve_interaction_node in
+	// migration 087, the one implementation). A burst source returns no row (no node).
+	ResolveInteractionNode(ctx context.Context, arg ResolveInteractionNodeParams) (uuid.UUID, error)
 	// Sets linked_kind, linked_id, linkage_state='linked',
 	// conflict_candidates=NULL on a row currently in linkage_state =
 	// 'conflict_pending'. Returns pgx.ErrNoRows (caller maps to 409) when
@@ -1871,14 +2007,15 @@ type Querier interface {
 	ReviveMeetingNote(ctx context.Context, arg ReviveMeetingNoteParams) (*MeetingNote, error)
 	RevokeMacHost(ctx context.Context, id uuid.UUID) (*MacHost, error)
 	// The rollover job: terminalize the bounded-with-pending-successor rows whose
-	// bound has been reached. Scoped TIGHT — superseded_by IS NOT NULL excludes
+	// bound has been reached, among the candidate ids the job locked (rows that
+	// became due since are left for the next run). Scoped TIGHT — superseded_by IS NOT NULL excludes
 	// successor-less historical accepted facts (which simply aren't current). Sets
 	// status='superseded', closure_reason='superseded'. knowledge_to is
 	// GREATEST(now, knowledge_from) so a row whose knowledge_from was set in the
 	// future via a KnowledgeFromOverride does not violate the assertion_knowledge_range
 	// CHECK and abort the whole sweep. Returns the updated rows so the caller can emit
 	// one assertion.superseded event per row.
-	RolloverDueBoundedSuccessors(ctx context.Context, now time.Time) ([]*Assertion, error)
+	RolloverDueBoundedSuccessors(ctx context.Context, arg RolloverDueBoundedSuccessorsParams) ([]*Assertion, error)
 	// Atomically replaces api_key_hash and bumps api_key_rotated_at. Used
 	// by the rotate-key endpoint. Filters revoked hosts so a revoked host
 	// cannot be silently re-activated by a rotation.
@@ -2615,6 +2752,11 @@ type Querier interface {
 	// given backend. Scoped to one blocker, so a parallel sibling waiting on an
 	// unrelated lock cannot satisfy the poll.
 	TestCountBackendsBlockedBy(ctx context.Context, blockerPid int32) (int64, error)
+	// Race-test only: how many active backends wait on the given backend, directly
+	// or behind another waiter. Two transactions that queue for one row lock the
+	// given backend holds wait in line: the second is blocked by the first waiter,
+	// not by the holder, so TestCountBackendsBlockedBy counts only the first.
+	TestCountBackendsWaitingOn(ctx context.Context, blockerPid int32) (int64, error)
 	// Test-only: counts venue-type nodes that no live interaction references via
 	// venue_id. Used by the venue backfill test to assert the no-orphan-node guard.
 	TestCountOrphanVenueNodes(ctx context.Context) (int64, error)
@@ -2683,6 +2825,12 @@ type Querier interface {
 	// Test-only read for migration fixtures that verify a deleted interaction is
 	// outside a historical repair selector. Production reads remain live-only.
 	TestGetInteractionIncludingDeleted(ctx context.Context, arg TestGetInteractionIncludingDeletedParams) (*Interaction, error)
+	// Test-only read of an interaction node's subtype row, for backfill fixtures
+	// that check a node's source and persisted identity key.
+	TestGetInteractionNode(ctx context.Context, nodeID uuid.UUID) (*InteractionNode, error)
+	// Test-only: reads a messages_message row by guid whether or not it is
+	// soft-deleted. Production code MUST NOT call this.
+	TestGetMessagesMessageIncludingDeleted(ctx context.Context, guid string) (*MessagesMessage, error)
 	// Test assertion — a planted job's disposition: its state, whether it is
 	// finalized, and its attempt counter. `attempt` is the load-bearing one for
 	// queue isolation: River increments it on FETCH, so attempt = 0 says the job was
@@ -2735,6 +2883,12 @@ type Querier interface {
 	// process's job. Available (not scheduled) precisely because the fetch has to
 	// be POSSIBLE for "it was never fetched" to mean anything.
 	TestInsertAvailableRematchJobForContact(ctx context.Context, arg TestInsertAvailableRematchJobForContactParams) (int64, error)
+	// Test-only: inserts an interaction observation with a caller-supplied id, the
+	// way the identity-backfill (migration 088) fixture stands up rows that carry no
+	// interaction node. The column list is explicit and names only columns that
+	// exist from schema 087 onward, so the fixture keeps working as later migrations
+	// add columns to interaction. Production code MUST NOT call this.
+	TestInsertBackfillObservation(ctx context.Context, arg TestInsertBackfillObservationParams) error
 	// TEST ONLY. See TestInsertExternalContactRawEmails. Same rationale for
 	// calendar_event.attendees.
 	TestInsertCalendarEventRawAttendees(ctx context.Context, arg TestInsertCalendarEventRawAttendeesParams) (*CalendarEvent, error)
@@ -2782,7 +2936,9 @@ type Querier interface {
 	// Test-only: inserts an interaction with a caller-supplied id, source, and
 	// source_ref and a NULL venue_id, bypassing the recorder. Used by the venue
 	// backfill migration test to stand up pre-existing (venue-less) interactions
-	// that the 069 backfill then populates. Production code MUST NOT call this.
+	// that the 069 backfill then populates. The caller supplies the interaction
+	// node, which the repository wrapper resolves through the observation step.
+	// Production code MUST NOT call this.
 	TestInsertInteraction(ctx context.Context, arg TestInsertInteractionParams) (*Interaction, error)
 	// Test-only: inserts a messages_message already linked to an interaction. Used
 	// by the venue backfill test to seed an iMessage chat container row. Production
@@ -2854,6 +3010,11 @@ type Querier interface {
 	// would otherwise fetch and finalize it within milliseconds, and the assertion
 	// that depends on it staying unfinalized would pass or fail on a race.
 	TestInsertUnfinalizedRecorderJobForEvent(ctx context.Context, eventID string) (int64, error)
+	// Test-only: reads every observation of a contact, soft-deleted ones included,
+	// for the identity-backfill (migration 088) fixture. The column list is explicit
+	// and names only columns that exist from schema 087 onward, so the same read
+	// runs at 087 and at the latest schema. Production code MUST NOT call this.
+	TestListBackfillObservations(ctx context.Context, contactID uuid.UUID) ([]*TestListBackfillObservationsRow, error)
 	// Index-definition test only: enumerate every index on one table with
 	// Postgres's own deterministic indexdef reconstruction, so a test can assert the
 	// exact key columns + partial predicate of an index whose PREDICATE is the
@@ -3167,7 +3328,9 @@ type Querier interface {
 	UpsertIdentity(ctx context.Context, arg UpsertIdentityParams) (*ExternalIdentity, error)
 	// Insert with no-op on guid conflict. peer_normalized and matched_contact_id
 	// come from the Pi ingest service identity-match path. mac_host_id is
-	// provenance — multi-host dedup is by guid, not by host.
+	// provenance — multi-host dedup is by guid, not by host. credits_reply is set
+	// only when ingest stores the user's own group message; a conflict keeps the
+	// stored row's value, so the RETURNING row is what reply eligibility reads.
 	UpsertMessagesMessage(ctx context.Context, arg UpsertMessagesMessageParams) (*MessagesMessage, error)
 	// Insert or update an OAuth credential.
 	// refresh_token_nonce is kept in sync with refresh_token_encrypted: when a new

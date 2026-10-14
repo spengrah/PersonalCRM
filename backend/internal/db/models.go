@@ -150,25 +150,27 @@ type CommsMessage struct {
 }
 
 type Contact struct {
-	ID                   uuid.UUID  `json:"id"`
-	FullName             string     `json:"full_name"`
-	Location             *string    `json:"location"`
-	Birthday             *time.Time `json:"birthday"`
-	HowMet               *string    `json:"how_met"`
-	Cadence              *string    `json:"cadence"`
-	LastContacted        *time.Time `json:"last_contacted"`
-	ProfilePhoto         *string    `json:"profile_photo"`
-	DeletedAt            *time.Time `json:"deleted_at"`
-	CreatedAt            *time.Time `json:"created_at"`
-	UpdatedAt            *time.Time `json:"updated_at"`
-	ContactBy            *time.Time `json:"contact_by"`
-	LastInteractionAt    *time.Time `json:"last_interaction_at"`
-	LastOutreachAt       *time.Time `json:"last_outreach_at"`
-	LastResponseAt       *time.Time `json:"last_response_at"`
-	AwaitingReplyUntil   *time.Time `json:"awaiting_reply_until"`
-	LastSkippedAt        *time.Time `json:"last_skipped_at"`
-	LastSkippedContactBy *time.Time `json:"last_skipped_contact_by"`
-	LastSkipReason       *string    `json:"last_skip_reason"`
+	ID                      uuid.UUID  `json:"id"`
+	FullName                string     `json:"full_name"`
+	Location                *string    `json:"location"`
+	Birthday                *time.Time `json:"birthday"`
+	HowMet                  *string    `json:"how_met"`
+	Cadence                 *string    `json:"cadence"`
+	LastContacted           *time.Time `json:"last_contacted"`
+	ProfilePhoto            *string    `json:"profile_photo"`
+	DeletedAt               *time.Time `json:"deleted_at"`
+	CreatedAt               *time.Time `json:"created_at"`
+	UpdatedAt               *time.Time `json:"updated_at"`
+	ContactBy               *time.Time `json:"contact_by"`
+	LastInteractionAt       *time.Time `json:"last_interaction_at"`
+	LastOutreachAt          *time.Time `json:"last_outreach_at"`
+	LastResponseAt          *time.Time `json:"last_response_at"`
+	AwaitingReplyUntil      *time.Time `json:"awaiting_reply_until"`
+	LastSkippedAt           *time.Time `json:"last_skipped_at"`
+	LastSkippedContactBy    *time.Time `json:"last_skipped_contact_by"`
+	LastSkipReason          *string    `json:"last_skip_reason"`
+	ContactByDirectSetAt    *time.Time `json:"contact_by_direct_set_at"`
+	ContactByDirectSetValue *time.Time `json:"contact_by_direct_set_value"`
 }
 
 type ContactEnrichment struct {
@@ -211,6 +213,14 @@ type ContactTask struct {
 	UpdatedAt      *time.Time `json:"updated_at"`
 	IdempotencyKey *string    `json:"idempotency_key"`
 	Lifecycle      string     `json:"lifecycle"`
+}
+
+type EffectiveParticipation struct {
+	ContactID         uuid.UUID  `json:"contact_id"`
+	InteractionNodeID *uuid.UUID `json:"interaction_node_id"`
+	Direction         string     `json:"direction"`
+	OccurredAt        time.Time  `json:"occurred_at"`
+	Members           []byte     `json:"members"`
 }
 
 type Embedding struct {
@@ -333,17 +343,42 @@ type ExternalSyncState struct {
 	UpdatedAt            *time.Time `json:"updated_at"`
 }
 
+type GcalOrphanNode struct {
+	SourceRef *string   `json:"source_ref"`
+	NodeID    uuid.UUID `json:"node_id"`
+}
+
 type Interaction struct {
-	ID          uuid.UUID  `json:"id"`
-	ContactID   uuid.UUID  `json:"contact_id"`
-	Source      string     `json:"source"`
-	SourceRef   *string    `json:"source_ref"`
-	OccurredAt  time.Time  `json:"occurred_at"`
-	Description *string    `json:"description"`
-	CreatedAt   *time.Time `json:"created_at"`
-	DeletedAt   *time.Time `json:"deleted_at"`
-	Direction   string     `json:"direction"`
-	VenueID     *uuid.UUID `json:"venue_id"`
+	ID                uuid.UUID  `json:"id"`
+	ContactID         uuid.UUID  `json:"contact_id"`
+	Source            string     `json:"source"`
+	SourceRef         *string    `json:"source_ref"`
+	OccurredAt        time.Time  `json:"occurred_at"`
+	Description       *string    `json:"description"`
+	CreatedAt         *time.Time `json:"created_at"`
+	DeletedAt         *time.Time `json:"deleted_at"`
+	Direction         string     `json:"direction"`
+	VenueID           *uuid.UUID `json:"venue_id"`
+	InteractionNodeID *uuid.UUID `json:"interaction_node_id"`
+	RecordedAt        time.Time  `json:"recorded_at"`
+}
+
+type InteractionNode struct {
+	NodeID      uuid.UUID `json:"node_id"`
+	Source      string    `json:"source"`
+	IdentityKey *string   `json:"identity_key"`
+}
+
+type InteractionObservationVerdict struct {
+	ObservationID     uuid.UUID  `json:"observation_id"`
+	ContactID         uuid.UUID  `json:"contact_id"`
+	Source            string     `json:"source"`
+	SourceRef         *string    `json:"source_ref"`
+	Direction         string     `json:"direction"`
+	OccurredAt        time.Time  `json:"occurred_at"`
+	InteractionNodeID *uuid.UUID `json:"interaction_node_id"`
+	RootNodeID        *uuid.UUID `json:"root_node_id"`
+	Excluded          bool       `json:"excluded"`
 }
 
 type JobExecSample struct {
@@ -360,25 +395,27 @@ type JobExecSample struct {
 }
 
 type LiveContact struct {
-	ID                   uuid.UUID  `json:"id"`
-	FullName             string     `json:"full_name"`
-	Location             *string    `json:"location"`
-	Birthday             *time.Time `json:"birthday"`
-	HowMet               *string    `json:"how_met"`
-	Cadence              *string    `json:"cadence"`
-	LastContacted        *time.Time `json:"last_contacted"`
-	ProfilePhoto         *string    `json:"profile_photo"`
-	DeletedAt            *time.Time `json:"deleted_at"`
-	CreatedAt            *time.Time `json:"created_at"`
-	UpdatedAt            *time.Time `json:"updated_at"`
-	ContactBy            *time.Time `json:"contact_by"`
-	LastInteractionAt    *time.Time `json:"last_interaction_at"`
-	LastOutreachAt       *time.Time `json:"last_outreach_at"`
-	LastResponseAt       *time.Time `json:"last_response_at"`
-	AwaitingReplyUntil   *time.Time `json:"awaiting_reply_until"`
-	LastSkippedAt        *time.Time `json:"last_skipped_at"`
-	LastSkippedContactBy *time.Time `json:"last_skipped_contact_by"`
-	LastSkipReason       *string    `json:"last_skip_reason"`
+	ID                      uuid.UUID  `json:"id"`
+	FullName                string     `json:"full_name"`
+	Location                *string    `json:"location"`
+	Birthday                *time.Time `json:"birthday"`
+	HowMet                  *string    `json:"how_met"`
+	Cadence                 *string    `json:"cadence"`
+	LastContacted           *time.Time `json:"last_contacted"`
+	ProfilePhoto            *string    `json:"profile_photo"`
+	DeletedAt               *time.Time `json:"deleted_at"`
+	CreatedAt               *time.Time `json:"created_at"`
+	UpdatedAt               *time.Time `json:"updated_at"`
+	ContactBy               *time.Time `json:"contact_by"`
+	LastInteractionAt       *time.Time `json:"last_interaction_at"`
+	LastOutreachAt          *time.Time `json:"last_outreach_at"`
+	LastResponseAt          *time.Time `json:"last_response_at"`
+	AwaitingReplyUntil      *time.Time `json:"awaiting_reply_until"`
+	LastSkippedAt           *time.Time `json:"last_skipped_at"`
+	LastSkippedContactBy    *time.Time `json:"last_skipped_contact_by"`
+	LastSkipReason          *string    `json:"last_skip_reason"`
+	ContactByDirectSetAt    *time.Time `json:"contact_by_direct_set_at"`
+	ContactByDirectSetValue *time.Time `json:"contact_by_direct_set_value"`
 }
 
 type MacHost struct {
@@ -451,6 +488,7 @@ type MessagesMessage struct {
 	ClaimedSessionRef *string    `json:"claimed_session_ref"`
 	DeletedAt         *time.Time `json:"deleted_at"`
 	CreatedAt         *time.Time `json:"created_at"`
+	CreditsReply      bool       `json:"credits_reply"`
 }
 
 type Node struct {
@@ -553,6 +591,7 @@ type Predicate struct {
 	Synonyms            []string        `json:"synonyms"`
 	Embedding           pgvector.Vector `json:"embedding"`
 	CreatedAt           time.Time       `json:"created_at"`
+	Correction          bool            `json:"correction"`
 }
 
 type RelationshipSignal struct {

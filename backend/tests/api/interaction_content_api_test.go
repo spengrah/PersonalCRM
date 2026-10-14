@@ -19,13 +19,40 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func getInteractionContent(t *testing.T, e *interactionAPIDB, id string) (int, map[string]any) {
+// getInteractionContent reads the content of an observation's timeline item in
+// the context of the test contact. An observation with an interaction node is
+// read as that interaction, any other as a message burst. Each test reads an
+// item with one member, whose content the answer's data then is.
+func getInteractionContent(t *testing.T, e *interactionAPIDB, row repository.Interaction) (int, map[string]any) {
+	t.Helper()
+	return getInteractionContentAs(t, e, row, e.contact.ID)
+}
+
+// getInteractionContentAs is getInteractionContent in the context of another
+// contact.
+func getInteractionContentAs(t *testing.T, e *interactionAPIDB, row repository.Interaction, contactID uuid.UUID) (int, map[string]any) {
+	t.Helper()
+	kind, id := timelineIdentityOf(&row)
+	return getTimelineContentAs(t, e, kind, id, contactID)
+}
+
+func getTimelineContent(t *testing.T, e *interactionAPIDB, kind string, id uuid.UUID) (int, map[string]any) {
+	t.Helper()
+	return getTimelineContentAs(t, e, kind, id, e.contact.ID)
+}
+
+func getTimelineContentAs(t *testing.T, e *interactionAPIDB, kind string, id, contactID uuid.UUID) (int, map[string]any) {
 	t.Helper()
 	w := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/interactions/"+id+"/content", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/timeline-items/"+kind+"/"+id.String()+"/content?contact_id="+contactID.String(), nil)
 	e.router.ServeHTTP(w, req)
 	var body map[string]any
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
+	if w.Code == http.StatusOK {
+		members := body["data"].(map[string]any)["members"].([]any)
+		require.Len(t, members, 1)
+		body["data"] = members[0]
+	}
 	return w.Code, body
 }
 
@@ -71,16 +98,16 @@ func TestInteractionContentAPI_KindPerSource(t *testing.T) {
 	seedAPINote(t, e, session, nil, "Session note", "Session summary", "Session memo")
 
 	rows := []struct {
-		id   uuid.UUID
+		row  repository.Interaction
 		kind string
 	}{
-		{manual.ID, "none"}, {todo.ID, "none"}, {call.ID, "call"},
-		{email.ID, "messages"}, {telegram.ID, "messages"}, {messages.ID, "messages"},
-		{whatsapp.ID, "messages"}, {gcalWithNote.ID, "meeting_note"},
-		{gcalWithoutNote.ID, "none"}, {anarlog.ID, "meeting_note"},
+		{manual, "none"}, {todo, "none"}, {call, "call"},
+		{email, "messages"}, {telegram, "messages"}, {messages, "messages"},
+		{whatsapp, "messages"}, {gcalWithNote, "meeting_note"},
+		{gcalWithoutNote, "none"}, {anarlog, "meeting_note"},
 	}
 	for _, tc := range rows {
-		status, body := getInteractionContent(t, e, tc.id.String())
+		status, body := getInteractionContent(t, e, tc.row)
 		require.Equal(t, http.StatusOK, status, tc.kind)
 		data := contentData(t, body)
 		require.Equal(t, tc.kind, data["kind"])
@@ -104,7 +131,7 @@ func TestInteractionContentAPI_KindPerSource(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, e.noteRepo.SoftDeleteMeetingNoteBySessionIDTx(e.ctx, tx, deadSession))
 	require.NoError(t, tx.Commit(e.ctx))
-	status, body := getInteractionContent(t, e, deadAnarlog.ID.String())
+	status, body := getInteractionContent(t, e, deadAnarlog)
 	require.Equal(t, http.StatusOK, status)
 	data := contentData(t, body)
 	assert.Equal(t, "meeting_note", data["kind"])
@@ -139,7 +166,7 @@ func TestInteractionContentAPI_ThreadWindow(t *testing.T) {
 	replica, err := e.database.Queries.TestInsertCommsMessageLinked(e.ctx, db.TestInsertCommsMessageLinkedParams{Source: repository.InteractionSourceGChat, ExternalID: "window-first", ThreadID: &thread, Direction: repository.InteractionDirectionInbound, SentAt: when, MatchedContactID: &other.ID})
 	require.NoError(t, err)
 
-	status, body := getInteractionContent(t, e, interaction.ID.String())
+	status, body := getInteractionContent(t, e, interaction)
 	require.Equal(t, http.StatusOK, status)
 	rows := contentData(t, body)["messages"].([]any)
 	require.Len(t, rows, 6)
@@ -186,7 +213,7 @@ func TestInteractionContentAPI_ThreadWindow(t *testing.T) {
 
 	oneMessageInteraction := seedAPIInteraction(t, e, repository.InteractionSourceGChat, when.Add(10*time.Second), nil)
 	oneMessage := seedAPIComms(t, e, oneMessageInteraction.ID, repository.InteractionSourceGChat, "window-one-message", "window-one-message", when.Add(10*time.Second))
-	status, body = getInteractionContent(t, e, oneMessageInteraction.ID.String())
+	status, body = getInteractionContent(t, e, oneMessageInteraction)
 	require.Equal(t, http.StatusOK, status)
 	oneMessageRows := contentData(t, body)["messages"].([]any)
 	require.Len(t, oneMessageRows, 1)
@@ -202,7 +229,7 @@ func TestInteractionContentAPI_MessageShape(t *testing.T) {
 	when := time.Date(2026, 8, 6, 12, 0, 0, 0, time.UTC)
 	email := seedAPIInteraction(t, e, repository.InteractionSourceEmail, when, nil)
 	outbound := seedAPICommsWith(t, e, email.ID, repository.InteractionSourceEmail, "shape-thread", "shape-outbound", when, nil, nil, nil, repository.InteractionDirectionOutbound, nil)
-	status, body := getInteractionContent(t, e, email.ID.String())
+	status, body := getInteractionContent(t, e, email)
 	require.Equal(t, http.StatusOK, status)
 	row := contentData(t, body)["messages"].([]any)[0].(map[string]any)
 	assert.Equal(t, outbound.ID.String(), row["id"])
@@ -223,7 +250,7 @@ func TestInteractionContentAPI_MessageShape(t *testing.T) {
 	whatsappUnknown := seedAPIInteraction(t, e, repository.InteractionSourceWhatsApp, when.Add(4*time.Minute), nil)
 	unknown := seedAPICommsWith(t, e, whatsappUnknown.ID, repository.InteractionSourceWhatsApp, "unknown-container", "unknown", when, nil, strptr("unknown body"), nil, repository.InteractionDirectionInbound, []byte(`{}`))
 	for _, tc := range []struct {
-		interaction uuid.UUID
+		interaction repository.Interaction
 		id, sender  string
 	}{
 		// A name the SOURCE supplied always wins over the CRM's own: the first
@@ -231,10 +258,10 @@ func TestInteractionContentAPI_MessageShape(t *testing.T) {
 		// seeded row carries the same matched contact. Only a sender that
 		// resolved to a raw identifier ("Peer Handle") or to no identifier at
 		// all ("Unknown") is replaced by the matched contact's name.
-		{telegram.ID, "", "tg-user"}, {telegramNamed.ID, "", "First Last"}, {whatsappPush.ID, push.ID.String(), "Push Name"},
-		{whatsappPeer.ID, peer.ID.String(), e.contact.FullName}, {whatsappUnknown.ID, unknown.ID.String(), e.contact.FullName},
+		{telegram, "", "tg-user"}, {telegramNamed, "", "First Last"}, {whatsappPush, push.ID.String(), "Push Name"},
+		{whatsappPeer, peer.ID.String(), e.contact.FullName}, {whatsappUnknown, unknown.ID.String(), e.contact.FullName},
 	} {
-		status, body = getInteractionContent(t, e, tc.interaction.String())
+		status, body = getInteractionContent(t, e, tc.interaction)
 		require.Equal(t, http.StatusOK, status)
 		messages := contentData(t, body)["messages"].([]any)
 		require.Len(t, messages, 1)
@@ -249,13 +276,15 @@ func TestInteractionContentAPI_MessageShape(t *testing.T) {
 	// deleted_at, so each sender falls back to what it resolved to before,
 	// rather than resurrecting a name the rest of the app no longer shows.
 	require.NoError(t, repository.NewContactRepository(e.database.Queries).SoftDeleteContact(e.ctx, e.contact.ID))
+	viewer, err := repository.NewContactRepository(e.database.Queries).CreateContact(e.ctx, repository.CreateContactRequest{FullName: "Synthetic viewing contact"})
+	require.NoError(t, err)
 	for _, tc := range []struct {
-		interaction uuid.UUID
+		interaction repository.Interaction
 		sender      string
 	}{
-		{whatsappPeer.ID, "Peer Handle"}, {whatsappUnknown.ID, "Unknown"}, {whatsappPush.ID, "Push Name"},
+		{whatsappPeer, "Peer Handle"}, {whatsappUnknown, "Unknown"}, {whatsappPush, "Push Name"},
 	} {
-		status, body = getInteractionContent(t, e, tc.interaction.String())
+		status, body = getInteractionContentAs(t, e, tc.interaction, viewer.ID)
 		require.Equal(t, http.StatusOK, status)
 		messages := contentData(t, body)["messages"].([]any)
 		require.Len(t, messages, 1)
@@ -276,7 +305,7 @@ func TestInteractionContentAPI_NotesAndNotFound(t *testing.T) {
 	time.Sleep(2 * time.Millisecond)
 	second := seedAPINote(t, e, uuid.New(), &event.ID, "Second title", "Second summary", "Second memo")
 	require.NotEqual(t, first.CreatedAt, second.CreatedAt)
-	status, body := getInteractionContent(t, e, interaction.ID.String())
+	status, body := getInteractionContent(t, e, interaction)
 	require.Equal(t, http.StatusOK, status)
 	notes := contentData(t, body)["meeting_notes"].([]any)
 	require.Len(t, notes, 2)
@@ -289,11 +318,11 @@ func TestInteractionContentAPI_NotesAndNotFound(t *testing.T) {
 	liveSibling := seedAPIInteraction(t, e, repository.InteractionSourceManual, when.Add(time.Minute), nil)
 	tombstone := seedAPIInteraction(t, e, repository.InteractionSourceManual, when.Add(2*time.Minute), nil)
 	require.NoError(t, e.interactionRepo.SoftDeleteInteraction(e.ctx, tombstone.ID))
-	status, _ = getInteractionContent(t, e, uuid.New().String())
+	status, _ = getTimelineContent(t, e, "interaction", uuid.New())
 	assert.Equal(t, http.StatusNotFound, status)
-	status, _ = getInteractionContent(t, e, tombstone.ID.String())
+	status, _ = getInteractionContent(t, e, tombstone)
 	assert.Equal(t, http.StatusNotFound, status)
-	status, body = getInteractionContent(t, e, liveSibling.ID.String())
+	status, body = getInteractionContent(t, e, liveSibling)
 	assert.Equal(t, http.StatusOK, status)
 	assert.Equal(t, "none", contentData(t, body)["kind"])
 }

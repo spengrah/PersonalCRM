@@ -474,17 +474,6 @@ final class MessagesSourcePluginTests: XCTestCase {
                        "outbound peer resolved from chat_handle_join")
     }
 
-    func testTickEmitsOutboundGroupAttributedToFirstMember() async throws {
-        let dbURL = try makeChatDBWithOutboundGroup(
-            firstMember: "+15551110000", secondMember: "+15552220000")
-        // Only the first member is known.
-        let (plugin, sink, _) = try makeOutboundPlugin(dbURL: dbURL, known: ["+15551110000"])
-        try await plugin.tick()
-        let peer = await sink.peerHandle(forSourceID: "gout1")
-        XCTAssertEqual(peer, "+15551110000",
-                       "group outbound attributed to first chat_handle_join member")
-    }
-
     func testTickDropsOutboundToUnknownRecipient() async throws {
         let dbURL = try makeChatDBWithOutbound1to1(peer: "+15551234567")
         // The recipient is NOT in the known set; an unrelated handle is.

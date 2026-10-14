@@ -84,7 +84,7 @@ func buildDomainConsumers(
 		cfg.EventBus.UnsafeAllowOffMode,
 		cfg.Watchdog,
 	)
-	calendarDeclineHandler := consumer.NewCalendarDeclineHandler(interactionRepo, contactRepo, cfg.Watchdog)
+	calendarDeclineHandler := consumer.NewCalendarDeclineHandler(interactionRepo, contactRepo, graphNodeRepo, cadenceUpdater, cfg.Watchdog)
 
 	// Knowledge-cache consumer (the location/birthday/how_met authority flip):
 	// the sole writer of those three derived cache columns. ContactService emits
@@ -187,6 +187,9 @@ func buildInteractionRecorder(
 	// Populate interaction.venue_id for message.* (telegram/messages/gchat) and
 	// gcal interactions this recorder writes.
 	interactionRecorder.SetVenueResolver(messaging.VenueResolver)
+	// A freshly recorded inbound group burst may already contain a user's group
+	// message (R12).
+	interactionRecorder.SetGroupReplyPromoter(service.NewGroupBurstPromoter(ingest.MessagesMessage, contactService))
 	return interactionRecorder
 }
 

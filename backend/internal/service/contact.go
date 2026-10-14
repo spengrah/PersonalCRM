@@ -10,6 +10,7 @@ import (
 	"personal-crm/backend/internal/accelerated"
 	"personal-crm/backend/internal/cadence"
 	"personal-crm/backend/internal/consumer/consumerjobs"
+	"personal-crm/backend/internal/contacttask"
 	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/events"
 	"personal-crm/backend/internal/logger"
@@ -45,6 +46,7 @@ type OverdueContact struct {
 // follow-up behavior without building the full consumer graph.
 type FollowUpConsumer interface {
 	ApplyInteraction(ctx context.Context, tx pgx.Tx, req repository.ApplyInteractionRequest) error
+	correctionFollowUp
 }
 
 // cadenceWriter abstracts the direct-invoke write surface of
@@ -64,6 +66,7 @@ type cadenceWriter interface {
 	ApplyContactByOverride(ctx context.Context, tx pgx.Tx, contactID uuid.UUID, contactBy *time.Time) error
 	ApplySkip(ctx context.Context, tx pgx.Tx, contactID uuid.UUID, nextContactBy, skippedAt time.Time, reason string) error
 	ApplyUndoSkip(ctx context.Context, tx pgx.Tx, contactID uuid.UUID) error
+	correctionCadence
 }
 
 // SkipReasonUI is the only skip reason the CRM writes (#212).
@@ -116,6 +119,12 @@ type ContactService struct {
 	// rather than silently dropping a location/birthday/how_met write (the
 	// columns are no longer written by the contact SQL).
 	knowledge *knowledgeWriter
+	// corrections recomputes a merge survivor's cadence fields and follow-up
+	// tasks from its effective participation, as a correction of interactions
+	// does, when the merge makes a correction cover an observation it did not
+	// cover before (MergeContacts). Only its participation reads and recompute
+	// are used, so it holds only their dependencies.
+	corrections *InteractionCorrectionService
 	// commsRepo carries the savepoint-wrapped comms_message merge repoint
 	// (dedup soft-delete + repoint with one scoped retry). Constructed
 	// internally from database.Queries — no new constructor arg.
@@ -181,6 +190,12 @@ func NewContactService(
 		cadence:           cadence,
 		knowledge:         buildKnowledgeWriter(assertSvc, knowledgeCache),
 		followUp:          followUp,
+		corrections: &InteractionCorrectionService{
+			interactions: interactionRepo,
+			contacts:     contactRepo,
+			cadence:      cadence,
+			followUp:     followUp,
+		},
 	}
 }
 
@@ -276,6 +291,11 @@ func (s *ContactService) SkipCycle(ctx context.Context, id uuid.UUID) (contact *
 		}
 	}()
 
+	// The skip is decided from the contact's current next-contact date, read
+	// under its cadence row lock.
+	if err = repository.LockContactCadenceTx(ctx, tx, id); err != nil {
+		return nil, err
+	}
 	contactRepo := repository.NewContactRepository(db.New(tx))
 	contact, err = contactRepo.GetContact(ctx, id)
 	if err != nil {
@@ -344,6 +364,11 @@ func (s *ContactService) UndoSkip(ctx context.Context, id uuid.UUID) (contact *r
 		}
 	}()
 
+	// Undo is decided from the contact's current skip state, read under its
+	// cadence row lock.
+	if err = repository.LockContactCadenceTx(ctx, tx, id); err != nil {
+		return nil, err
+	}
 	contactRepo := repository.NewContactRepository(db.New(tx))
 	contact, err = contactRepo.GetContact(ctx, id)
 	if err != nil {
@@ -528,6 +553,11 @@ func (s *ContactService) UpdateContact(ctx context.Context, id uuid.UUID, req re
 	contactMethodRepo := repository.NewContactMethodRepository(txQueries)
 	nodeRepo := repository.NewNodeRepository(txQueries)
 
+	// contact_by below is derived from the contact's current last_contacted,
+	// read under its cadence row lock.
+	if err = repository.LockContactCadenceTx(ctx, tx, id); err != nil {
+		return nil, err
+	}
 	existingContact, err := contactRepo.GetContact(ctx, id)
 	if err != nil {
 		return nil, err
@@ -542,17 +572,7 @@ func (s *ContactService) UpdateContact(ctx context.Context, id uuid.UUID, req re
 	// accepts backdate/clear semantics, which is required for "user
 	// switched from weekly to annual" or "user removed cadence
 	// entirely".
-	var newContactBy *time.Time
-	if req.Cadence != nil && *req.Cadence != "" {
-		if cadenceType, parseErr := cadence.ParseCadence(*req.Cadence); parseErr == nil {
-			base := existingContact.CreatedAt
-			if existingContact.LastContacted != nil {
-				base = *existingContact.LastContacted
-			}
-			t := cadence.CalculateContactBy(base, cadenceType)
-			newContactBy = &t
-		}
-	}
+	newContactBy := cadenceEditContactBy(req.Cadence, existingContact)
 	// The DTO's ContactBy field is ignored — contact_by is
 	// always recomputed from the cadence string to preserve the
 	// invariant "cadence drives contact_by". Zero it explicitly on the
@@ -735,6 +755,9 @@ func (s *ContactService) RecordInteractionTx(
 				Str("source", req.Source).
 				Str("sourceRef", *req.SourceRef).
 				Msg("skipping duplicate interaction (same source_ref)")
+			if err := s.observeReplayTx(ctx, tx, req, existing); err != nil {
+				return nil, err
+			}
 			return &RecordInteractionResult{Interaction: existing, IsReplay: true}, nil
 		}
 	} else {
@@ -748,20 +771,46 @@ func (s *ContactService) RecordInteractionTx(
 				Str("existingSource", existing.Source).
 				Str("newSource", req.Source).
 				Msg("skipping duplicate interaction within 30-min window")
+			if err := s.observeReplayTx(ctx, tx, req, existing); err != nil {
+				return nil, err
+			}
 			return &RecordInteractionResult{Interaction: existing, IsReplay: true}, nil
 		}
 	}
 
 	// 3. Verify contact exists (avoids FK violation returning unhelpful error).
-	contact, err := s.contactRepo.GetContactTx(ctx, tx, req.ContactID)
-	if err != nil {
+	if _, err := s.contactRepo.GetContactTx(ctx, tx, req.ContactID); err != nil {
 		return nil, err // propagates db.ErrNotFound
 	}
 
-	// 4. Capture pre-cadence snapshot + cadence-at-emit from the
-	// in-memory contact BEFORE the write. This is the pre-image the
-	// interaction.recorded V2 payload carries so CadenceUpdater can
-	// replay against a deterministic prev snapshot.
+	// 4. Observation step, in the caller's tx. The step runs before the write
+	// and before any cadence or follow-up effect below, and takes the
+	// correction lock on the observation's interaction node.
+	nodeID, err := s.interactionRepo.ObserveInteractionTx(ctx, tx, repository.InteractionObservation{
+		ContactID:  req.ContactID,
+		Source:     req.Source,
+		SourceRef:  req.SourceRef,
+		Direction:  req.Direction,
+		OccurredAt: req.OccurredAt,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("observe interaction: %w", err)
+	}
+
+	// 5. Capture pre-cadence snapshot + cadence-at-emit BEFORE the write,
+	// under the contact's cadence row lock, taken after the correction lock
+	// as a correction takes them. This is the pre-image the
+	// interaction.recorded V2 payload carries so CadenceUpdater can replay
+	// against a deterministic prev snapshot; the lock keeps it current until
+	// this tx commits, so no correction recompute lands between the snapshot
+	// and the cadence write decided from it.
+	if err := repository.LockContactCadenceTx(ctx, tx, req.ContactID); err != nil {
+		return nil, err
+	}
+	contact, err := s.contactRepo.GetContactTx(ctx, tx, req.ContactID)
+	if err != nil {
+		return nil, err
+	}
 	prevSnap := repository.ContactCadenceFieldsFromContact(contact)
 	var cadenceAtEmit *string
 	if contact.Cadence != nil && *contact.Cadence != "" {
@@ -769,47 +818,42 @@ func (s *ContactService) RecordInteractionTx(
 		cadenceAtEmit = &c
 	}
 
-	// 5. Create interaction record in the caller's tx.
-	interaction, err := s.interactionRepo.CreateInteractionTx(ctx, tx, repository.CreateInteractionRequest(req))
+	// 6. Create the interaction record in the caller's tx.
+	interaction, err := s.interactionRepo.CreateInteractionTx(ctx, tx, repository.CreateInteractionRequest{
+		ContactID:         req.ContactID,
+		Source:            req.Source,
+		SourceRef:         req.SourceRef,
+		OccurredAt:        req.OccurredAt,
+		Description:       req.Description,
+		Direction:         req.Direction,
+		VenueID:           req.VenueID,
+		InteractionNodeID: nodeID,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("create interaction: %w", err)
 	}
 
-	// 6. Direct-path cadence write. When publishesEvent=false the caller is
-	// NOT going through the event bus (non-bus wrappers: Todoist action /
-	// cadence task completion, and service-layer tests). No
-	// interaction.recorded will be emitted, so InteractionRecorder's
-	// inline CadenceUpdater.HandleEvent dispatch won't fire and cadence
-	// columns would otherwise silently stop updating. Route through
-	// CadenceUpdater.ApplyInteraction so this path stays under the
-	// sole-writer invariant. publishesEvent=true callers (the
-	// InteractionRecorder) still rely on the recorder's inline
-	// HandleEvent path + event-id claim for dedupe across inline +
-	// queued delivery.
-	if !publishesEvent {
-		if s.cadence == nil {
-			return nil, errors.New("record interaction: cadence updater not wired (pass cadence to NewContactService)")
-		}
-		if err := s.cadence.ApplyInteraction(ctx, tx, repository.ApplyInteractionRequest{
-			ContactID:  req.ContactID,
-			Direction:  req.Direction,
-			Source:     req.Source,
-			OccurredAt: req.OccurredAt,
-		}); err != nil {
-			return nil, fmt.Errorf("apply interaction cadence: %w", err)
-		}
+	// 7. Verdict read (arc seam S3): whether a correction excludes the
+	// observation and, when it is effective, the contact's effective
+	// participation it belongs to. Every cadence or follow-up effect of this
+	// write follows it.
+	verdict, err := s.interactionRepo.ObservationVerdictTx(ctx, tx, interaction.ID)
+	if err != nil {
+		return nil, fmt.Errorf("observation verdict: %w", err)
 	}
 
-	// 7. Derive the follow-up closure. Cadence writes happen via either
-	// the recorder's inline CadenceUpdater.HandleEvent (publishesEvent true)
-	// or the direct ApplyInteraction call above (publishesEvent false).
-	// Follow-up runs the same way: publishesEvent=true callers rely on the
-	// recorder's inline FollowUpManager.HandleEvent; the publishesEvent=false
-	// path (Todoist completion wrapper) applies it INLINE here, in the
-	// caller's tx, so the op enqueue commits atomically with the interaction
-	// (I4 — no best-effort post-commit closure).
+	// 8. Direct-path cadence + follow-up. When publishesEvent=false the
+	// caller is NOT going through the event bus (non-bus wrappers: Todoist
+	// action / cadence task completion, Anarlog sessions, service-layer
+	// tests). No interaction.recorded will be emitted, so the effect is
+	// applied here, inline in the caller's tx, through the sole writers
+	// (CadenceUpdater.ApplyInteraction, FollowUpManager.ApplyInteraction), so
+	// any op enqueue commits atomically with the interaction (I4).
+	// publishesEvent=true callers publish interaction.recorded from
+	// res.Verdict instead: nothing when excluded, else the entry's direction
+	// and time, which the recorder's inline HandleEvent paths apply.
 	if !publishesEvent {
-		if err := s.applyFollowUpInlineTx(ctx, tx, interaction); err != nil {
+		if err := s.applyEffectTx(ctx, tx, interaction, verdict); err != nil {
 			return nil, err
 		}
 	}
@@ -817,6 +861,7 @@ func (s *ContactService) RecordInteractionTx(
 	res := &RecordInteractionResult{
 		Interaction: interaction,
 		IsReplay:    false,
+		Verdict:     verdict,
 	}
 	if publishesEvent {
 		// The caller will publish interaction.recorded after this returns;
@@ -847,23 +892,16 @@ func (s *ContactService) PromoteInteractionToMutualTx(
 	if s.cadence == nil {
 		return errors.New("promote interaction: cadence updater not wired (pass cadence to NewContactService)")
 	}
+	if err := s.observeExistingTx(ctx, tx, interactionID, contactID, repository.InteractionDirectionMutual, replyAt); err != nil {
+		return fmt.Errorf("update interaction direction: %w", err)
+	}
 	updated, err := s.updateInteractionDirectionTx(ctx, tx, interactionID, repository.InteractionDirectionMutual, replyAt)
 	if err != nil {
 		return fmt.Errorf("update interaction direction: %w", err)
 	}
-	// Route cadence writes through CadenceUpdater so the sole-writer
-	// invariant holds. Promote does NOT emit interaction.recorded and
-	// therefore does not claim an event — ApplyInteraction is the
-	// direct-invoke path that bypasses the claim store.
-	if err := s.cadence.ApplyInteraction(ctx, tx, repository.ApplyInteractionRequest{
-		ContactID:  contactID,
-		Direction:  repository.InteractionDirectionMutual,
-		Source:     updated.Source,
-		OccurredAt: replyAt,
-	}); err != nil {
-		return fmt.Errorf("apply promote cadence: %w", err)
-	}
-	return s.applyFollowUpInlineTx(ctx, tx, updated)
+	// Promote does NOT emit interaction.recorded and therefore does not
+	// claim an event; the effect goes through the direct-invoke sole writers.
+	return s.applyWrittenEffectTx(ctx, tx, updated)
 }
 
 // ExtendInteraction extends an existing interaction's timestamp/description (incremental
@@ -886,28 +924,77 @@ func (s *ContactService) ExtendInteractionTx(
 	if s.cadence == nil {
 		return errors.New("extend interaction: cadence updater not wired (pass cadence to NewContactService)")
 	}
+	if err := s.observeExistingTx(ctx, tx, interactionID, contactID, direction, occurredAt); err != nil {
+		return fmt.Errorf("update interaction timestamp: %w", err)
+	}
 	updated, err := s.updateInteractionTimestampTx(ctx, tx, interactionID, occurredAt, description)
 	if err != nil {
 		return fmt.Errorf("update interaction timestamp: %w", err)
 	}
-	// UpdateInteractionTimestamp did not change the row's Direction column —
-	// the persisted Direction may be outbound/inbound/mutual from a prior
-	// write. The follow-up apply reads the row's Direction, which for
-	// same-direction coalescing equals the caller-supplied direction. Guard
-	// against surprises by overriding the row's Direction in-memory with the
-	// caller's intent before applying effects.
-	updated.Direction = direction
-	// Route cadence writes through CadenceUpdater. Extend does NOT emit
-	// interaction.recorded; ApplyInteraction is the direct-invoke path.
-	if err := s.cadence.ApplyInteraction(ctx, tx, repository.ApplyInteractionRequest{
-		ContactID:  contactID,
-		Direction:  direction,
-		Source:     updated.Source,
-		OccurredAt: occurredAt,
-	}); err != nil {
-		return fmt.Errorf("apply extend cadence: %w", err)
+	// Extend does NOT emit interaction.recorded; the effect goes through the
+	// direct-invoke sole writers. Every caller extends a row of the same
+	// direction, so the row's direction is the caller's.
+	return s.applyWrittenEffectTx(ctx, tx, updated)
+}
+
+// observeReplayTx runs the observation step for a dedup hit, so a live row
+// that has no interaction node gets one, and reflects the result on the row.
+func (s *ContactService) observeReplayTx(ctx context.Context, tx pgx.Tx, req repository.RecordInteractionRequest, existing *repository.Interaction) error {
+	nodeID, err := s.interactionRepo.ObserveInteractionTx(ctx, tx, repository.InteractionObservation{
+		ContactID:  req.ContactID,
+		Source:     req.Source,
+		SourceRef:  req.SourceRef,
+		Direction:  req.Direction,
+		OccurredAt: req.OccurredAt,
+		Existing:   existing,
+	})
+	if err != nil {
+		return fmt.Errorf("observe interaction: %w", err)
 	}
-	return s.applyFollowUpInlineTx(ctx, tx, updated)
+	existing.InteractionNodeID = nodeID
+	return nil
+}
+
+// observeExistingTx runs the observation step for an extend or promote of the
+// row interactionID, reading the row in the same tx.
+func (s *ContactService) observeExistingTx(
+	ctx context.Context, tx pgx.Tx, interactionID, contactID uuid.UUID, direction string, occurredAt time.Time,
+) error {
+	existing, err := s.interactionRepo.GetInteractionTx(ctx, tx, interactionID)
+	if err != nil {
+		return err
+	}
+	_, err = s.interactionRepo.ObserveInteractionTx(ctx, tx, repository.InteractionObservation{
+		ContactID:  contactID,
+		Source:     existing.Source,
+		SourceRef:  existing.SourceRef,
+		Direction:  direction,
+		OccurredAt: occurredAt,
+		Existing:   existing,
+	})
+	return err
+}
+
+// RelinkInteractionVenueTx moves an existing interaction to a (re-resolved)
+// venue, for example when its Anarlog session was re-linked to a calendar
+// event. The observation step runs first; the row keeps the interaction node
+// it has. Moving a venue changes neither the observation's direction nor its
+// time, so a re-link has no cadence or follow-up effect of its own; a re-link
+// that also re-times or re-creates a participation does so through
+// ExtendInteractionTx or RecordInteractionTx, which apply the verdict. Caller
+// owns the tx. A nil venueID clears the venue.
+func (s *ContactService) RelinkInteractionVenueTx(ctx context.Context, tx pgx.Tx, existing repository.Interaction, venueID *uuid.UUID) error {
+	if _, err := s.interactionRepo.ObserveInteractionTx(ctx, tx, repository.InteractionObservation{
+		ContactID:  existing.ContactID,
+		Source:     existing.Source,
+		SourceRef:  existing.SourceRef,
+		Direction:  existing.Direction,
+		OccurredAt: existing.OccurredAt,
+		Existing:   &existing,
+	}); err != nil {
+		return fmt.Errorf("observe interaction: %w", err)
+	}
+	return s.interactionRepo.UpdateInteractionVenueTx(ctx, tx, existing.ID, venueID)
 }
 
 // updateInteractionDirectionTx / updateInteractionTimestampTx are thin
@@ -928,25 +1015,48 @@ func (s *ContactService) updateInteractionTimestampTx(
 	return s.interactionRepo.UpdateInteractionTimestampTx(ctx, tx, id, occurredAt, description)
 }
 
-// applyFollowUpInlineTx routes non-bus follow-up work through
-// FollowUpManager.ApplyInteraction INSIDE the caller's tx. Used by the
-// non-bus callers (RecordInteractionTx for Todoist completion, Promote/
-// Extend) where no interaction.recorded event is published and therefore
-// the recorder's inline dispatch never fires. ApplyInteraction performs
-// its own direction dispatch (unknown directions no-op) and enqueues any
-// op job in the same tx, so the follow-up write commits atomically with
-// the interaction — no best-effort post-commit closure (I4). No-op when
-// the follow-up consumer isn't wired (tests).
-func (s *ContactService) applyFollowUpInlineTx(ctx context.Context, tx pgx.Tx, interaction *repository.Interaction) error {
-	if s.followUp == nil || interaction == nil {
+// applyWrittenEffectTx reads the verdict of the observation a promote or
+// extend just wrote, in the same tx, and applies its effect (applyEffectTx).
+func (s *ContactService) applyWrittenEffectTx(ctx context.Context, tx pgx.Tx, written *repository.Interaction) error {
+	verdict, err := s.interactionRepo.ObservationVerdictTx(ctx, tx, written.ID)
+	if err != nil {
+		return fmt.Errorf("observation verdict: %w", err)
+	}
+	return s.applyEffectTx(ctx, tx, written, verdict)
+}
+
+// applyEffectTx applies the cadence and follow-up effect of a written
+// observation by its verdict (ING-040): none when a correction excludes it —
+// the raw observation stays recorded — and otherwise the effect of the
+// contact's effective participation the observation belongs to, at that
+// entry's direction and time, under the observation's own source (a manual
+// observation keeps its unconditional branch). For an uncorrected
+// observation the entry is the observation itself.
+//
+// Both writes run inside the caller's tx through the sole writers
+// (CadenceUpdater.ApplyInteraction, FollowUpManager.ApplyInteraction), so
+// any Todoist op enqueue commits atomically with the observation (I4). The
+// follow-up write no-ops when the follow-up consumer isn't wired (tests).
+func (s *ContactService) applyEffectTx(ctx context.Context, tx pgx.Tx, written *repository.Interaction, verdict *repository.ObservationVerdict) error {
+	if verdict.Excluded {
 		return nil
 	}
-	if err := s.followUp.ApplyInteraction(ctx, tx, repository.ApplyInteractionRequest{
-		ContactID:  interaction.ContactID,
-		Direction:  interaction.Direction,
-		Source:     interaction.Source,
-		OccurredAt: interaction.OccurredAt,
-	}); err != nil {
+	if s.cadence == nil {
+		return errors.New("apply interaction effect: cadence updater not wired (pass cadence to NewContactService)")
+	}
+	effect := repository.ApplyInteractionRequest{
+		ContactID:  written.ContactID,
+		Direction:  verdict.Entry.Direction,
+		Source:     written.Source,
+		OccurredAt: verdict.Entry.OccurredAt,
+	}
+	if err := s.cadence.ApplyInteraction(ctx, tx, effect); err != nil {
+		return fmt.Errorf("apply interaction cadence: %w", err)
+	}
+	if s.followUp == nil {
+		return nil
+	}
+	if err := s.followUp.ApplyInteraction(ctx, tx, effect); err != nil {
 		return fmt.Errorf("apply follow-up: %w", err)
 	}
 	return nil
@@ -1291,6 +1401,36 @@ func (s *ContactService) MergeContacts(ctx context.Context, req MergeContactsReq
 	sourceUUID := req.SourceContactID
 	targetUUID := req.TargetContactID
 
+	if s.knowledge == nil {
+		return nil, errors.New("merge contacts: knowledge writer not wired (pass assertSvc+knowledgeCache to NewContactService)")
+	}
+	// The graph merge's correction locks (7-graph) before any row write: a
+	// correction takes its correction locks before it locks a contact's row,
+	// so taking them only at the graph merge, after the target's row is
+	// written, could deadlock against a correction naming the target or an
+	// interaction node the source's assertions name. The slot locks stay at
+	// the graph merge, after the row writes, where a profile writer takes
+	// them too.
+	if err := s.knowledge.assertSvc.LockNodeMergeTx(ctx, tx, req.SourceContactID, req.TargetContactID); err != nil {
+		return nil, fmt.Errorf("lock source and target nodes for merge: %w", err)
+	}
+
+	// Both contacts' effective observations, and the outbound each contact's
+	// own participation awaits a reply to, read before anything moves; 7a
+	// compares them with the survivor's after the merge.
+	effectiveBefore, err := s.effectiveObservationsTx(ctx, tx, req.SourceContactID, req.TargetContactID)
+	if err != nil {
+		return nil, fmt.Errorf("read participation before merge: %w", err)
+	}
+	_, sourceAwaited, _, err := s.corrections.recordedParticipation(ctx, tx, nil, req.SourceContactID)
+	if err != nil {
+		return nil, fmt.Errorf("read source awaited outbound before merge: %w", err)
+	}
+	_, targetAwaited, _, err := s.corrections.recordedParticipation(ctx, tx, nil, req.TargetContactID)
+	if err != nil {
+		return nil, fmt.Errorf("read target awaited outbound before merge: %w", err)
+	}
+
 	// 1. Delete duplicate contact methods (same normalized value and type)
 	if err := txQueries.DeleteDuplicateContactMethods(ctx, db.DeleteDuplicateContactMethodsParams{
 		SourceContactID: sourceUUID,
@@ -1475,6 +1615,7 @@ func (s *ContactService) MergeContacts(ctx context.Context, req MergeContactsReq
 		Str("target_contact_id", req.TargetContactID.String()).
 		Int("transferred_tasks", len(transferredRefs)).
 		Msg("merge: transferred automated contact tasks to survivor")
+	awaitedBefore := liveFollowUpAwaited(transferredRefs, sourceAwaited, targetAwaited)
 	closedRefs, err := s.contactTaskRepo.CompleteLiveTasksForContactTx(ctx, tx, req.SourceContactID, todoist.MetadataKeyPendingTempID)
 	if err != nil {
 		return nil, fmt.Errorf("close live contact tasks: %w", err)
@@ -1529,10 +1670,6 @@ func (s *ContactService) MergeContacts(ctx context.Context, req MergeContactsReq
 		return nil, fmt.Errorf("sync target person node label: %w", err)
 	}
 
-	if s.knowledge == nil {
-		return nil, errors.New("merge contacts: knowledge writer not wired (pass assertSvc+knowledgeCache to NewContactService)")
-	}
-
 	// 7-graph. Graph merge FIRST: tombstone the source person node
 	// (merged_into=target, deleted_at=now) and re-point every assertion touching
 	// the source onto the target node (D9). This migrates the source contact's OWN
@@ -1562,21 +1699,34 @@ func (s *ContactService) MergeContacts(ctx context.Context, req MergeContactsReq
 		return nil, fmt.Errorf("apply merged contact knowledge: %w", err)
 	}
 
-	// 7a. Forward-max merged cadence columns through
+	if s.cadence == nil {
+		return nil, errors.New("merge contacts: cadence updater not wired (pass cadence to NewContactService)")
+	}
+	// 7a. The graph merge re-points each contact's corrections onto the
+	// survivor, so a removal of one contact now covers the other's
+	// observation of the same interaction. When the merge excludes an
+	// observation that was effective before it, the survivor's cadence fields
+	// and follow-up tasks are recomputed from its effective participation as
+	// a correction recomputes them (CAD-047, CAD-048), in place of 7b.
+	recomputed, err := s.recomputeMergeExclusionsTx(ctx, tx, req.TargetContactID, targetContact.Cadence, updateReq.Cadence, effectiveBefore, awaitedBefore)
+	if err != nil {
+		return nil, err
+	}
+
+	// 7b. Otherwise forward-max merged cadence columns through
 	// CadenceUpdater.BulkApply. The merged cadence string may come from
 	// the source (when FieldSelections.Cadence == "source"), so
 	// contact_by is derived from the CHOSEN cadence value — not from
 	// the pre-merge target.cadence, which might have been overwritten
 	// above.
-	if s.cadence == nil {
-		return nil, errors.New("merge contacts: cadence updater not wired (pass cadence to NewContactService)")
-	}
-	mergedFields := buildMergeCadenceFields(targetContact, sourceContact, updateReq.Cadence)
-	if err := s.cadence.BulkApply(ctx, tx, req.TargetContactID, mergedFields); err != nil {
-		return nil, fmt.Errorf("bulk apply merged cadence: %w", err)
+	if !recomputed {
+		mergedFields := buildMergeCadenceFields(targetContact, sourceContact, updateReq.Cadence)
+		if err := s.cadence.BulkApply(ctx, tx, req.TargetContactID, mergedFields); err != nil {
+			return nil, fmt.Errorf("bulk apply merged cadence: %w", err)
+		}
 	}
 
-	// BulkApply is a second UPDATE on the contact row, so the profile-
+	// 7a or 7b is a second UPDATE on the contact row, so the profile-
 	// only UpdateContact's RETURNING values (updated_at + the four
 	// cadence columns) are stale. Re-fetch inside the tx so the struct
 	// the caller receives matches the committed row bit-for-bit.
@@ -1623,6 +1773,95 @@ func (s *ContactService) MergeContacts(ctx context.Context, req MergeContactsReq
 	}
 
 	return mergedContact, nil
+}
+
+// effectiveObservationsTx returns the set of observations in the contacts'
+// effective participation.
+func (s *ContactService) effectiveObservationsTx(ctx context.Context, tx pgx.Tx, contactIDs ...uuid.UUID) (map[uuid.UUID]bool, error) {
+	observations := map[uuid.UUID]bool{}
+	for _, contactID := range contactIDs {
+		entries, err := s.interactionRepo.ListEffectiveParticipationTx(ctx, tx, contactID)
+		if err != nil {
+			return nil, err
+		}
+		for _, entry := range entries {
+			for _, member := range entry.Members {
+				observations[member.ObservationID] = true
+			}
+		}
+	}
+	return observations, nil
+}
+
+// liveFollowUpAwaited returns the outbound the merge survivor's live
+// follow-up, when it holds one, tracks after the merge moved the source's live
+// automated tasks: the source's awaited outbound when the transfer moved the
+// source's follow-up, the target's otherwise. The follow-up reconciliation
+// reads it only when a follow-up is live.
+func liveFollowUpAwaited(transferred []repository.TransferredTaskRef, sourceAwaited, targetAwaited *repository.ApplyInteractionRequest) *repository.ApplyInteractionRequest {
+	for _, ref := range transferred {
+		if ref.Lifecycle == contacttask.LifecycleFollowUpLoop {
+			return sourceAwaited
+		}
+	}
+	return targetAwaited
+}
+
+// recomputeMergeExclusionsTx recomputes the merge survivor from its effective
+// participation when the merge excluded an observation in effectiveBefore,
+// and reports whether it did. The corrected observations are the excluded
+// ones. The state before the correction is the survivor's own cadence row,
+// which the merge has not yet written, and awaitedBefore, the outbound the
+// survivor's live follow-up tracks (see liveFollowUpAwaited).
+//
+// priorCadence is the survivor's cadence before the merge and mergedCadence
+// the cadence the merge selected. When the selection changes the survivor's
+// cadence, the change applies as a cadence edit before the recompute, so
+// contact_by derives from the selected cadence whether or not the
+// correction moves last_contacted. The edit derives from the survivor's row
+// as this transaction reads it, which the merge's profile write has locked,
+// so a recording committed before the merge took its locks counts.
+func (s *ContactService) recomputeMergeExclusionsTx(
+	ctx context.Context, tx pgx.Tx, survivorID uuid.UUID, priorCadence, mergedCadence *string, effectiveBefore map[uuid.UUID]bool, awaitedBefore *repository.ApplyInteractionRequest,
+) (bool, error) {
+	effectiveAfter, err := s.effectiveObservationsTx(ctx, tx, survivorID)
+	if err != nil {
+		return false, fmt.Errorf("read participation after merge: %w", err)
+	}
+	before := contactBefore{contactID: survivorID, awaited: awaitedBefore}
+	excluded := false
+	for observationID := range effectiveBefore {
+		if effectiveAfter[observationID] {
+			continue
+		}
+		excluded = true
+		row, err := s.interactionRepo.GetInteractionTx(ctx, tx, observationID)
+		if err != nil {
+			return false, fmt.Errorf("read observation %s excluded by merge: %w", observationID, err)
+		}
+		if row.RecordedAt.After(before.judgedRecordedAt) {
+			before.judgedRecordedAt = row.RecordedAt
+		}
+	}
+	if !excluded {
+		return false, nil
+	}
+	if s.followUp == nil {
+		return false, errors.New("merge contacts: follow-up consumer not wired (pass followUp to NewContactService)")
+	}
+	if !stringPtrEqual(priorCadence, mergedCadence) {
+		survivor, err := s.contactRepo.GetContactTx(ctx, tx, survivorID)
+		if err != nil {
+			return false, fmt.Errorf("read survivor before applying merged cadence: %w", err)
+		}
+		if err := s.cadence.ApplyContactByOverride(ctx, tx, survivorID, cadenceEditContactBy(mergedCadence, survivor)); err != nil {
+			return false, fmt.Errorf("apply merged cadence contact_by: %w", err)
+		}
+	}
+	if err := s.corrections.recompute(ctx, tx, uuid.New(), []contactBefore{before}); err != nil {
+		return false, fmt.Errorf("recompute merged contact from effective participation: %w", err)
+	}
+	return true, nil
 }
 
 // repointMergedAttributionSecondPass re-runs the merge's identity +
@@ -1672,6 +1911,26 @@ func (s *ContactService) repointMergedAttributionSecondPass(ctx context.Context,
 	}); err != nil {
 		logSecondPassErr("comms_message", err)
 	}
+}
+
+// cadenceEditContactBy returns the contact_by a cadence edit derives
+// (CON-007): cadenceStr's interval after the contact's last_contacted, or
+// after its creation when it has none. An empty or unparseable cadence
+// derives none.
+func cadenceEditContactBy(cadenceStr *string, contact *repository.Contact) *time.Time {
+	if cadenceStr == nil || *cadenceStr == "" {
+		return nil
+	}
+	cadenceType, err := cadence.ParseCadence(*cadenceStr)
+	if err != nil {
+		return nil
+	}
+	base := contact.CreatedAt
+	if contact.LastContacted != nil {
+		base = *contact.LastContacted
+	}
+	t := cadence.CalculateContactBy(base, cadenceType)
+	return &t
 }
 
 // buildMergeUpdateRequest creates an UpdateContactRequest based on field selections

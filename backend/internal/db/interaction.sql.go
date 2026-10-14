@@ -31,6 +31,26 @@ func (q *Queries) AcquireSourceRefAggregateLock(ctx context.Context, lockKey str
 	return err
 }
 
+const AssignInteractionNode = `-- name: AssignInteractionNode :exec
+UPDATE interaction
+SET interaction_node_id = $1
+WHERE id = $2
+  AND interaction_node_id IS NULL
+`
+
+type AssignInteractionNodeParams struct {
+	InteractionNodeID *uuid.UUID `json:"interaction_node_id"`
+	ID                uuid.UUID  `json:"id"`
+}
+
+// Gives a row that has no interaction node its node, when a source observes it
+// again. The IS NULL guard makes an assigned node permanent: this is the only
+// statement besides the create insert that writes interaction_node_id.
+func (q *Queries) AssignInteractionNode(ctx context.Context, arg AssignInteractionNodeParams) error {
+	_, err := q.db.Exec(ctx, AssignInteractionNode, arg.InteractionNodeID, arg.ID)
+	return err
+}
+
 const CountContactInteractions = `-- name: CountContactInteractions :one
 SELECT COUNT(*) FROM interaction
 WHERE contact_id = $1 AND deleted_at IS NULL
@@ -43,55 +63,8 @@ func (q *Queries) CountContactInteractions(ctx context.Context, contactID uuid.U
 	return count, err
 }
 
-const CountContactInteractionsFiltered = `-- name: CountContactInteractionsFiltered :one
-SELECT COUNT(*) FROM interaction
-WHERE contact_id = $1
-  AND deleted_at IS NULL
-  AND ($2::timestamptz IS NULL OR occurred_at >= $2)
-  AND ($3::timestamptz IS NULL OR occurred_at < $3)
-  AND (
-    ($4::text IS NULL AND $5::text IS NULL)
-    OR (
-      $4::text IS NOT NULL AND $5::text IS NOT NULL
-      AND CASE
-        WHEN $4::text IN ('email', 'gchat', 'whatsapp') THEN EXISTS (
-          SELECT 1 FROM comms_message cm WHERE cm.interaction_id = interaction.id AND cm.deleted_at IS NULL
-            AND cm.source = $4::text AND cm.thread_id = $5::text)
-        WHEN $4::text = 'telegram' THEN EXISTS (
-          SELECT 1 FROM telegram_message tm WHERE tm.interaction_id = interaction.id AND tm.deleted_at IS NULL
-            AND tm.telegram_chat_id::text = $5::text)
-        WHEN $4::text = 'messages' THEN EXISTS (
-          SELECT 1 FROM messages_message mm WHERE mm.interaction_id = interaction.id AND mm.deleted_at IS NULL
-            AND mm.chat_guid = $5::text)
-        ELSE FALSE
-      END
-    )
-  )
-`
-
-type CountContactInteractionsFilteredParams struct {
-	ContactID      uuid.UUID  `json:"contact_id"`
-	FromTime       *time.Time `json:"from_time"`
-	ToTime         *time.Time `json:"to_time"`
-	VenueSource    *string    `json:"venue_source"`
-	VenueContainer *string    `json:"venue_container"`
-}
-
-func (q *Queries) CountContactInteractionsFiltered(ctx context.Context, arg CountContactInteractionsFilteredParams) (int64, error) {
-	row := q.db.QueryRow(ctx, CountContactInteractionsFiltered,
-		arg.ContactID,
-		arg.FromTime,
-		arg.ToTime,
-		arg.VenueSource,
-		arg.VenueContainer,
-	)
-	var count int64
-	err := row.Scan(&count)
-	return count, err
-}
-
 const CreateInteraction = `-- name: CreateInteraction :one
-INSERT INTO interaction (contact_id, source, source_ref, occurred_at, description, direction, venue_id)
+INSERT INTO interaction (contact_id, source, source_ref, occurred_at, description, direction, venue_id, interaction_node_id)
 VALUES (
     $1,
     $2,
@@ -99,19 +72,21 @@ VALUES (
     $4,
     $5,
     COALESCE($6, 'mutual'),
-    $7
+    $7,
+    $8
 )
-RETURNING id, contact_id, source, source_ref, occurred_at, description, created_at, deleted_at, direction, venue_id
+RETURNING id, contact_id, source, source_ref, occurred_at, description, created_at, deleted_at, direction, venue_id, interaction_node_id, recorded_at
 `
 
 type CreateInteractionParams struct {
-	ContactID   uuid.UUID   `json:"contact_id"`
-	Source      string      `json:"source"`
-	SourceRef   *string     `json:"source_ref"`
-	OccurredAt  time.Time   `json:"occurred_at"`
-	Description *string     `json:"description"`
-	Direction   interface{} `json:"direction"`
-	VenueID     *uuid.UUID  `json:"venue_id"`
+	ContactID         uuid.UUID   `json:"contact_id"`
+	Source            string      `json:"source"`
+	SourceRef         *string     `json:"source_ref"`
+	OccurredAt        time.Time   `json:"occurred_at"`
+	Description       *string     `json:"description"`
+	Direction         interface{} `json:"direction"`
+	VenueID           *uuid.UUID  `json:"venue_id"`
+	InteractionNodeID *uuid.UUID  `json:"interaction_node_id"`
 }
 
 func (q *Queries) CreateInteraction(ctx context.Context, arg CreateInteractionParams) (*Interaction, error) {
@@ -123,6 +98,7 @@ func (q *Queries) CreateInteraction(ctx context.Context, arg CreateInteractionPa
 		arg.Description,
 		arg.Direction,
 		arg.VenueID,
+		arg.InteractionNodeID,
 	)
 	var i Interaction
 	err := row.Scan(
@@ -136,12 +112,14 @@ func (q *Queries) CreateInteraction(ctx context.Context, arg CreateInteractionPa
 		&i.DeletedAt,
 		&i.Direction,
 		&i.VenueID,
+		&i.InteractionNodeID,
+		&i.RecordedAt,
 	)
 	return &i, err
 }
 
 const FindInteractionBySourceRef = `-- name: FindInteractionBySourceRef :one
-SELECT id, contact_id, source, source_ref, occurred_at, description, created_at, deleted_at, direction, venue_id FROM interaction
+SELECT id, contact_id, source, source_ref, occurred_at, description, created_at, deleted_at, direction, venue_id, interaction_node_id, recorded_at FROM interaction
 WHERE contact_id = $1 AND source = $2 AND source_ref = $3 AND deleted_at IS NULL
 LIMIT 1
 `
@@ -167,12 +145,14 @@ func (q *Queries) FindInteractionBySourceRef(ctx context.Context, arg FindIntera
 		&i.DeletedAt,
 		&i.Direction,
 		&i.VenueID,
+		&i.InteractionNodeID,
+		&i.RecordedAt,
 	)
 	return &i, err
 }
 
 const FindInteractionInWindow = `-- name: FindInteractionInWindow :one
-SELECT id, contact_id, source, source_ref, occurred_at, description, created_at, deleted_at, direction, venue_id FROM interaction
+SELECT id, contact_id, source, source_ref, occurred_at, description, created_at, deleted_at, direction, venue_id, interaction_node_id, recorded_at FROM interaction
 WHERE contact_id = $1
   AND source = $2
   AND direction = $3
@@ -214,12 +194,14 @@ func (q *Queries) FindInteractionInWindow(ctx context.Context, arg FindInteracti
 		&i.DeletedAt,
 		&i.Direction,
 		&i.VenueID,
+		&i.InteractionNodeID,
+		&i.RecordedAt,
 	)
 	return &i, err
 }
 
 const FindRecentInteractionBySourceAndDirection = `-- name: FindRecentInteractionBySourceAndDirection :one
-SELECT id, contact_id, source, source_ref, occurred_at, description, created_at, deleted_at, direction, venue_id FROM interaction
+SELECT id, contact_id, source, source_ref, occurred_at, description, created_at, deleted_at, direction, venue_id, interaction_node_id, recorded_at FROM interaction
 WHERE contact_id = $1
   AND source = $2
   AND direction = $3
@@ -278,12 +260,14 @@ func (q *Queries) FindRecentInteractionBySourceAndDirection(ctx context.Context,
 		&i.DeletedAt,
 		&i.Direction,
 		&i.VenueID,
+		&i.InteractionNodeID,
+		&i.RecordedAt,
 	)
 	return &i, err
 }
 
 const FindRecentOutboundInteractionBySource = `-- name: FindRecentOutboundInteractionBySource :one
-SELECT id, contact_id, source, source_ref, occurred_at, description, created_at, deleted_at, direction, venue_id FROM interaction
+SELECT id, contact_id, source, source_ref, occurred_at, description, created_at, deleted_at, direction, venue_id, interaction_node_id, recorded_at FROM interaction
 WHERE contact_id = $1
   AND source = $2
   AND direction = 'outbound'
@@ -329,12 +313,14 @@ func (q *Queries) FindRecentOutboundInteractionBySource(ctx context.Context, arg
 		&i.DeletedAt,
 		&i.Direction,
 		&i.VenueID,
+		&i.InteractionNodeID,
+		&i.RecordedAt,
 	)
 	return &i, err
 }
 
 const FindRecentOutboundTelegramInteraction = `-- name: FindRecentOutboundTelegramInteraction :one
-SELECT id, contact_id, source, source_ref, occurred_at, description, created_at, deleted_at, direction, venue_id FROM interaction
+SELECT id, contact_id, source, source_ref, occurred_at, description, created_at, deleted_at, direction, venue_id, interaction_node_id, recorded_at FROM interaction
 WHERE contact_id = $1
   AND source = 'telegram'
   AND direction = 'outbound'
@@ -374,12 +360,14 @@ func (q *Queries) FindRecentOutboundTelegramInteraction(ctx context.Context, arg
 		&i.DeletedAt,
 		&i.Direction,
 		&i.VenueID,
+		&i.InteractionNodeID,
+		&i.RecordedAt,
 	)
 	return &i, err
 }
 
 const FindRecentTelegramInteraction = `-- name: FindRecentTelegramInteraction :one
-SELECT id, contact_id, source, source_ref, occurred_at, description, created_at, deleted_at, direction, venue_id FROM interaction
+SELECT id, contact_id, source, source_ref, occurred_at, description, created_at, deleted_at, direction, venue_id, interaction_node_id, recorded_at FROM interaction
 WHERE contact_id = $1
   AND source = 'telegram'
   AND direction = $2
@@ -421,13 +409,43 @@ func (q *Queries) FindRecentTelegramInteraction(ctx context.Context, arg FindRec
 		&i.DeletedAt,
 		&i.Direction,
 		&i.VenueID,
+		&i.InteractionNodeID,
+		&i.RecordedAt,
+	)
+	return &i, err
+}
+
+const GetEffectiveParticipationOfObservation = `-- name: GetEffectiveParticipationOfObservation :one
+SELECT contact_id, interaction_node_id, direction, occurred_at, members FROM effective_participation ep
+WHERE ep.contact_id = $1
+  AND ep.interaction_node_id IS NOT DISTINCT FROM $2::uuid
+  AND ep.members @> jsonb_build_array(jsonb_build_object('observation_id', $3::uuid))
+`
+
+type GetEffectiveParticipationOfObservationParams struct {
+	ContactID     uuid.UUID  `json:"contact_id"`
+	RootNodeID    *uuid.UUID `json:"root_node_id"`
+	ObservationID uuid.UUID  `json:"observation_id"`
+}
+
+// The contact's effective entry that holds the observation as a member. The
+// root qual (NULL for a message burst) narrows the derivation to that entry.
+func (q *Queries) GetEffectiveParticipationOfObservation(ctx context.Context, arg GetEffectiveParticipationOfObservationParams) (*EffectiveParticipation, error) {
+	row := q.db.QueryRow(ctx, GetEffectiveParticipationOfObservation, arg.ContactID, arg.RootNodeID, arg.ObservationID)
+	var i EffectiveParticipation
+	err := row.Scan(
+		&i.ContactID,
+		&i.InteractionNodeID,
+		&i.Direction,
+		&i.OccurredAt,
+		&i.Members,
 	)
 	return &i, err
 }
 
 const GetInteraction = `-- name: GetInteraction :one
 
-SELECT id, contact_id, source, source_ref, occurred_at, description, created_at, deleted_at, direction, venue_id FROM interaction WHERE id = $1 AND deleted_at IS NULL
+SELECT id, contact_id, source, source_ref, occurred_at, description, created_at, deleted_at, direction, venue_id, interaction_node_id, recorded_at FROM interaction WHERE id = $1 AND deleted_at IS NULL
 `
 
 // Interaction queries
@@ -445,7 +463,33 @@ func (q *Queries) GetInteraction(ctx context.Context, id uuid.UUID) (*Interactio
 		&i.DeletedAt,
 		&i.Direction,
 		&i.VenueID,
+		&i.InteractionNodeID,
+		&i.RecordedAt,
 	)
+	return &i, err
+}
+
+const GetObservationVerdict = `-- name: GetObservationVerdict :one
+SELECT
+    v.contact_id,
+    v.root_node_id,
+    v.excluded
+FROM interaction_observation_verdict v
+WHERE v.observation_id = $1
+`
+
+type GetObservationVerdictRow struct {
+	ContactID  uuid.UUID  `json:"contact_id"`
+	RootNodeID *uuid.UUID `json:"root_node_id"`
+	Excluded   bool       `json:"excluded"`
+}
+
+// Whether a correction excludes the live observation, with the contact and
+// root its effective entry is keyed by.
+func (q *Queries) GetObservationVerdict(ctx context.Context, observationID uuid.UUID) (*GetObservationVerdictRow, error) {
+	row := q.db.QueryRow(ctx, GetObservationVerdict, observationID)
+	var i GetObservationVerdictRow
+	err := row.Scan(&i.ContactID, &i.RootNodeID, &i.Excluded)
 	return &i, err
 }
 
@@ -472,11 +516,10 @@ func (q *Queries) HardDeleteInteractionsBySourceRefPrefix(ctx context.Context, a
 
 const HasResponseAfter = `-- name: HasResponseAfter :one
 SELECT EXISTS (
-    SELECT 1 FROM interaction
+    SELECT 1 FROM effective_participation
     WHERE contact_id = $1
       AND direction IN ('inbound', 'mutual')
-      AND occurred_at > $2
-      AND deleted_at IS NULL
+      AND occurred_at > $2::timestamptz
     LIMIT 1
 ) AS has_response
 `
@@ -486,10 +529,12 @@ type HasResponseAfterParams struct {
 	OutreachAt time.Time `json:"outreach_at"`
 }
 
-// Returns TRUE if any later inbound/mutual interaction exists for the
-// contact after the given outreach time. Used by the FollowUpManager's
+// Returns TRUE if any later inbound/mutual effective participation exists for
+// the contact after the given outreach time. Used by the FollowUpManager's
 // out-of-order guard: an outbound event arriving after a response has
 // already landed must not produce a stale follow-up.
+// Reads effective participation (migration 089), so a response a correction
+// removed is no response, and a merged participation answers as one.
 func (q *Queries) HasResponseAfter(ctx context.Context, arg HasResponseAfterParams) (bool, error) {
 	row := q.db.QueryRow(ctx, HasResponseAfter, arg.ContactID, arg.OutreachAt)
 	var has_response bool
@@ -497,8 +542,30 @@ func (q *Queries) HasResponseAfter(ctx context.Context, arg HasResponseAfterPara
 	return has_response, err
 }
 
+const InteractionRecordingSuppressedFollowUp = `-- name: InteractionRecordingSuppressedFollowUp :one
+SELECT EXISTS (
+    SELECT 1
+    FROM interaction i
+    JOIN event e ON e.source = i.source AND e.source_id = i.id::text
+    WHERE i.id = $1
+      AND e.kind = 'interaction.recorded'
+      AND COALESCE((e.payload->>'suppress_follow_up')::boolean, false)
+)::boolean AS suppressed
+`
+
+// Whether the recording of the observation suppressed its follow-up (a send
+// task's completion, CAD-012): read from the interaction.recorded event that
+// recording published, which is keyed by the observation's id under its
+// source. An observation recorded without that event suppressed nothing.
+func (q *Queries) InteractionRecordingSuppressedFollowUp(ctx context.Context, id uuid.UUID) (bool, error) {
+	row := q.db.QueryRow(ctx, InteractionRecordingSuppressedFollowUp, id)
+	var suppressed bool
+	err := row.Scan(&suppressed)
+	return suppressed, err
+}
+
 const ListContactInteractions = `-- name: ListContactInteractions :many
-SELECT id, contact_id, source, source_ref, occurred_at, description, created_at, deleted_at, direction, venue_id FROM interaction
+SELECT id, contact_id, source, source_ref, occurred_at, description, created_at, deleted_at, direction, venue_id, interaction_node_id, recorded_at FROM interaction
 WHERE contact_id = $1 AND deleted_at IS NULL
 ORDER BY occurred_at DESC
 LIMIT $2 OFFSET $3
@@ -530,6 +597,8 @@ func (q *Queries) ListContactInteractions(ctx context.Context, arg ListContactIn
 			&i.DeletedAt,
 			&i.Direction,
 			&i.VenueID,
+			&i.InteractionNodeID,
+			&i.RecordedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -541,54 +610,179 @@ func (q *Queries) ListContactInteractions(ctx context.Context, arg ListContactIn
 	return items, nil
 }
 
-const ListContactInteractionsFiltered = `-- name: ListContactInteractionsFiltered :many
-SELECT id, contact_id, source, source_ref, occurred_at, description, created_at, deleted_at, direction, venue_id FROM interaction
-WHERE contact_id = $1
-  AND deleted_at IS NULL
-  AND ($2::timestamptz IS NULL OR occurred_at >= $2)
-  AND ($3::timestamptz IS NULL OR occurred_at < $3)
-  AND (
-    ($4::text IS NULL AND $5::text IS NULL)
-    OR (
-      $4::text IS NOT NULL AND $5::text IS NOT NULL
-      AND CASE
-        WHEN $4::text IN ('email', 'gchat', 'whatsapp') THEN EXISTS (
-          SELECT 1 FROM comms_message cm WHERE cm.interaction_id = interaction.id AND cm.deleted_at IS NULL
-            AND cm.source = $4::text AND cm.thread_id = $5::text)
-        WHEN $4::text = 'telegram' THEN EXISTS (
-          SELECT 1 FROM telegram_message tm WHERE tm.interaction_id = interaction.id AND tm.deleted_at IS NULL
-            AND tm.telegram_chat_id::text = $5::text)
-        WHEN $4::text = 'messages' THEN EXISTS (
-          SELECT 1 FROM messages_message mm WHERE mm.interaction_id = interaction.id AND mm.deleted_at IS NULL
-            AND mm.chat_guid = $5::text)
-        ELSE FALSE
-      END
-    )
-  )
-ORDER BY occurred_at DESC, id DESC
-LIMIT $7 OFFSET $6
+const ListEffectiveParticipationForContact = `-- name: ListEffectiveParticipationForContact :many
+
+SELECT contact_id, interaction_node_id, direction, occurred_at, members FROM effective_participation ep
+WHERE ep.contact_id = $1
+ORDER BY ep.occurred_at DESC, ep.members->0->>'observation_id'
 `
 
-type ListContactInteractionsFilteredParams struct {
-	ContactID      uuid.UUID  `json:"contact_id"`
-	FromTime       *time.Time `json:"from_time"`
-	ToTime         *time.Time `json:"to_time"`
-	VenueSource    *string    `json:"venue_source"`
-	VenueContainer *string    `json:"venue_container"`
-	OffsetCount    int32      `json:"offset_count"`
-	LimitCount     int32      `json:"limit_count"`
+// Effective participation reads (arc seam S4). Each reads the one derivation,
+// the effective_participation and interaction_observation_verdict views of
+// migration 089; none derives participation of its own.
+// One row per effective participation of the contact, latest first.
+func (q *Queries) ListEffectiveParticipationForContact(ctx context.Context, contactID uuid.UUID) ([]*EffectiveParticipation, error) {
+	rows, err := q.db.Query(ctx, ListEffectiveParticipationForContact, contactID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []*EffectiveParticipation{}
+	for rows.Next() {
+		var i EffectiveParticipation
+		if err := rows.Scan(
+			&i.ContactID,
+			&i.InteractionNodeID,
+			&i.Direction,
+			&i.OccurredAt,
+			&i.Members,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
-func (q *Queries) ListContactInteractionsFiltered(ctx context.Context, arg ListContactInteractionsFilteredParams) ([]*Interaction, error) {
-	rows, err := q.db.Query(ctx, ListContactInteractionsFiltered,
-		arg.ContactID,
-		arg.FromTime,
-		arg.ToTime,
-		arg.VenueSource,
-		arg.VenueContainer,
-		arg.OffsetCount,
-		arg.LimitCount,
-	)
+const ListInteractionAliasTree = `-- name: ListInteractionAliasTree :many
+SELECT n.id, n.merged_into
+FROM node n
+WHERE n.type = 'interaction'
+  AND n.id IN (
+      SELECT interaction_alias_tree(interaction_node_root($1::uuid)))
+  AND EXISTS (
+      SELECT 1 FROM node q WHERE q.id = $1::uuid AND q.type = 'interaction')
+ORDER BY n.id
+`
+
+type ListInteractionAliasTreeRow struct {
+	ID         uuid.UUID  `json:"id"`
+	MergedInto *uuid.UUID `json:"merged_into"`
+}
+
+// Every node of the alias tree that holds node_id, each with its own alias
+// (NULL for the root). No row when node_id names no interaction node.
+func (q *Queries) ListInteractionAliasTree(ctx context.Context, nodeID uuid.UUID) ([]*ListInteractionAliasTreeRow, error) {
+	rows, err := q.db.Query(ctx, ListInteractionAliasTree, nodeID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []*ListInteractionAliasTreeRow{}
+	for rows.Next() {
+		var i ListInteractionAliasTreeRow
+		if err := rows.Scan(&i.ID, &i.MergedInto); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const ListInteractionParticipants = `-- name: ListInteractionParticipants :many
+SELECT contact_id, interaction_node_id, direction, occurred_at, members FROM effective_participation ep
+WHERE ep.interaction_node_id = interaction_node_root($1::uuid)
+  AND ep.contact_id = ANY(ARRAY(
+      SELECT i.contact_id FROM interaction i
+      WHERE i.interaction_node_id IN (
+          SELECT interaction_alias_tree(interaction_node_root($1::uuid)))
+        AND i.deleted_at IS NULL))
+ORDER BY ep.contact_id
+`
+
+// The effective participants of the interaction whose alias tree holds
+// node_id (the root or any node merged into it), each with its entry for the
+// root. Only the contacts observed on the tree are derived.
+func (q *Queries) ListInteractionParticipants(ctx context.Context, nodeID uuid.UUID) ([]*EffectiveParticipation, error) {
+	rows, err := q.db.Query(ctx, ListInteractionParticipants, nodeID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []*EffectiveParticipation{}
+	for rows.Next() {
+		var i EffectiveParticipation
+		if err := rows.Scan(
+			&i.ContactID,
+			&i.InteractionNodeID,
+			&i.Direction,
+			&i.OccurredAt,
+			&i.Members,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const ListInteractionTreeObservations = `-- name: ListInteractionTreeObservations :many
+SELECT i.id, i.contact_id, i.source, i.source_ref, i.occurred_at, i.description, i.created_at, i.deleted_at, i.direction, i.venue_id, i.interaction_node_id, i.recorded_at, r.root_id::uuid AS root_id
+FROM unnest($1::uuid[]) AS r(root_id)
+CROSS JOIN LATERAL interaction_alias_tree(r.root_id) AS t(node_id)
+JOIN interaction i ON i.interaction_node_id = t.node_id AND i.deleted_at IS NULL
+ORDER BY i.occurred_at, i.id
+`
+
+type ListInteractionTreeObservationsRow struct {
+	Interaction Interaction `json:"interaction"`
+	RootID      uuid.UUID   `json:"root_id"`
+}
+
+// The live observations, of any contact, on every node of the alias tree under
+// each root, with the root they belong to: the members of each merged
+// interaction. The alias is read only to find the tree.
+func (q *Queries) ListInteractionTreeObservations(ctx context.Context, rootIds []uuid.UUID) ([]*ListInteractionTreeObservationsRow, error) {
+	rows, err := q.db.Query(ctx, ListInteractionTreeObservations, rootIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []*ListInteractionTreeObservationsRow{}
+	for rows.Next() {
+		var i ListInteractionTreeObservationsRow
+		if err := rows.Scan(
+			&i.Interaction.ID,
+			&i.Interaction.ContactID,
+			&i.Interaction.Source,
+			&i.Interaction.SourceRef,
+			&i.Interaction.OccurredAt,
+			&i.Interaction.Description,
+			&i.Interaction.CreatedAt,
+			&i.Interaction.DeletedAt,
+			&i.Interaction.Direction,
+			&i.Interaction.VenueID,
+			&i.Interaction.InteractionNodeID,
+			&i.Interaction.RecordedAt,
+			&i.RootID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const ListInteractionsByIDs = `-- name: ListInteractionsByIDs :many
+SELECT id, contact_id, source, source_ref, occurred_at, description, created_at, deleted_at, direction, venue_id, interaction_node_id, recorded_at FROM interaction
+WHERE id = ANY($1::uuid[]) AND deleted_at IS NULL
+`
+
+// Live interactions with the given ids, in no particular order.
+func (q *Queries) ListInteractionsByIDs(ctx context.Context, ids []uuid.UUID) ([]*Interaction, error) {
+	rows, err := q.db.Query(ctx, ListInteractionsByIDs, ids)
 	if err != nil {
 		return nil, err
 	}
@@ -607,6 +801,8 @@ func (q *Queries) ListContactInteractionsFiltered(ctx context.Context, arg ListC
 			&i.DeletedAt,
 			&i.Direction,
 			&i.VenueID,
+			&i.InteractionNodeID,
+			&i.RecordedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -618,8 +814,87 @@ func (q *Queries) ListContactInteractionsFiltered(ctx context.Context, arg ListC
 	return items, nil
 }
 
+const ListLiveContactsObservedOnNodes = `-- name: ListLiveContactsObservedOnNodes :many
+SELECT DISTINCT i.contact_id
+FROM interaction i
+JOIN live_contact c ON c.id = i.contact_id
+WHERE i.interaction_node_id = ANY($1::uuid[])
+  AND i.deleted_at IS NULL
+ORDER BY i.contact_id
+`
+
+// The live contacts with a live observation on any of the interaction nodes,
+// whether or not a correction excludes it: the contacts a merge of those
+// nodes recomputes.
+func (q *Queries) ListLiveContactsObservedOnNodes(ctx context.Context, nodeIds []uuid.UUID) ([]uuid.UUID, error) {
+	rows, err := q.db.Query(ctx, ListLiveContactsObservedOnNodes, nodeIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []uuid.UUID{}
+	for rows.Next() {
+		var contact_id uuid.UUID
+		if err := rows.Scan(&contact_id); err != nil {
+			return nil, err
+		}
+		items = append(items, contact_id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const ListObservationsInVenue = `-- name: ListObservationsInVenue :many
+SELECT interaction.id FROM interaction
+WHERE interaction.id = ANY($1::uuid[])
+  AND interaction.deleted_at IS NULL
+  AND CASE
+    WHEN $2::text IN ('email', 'gchat', 'whatsapp') THEN EXISTS (
+      SELECT 1 FROM comms_message cm WHERE cm.interaction_id = interaction.id AND cm.deleted_at IS NULL
+        AND cm.source = $2::text AND cm.thread_id = $3::text)
+    WHEN $2::text = 'telegram' THEN EXISTS (
+      SELECT 1 FROM telegram_message tm WHERE tm.interaction_id = interaction.id AND tm.deleted_at IS NULL
+        AND tm.telegram_chat_id::text = $3::text)
+    WHEN $2::text = 'messages' THEN EXISTS (
+      SELECT 1 FROM messages_message mm WHERE mm.interaction_id = interaction.id AND mm.deleted_at IS NULL
+        AND mm.chat_guid = $3::text)
+    ELSE FALSE
+  END
+`
+
+type ListObservationsInVenueParams struct {
+	ObservationIds []uuid.UUID `json:"observation_ids"`
+	VenueSource    string      `json:"venue_source"`
+	VenueContainer string      `json:"venue_container"`
+}
+
+// The given live observations whose content sits in the venue: the base venue
+// filter of a contact's interaction list. A source that has no content
+// container matches nothing.
+func (q *Queries) ListObservationsInVenue(ctx context.Context, arg ListObservationsInVenueParams) ([]uuid.UUID, error) {
+	rows, err := q.db.Query(ctx, ListObservationsInVenue, arg.ObservationIds, arg.VenueSource, arg.VenueContainer)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []uuid.UUID{}
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const ListSessionAttributedInteractions = `-- name: ListSessionAttributedInteractions :many
-SELECT id, contact_id, source, source_ref, occurred_at, description, created_at, deleted_at, direction, venue_id FROM interaction
+SELECT id, contact_id, source, source_ref, occurred_at, description, created_at, deleted_at, direction, venue_id, interaction_node_id, recorded_at FROM interaction
 WHERE source = 'anarlog_sessions'
   AND source_ref LIKE $1
   AND deleted_at IS NULL
@@ -651,6 +926,8 @@ func (q *Queries) ListSessionAttributedInteractions(ctx context.Context, sourceR
 			&i.DeletedAt,
 			&i.Direction,
 			&i.VenueID,
+			&i.InteractionNodeID,
+			&i.RecordedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -660,6 +937,25 @@ func (q *Queries) ListSessionAttributedInteractions(ctx context.Context, sourceR
 		return nil, err
 	}
 	return items, nil
+}
+
+const ResolveInteractionNode = `-- name: ResolveInteractionNode :one
+SELECT resolve_interaction_node($1::text, $2::text) AS node_id
+`
+
+type ResolveInteractionNodeParams struct {
+	Source    string  `json:"source"`
+	SourceRef *string `json:"source_ref"`
+}
+
+// The observation step's resolution: finds or creates the interaction node of
+// an observation by the per-source identity rule (resolve_interaction_node in
+// migration 087, the one implementation). A burst source returns no row (no node).
+func (q *Queries) ResolveInteractionNode(ctx context.Context, arg ResolveInteractionNodeParams) (uuid.UUID, error) {
+	row := q.db.QueryRow(ctx, ResolveInteractionNode, arg.Source, arg.SourceRef)
+	var node_id uuid.UUID
+	err := row.Scan(&node_id)
+	return node_id, err
 }
 
 const SoftDeleteInteraction = `-- name: SoftDeleteInteraction :exec
@@ -673,7 +969,7 @@ func (q *Queries) SoftDeleteInteraction(ctx context.Context, id uuid.UUID) error
 }
 
 const TestGetInteractionIncludingDeleted = `-- name: TestGetInteractionIncludingDeleted :one
-SELECT id, contact_id, source, source_ref, occurred_at, description, created_at, deleted_at, direction, venue_id FROM interaction
+SELECT id, contact_id, source, source_ref, occurred_at, description, created_at, deleted_at, direction, venue_id, interaction_node_id, recorded_at FROM interaction
 WHERE contact_id = $1
   AND source = $2
   AND source_ref = $3
@@ -702,36 +998,56 @@ func (q *Queries) TestGetInteractionIncludingDeleted(ctx context.Context, arg Te
 		&i.DeletedAt,
 		&i.Direction,
 		&i.VenueID,
+		&i.InteractionNodeID,
+		&i.RecordedAt,
 	)
 	return &i, err
 }
 
+const TestGetInteractionNode = `-- name: TestGetInteractionNode :one
+SELECT node_id, source, identity_key FROM interaction_node
+WHERE node_id = $1
+`
+
+// Test-only read of an interaction node's subtype row, for backfill fixtures
+// that check a node's source and persisted identity key.
+func (q *Queries) TestGetInteractionNode(ctx context.Context, nodeID uuid.UUID) (*InteractionNode, error) {
+	row := q.db.QueryRow(ctx, TestGetInteractionNode, nodeID)
+	var i InteractionNode
+	err := row.Scan(&i.NodeID, &i.Source, &i.IdentityKey)
+	return &i, err
+}
+
 const TestInsertInteraction = `-- name: TestInsertInteraction :one
-INSERT INTO interaction (id, contact_id, source, source_ref, occurred_at, direction)
+INSERT INTO interaction (id, contact_id, source, source_ref, occurred_at, direction, interaction_node_id)
 VALUES (
     $1,
     $2,
     $3,
     $4,
     $5,
-    $6
+    $6,
+    $7
 )
-RETURNING id, contact_id, source, source_ref, occurred_at, description, created_at, deleted_at, direction, venue_id
+RETURNING id, contact_id, source, source_ref, occurred_at, description, created_at, deleted_at, direction, venue_id, interaction_node_id, recorded_at
 `
 
 type TestInsertInteractionParams struct {
-	ID         uuid.UUID `json:"id"`
-	ContactID  uuid.UUID `json:"contact_id"`
-	Source     string    `json:"source"`
-	SourceRef  *string   `json:"source_ref"`
-	OccurredAt time.Time `json:"occurred_at"`
-	Direction  string    `json:"direction"`
+	ID                uuid.UUID  `json:"id"`
+	ContactID         uuid.UUID  `json:"contact_id"`
+	Source            string     `json:"source"`
+	SourceRef         *string    `json:"source_ref"`
+	OccurredAt        time.Time  `json:"occurred_at"`
+	Direction         string     `json:"direction"`
+	InteractionNodeID *uuid.UUID `json:"interaction_node_id"`
 }
 
 // Test-only: inserts an interaction with a caller-supplied id, source, and
 // source_ref and a NULL venue_id, bypassing the recorder. Used by the venue
 // backfill migration test to stand up pre-existing (venue-less) interactions
-// that the 069 backfill then populates. Production code MUST NOT call this.
+// that the 069 backfill then populates. The caller supplies the interaction
+// node, which the repository wrapper resolves through the observation step.
+// Production code MUST NOT call this.
 func (q *Queries) TestInsertInteraction(ctx context.Context, arg TestInsertInteractionParams) (*Interaction, error) {
 	row := q.db.QueryRow(ctx, TestInsertInteraction,
 		arg.ID,
@@ -740,6 +1056,7 @@ func (q *Queries) TestInsertInteraction(ctx context.Context, arg TestInsertInter
 		arg.SourceRef,
 		arg.OccurredAt,
 		arg.Direction,
+		arg.InteractionNodeID,
 	)
 	var i Interaction
 	err := row.Scan(
@@ -753,6 +1070,8 @@ func (q *Queries) TestInsertInteraction(ctx context.Context, arg TestInsertInter
 		&i.DeletedAt,
 		&i.Direction,
 		&i.VenueID,
+		&i.InteractionNodeID,
+		&i.RecordedAt,
 	)
 	return &i, err
 }
@@ -763,7 +1082,7 @@ SET direction = $1,
     occurred_at = $2
 WHERE id = $3
   AND deleted_at IS NULL
-RETURNING id, contact_id, source, source_ref, occurred_at, description, created_at, deleted_at, direction, venue_id
+RETURNING id, contact_id, source, source_ref, occurred_at, description, created_at, deleted_at, direction, venue_id, interaction_node_id, recorded_at
 `
 
 type UpdateInteractionDirectionParams struct {
@@ -787,6 +1106,8 @@ func (q *Queries) UpdateInteractionDirection(ctx context.Context, arg UpdateInte
 		&i.DeletedAt,
 		&i.Direction,
 		&i.VenueID,
+		&i.InteractionNodeID,
+		&i.RecordedAt,
 	)
 	return &i, err
 }
@@ -797,7 +1118,7 @@ SET occurred_at = $1,
     description = $2
 WHERE id = $3
   AND deleted_at IS NULL
-RETURNING id, contact_id, source, source_ref, occurred_at, description, created_at, deleted_at, direction, venue_id
+RETURNING id, contact_id, source, source_ref, occurred_at, description, created_at, deleted_at, direction, venue_id, interaction_node_id, recorded_at
 `
 
 type UpdateInteractionTimestampParams struct {
@@ -821,6 +1142,8 @@ func (q *Queries) UpdateInteractionTimestamp(ctx context.Context, arg UpdateInte
 		&i.DeletedAt,
 		&i.Direction,
 		&i.VenueID,
+		&i.InteractionNodeID,
+		&i.RecordedAt,
 	)
 	return &i, err
 }

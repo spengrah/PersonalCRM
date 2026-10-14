@@ -39,13 +39,15 @@ type routeDeps struct {
 	MeetingNoteHandler *handlers.MeetingNoteHandler
 
 	// Core (always-on)
-	ContactHandler       *handlers.ContactHandler
-	InteractionHandler   *handlers.InteractionHandler
-	NoteHandler          *handlers.NoteHandler
-	ContactMethodHandler *handlers.ContactMethodHandler
-	RematchHandler       *handlers.RematchHandler
-	StalenessHandler     *handlers.StalenessHandler
-	SystemHandler        *handlers.SystemHandler
+	ContactHandler           *handlers.ContactHandler
+	InteractionHandler       *handlers.InteractionHandler
+	CorrectionHandler        *handlers.InteractionCorrectionHandler
+	TimelineAssertionHandler *handlers.TimelineAssertionHandler
+	NoteHandler              *handlers.NoteHandler
+	ContactMethodHandler     *handlers.ContactMethodHandler
+	RematchHandler           *handlers.RematchHandler
+	StalenessHandler         *handlers.StalenessHandler
+	SystemHandler            *handlers.SystemHandler
 
 	// OAuth / external sync (feature-flagged / nil when unconfigured)
 	OAuthHandler            *handlers.OAuthHandler
@@ -109,9 +111,13 @@ func registerRoutes(deps routeDeps) {
 	// known-ids). Registered via the shared helper so integration tests
 	// exercise the same code path. Admin routes are registered later
 	// inside the global-API-key-protected v1 group.
+	enrichmentHandler := handlers.NewMessagesEnrichmentHandler(
+		service.NewMessagesEnrichmentService(repository.NewMessagesMessageRepository(database.Queries)),
+	)
 	handlers.RegisterMacHostRoutes(router, handlers.MacHostRouteDeps{
 		HostRepo:    deps.MacHostRepo,
 		Handler:     deps.MacHostHandler,
+		Enrichment:  enrichmentHandler,
 		AuthLimiter: auth.DefaultMacHostAuthLimiterConfig(),
 	})
 
@@ -142,10 +148,12 @@ func registerRoutes(deps routeDeps) {
 	{
 		// Contact + interaction routes (unconditional).
 		handlers.RegisterContactRoutes(v1, handlers.ContactRouteDeps{
-			Contact:       deps.ContactHandler,
-			Interaction:   deps.InteractionHandler,
-			Note:          deps.NoteHandler,
-			ContactMethod: deps.ContactMethodHandler,
+			Contact:           deps.ContactHandler,
+			Interaction:       deps.InteractionHandler,
+			Correction:        deps.CorrectionHandler,
+			TimelineAssertion: deps.TimelineAssertionHandler,
+			Note:              deps.NoteHandler,
+			ContactMethod:     deps.ContactMethodHandler,
 		})
 
 		// Meeting-note conflict-resolution — user-driven, called from

@@ -66,11 +66,16 @@ func (e *awaitingReplyDerivationEnv) applyInteraction(t *testing.T, contactID uu
 	tx, err := e.database.Pool.Begin(e.ctx)
 	require.NoError(t, err)
 	defer func() { _ = tx.Rollback(e.ctx) }()
+	node, err := e.interactionRepo.ObserveInteractionTx(e.ctx, tx, repository.InteractionObservation{
+		ContactID: contactID, Source: source, Direction: direction, OccurredAt: occurredAt,
+	})
+	require.NoError(t, err)
 	interaction, err := e.interactionRepo.CreateInteractionTx(e.ctx, tx, repository.CreateInteractionRequest{
-		ContactID:  contactID,
-		Source:     source,
-		OccurredAt: occurredAt,
-		Direction:  direction,
+		ContactID:         contactID,
+		Source:            source,
+		OccurredAt:        occurredAt,
+		Direction:         direction,
+		InteractionNodeID: node,
 	})
 	require.NoError(t, err)
 	require.NoError(t, e.cadenceUpdater.ApplyInteraction(e.ctx, tx, repository.ApplyInteractionRequest{

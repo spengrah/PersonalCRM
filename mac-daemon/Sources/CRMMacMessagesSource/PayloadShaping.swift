@@ -8,10 +8,8 @@
 //
 // Outbound peer (is_from_me=1, usually NULL handle_id): the caller
 // resolves via ChatDBReader.outboundPeer (the first chat_handle_join
-// entry by join ROWID) before invoking shape. For group chats this is
-// a v1 simplification — every outbound group message attributes to the
-// same peer. There is no self-handle exclusion; it relies on macOS
-// excluding the account owner's handle from chat_handle_join.
+// entry by join ROWID) before invoking shape. An outbound group message
+// names no member: the caller passes the empty peer.
 import Foundation
 
 /// One attachment's metadata, per the Pi-side AttachmentMeta. Currently

@@ -32,6 +32,7 @@ CREATE TABLE message (
     ROWID INTEGER PRIMARY KEY AUTOINCREMENT,
     guid TEXT NOT NULL UNIQUE,
     text TEXT,
+    attributedBody BLOB,
     handle_id INTEGER,
     date INTEGER NOT NULL,
     date_read INTEGER,

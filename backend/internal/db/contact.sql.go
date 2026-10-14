@@ -12,6 +12,34 @@ import (
 	"github.com/google/uuid"
 )
 
+const ApplyContactByDirectSet = `-- name: ApplyContactByDirectSet :exec
+UPDATE contact SET
+    contact_by                  = $1::date,
+    contact_by_direct_set_value = $1::date,
+    contact_by_direct_set_at    = clock_timestamp(),
+    last_skipped_at             = NULL,
+    last_skipped_contact_by     = NULL,
+    last_skip_reason            = NULL,
+    updated_at = NOW()
+WHERE id = $2 AND deleted_at IS NULL
+`
+
+type ApplyContactByDirectSetParams struct {
+	ContactBy time.Time `json:"contact_by"`
+	ID        uuid.UUID `json:"id"`
+}
+
+// A due date the user set directly: a Todoist deadline edit on the contact's
+// cadence task. Sets contact_by unconditionally, clears skip state like every
+// other writer of the clock (CAD-045), and records the date and when it was
+// set in the SAME statement, for the correction recompute (CAD-047). This is
+// the only writer of contact_by_direct_set_at and contact_by_direct_set_value.
+// Cadence-owned: the caller declares crm.derived_writer=cadence first.
+func (q *Queries) ApplyContactByDirectSet(ctx context.Context, arg ApplyContactByDirectSetParams) error {
+	_, err := q.db.Exec(ctx, ApplyContactByDirectSet, arg.ContactBy, arg.ID)
+	return err
+}
+
 const ApplyContactSkip = `-- name: ApplyContactSkip :exec
 UPDATE contact SET
     last_skipped_contact_by = contact_by,
@@ -72,8 +100,8 @@ WITH agg AS (
   SELECT
     MAX(occurred_at) FILTER (WHERE direction IN ('inbound','mutual'))  AS new_non_outbound,
     MAX(occurred_at) FILTER (WHERE direction IN ('outbound','mutual')) AS new_outreach
-  FROM interaction
-  WHERE contact_id = $1 AND deleted_at IS NULL
+  FROM effective_participation
+  WHERE contact_id = $1
 ),
 locked AS (
   SELECT id, last_contacted, last_interaction_at, last_response_at,
@@ -120,6 +148,9 @@ type ComputeContactDatesAfterDeleteRow struct {
 // concurrent writer that committed while waiting for the contact lock (the
 // FOR UPDATE retained below re-takes the held lock; the load-bearing
 // serialization is the prior LockContactForDateRecompute statement).
+// The aggregate reads effective participation (migration 089), so a
+// participation a correction removed is never a remaining one, and a merged
+// participation counts once at its own direction and time.
 func (q *Queries) ComputeContactDatesAfterDelete(ctx context.Context, id uuid.UUID) (*ComputeContactDatesAfterDeleteRow, error) {
 	row := q.db.QueryRow(ctx, ComputeContactDatesAfterDelete, id)
 	var i ComputeContactDatesAfterDeleteRow
@@ -164,7 +195,7 @@ INSERT INTO contact (id, full_name, cadence, last_contacted, profile_photo, crea
 SELECT new_node.id, $1, $2, $3,
        $4, $5, $6
 FROM new_node
-RETURNING contact.id, contact.full_name, contact.location, contact.birthday, contact.how_met, contact.cadence, contact.last_contacted, contact.profile_photo, contact.deleted_at, contact.created_at, contact.updated_at, contact.contact_by, contact.last_interaction_at, contact.last_outreach_at, contact.last_response_at, contact.awaiting_reply_until, contact.last_skipped_at, contact.last_skipped_contact_by, contact.last_skip_reason
+RETURNING contact.id, contact.full_name, contact.location, contact.birthday, contact.how_met, contact.cadence, contact.last_contacted, contact.profile_photo, contact.deleted_at, contact.created_at, contact.updated_at, contact.contact_by, contact.last_interaction_at, contact.last_outreach_at, contact.last_response_at, contact.awaiting_reply_until, contact.last_skipped_at, contact.last_skipped_contact_by, contact.last_skip_reason, contact.contact_by_direct_set_at, contact.contact_by_direct_set_value
 `
 
 type CreateContactWithNodeParams struct {
@@ -220,6 +251,8 @@ func (q *Queries) CreateContactWithNode(ctx context.Context, arg CreateContactWi
 		&i.LastSkippedAt,
 		&i.LastSkippedContactBy,
 		&i.LastSkipReason,
+		&i.ContactByDirectSetAt,
+		&i.ContactByDirectSetValue,
 	)
 	return &i, err
 }
@@ -373,7 +406,7 @@ func (q *Queries) FindSimilarContactsBatch(ctx context.Context, arg FindSimilarC
 
 const GetContact = `-- name: GetContact :one
 
-SELECT id, full_name, location, birthday, how_met, cadence, last_contacted, profile_photo, deleted_at, created_at, updated_at, contact_by, last_interaction_at, last_outreach_at, last_response_at, awaiting_reply_until, last_skipped_at, last_skipped_contact_by, last_skip_reason FROM contact
+SELECT id, full_name, location, birthday, how_met, cadence, last_contacted, profile_photo, deleted_at, created_at, updated_at, contact_by, last_interaction_at, last_outreach_at, last_response_at, awaiting_reply_until, last_skipped_at, last_skipped_contact_by, last_skip_reason, contact_by_direct_set_at, contact_by_direct_set_value FROM contact
 WHERE id = $1 AND deleted_at IS NULL
 `
 
@@ -401,6 +434,8 @@ func (q *Queries) GetContact(ctx context.Context, id uuid.UUID) (*Contact, error
 		&i.LastSkippedAt,
 		&i.LastSkippedContactBy,
 		&i.LastSkipReason,
+		&i.ContactByDirectSetAt,
+		&i.ContactByDirectSetValue,
 	)
 	return &i, err
 }
@@ -441,7 +476,7 @@ func (q *Queries) ListContactNamesByIDs(ctx context.Context, ids []uuid.UUID) ([
 }
 
 const ListContactsWithCadence = `-- name: ListContactsWithCadence :many
-SELECT id, full_name, location, birthday, how_met, cadence, last_contacted, profile_photo, deleted_at, created_at, updated_at, contact_by, last_interaction_at, last_outreach_at, last_response_at, awaiting_reply_until, last_skipped_at, last_skipped_contact_by, last_skip_reason FROM contact
+SELECT id, full_name, location, birthday, how_met, cadence, last_contacted, profile_photo, deleted_at, created_at, updated_at, contact_by, last_interaction_at, last_outreach_at, last_response_at, awaiting_reply_until, last_skipped_at, last_skipped_contact_by, last_skip_reason, contact_by_direct_set_at, contact_by_direct_set_value FROM contact
 WHERE deleted_at IS NULL
   AND cadence IS NOT NULL
   AND cadence != ''
@@ -479,6 +514,8 @@ func (q *Queries) ListContactsWithCadence(ctx context.Context, limit int32) ([]*
 			&i.LastSkippedAt,
 			&i.LastSkippedContactBy,
 			&i.LastSkipReason,
+			&i.ContactByDirectSetAt,
+			&i.ContactByDirectSetValue,
 		); err != nil {
 			return nil, err
 		}
@@ -491,7 +528,7 @@ func (q *Queries) ListContactsWithCadence(ctx context.Context, limit int32) ([]*
 }
 
 const ListContactsWithContactBy = `-- name: ListContactsWithContactBy :many
-SELECT id, full_name, location, birthday, how_met, cadence, last_contacted, profile_photo, deleted_at, created_at, updated_at, contact_by, last_interaction_at, last_outreach_at, last_response_at, awaiting_reply_until, last_skipped_at, last_skipped_contact_by, last_skip_reason FROM contact
+SELECT id, full_name, location, birthday, how_met, cadence, last_contacted, profile_photo, deleted_at, created_at, updated_at, contact_by, last_interaction_at, last_outreach_at, last_response_at, awaiting_reply_until, last_skipped_at, last_skipped_contact_by, last_skip_reason, contact_by_direct_set_at, contact_by_direct_set_value FROM contact
 WHERE deleted_at IS NULL
   AND contact_by IS NOT NULL
 ORDER BY contact_by ASC
@@ -529,6 +566,8 @@ func (q *Queries) ListContactsWithContactBy(ctx context.Context, limit int32) ([
 			&i.LastSkippedAt,
 			&i.LastSkippedContactBy,
 			&i.LastSkipReason,
+			&i.ContactByDirectSetAt,
+			&i.ContactByDirectSetValue,
 		); err != nil {
 			return nil, err
 		}
@@ -593,7 +632,7 @@ func (q *Queries) ListContactsWithKnowledgeColumns(ctx context.Context) ([]*List
 }
 
 const ListOverdueContacts = `-- name: ListOverdueContacts :many
-SELECT id, full_name, location, birthday, how_met, cadence, last_contacted, profile_photo, deleted_at, created_at, updated_at, contact_by, last_interaction_at, last_outreach_at, last_response_at, awaiting_reply_until, last_skipped_at, last_skipped_contact_by, last_skip_reason FROM contact
+SELECT id, full_name, location, birthday, how_met, cadence, last_contacted, profile_photo, deleted_at, created_at, updated_at, contact_by, last_interaction_at, last_outreach_at, last_response_at, awaiting_reply_until, last_skipped_at, last_skipped_contact_by, last_skip_reason, contact_by_direct_set_at, contact_by_direct_set_value FROM contact
 WHERE deleted_at IS NULL
   AND contact_by IS NOT NULL
   AND contact_by < $1::date
@@ -637,6 +676,8 @@ func (q *Queries) ListOverdueContacts(ctx context.Context, arg ListOverdueContac
 			&i.LastSkippedAt,
 			&i.LastSkippedContactBy,
 			&i.LastSkipReason,
+			&i.ContactByDirectSetAt,
+			&i.ContactByDirectSetValue,
 		); err != nil {
 			return nil, err
 		}
@@ -760,7 +801,7 @@ UPDATE contact SET
   profile_photo = $4,
   updated_at = NOW()
 WHERE id = $1 AND deleted_at IS NULL
-RETURNING id, full_name, location, birthday, how_met, cadence, last_contacted, profile_photo, deleted_at, created_at, updated_at, contact_by, last_interaction_at, last_outreach_at, last_response_at, awaiting_reply_until, last_skipped_at, last_skipped_contact_by, last_skip_reason
+RETURNING id, full_name, location, birthday, how_met, cadence, last_contacted, profile_photo, deleted_at, created_at, updated_at, contact_by, last_interaction_at, last_outreach_at, last_response_at, awaiting_reply_until, last_skipped_at, last_skipped_contact_by, last_skip_reason, contact_by_direct_set_at, contact_by_direct_set_value
 `
 
 type UpdateContactParams struct {
@@ -808,6 +849,8 @@ func (q *Queries) UpdateContact(ctx context.Context, arg UpdateContactParams) (*
 		&i.LastSkippedAt,
 		&i.LastSkippedContactBy,
 		&i.LastSkipReason,
+		&i.ContactByDirectSetAt,
+		&i.ContactByDirectSetValue,
 	)
 	return &i, err
 }

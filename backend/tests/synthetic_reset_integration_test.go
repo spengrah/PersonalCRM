@@ -42,6 +42,7 @@ var wipedTables = []string{
 	"external_sync_log",
 	"external_sync_state",
 	"interaction",
+	"interaction_node",
 	"job_exec_sample",
 	"mac_host",
 	"mac_host_pairing_token",

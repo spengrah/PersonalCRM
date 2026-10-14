@@ -33,6 +33,7 @@ type MessagesMessage struct {
 	SentAt            time.Time
 	IsOutgoing        bool
 	IsGroupChat       bool
+	CreditsReply      bool
 	ReplyToGuid       *string
 	MatchedContactID  *uuid.UUID
 	InteractionID     *uuid.UUID
@@ -59,6 +60,10 @@ type UpsertMessagesMessageParams struct {
 	ReplyToGuid      *string
 	MatchedContactID *uuid.UUID
 	MacHostID        *uuid.UUID
+	// CreditsReply marks the user's own group message as ingest stores it: the
+	// only kind of row that reads as a reply to a member's inbound burst. A
+	// guid already stored keeps its own value.
+	CreditsReply bool
 }
 
 // MessagesMessageRepository wraps the sqlc-generated messages_message queries.
@@ -139,6 +144,143 @@ func (r *MessagesMessageRepository) TestSoftDeleteMessage(ctx context.Context, i
 	return r.queries.TestSoftDeleteMessagesMessage(ctx, id)
 }
 
+// TestGetMessageIncludingDeleted is test-only; production code MUST NOT call this.
+func (r *MessagesMessageRepository) TestGetMessageIncludingDeleted(ctx context.Context, guid string) (*MessagesMessage, error) {
+	dbMsg, err := r.queries.TestGetMessagesMessageIncludingDeleted(ctx, guid)
+	if err != nil {
+		return nil, err
+	}
+	msg := convertDbMessagesMessage(dbMsg)
+	return &msg, nil
+}
+
+// ListBodylessGuids returns up to limit guids of stored, non-deleted rows
+// whose text is NULL or empty, ordered by guid ascending, strictly after
+// the given guid (nil lists from the start).
+func (r *MessagesMessageRepository) ListBodylessGuids(ctx context.Context, after *string, limit int32) ([]string, error) {
+	return r.queries.ListBodylessMessagesMessageGuids(ctx, db.ListBodylessMessagesMessageGuidsParams{After: after, RowLimit: limit})
+}
+
+// FillBody sets the body of a stored, non-deleted row that has none and
+// reports whether it did. It changes no other column.
+func (r *MessagesMessageRepository) FillBody(ctx context.Context, guid, body string) (bool, error) {
+	n, err := r.queries.FillMessagesMessageBody(ctx, db.FillMessagesMessageBodyParams{Guid: guid, Body: &body})
+	return n > 0, err
+}
+
+// WithTx returns a repository bound to the transaction, for callers that must
+// read or write inside a transaction they own.
+func (r *MessagesMessageRepository) WithTx(tx pgx.Tx) *MessagesMessageRepository {
+	return &MessagesMessageRepository{queries: db.New(tx)}
+}
+
+// GroupBurstWindow is the window of one group-chat burst: the closed span from
+// the earliest to the latest sent time of the live messages rows linked to one
+// live messages interaction.
+type GroupBurstWindow struct {
+	InteractionID uuid.UUID
+	ContactID     uuid.UUID
+	Direction     string
+	OccurredAt    time.Time
+	ChatGuid      string
+	Start         time.Time
+	End           time.Time
+}
+
+// GroupBurstWindowFilter narrows ListGroupBurstWindows; every field is
+// optional. After is exclusive and ChatLimit bounds the number of distinct
+// chats returned.
+type GroupBurstWindowFilter struct {
+	ChatGuid      *string
+	After         *string
+	InteractionID *uuid.UUID
+	Direction     *string
+	ContainsAt    *time.Time
+	ChatLimit     *int32
+}
+
+// ListGroupBurstWindows is the one derivation of a group-chat burst's window.
+// Rows come ordered by chat_guid, window start, window end, interaction id.
+func (r *MessagesMessageRepository) ListGroupBurstWindows(ctx context.Context, f GroupBurstWindowFilter) ([]GroupBurstWindow, error) {
+	rows, err := r.queries.ListMessagesGroupBurstWindows(ctx, db.ListMessagesGroupBurstWindowsParams{
+		ChatLimit:     f.ChatLimit,
+		ChatGuid:      f.ChatGuid,
+		After:         f.After,
+		InteractionID: f.InteractionID,
+		Direction:     f.Direction,
+		ContainsAt:    f.ContainsAt,
+	})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]GroupBurstWindow, len(rows))
+	for i, row := range rows {
+		out[i] = GroupBurstWindow{
+			InteractionID: row.InteractionID,
+			ContactID:     row.ContactID,
+			Direction:     row.Direction,
+			OccurredAt:    row.OccurredAt,
+			ChatGuid:      row.ChatGuid,
+			Start:         row.WindowStart,
+			End:           row.WindowEnd,
+		}
+	}
+	return out, nil
+}
+
+// HasCreditingReplyBetween reports whether a live message that credits a reply
+// (the user's own group message as ingest stored it) was sent inside the closed
+// span of the chat. It is the one reply-eligibility decision, shared by the
+// ingest and aggregation promotion paths.
+func (r *MessagesMessageRepository) HasCreditingReplyBetween(ctx context.Context, chatGuid string, from, to time.Time) (bool, error) {
+	return r.queries.ExistsMessagesCreditingReply(ctx, db.ExistsMessagesCreditingReplyParams{
+		ChatGuid: chatGuid,
+		FromTime: from,
+		ToTime:   to,
+	})
+}
+
+// GuidExists reports whether any row, soft-deleted or not, holds the guid.
+func (r *MessagesMessageRepository) GuidExists(ctx context.Context, guid string) (bool, error) {
+	return r.queries.MessagesMessageGuidExists(ctx, guid)
+}
+
+// AddGroupEvidenceParams is the input for AddGroupEvidence. PeerHandle is the
+// sender of an inbound message and empty for the user's own message.
+type AddGroupEvidenceParams struct {
+	Guid       string
+	ChatGuid   string
+	PeerHandle string
+	Text       *string
+	SentAt     time.Time
+	IsOutgoing bool
+	MacHostID  uuid.UUID
+}
+
+// AddGroupEvidence stores a group-chat message as evidence only (processed,
+// linked to no interaction, matched to no contact) and reports whether it
+// stored one. A guid that is already stored is left alone.
+func (r *MessagesMessageRepository) AddGroupEvidence(ctx context.Context, p AddGroupEvidenceParams) (bool, error) {
+	n, err := r.queries.InsertMessagesGroupEvidenceMessage(ctx, db.InsertMessagesGroupEvidenceMessageParams{
+		Guid:       p.Guid,
+		ChatGuid:   p.ChatGuid,
+		PeerHandle: p.PeerHandle,
+		Text:       p.Text,
+		SentAt:     p.SentAt,
+		IsOutgoing: p.IsOutgoing,
+		MacHostID:  &p.MacHostID,
+	})
+	return n > 0, err
+}
+
+// ClearOutboundPeer removes the member attribution from a stored, non-deleted
+// outbound group-chat row and reports whether it changed one. It changes no
+// other column.
+func (r *MessagesMessageRepository) ClearOutboundPeer(ctx context.Context, guid string) (bool, error) {
+	n, err := r.queries.ClearMessagesMessageOutboundPeer(ctx, guid)
+	return n > 0, err
+}
+
 func convertDbMessagesMessage(m *db.MessagesMessage) MessagesMessage {
 	msg := MessagesMessage{
 		Guid:        m.Guid,
@@ -148,6 +290,7 @@ func convertDbMessagesMessage(m *db.MessagesMessage) MessagesMessage {
 		IsOutgoing:  m.IsOutgoing,
 		IsGroupChat: m.IsGroupChat,
 	}
+	msg.CreditsReply = m.CreditsReply
 	msg.ID = m.ID
 	msg.PeerNormalized = m.PeerNormalized
 	msg.Text = m.Text
@@ -207,6 +350,7 @@ func buildUpsertMessagesMessageParams(params UpsertMessagesMessageParams) db.Ups
 		ReplyToGuid:      params.ReplyToGuid,
 		MatchedContactID: params.MatchedContactID,
 		MacHostID:        params.MacHostID,
+		CreditsReply:     params.CreditsReply,
 	}
 }
 

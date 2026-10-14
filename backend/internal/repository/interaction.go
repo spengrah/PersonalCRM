@@ -62,6 +62,15 @@ type ApplyInteractionRequest struct {
 	OccurredAt time.Time
 }
 
+// RecordedParticipation is one effective participation as the recording rules
+// take it, with when its effect was last recorded: the latest RecordedAt of its
+// member observations. The correction recompute replays these in RecordedAt
+// order (CAD-047).
+type RecordedParticipation struct {
+	ApplyInteractionRequest
+	RecordedAt time.Time
+}
+
 // RecordInteractionResult bundles the non-error returns of
 // ContactService.RecordInteractionTx. Lives in repository (next to
 // RecordInteractionRequest) so consumer.interactionWriter can reference
@@ -86,6 +95,13 @@ type RecordInteractionResult struct {
 	// (may be nil if the contact has no cadence). Non-nil only when
 	// publishesEvent=true and cadence is set.
 	CadenceAtEmit *string
+	// Verdict is the verdict read (ObservationVerdictTx) of the freshly
+	// recorded observation, taken after the write in the same tx: whether a
+	// correction excludes it and, when effective, the contact's effective
+	// participation it belongs to. A caller that publishes interaction.recorded
+	// publishes nothing when it is excluded and otherwise publishes the entry's
+	// direction and time. Nil on replay.
+	Verdict *ObservationVerdict
 }
 
 // InteractionRepository handles interaction persistence
@@ -119,20 +135,28 @@ type Interaction struct {
 	Direction   string     `json:"direction"`
 	CreatedAt   time.Time  `json:"created_at"`
 	VenueID     *uuid.UUID `json:"venue_id,omitempty"`
+	// InteractionNodeID is the interaction node every observation of the same
+	// source object shares; nil for a message-burst observation. Assigned once
+	// by the observation step, never rewritten.
+	InteractionNodeID *uuid.UUID `json:"interaction_node_id,omitempty"`
+	// RecordedAt is when the observation's effect was last recorded: its
+	// insert, or the latest write that changed its direction or occurred_at.
+	// The database sets it.
+	RecordedAt time.Time `json:"-"`
 }
 
 // CreateInteractionRequest represents the request to create an interaction.
-//
-// Field layout MUST stay identical to RecordInteractionRequest — the service
-// constructs it via the direct type conversion CreateInteractionRequest(req).
+// InteractionNodeID is the observation step's result for this observation
+// (ObserveInteractionTx); nil for a message-burst source.
 type CreateInteractionRequest struct {
-	ContactID   uuid.UUID
-	Source      string
-	SourceRef   *string
-	OccurredAt  time.Time
-	Description *string
-	Direction   string
-	VenueID     *uuid.UUID
+	ContactID         uuid.UUID
+	Source            string
+	SourceRef         *string
+	OccurredAt        time.Time
+	Description       *string
+	Direction         string
+	VenueID           *uuid.UUID
+	InteractionNodeID *uuid.UUID
 }
 
 func convertDbInteraction(dbInteraction *db.Interaction) Interaction {
@@ -150,6 +174,8 @@ func convertDbInteraction(dbInteraction *db.Interaction) Interaction {
 	interaction.SourceRef = dbInteraction.SourceRef
 	interaction.Description = dbInteraction.Description
 	interaction.VenueID = dbInteraction.VenueID
+	interaction.InteractionNodeID = dbInteraction.InteractionNodeID
+	interaction.RecordedAt = dbInteraction.RecordedAt.UTC()
 
 	return interaction
 }
@@ -165,6 +191,25 @@ func interactionDirectionArg(direction string) interface{} {
 		return nil
 	}
 	return direction
+}
+
+// GetInteractionTx is the tx-bound variant of GetInteraction.
+func (r *InteractionRepository) GetInteractionTx(ctx context.Context, tx pgx.Tx, id uuid.UUID) (*Interaction, error) {
+	dbInteraction, err := db.New(tx).GetInteraction(ctx, id)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, db.ErrNotFound
+		}
+		return nil, err
+	}
+	interaction := convertDbInteraction(dbInteraction)
+	return &interaction, nil
+}
+
+// RecordingSuppressedFollowUpTx reports whether the recording of observation
+// id suppressed its follow-up (a send task's completion, CAD-012).
+func (r *InteractionRepository) RecordingSuppressedFollowUpTx(ctx context.Context, tx pgx.Tx, id uuid.UUID) (bool, error) {
+	return db.New(tx).InteractionRecordingSuppressedFollowUp(ctx, id)
 }
 
 // GetInteraction retrieves an interaction by ID
@@ -205,45 +250,94 @@ func (r *InteractionRepository) CountContactInteractions(ctx context.Context, co
 	return r.queries.CountContactInteractions(ctx, contactID)
 }
 
-func (r *InteractionRepository) ListContactInteractionsFiltered(ctx context.Context, p InteractionListFilterParams) ([]Interaction, error) {
-	rows, err := r.queries.ListContactInteractionsFiltered(ctx, db.ListContactInteractionsFilteredParams{
-		ContactID: p.ContactID, VenueSource: p.VenueSource, VenueContainer: p.VenueContainer,
-		FromTime: p.From, ToTime: p.To, LimitCount: p.Limit, OffsetCount: p.Offset,
-	})
+// ListInteractionsByIDs returns the live interactions with the given ids,
+// keyed by id.
+func (r *InteractionRepository) ListInteractionsByIDs(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]Interaction, error) {
+	rows, err := r.queries.ListInteractionsByIDs(ctx, ids)
 	if err != nil {
 		return nil, err
 	}
-	out := make([]Interaction, len(rows))
-	for i, row := range rows {
-		out[i] = convertDbInteraction(row)
+	out := make(map[uuid.UUID]Interaction, len(rows))
+	for _, row := range rows {
+		out[row.ID] = convertDbInteraction(row)
 	}
 	return out, nil
 }
 
-func (r *InteractionRepository) CountContactInteractionsFiltered(ctx context.Context, p InteractionListFilterParams) (int64, error) {
-	return r.queries.CountContactInteractionsFiltered(ctx, db.CountContactInteractionsFilteredParams{
-		ContactID: p.ContactID, VenueSource: p.VenueSource, VenueContainer: p.VenueContainer,
-		FromTime: p.From, ToTime: p.To,
-	})
+// ListInteractionTreeObservations returns, for each root interaction node, the
+// live observations of any contact on the nodes of its merge-alias tree, in
+// time order. A root whose tree holds no live observation is absent.
+func (r *InteractionRepository) ListInteractionTreeObservations(ctx context.Context, rootIDs []uuid.UUID) (map[uuid.UUID][]Interaction, error) {
+	rows, err := r.queries.ListInteractionTreeObservations(ctx, rootIDs)
+	if err != nil {
+		return nil, fmt.Errorf("list interaction tree observations: %w", err)
+	}
+	out := make(map[uuid.UUID][]Interaction, len(rootIDs))
+	for _, row := range rows {
+		out[row.RootID] = append(out[row.RootID], convertDbInteraction(&row.Interaction))
+	}
+	return out, nil
 }
 
-// CreateInteraction creates a new interaction record
-func (r *InteractionRepository) CreateInteraction(ctx context.Context, req CreateInteractionRequest) (*Interaction, error) {
-	dbInteraction, err := r.queries.CreateInteraction(ctx, db.CreateInteractionParams{
-		ContactID:   req.ContactID,
-		Source:      req.Source,
-		SourceRef:   req.SourceRef,
-		OccurredAt:  req.OccurredAt,
-		Description: req.Description,
-		Direction:   interactionDirectionArg(req.Direction),
-		VenueID:     req.VenueID,
+// ListObservationsInVenue returns the ids, among observationIDs, of the live
+// observations whose content sits in the venue (source, container).
+func (r *InteractionRepository) ListObservationsInVenue(ctx context.Context, observationIDs []uuid.UUID, venueSource, venueContainer string) (map[uuid.UUID]bool, error) {
+	ids, err := r.queries.ListObservationsInVenue(ctx, db.ListObservationsInVenueParams{
+		ObservationIds: observationIDs, VenueSource: venueSource, VenueContainer: venueContainer,
 	})
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("list observations in venue: %w", err)
 	}
+	out := make(map[uuid.UUID]bool, len(ids))
+	for _, id := range ids {
+		out[id] = true
+	}
+	return out, nil
+}
 
-	interaction := convertDbInteraction(dbInteraction)
-	return &interaction, nil
+// CreateInteraction creates a new interaction record in a transaction of its
+// own: the observation step resolves the interaction node and the insert
+// commits with it. It is the fixture entry point and ignores
+// req.InteractionNodeID. Recording paths run ObserveInteractionTx and
+// CreateInteractionTx inside their own write's tx.
+func (r *InteractionRepository) CreateInteraction(ctx context.Context, req CreateInteractionRequest) (*Interaction, error) {
+	var created *Interaction
+	err := r.observeInOwnTx(ctx, InteractionObservation{
+		ContactID:  req.ContactID,
+		Source:     req.Source,
+		SourceRef:  req.SourceRef,
+		OccurredAt: req.OccurredAt,
+	}, func(tx pgx.Tx, nodeID *uuid.UUID) error {
+		req.InteractionNodeID = nodeID
+		var err error
+		created, err = r.CreateInteractionTx(ctx, tx, req)
+		return err
+	})
+	return created, err
+}
+
+// observeInOwnTx runs the observation step and the caller's insert in one
+// transaction, for fixture writers that have no transaction of their own.
+func (r *InteractionRepository) observeInOwnTx(ctx context.Context, obs InteractionObservation, write func(tx pgx.Tx, nodeID *uuid.UUID) error) error {
+	beginner, ok := r.queries.(interface {
+		Begin(context.Context) (pgx.Tx, error)
+	})
+	if !ok {
+		return errors.New("interaction repository: connection cannot begin a transaction")
+	}
+	tx, err := beginner.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	nodeID, err := r.ObserveInteractionTx(ctx, tx, obs)
+	if err != nil {
+		return err
+	}
+	if err := write(tx, nodeID); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
 
 // SoftDeleteInteraction soft-deletes an interaction
@@ -476,19 +570,31 @@ func (r *InteractionRepository) UpdateInteractionTimestamp(ctx context.Context, 
 // migration test to stand up pre-existing venue-less interactions. Production
 // code MUST NOT call this.
 func (r *InteractionRepository) TestInsertInteraction(ctx context.Context, id, contactID uuid.UUID, source string, sourceRef *string, occurredAt time.Time, direction string) (*Interaction, error) {
-	dbInteraction, err := r.queries.TestInsertInteraction(ctx, db.TestInsertInteractionParams{
-		ID:         id,
+	var inserted *Interaction
+	err := r.observeInOwnTx(ctx, InteractionObservation{
 		ContactID:  contactID,
 		Source:     source,
 		SourceRef:  sourceRef,
-		OccurredAt: occurredAt,
 		Direction:  direction,
+		OccurredAt: occurredAt,
+	}, func(tx pgx.Tx, nodeID *uuid.UUID) error {
+		row, err := db.New(tx).TestInsertInteraction(ctx, db.TestInsertInteractionParams{
+			ID:                id,
+			ContactID:         contactID,
+			Source:            source,
+			SourceRef:         sourceRef,
+			OccurredAt:        occurredAt,
+			Direction:         direction,
+			InteractionNodeID: nodeID,
+		})
+		if err != nil {
+			return err
+		}
+		converted := convertDbInteraction(row)
+		inserted = &converted
+		return nil
 	})
-	if err != nil {
-		return nil, err
-	}
-	interaction := convertDbInteraction(dbInteraction)
-	return &interaction, nil
+	return inserted, err
 }
 
 // UpdateInteractionVenueTx sets venue_id on an existing interaction inside the
@@ -506,13 +612,14 @@ func (r *InteractionRepository) UpdateInteractionVenueTx(ctx context.Context, tx
 // with the interaction.recorded event row (spec §3.4.1).
 func (r *InteractionRepository) CreateInteractionTx(ctx context.Context, tx pgx.Tx, req CreateInteractionRequest) (*Interaction, error) {
 	dbInteraction, err := db.New(tx).CreateInteraction(ctx, db.CreateInteractionParams{
-		ContactID:   req.ContactID,
-		Source:      req.Source,
-		SourceRef:   req.SourceRef,
-		OccurredAt:  req.OccurredAt,
-		Description: req.Description,
-		Direction:   interactionDirectionArg(req.Direction),
-		VenueID:     req.VenueID,
+		ContactID:         req.ContactID,
+		Source:            req.Source,
+		SourceRef:         req.SourceRef,
+		OccurredAt:        req.OccurredAt,
+		Description:       req.Description,
+		Direction:         interactionDirectionArg(req.Direction),
+		VenueID:           req.VenueID,
+		InteractionNodeID: req.InteractionNodeID,
 	})
 	if err != nil {
 		return nil, err
@@ -659,4 +766,18 @@ func (r *InteractionRepository) HasResponseAfterTx(ctx context.Context, tx pgx.T
 		return false, err
 	}
 	return hasResp, nil
+}
+
+// ListLiveContactsObservedOnNodesTx returns the live contacts with a live
+// observation on any of the interaction nodes, effective or excluded, in id
+// order.
+func (r *InteractionRepository) ListLiveContactsObservedOnNodesTx(ctx context.Context, tx pgx.Tx, nodeIDs []uuid.UUID) ([]uuid.UUID, error) {
+	if tx == nil {
+		return nil, fmt.Errorf("ListLiveContactsObservedOnNodesTx: %w", errNilTx)
+	}
+	ids, err := db.New(tx).ListLiveContactsObservedOnNodes(ctx, nodeIDs)
+	if err != nil {
+		return nil, fmt.Errorf("list contacts observed on nodes: %w", err)
+	}
+	return ids, nil
 }

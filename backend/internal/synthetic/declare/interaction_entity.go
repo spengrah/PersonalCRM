@@ -4,11 +4,13 @@ import (
 	"context"
 	"crypto/sha256"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
 	"personal-crm/backend/internal/events"
 	"personal-crm/backend/internal/repository"
+	"personal-crm/backend/internal/service"
 	"personal-crm/backend/internal/synthetic/factory"
 	"personal-crm/backend/internal/synthetic/replay"
 
@@ -96,13 +98,33 @@ func (p *messageInteractionPlan) validate() error {
 	return nil
 }
 
+// CallOutcome is how a declared phone call went. It fixes the staged call
+// record; the call ingest decision table (ING-039) decides the interaction
+// recorded for it, which is none for CallMissed, a missed call without
+// voicemail.
+type CallOutcome int
+
+const (
+	CallAnswered CallOutcome = iota
+	CallVoicemail
+	CallMissed
+	CallOutboundConnected
+	CallOutboundNoAnswer
+)
+
 type phoneCallInteractionPlan struct {
 	name, contact string
+	outcome       CallOutcome
 	props         interactionPlanProps
 }
 
 func (p *phoneCallInteractionPlan) handle() string { return p.name }
-func (p *phoneCallInteractionPlan) kind() string   { return "interaction" }
+func (p *phoneCallInteractionPlan) kind() string {
+	if p.outcome == CallMissed {
+		return "missed_call"
+	}
+	return "interaction"
+}
 func (p *phoneCallInteractionPlan) refs() []string { return []string{p.contact} }
 func (p *phoneCallInteractionPlan) validate() error {
 	if strings.TrimSpace(p.name) == "" {
@@ -191,8 +213,13 @@ func MessageInteraction(handle, contactHandle, source string, props ...Interacti
 	return p
 }
 
+// PhoneCallInteraction declares an answered inbound call.
 func PhoneCallInteraction(handle, contactHandle string, props ...InteractionProp) Entity {
-	p := &phoneCallInteractionPlan{name: handle, contact: contactHandle}
+	return PhoneCall(handle, contactHandle, CallAnswered, props...)
+}
+
+func PhoneCall(handle, contactHandle string, outcome CallOutcome, props ...InteractionProp) Entity {
+	p := &phoneCallInteractionPlan{name: handle, contact: contactHandle, outcome: outcome}
 	for _, prop := range props {
 		prop(&p.props)
 	}
@@ -327,7 +354,7 @@ func runGroupThread(ctx context.Context, h *replay.Harness, p *messageInteractio
 	}); err != nil {
 		return Seeded{}, fmt.Errorf("replay group thread %q: %w", p.name, err)
 	}
-	rows, err := h.InteractionRepo().ListContactInteractionsFiltered(ctx, repository.InteractionListFilterParams{ContactID: subjectID, Limit: 100})
+	rows, err := h.InteractionRepo().ListContactInteractions(ctx, subjectID, 100, 0)
 	if err != nil {
 		return Seeded{}, fmt.Errorf("read back group thread %q: %w", p.name, err)
 	}
@@ -371,7 +398,16 @@ func anarlogSessionEventPrefix(factoryPrefix string) string {
 	return fmt.Sprintf("%08x-%04x-%04x-%04x-%04x", hash[0:4], hash[4:6], hash[6:8], hash[8:10], hash[10:12])
 }
 
-func runLinkedMeetingNote(ctx context.Context, h *replay.Harness, p *linkedMeetingNotePlan, st *runState) (Seeded, error) {
+// runLinkedMeetingNote records the note through meeting-note ingest, tagging the
+// event's attendee as the session's participant. Ingest links a note to the one
+// event or call in its window, and when several share it, to the one whose
+// attendee the note's participants name. Untagged, the note links only while no
+// other event or call starts within the window, and every declared event starts at
+// the run anchor minus whole days, so a second run of a behavior, or a second
+// declaration at the same day offset, would put a competing event at that
+// instant. The tag is the signal the daemon sends, so the link no longer depends
+// on what else the database holds.
+func runLinkedMeetingNote(ctx context.Context, h *replay.Harness, support *repository.SyntheticSupportRepository, p *linkedMeetingNotePlan, st *runState) (Seeded, error) {
 	seededEvent, ok := st.seeded[p.eventHandle]
 	if !ok {
 		return Seeded{}, fmt.Errorf("linked meeting note %q: event handle %q has not been created", p.name, p.eventHandle)
@@ -389,13 +425,17 @@ func runLinkedMeetingNote(ctx context.Context, h *replay.Harness, p *linkedMeeti
 	}
 	gen := h.Generator()
 	prefix := gen.Prefix()
+	sessionID := anarlogSessionUUID(prefix, p.name)
+	humanID, err := tagEventAttendee(ctx, h, support, st, p, events[0].MatchedContactIDs, sessionID)
+	if err != nil {
+		return Seeded{}, err
+	}
 	title := strings.ToLower(fmt.Sprintf("%s%s note", prefix, p.name))
 	summary := fmt.Sprintf("Summary for %s%s", prefix, p.name)
 	memo := fmt.Sprintf("Memo for %s%s <i>not-markup</i>", prefix, p.name)
-	sessionID := anarlogSessionUUID(prefix, p.name)
 	if err := h.ReplayMeetingNoteRecorded(ctx, replay.MeetingNoteRecordedSpec{
 		SessionID: sessionID, Title: &title, Summary: &summary, Memo: &memo,
-		MeetingAt: events[0].StartTime,
+		MeetingAt: events[0].StartTime, ParticipantIDs: []string{humanID},
 	}); err != nil {
 		return Seeded{}, fmt.Errorf("linked meeting note %q: %w", p.name, err)
 	}
@@ -411,6 +451,59 @@ func runLinkedMeetingNote(ctx context.Context, h *replay.Harness, p *linkedMeeti
 		return Seeded{}, fmt.Errorf("linked meeting note %q: unexpected linkage state=%q kind=%v id=%v", p.name, note.LinkageState, note.LinkedKind, note.LinkedID)
 	}
 	return Seeded{Kind: "meeting_note", ID: note.ID.String(), Name: title}, nil
+}
+
+// tagEventAttendee registers an anarlog human for the declared contact the event
+// matched, through the same anarlog_humans ingest the daemon uses, and returns its
+// id. The human id derives from the session id, so each note owns its human and
+// re-running a namespace reproduces it. The external_contact row it leaves
+// carries no namespace prefix, so its ownership is recorded by id for cleanup,
+// which also removes the identity keyed to it.
+func tagEventAttendee(
+	ctx context.Context,
+	h *replay.Harness,
+	support *repository.SyntheticSupportRepository,
+	st *runState,
+	p *linkedMeetingNotePlan,
+	matched []uuid.UUID,
+	sessionID uuid.UUID,
+) (string, error) {
+	var attendee *factory.ContactSpec
+	for i, handle := range st.orderHandles {
+		seeded := st.order[i]
+		if seeded.Kind != "contact" || !slices.ContainsFunc(matched, func(id uuid.UUID) bool { return id.String() == seeded.ID }) {
+			continue
+		}
+		spec := st.specs[handle]
+		attendee = &spec
+		break
+	}
+	if attendee == nil {
+		return "", fmt.Errorf("linked meeting note %q: event %q matched no declared contact to tag as a participant", p.name, p.eventHandle)
+	}
+	humanID := uuid.NewSHA1(sessionID, []byte("anarlog-human"))
+	hostID := h.MacHostID()
+	if st.macHostID != nil {
+		hostID = *st.macHostID
+	}
+	spec, err := h.Generator().AnarlogHumanFor(*attendee, humanID, hostID)
+	if err != nil {
+		return "", fmt.Errorf("linked meeting note %q: %w", p.name, err)
+	}
+	if _, err := h.ReplayMacContacts(ctx, uuid.Nil, spec); err != nil {
+		return "", fmt.Errorf("linked meeting note %q: tag participant: %w", p.name, err)
+	}
+	row, err := h.ExternalContactRepo().GetBySource(ctx, SourceAnarlogHumans, spec.EntityID, nil)
+	if err != nil {
+		return "", fmt.Errorf("linked meeting note %q: read back participant: %w", p.name, err)
+	}
+	if row == nil {
+		return "", fmt.Errorf("linked meeting note %q: participant %s was not stored", p.name, spec.EntityID)
+	}
+	if err := support.RecordNamespaceEntity(ctx, h.Namespace(), repository.EntityKindExternalContact, row.ID); err != nil {
+		return "", fmt.Errorf("linked meeting note %q: record participant ownership: %w", p.name, err)
+	}
+	return spec.EntityID, nil
 }
 
 func setIMessageChatID(envelope *events.Envelope, chatID string) error {
@@ -462,30 +555,57 @@ func runPhoneCallInteraction(ctx context.Context, h *replay.Harness, p *phoneCal
 	if spec, ok := st.specs[p.contact]; ok && spec.Phone != "" {
 		peer = spec.Phone
 	}
-	answered := true
-	callRepo := repository.NewPhoneCallRepository(h.Database().Queries)
-	call, err := callRepo.UpsertCall(ctx, repository.UpsertPhoneCallParams{
+	// Each outcome's staged call fields. Call ingest's own decision table then
+	// decides the interaction, its direction and its description.
+	call := repository.UpsertPhoneCallParams{
 		CallUniqueID: h.Generator().Prefix() + "call-" + p.name,
-		PeerHandle:   peer, PeerNormalized: peer,
-		Service: repository.PhoneCallServiceVoice, Direction: repository.PhoneCallDirectionInbound,
-		Answered: &answered, HasVoicemail: false, DurationSeconds: 372, StartedAt: target,
+		PeerHandle:   peer, PeerNormalized: peer, Service: repository.PhoneCallServiceVoice,
+		Direction: repository.PhoneCallDirectionInbound, StartedAt: target,
 		MatchedContactID: &contactID, MacHostID: func() *uuid.UUID { id := h.MacHostID(); return &id }(),
-	})
+	}
+	answered, unanswered := true, false
+	switch p.outcome {
+	case CallAnswered:
+		call.Answered, call.DurationSeconds = &answered, 372
+	case CallVoicemail:
+		call.Answered, call.HasVoicemail, call.DurationSeconds = &unanswered, true, 24
+	case CallMissed:
+		call.Answered = &unanswered
+	case CallOutboundConnected:
+		call.Direction, call.DurationSeconds = repository.PhoneCallDirectionOutbound, 372
+	case CallOutboundNoAnswer:
+		call.Direction = repository.PhoneCallDirectionOutbound
+	default:
+		return Seeded{}, fmt.Errorf("phone call %q: unknown outcome %d", p.name, p.outcome)
+	}
+	record, direction, description := service.DecideCallInteraction(
+		call.Direction == repository.PhoneCallDirectionOutbound, call.Answered, call.HasVoicemail, call.DurationSeconds, call.Service)
+	callRepo := repository.NewPhoneCallRepository(h.Database().Queries)
+	staged, err := callRepo.UpsertCall(ctx, call)
 	if err != nil {
 		return Seeded{}, fmt.Errorf("insert phone call %q: %w", p.name, err)
 	}
-	interaction, err := h.InteractionRepo().TestInsertInteraction(ctx, uuid.New(), contactID, repository.InteractionSourcePhoneCalls, nil, target, repository.InteractionDirectionInbound)
+	if !record {
+		if err := callRepo.MarkProcessed(ctx, repository.MarkProcessedParams{ID: staged.ID}); err != nil {
+			return Seeded{}, fmt.Errorf("mark missed call %q processed: %w", p.name, err)
+		}
+		return Seeded{Kind: "missed_call", ID: staged.ID.String(), Name: p.name}, nil
+	}
+	interaction, err := h.InteractionRepo().TestInsertInteraction(ctx, uuid.New(), contactID, repository.InteractionSourcePhoneCalls, nil, target, direction)
 	if err != nil {
 		return Seeded{}, fmt.Errorf("insert phone interaction %q: %w", p.name, err)
 	}
-	if err := callRepo.MarkProcessed(ctx, repository.MarkProcessedParams{ID: call.ID, InteractionID: &interaction.ID}); err != nil {
+	if _, err := h.InteractionRepo().UpdateInteractionTimestamp(ctx, interaction.ID, target, &description); err != nil {
+		return Seeded{}, fmt.Errorf("describe phone interaction %q: %w", p.name, err)
+	}
+	if err := callRepo.MarkProcessed(ctx, repository.MarkProcessedParams{ID: staged.ID, InteractionID: &interaction.ID}); err != nil {
 		return Seeded{}, fmt.Errorf("link phone interaction %q: %w", p.name, err)
 	}
 	return Seeded{Kind: "interaction", ID: interaction.ID.String(), Name: p.name}, nil
 }
 
 func findInteractionAt(ctx context.Context, h *replay.Harness, contactID uuid.UUID, source string, target time.Time) (*repository.Interaction, error) {
-	rows, err := h.InteractionRepo().ListContactInteractionsFiltered(ctx, repository.InteractionListFilterParams{ContactID: contactID, Limit: 100})
+	rows, err := h.InteractionRepo().ListContactInteractions(ctx, contactID, 100, 0)
 	if err != nil {
 		return nil, err
 	}

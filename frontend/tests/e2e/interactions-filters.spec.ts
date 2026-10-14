@@ -7,45 +7,22 @@ import {
   TestAPI,
   type SeedBehaviorResult,
 } from './helpers/test-api'
-
-interface InteractionItem {
-  id: string
-  occurred_at: string
-  venue_tags: Array<{ key: string; label: string }>
-}
-
-interface InteractionPage {
-  items: InteractionItem[]
-  venue_options: Array<{ key: string; label: string }>
-}
+import {
+  fetchTimeline,
+  fetchTimelineContent,
+  itemAgoDays,
+  itemWithSource,
+} from './helpers/timeline-items'
 
 interface ContactEvent {
   id: string
   start_time: string
 }
 
-interface InteractionContent {
-  messages: Array<{ id: string; body: string; venue_key: string }>
-}
-
 const handleId = (seeded: SeedBehaviorResult, handle: string): string => {
   const entity = seeded.entities[handle]
   expect(entity, `declared handle ${handle} should be in the manifest`).toBeTruthy()
   return entity.id
-}
-
-async function fetchInteractions(
-  request: APIRequestContext,
-  contactId: string,
-  limit?: number
-): Promise<InteractionPage> {
-  const params = limit ? `?limit=${limit}` : ''
-  const response = await request.get(
-    `${API_BASE_URL}/api/v1/contacts/${contactId}/interactions${params}`,
-    { headers: API_HEADERS }
-  )
-  expect(response.ok()).toBe(true)
-  return (await response.json()).data as InteractionPage
 }
 
 async function fetchUpcoming(
@@ -92,14 +69,12 @@ test.describe('Interactions Filters @area:interactions', () => {
   test('filters the history to a venue and its expanded evidence', async ({ page, request }) => {
     const seeded = await testApi.seedBehavior('IXN-007')
     const contactId = handleId(seeded, 'subject')
-    const list = await fetchInteractions(request, contactId)
-    const upcoming = await fetchUpcoming(request, contactId)
-    const gchatId = handleId(seeded, 'gchat-thread')
-    const emailId = handleId(seeded, 'email-thread')
+    const list = await fetchTimeline(request, contactId)
+    const gchat = itemWithSource(list.items, 'gchat')
+    const gchatId = gchat.identity.id
+    const emailId = itemWithSource(list.items, 'email').identity.id
     const futureId = handleId(seeded, 'future-noise')
-    const gchat = list.items.find(item => item.id === gchatId)
-    expect(gchat).toBeTruthy()
-    const selectedVenue = gchat!.venue_tags[0].key
+    const selectedVenue = gchat.members[0].venue_tags[0].key
 
     await page.goto(`/contacts/${contactId}`)
     await expect(page.locator(`[data-interaction-id="${gchatId}"]`)).toBeVisible({
@@ -147,15 +122,10 @@ test.describe('Interactions Filters @area:interactions', () => {
       .locator(`[data-interaction-id="${gchatId}"]`)
       .getByRole('button', { name: 'Expand content' })
       .click()
-    const contentResponse = await request.get(
-      `${API_BASE_URL}/api/v1/interactions/${gchatId}/content`,
-      {
-        headers: API_HEADERS,
-      }
-    )
-    expect(contentResponse.ok()).toBe(true)
-    const content = (await contentResponse.json()).data as InteractionContent
-    const relevant = content.messages.filter(message => message.venue_key === selectedVenue)
+    const content = await fetchTimelineContent(request, gchat.identity, contactId)
+    const relevant = content.members
+      .flatMap(member => member.messages)
+      .filter(message => message.container === selectedVenue)
     expect(relevant.length).toBeGreaterThan(0)
     const region = page.locator(`[data-interaction-id="${gchatId}"] [data-content-region]`)
     // spec: IXN-007.expanded-shows-venue-messages
@@ -171,14 +141,17 @@ test.describe('Interactions Filters @area:interactions', () => {
 
   test('bounds the history with 30 and 90 day presets while paging under the filter', async ({
     page,
+    request,
   }) => {
     const seeded = await testApi.seedBehavior('IXN-008')
     const contactId = handleId(seeded, 'subject')
-    const recentId = handleId(seeded, 'recent-01')
-    const edge29Id = handleId(seeded, 'edge-29')
-    const edge31Id = handleId(seeded, 'edge-31')
-    const edge89Id = handleId(seeded, 'edge-89')
-    const edge91Id = handleId(seeded, 'edge-91')
+    const { items } = await fetchTimeline(request, contactId, { limit: 100 })
+    const at = (agoDays: number) => itemAgoDays(items, seeded.anchor, 'manual', agoDays).identity.id
+    const recentId = at(1)
+    const edge29Id = at(29)
+    const edge31Id = at(31)
+    const edge89Id = at(89)
+    const edge91Id = at(91)
 
     await page.goto(`/contacts/${contactId}`)
     await expect(historyRows(page)).toHaveCount(20, { timeout: SLOW_TIMEOUT_MS })
@@ -244,9 +217,12 @@ test.describe('Interactions Filters @area:interactions', () => {
   }) => {
     const seeded = await testApi.seedBehavior('IXN-008')
     const contactId = handleId(seeded, 'subject')
-    const recentId = handleId(seeded, 'recent-01')
-    const edge31Id = handleId(seeded, 'edge-31')
-    const edge91Id = handleId(seeded, 'edge-91')
+    const { items } = await fetchTimeline(request, contactId, { limit: 100 })
+    const at = (agoDays: number) => itemAgoDays(items, seeded.anchor, 'manual', agoDays)
+    const recentId = at(1).identity.id
+    const edge31 = at(31)
+    const edge31Id = edge31.identity.id
+    const edge91Id = at(91).identity.id
     const boundAId = handleId(seeded, 'bound-a')
     const boundBId = handleId(seeded, 'bound-b')
     const boundCId = handleId(seeded, 'bound-c')
@@ -256,17 +232,12 @@ test.describe('Interactions Filters @area:interactions', () => {
       expect(value).toBeTruthy()
       return value!
     }
-    const edge31 = (await fetchInteractions(request, contactId, 100)).items.find(
-      item => item.id === edge31Id
-    )
-    expect(edge31).toBeTruthy()
-
     await page.goto(`/contacts/${contactId}`)
     await page.getByRole('button', { name: 'Custom', exact: true }).click()
     await page
       .getByLabel('Start date')
-      .fill(new Date(edge31!.occurred_at).toISOString().slice(0, 10))
-    await page.getByLabel('End date').fill(new Date(edge31!.occurred_at).toISOString().slice(0, 10))
+      .fill(new Date(edge31.occurred_at).toISOString().slice(0, 10))
+    await page.getByLabel('End date').fill(new Date(edge31.occurred_at).toISOString().slice(0, 10))
     // spec: IXN-008.custom-range
     await expect(page.locator(`[data-interaction-id="${edge31Id}"]`)).toBeVisible({
       timeout: SLOW_TIMEOUT_MS,

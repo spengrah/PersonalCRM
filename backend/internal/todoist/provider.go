@@ -123,9 +123,11 @@ type contactWriter interface {
 // cadenceOverrider is the subset of *consumer.CadenceUpdater the provider
 // uses to route contact_by writes through the sole writer. Defined
 // consumer-side so the todoist package does not import the consumer
-// package directly.
+// package directly. A deadline edit is a due date the user set directly
+// (ApplyContactByDirectSet); a skip is not (ApplyContactByOverride).
 type cadenceOverrider interface {
 	ApplyContactByOverride(ctx context.Context, tx pgx.Tx, contactID uuid.UUID, contactBy *time.Time) error
+	ApplyContactByDirectSet(ctx context.Context, tx pgx.Tx, contactID uuid.UUID, contactBy time.Time) error
 }
 
 // CadenceSyncProvider implements SyncProvider for Todoist cadence tasks
@@ -603,8 +605,8 @@ func (p *CadenceSyncProvider) processItem(
 					metadata[MetadataKeySyncedContactBy] = newDeadlineStr
 
 					txErr := pgx.BeginTxFunc(ctx, p.pool, pgx.TxOptions{}, func(tx pgx.Tx) error {
-						if err := p.cadenceUpdater.ApplyContactByOverride(ctx, tx, contact.ID, &todoistDeadline); err != nil {
-							return fmt.Errorf("apply contact_by override from todoist deadline edit: %w", err)
+						if err := p.cadenceUpdater.ApplyContactByDirectSet(ctx, tx, contact.ID, todoistDeadline); err != nil {
+							return fmt.Errorf("apply contact_by from todoist deadline edit: %w", err)
 						}
 						if _, err := p.contactTaskRepo.UpdateContactTaskMetadataTx(ctx, tx, task.ID, metadata); err != nil {
 							return fmt.Errorf("update synced_deadline after todoist deadline edit: %w", err)

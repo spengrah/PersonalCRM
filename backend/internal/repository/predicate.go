@@ -66,24 +66,27 @@ const (
 // TypicalDurationDays, and Embedding are nullable; Embedding is populated
 // separately (NULL until then).
 type Predicate struct {
-	Key                 string           `json:"key"`
-	Kind                string           `json:"kind"`
-	SubjectType         string           `json:"subject_type"`
-	ObjectType          *string          `json:"object_type,omitempty"`
-	ValueType           *string          `json:"value_type,omitempty"`
-	Cardinality         string           `json:"cardinality"`
-	Symmetric           bool             `json:"symmetric"`
-	InversePredicate    *string          `json:"inverse_predicate,omitempty"`
-	TemporalProfile     string           `json:"temporal_profile"`
-	BaseRateDays        *int32           `json:"base_rate_days,omitempty"`
-	TypicalDurationDays *int32           `json:"typical_duration_days,omitempty"`
-	DefaultSalience     int16            `json:"default_salience"`
-	DefaultReviewPolicy string           `json:"default_review_policy"`
-	PropositionBucket   string           `json:"proposition_bucket"`
-	Status              string           `json:"status"`
-	Description         string           `json:"description"`
-	Synonyms            []string         `json:"synonyms"`
-	Embedding           *pgvector.Vector `json:"embedding,omitempty"`
+	Key                 string   `json:"key"`
+	Kind                string   `json:"kind"`
+	SubjectType         string   `json:"subject_type"`
+	ObjectType          *string  `json:"object_type,omitempty"`
+	ValueType           *string  `json:"value_type,omitempty"`
+	Cardinality         string   `json:"cardinality"`
+	Symmetric           bool     `json:"symmetric"`
+	InversePredicate    *string  `json:"inverse_predicate,omitempty"`
+	TemporalProfile     string   `json:"temporal_profile"`
+	BaseRateDays        *int32   `json:"base_rate_days,omitempty"`
+	TypicalDurationDays *int32   `json:"typical_duration_days,omitempty"`
+	DefaultSalience     int16    `json:"default_salience"`
+	DefaultReviewPolicy string   `json:"default_review_policy"`
+	PropositionBucket   string   `json:"proposition_bucket"`
+	Status              string   `json:"status"`
+	Description         string   `json:"description"`
+	Synonyms            []string `json:"synonyms"`
+	// Correction marks a correction predicate (migration 089): its assertions
+	// are the user's corrections of interactions.
+	Correction bool             `json:"correction"`
+	Embedding  *pgvector.Vector `json:"embedding,omitempty"`
 }
 
 // CreatePredicateRequest is the input for minting a provisional predicate.
@@ -121,7 +124,7 @@ func NewPredicateRepository(queries db.Querier) *PredicateRepository {
 
 // predicateRow holds the columns the read/RETURNING queries project (every
 // predicate column EXCEPT embedding — see predicate.sql for why the nullable
-// vector is never selected here). The four generated row types are
+// vector is never selected here). The five generated row types are
 // field-identical; the small adapters below normalize them onto this one shape
 // so a single converter (convertPredicateRow) builds the domain struct.
 type predicateRow struct {
@@ -142,6 +145,7 @@ type predicateRow struct {
 	Status              string
 	Description         string
 	Synonyms            []string
+	Correction          bool
 	CreatedAt           time.Time
 }
 
@@ -158,6 +162,10 @@ func predicateRowFromList(r *db.ListPredicatesByStatusRow) predicateRow {
 }
 
 func predicateRowFromCurated(r *db.ListCuratedPredicatesRow) predicateRow {
+	return predicateRow(*r)
+}
+
+func predicateRowFromCorrection(r *db.ListCorrectionPredicatesRow) predicateRow {
 	return predicateRow(*r)
 }
 
@@ -183,6 +191,7 @@ func convertPredicateRow(row predicateRow) Predicate {
 		Status:              row.Status,
 		Description:         row.Description,
 		Synonyms:            row.Synonyms,
+		Correction:          row.Correction,
 	}
 	return predicate
 }
@@ -220,6 +229,21 @@ func (r *PredicateRepository) ListCurated(ctx context.Context) ([]Predicate, err
 	predicates := make([]Predicate, 0, len(rows))
 	for _, row := range rows {
 		predicates = append(predicates, convertPredicateRow(predicateRowFromCurated(row)))
+	}
+	return predicates, nil
+}
+
+// ListCorrection returns the correction predicates, ordered by key: the
+// predicates the catalog marks correction (migration 089), the one source of
+// that set.
+func (r *PredicateRepository) ListCorrection(ctx context.Context) ([]Predicate, error) {
+	rows, err := r.queries.ListCorrectionPredicates(ctx)
+	if err != nil {
+		return nil, err
+	}
+	predicates := make([]Predicate, 0, len(rows))
+	for _, row := range rows {
+		predicates = append(predicates, convertPredicateRow(predicateRowFromCorrection(row)))
 	}
 	return predicates, nil
 }

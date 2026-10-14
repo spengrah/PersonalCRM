@@ -3,6 +3,7 @@
 package tests
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"sort"
@@ -63,7 +64,7 @@ func TestInteractionsDeclare_RowWorld(t *testing.T) {
 	}
 
 	subject := uuid.MustParse(seeded.Entities["subject"].ID)
-	rows, err := repository.NewInteractionRepository(database.Queries).ListContactInteractionsFiltered(ctx, repository.InteractionListFilterParams{ContactID: subject, Limit: 100})
+	rows, err := observationsOf(ctx, repository.NewInteractionRepository(database.Queries), subject)
 	require.NoError(t, err)
 	require.Len(t, rows, 10)
 	sources := map[string]bool{}
@@ -180,7 +181,7 @@ func TestInteractionsDeclare_PagingWorld(t *testing.T) {
 	seeded, err := declare.Run(ctx, database, "IXN-001", syntheticNS(t), factory.DefaultSeed)
 	require.NoError(t, err)
 	subject := uuid.MustParse(seeded.Entities["subject"].ID)
-	rows, err := repository.NewInteractionRepository(database.Queries).ListContactInteractionsFiltered(ctx, repository.InteractionListFilterParams{ContactID: subject, Limit: 100})
+	rows, err := observationsOf(ctx, repository.NewInteractionRepository(database.Queries), subject)
 	require.NoError(t, err)
 	require.Len(t, rows, 25)
 	tieA := findDeclaredRow(t, rows, seeded.Entities["tie-a"].ID)
@@ -223,7 +224,7 @@ func TestInteractionsDeclare_UpcomingWorld(t *testing.T) {
 		upcomingIDs[event.ID.String()] = struct{}{}
 	}
 	assert.Equal(t, expectedEventIDs, actualEventIDs)
-	rows, err := repository.NewInteractionRepository(database.Queries).ListContactInteractionsFiltered(ctx, repository.InteractionListFilterParams{ContactID: subject, Limit: 100})
+	rows, err := observationsOf(ctx, repository.NewInteractionRepository(database.Queries), subject)
 	require.NoError(t, err)
 	require.Len(t, rows, 1)
 	assert.Equal(t, seeded.Entities["past-row"].ID, rows[0].ID.String())
@@ -243,20 +244,20 @@ func TestInteractionsDeclare_HonestWorld(t *testing.T) {
 	require.NoError(t, err)
 	ir := repository.NewInteractionRepository(database.Queries)
 	silent := uuid.MustParse(seeded.Entities["silent"].ID)
-	rows, err := ir.ListContactInteractionsFiltered(ctx, repository.InteractionListFilterParams{ContactID: silent, Limit: 100})
+	rows, err := observationsOf(ctx, ir, silent)
 	require.NoError(t, err)
 	assert.Empty(t, rows)
-	count, err := ir.CountContactInteractionsFiltered(ctx, repository.InteractionListFilterParams{ContactID: silent})
+	count, err := ir.CountContactInteractions(ctx, silent)
 	require.NoError(t, err)
 	assert.Zero(t, count)
 	events, err := repository.NewCalendarEventRepository(database.Queries).ListUpcomingEventsForContact(ctx, silent, accelerated.GetCurrentTime(), 250)
 	require.NoError(t, err)
 	assert.Empty(t, events)
 	dup := uuid.MustParse(seeded.Entities["dup-host"].ID)
-	rows, err = ir.ListContactInteractionsFiltered(ctx, repository.InteractionListFilterParams{ContactID: dup, Limit: 100})
+	rows, err = observationsOf(ctx, ir, dup)
 	require.NoError(t, err)
 	assert.Len(t, rows, 4)
-	count, err = ir.CountContactInteractionsFiltered(ctx, repository.InteractionListFilterParams{ContactID: dup})
+	count, err = ir.CountContactInteractions(ctx, dup)
 	require.NoError(t, err)
 	assert.Equal(t, int64(4), count)
 	events, err = repository.NewCalendarEventRepository(database.Queries).ListUpcomingEventsForContact(ctx, dup, accelerated.GetCurrentTime(), 250)
@@ -284,10 +285,10 @@ func TestInteractionsDeclare_HonestWorld(t *testing.T) {
 	assert.Equal(t, "Logged interaction", enriched[manualA.ID].Label)
 	assert.Equal(t, "Logged interaction", enriched[manualB.ID].Label)
 	future := uuid.MustParse(seeded.Entities["future-only"].ID)
-	rows, err = ir.ListContactInteractionsFiltered(ctx, repository.InteractionListFilterParams{ContactID: future, Limit: 100})
+	rows, err = observationsOf(ctx, ir, future)
 	require.NoError(t, err)
 	assert.Empty(t, rows)
-	count, err = ir.CountContactInteractionsFiltered(ctx, repository.InteractionListFilterParams{ContactID: future})
+	count, err = ir.CountContactInteractions(ctx, future)
 	require.NoError(t, err)
 	assert.Zero(t, count)
 	events, err = repository.NewCalendarEventRepository(database.Queries).ListUpcomingEventsForContact(ctx, future, accelerated.GetCurrentTime(), 250)
@@ -304,7 +305,7 @@ func TestInteractionsDeclare_CleanupEmptiesNamespace(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, declare.StatusCleaned, res.Results[seeded.Namespace].Status)
 	subject := uuid.MustParse(seeded.Entities["subject"].ID)
-	rows, err := repository.NewInteractionRepository(database.Queries).ListContactInteractionsFiltered(ctx, repository.InteractionListFilterParams{ContactID: subject, Limit: 100})
+	rows, err := observationsOf(ctx, repository.NewInteractionRepository(database.Queries), subject)
 	require.NoError(t, err)
 	assert.Empty(t, rows)
 	callUniqueID := factory.SyntheticSourcePrefix + seeded.Namespace + "-call-call-row"
@@ -336,7 +337,7 @@ func TestInteractionsDeclare_DrilldownWorld(t *testing.T) {
 	speaker := uuid.MustParse(seeded.Entities["speaker"].ID)
 	groupID := uuid.MustParse(seeded.Entities["group-thread"].ID)
 	ir := repository.NewInteractionRepository(database.Queries)
-	rows, err := ir.ListContactInteractionsFiltered(ctx, repository.InteractionListFilterParams{ContactID: subject, Limit: 100})
+	rows, err := observationsOf(ctx, ir, subject)
 	require.NoError(t, err)
 	var subjectRows []repository.Interaction
 	for _, row := range rows {
@@ -374,7 +375,7 @@ func TestInteractionsDeclare_DrilldownWorld(t *testing.T) {
 	assert.Equal(t, content.Messages[0].VenueKey, content.Messages[1].VenueKey)
 	assert.Equal(t, content.Messages[1].VenueKey, content.Messages[2].VenueKey)
 
-	speakerRows, err := ir.ListContactInteractionsFiltered(ctx, repository.InteractionListFilterParams{ContactID: speaker, Limit: 100})
+	speakerRows, err := observationsOf(ctx, ir, speaker)
 	require.NoError(t, err)
 	require.Len(t, speakerRows, 1)
 	speakerContent, err := contentSvc.GetContent(ctx, speakerRows[0].ID)
@@ -393,7 +394,7 @@ func TestInteractionsDeclare_NotesWorld(t *testing.T) {
 	noteIDs := []uuid.UUID{uuid.MustParse(seeded.Entities["note-a"].ID), uuid.MustParse(seeded.Entities["note-b"].ID)}
 	subject := uuid.MustParse(seeded.Entities["subject"].ID)
 	ir := repository.NewInteractionRepository(database.Queries)
-	rows, err := ir.ListContactInteractionsFiltered(ctx, repository.InteractionListFilterParams{ContactID: subject, Limit: 100})
+	rows, err := observationsOf(ctx, ir, subject)
 	require.NoError(t, err)
 	require.Len(t, rows, 1)
 	assert.Equal(t, repository.InteractionSourceGCal, rows[0].Source)
@@ -591,7 +592,7 @@ func TestInteractionsDeclare_VenueFilterWorld(t *testing.T) {
 
 	subject := uuid.MustParse(seeded.Entities["subject"].ID)
 	ir := repository.NewInteractionRepository(database.Queries)
-	rows, err := ir.ListContactInteractionsFiltered(ctx, repository.InteractionListFilterParams{ContactID: subject, Limit: 100})
+	rows, err := observationsOf(ctx, ir, subject)
 	require.NoError(t, err)
 	require.Len(t, rows, 2, "the future event must not mint an interaction")
 
@@ -654,7 +655,7 @@ func TestInteractionsDeclare_DateSpreadWorld(t *testing.T) {
 
 	subject := uuid.MustParse(seeded.Entities["subject"].ID)
 	ir := repository.NewInteractionRepository(database.Queries)
-	rows, err := ir.ListContactInteractionsFiltered(ctx, repository.InteractionListFilterParams{ContactID: subject, Limit: 100})
+	rows, err := observationsOf(ctx, ir, subject)
 	require.NoError(t, err)
 	require.Len(t, rows, 24, "upcoming events must not mint interactions")
 	for handle, age := range interactionAgeByHandle {
@@ -663,13 +664,9 @@ func TestInteractionsDeclare_DateSpreadWorld(t *testing.T) {
 		assert.Equal(t, want, row.OccurredAt.UTC(), handle)
 	}
 	from30 := seeded.Anchor.Add(-720 * time.Hour)
-	count, err := ir.CountContactInteractionsFiltered(ctx, repository.InteractionListFilterParams{ContactID: subject, From: &from30})
-	require.NoError(t, err)
-	assert.Equal(t, int64(21), count)
+	assert.Equal(t, 21, countFrom(rows, from30))
 	from90 := seeded.Anchor.Add(-2160 * time.Hour)
-	count, err = ir.CountContactInteractionsFiltered(ctx, repository.InteractionListFilterParams{ContactID: subject, From: &from90})
-	require.NoError(t, err)
-	assert.Equal(t, int64(23), count)
+	assert.Equal(t, 23, countFrom(rows, from90))
 
 	eventIDs := make([]uuid.UUID, 0, 3)
 	for _, handle := range []string{"bound-a", "bound-b", "bound-c"} {
@@ -704,4 +701,31 @@ func TestInteractionsDeclare_DateSpreadWorld(t *testing.T) {
 			assert.False(t, isUpcomingEvent, "interaction source_ref must not reference an upcoming event")
 		}
 	}
+}
+
+// observationsOf is a contact's live observations, latest first, then by id,
+// descending.
+func observationsOf(ctx context.Context, ir *repository.InteractionRepository, contactID uuid.UUID) ([]repository.Interaction, error) {
+	rows, err := ir.ListContactInteractions(ctx, contactID, 100, 0)
+	if err != nil {
+		return nil, err
+	}
+	sort.SliceStable(rows, func(i, j int) bool {
+		if rows[i].OccurredAt.Equal(rows[j].OccurredAt) {
+			return bytes.Compare(rows[i].ID[:], rows[j].ID[:]) > 0
+		}
+		return rows[i].OccurredAt.After(rows[j].OccurredAt)
+	})
+	return rows, nil
+}
+
+// countFrom counts the observations at or after from.
+func countFrom(rows []repository.Interaction, from time.Time) int {
+	n := 0
+	for _, row := range rows {
+		if !row.OccurredAt.Before(from) {
+			n++
+		}
+	}
+	return n
 }

@@ -329,15 +329,12 @@ func TestInteractionContentService_ReadOnlyEnforced(t *testing.T) {
 		venueKeys[i] = venue.Key
 	}
 	require.Equal(t, []string{"email:ro-thread", "messages:ro-chat", fmt.Sprintf("telegram:%d", chatID(tg.ID))}, venueKeys)
-	listRepo := repository.NewInteractionRepository(db.New(tx))
-	list, err := listRepo.ListContactInteractionsFiltered(e.ctx, repository.InteractionListFilterParams{ContactID: e.contact.ID, Limit: 100})
+	list, err := ro.ListTimeline(e.ctx, repository.InteractionListFilterParams{ContactID: e.contact.ID, Limit: 100})
 	require.NoError(t, err)
-	wantIDs := pageIDs(rows)
+	wantIDs := identityIDs(rows)
 	sort.Slice(wantIDs, func(i, j int) bool { return bytes.Compare(wantIDs[i][:], wantIDs[j][:]) > 0 })
-	require.Equal(t, wantIDs, pageIDs(list))
-	count, err := listRepo.CountContactInteractionsFiltered(e.ctx, repository.InteractionListFilterParams{ContactID: e.contact.ID})
-	require.NoError(t, err)
-	require.Equal(t, int64(len(rows)), count)
+	require.Equal(t, wantIDs, itemIDs(list.Items))
+	require.Equal(t, len(rows), list.Total)
 }
 
 func TestInteractionContentService_LatestRowMetadata(t *testing.T) {
@@ -613,22 +610,22 @@ func TestInteractionContentFilteredList(t *testing.T) {
 	require.NoError(t, e.ir.SoftDeleteInteraction(e.ctx, tomb.ID))
 	venueSource, venueContainer := repository.InteractionSourceGChat, "filter-container"
 	p := repository.InteractionListFilterParams{ContactID: e.contact.ID, VenueSource: &venueSource, VenueContainer: &venueContainer, From: &from, To: &to, Limit: 2}
-	page1, err := e.ir.ListContactInteractionsFiltered(e.ctx, p)
+	svc := e.svc(e.db.Queries)
+	page1, err := svc.ListTimeline(e.ctx, p)
 	require.NoError(t, err)
 	p.Offset = 2
-	page2, err := e.ir.ListContactInteractionsFiltered(e.ctx, p)
+	page2, err := svc.ListTimeline(e.ctx, p)
 	require.NoError(t, err)
-	require.Len(t, page1, 2)
-	require.Len(t, page2, 2)
-	got := append(pageIDs(page1), pageIDs(page2)...)
+	require.Len(t, page1.Items, 2)
+	require.Len(t, page2.Items, 2)
+	got := append(itemIDs(page1.Items), itemIDs(page2.Items)...)
 	for _, id := range got {
 		require.Contains(t, ids, id)
 		require.NotEqual(t, tomb.ID, id)
 	}
 	require.NotContains(t, got, differentContainer.ID)
-	count, err := e.ir.CountContactInteractionsFiltered(e.ctx, p)
-	require.NoError(t, err)
-	require.Equal(t, int64(4), count)
+	require.Equal(t, 4, page1.Total)
+	require.Equal(t, 4, page2.Total)
 	sort.Slice(filterRows, func(i, j int) bool {
 		if filterRows[i].OccurredAt.Equal(filterRows[j].OccurredAt) {
 			return bytes.Compare(filterRows[i].ID[:], filterRows[j].ID[:]) > 0
@@ -638,16 +635,30 @@ func TestInteractionContentFilteredList(t *testing.T) {
 	require.Equal(t, []uuid.UUID{filterRows[0].ID, filterRows[1].ID, filterRows[2].ID, filterRows[3].ID}, got)
 	p.Offset = 0
 	p.Limit = 20
-	rows, err := e.ir.ListContactInteractionsFiltered(e.ctx, p)
+	rows, err := svc.ListTimeline(e.ctx, p)
 	require.NoError(t, err)
-	require.Contains(t, pageIDs(rows), ids[0])
-	require.Contains(t, pageIDs(rows), fromRow.ID)
-	require.NotContains(t, pageIDs(rows), differentContainer.ID)
+	require.Contains(t, itemIDs(rows.Items), ids[0])
+	require.Contains(t, itemIDs(rows.Items), fromRow.ID)
+	require.NotContains(t, itemIDs(rows.Items), differentContainer.ID)
 }
-func pageIDs(rows []repository.Interaction) []uuid.UUID {
+
+// identityIDs are the ids of the timeline identities of observations: an
+// interaction's node, and a message burst's own id.
+func identityIDs(rows []repository.Interaction) []uuid.UUID {
 	out := make([]uuid.UUID, len(rows))
 	for i := range rows {
 		out[i] = rows[i].ID
+		if rows[i].InteractionNodeID != nil {
+			out[i] = *rows[i].InteractionNodeID
+		}
+	}
+	return out
+}
+
+func itemIDs(items []service.TimelineItem) []uuid.UUID {
+	out := make([]uuid.UUID, len(items))
+	for i := range items {
+		out[i] = items[i].Identity.ID
 	}
 	return out
 }
@@ -668,9 +679,9 @@ func TestInteractionContentReads_HeavyContact(t *testing.T) {
 	}
 	require.Len(t, rows, 1000)
 	started := accelerated.GetCurrentTime()
-	page, err := e.ir.ListContactInteractionsFiltered(e.ctx, repository.InteractionListFilterParams{ContactID: e.contact.ID, Limit: 100})
+	page, err := e.svc(e.db.Queries).ListTimeline(e.ctx, repository.InteractionListFilterParams{ContactID: e.contact.ID, Limit: 100})
 	require.NoError(t, err)
-	require.Len(t, page, 100)
+	require.Len(t, page.Items, 100)
 	require.Less(t, accelerated.GetCurrentTime().Sub(started), 2*time.Second)
 	started = accelerated.GetCurrentTime()
 	content, err := e.svc(e.db.Queries).GetContent(e.ctx, rows[0].ID)

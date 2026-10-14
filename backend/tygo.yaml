@@ -23,6 +23,7 @@ packages:
     type_mappings:
       time.Time: 'string'
     frontmatter: |
+      import type { AssertionStatus } from './assertion'
       // ContactMethodType mirrors the `oneof` validation on
       // ContactMethodRequest.Type (backend/internal/api/handlers/contact.go);
       // referenced from Go via tstype tags.
@@ -39,3 +40,10 @@ packages:
       export type InteractionContentKind = 'messages' | 'meeting_note' | 'call' | 'none';
       export type InteractionVenueKind = 'group_chat' | 'dm' | 'email_thread';
       export type CallService = 'voice' | 'facetime_audio' | 'facetime_video';
+      export type CallDirection = 'inbound' | 'outbound';
+      export type TimelineItemKind = 'interaction' | 'message_burst' | 'upcoming_event' | 'missed_call';
+  - path: 'personal-crm/backend/internal/repository'
+    output_path: '../frontend/src/types/generated/assertion.ts'
+    include_files:
+      - 'assertion_status.go'
+    enum_style: 'union'

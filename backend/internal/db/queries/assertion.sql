@@ -83,6 +83,21 @@ WHERE status = 'accepted'
 ORDER BY valid_from ASC NULLS FIRST, id ASC
 FOR UPDATE;
 
+-- name: ListAcceptedSlotNodes :many
+-- The nodes the accepted, knowledge-open rows of a single-cardinality slot name,
+-- at any valid time and without a row lock: a write takes the correction lock
+-- on them before the slot lock and the FindAcceptedForSlot row locks. An
+-- asymmetric slot is (subject, predicate); a symmetric slot holds a row where
+-- any participant appears in either position.
+SELECT subject_node_id, object_node_id FROM assertion
+WHERE status = 'accepted'
+  AND knowledge_to IS NULL
+  AND predicate_key = sqlc.arg(predicate_key)
+  AND (
+        subject_node_id = ANY(sqlc.arg(participants)::uuid[])
+     OR (sqlc.arg(symmetric_slot)::bool AND object_node_id = ANY(sqlc.arg(participants)::uuid[]))
+      );
+
 -- name: CloseAssertion :exec
 -- Terminalizes an assertion: the present-successor, closure-only, retract, and
 -- rollover paths all use this (set valid_to/status/closure_reason/superseded_by/
@@ -125,9 +140,22 @@ UPDATE assertion
 SET superseded_by = sqlc.arg(superseded_by)
 WHERE id = sqlc.arg(id);
 
+-- name: ListDueBoundedSuccessors :many
+-- The rollover job's candidates: the rows RolloverDueBoundedSuccessors would
+-- terminalize, read without a row lock so the job can take their correction
+-- locks before it updates them.
+SELECT * FROM assertion
+WHERE status = 'accepted'
+  AND knowledge_to IS NULL
+  AND superseded_by IS NOT NULL
+  AND valid_to IS NOT NULL
+  AND valid_to <= sqlc.arg(now)::timestamptz
+ORDER BY id;
+
 -- name: RolloverDueBoundedSuccessors :many
 -- The rollover job: terminalize the bounded-with-pending-successor rows whose
--- bound has been reached. Scoped TIGHT — superseded_by IS NOT NULL excludes
+-- bound has been reached, among the candidate ids the job locked (rows that
+-- became due since are left for the next run). Scoped TIGHT — superseded_by IS NOT NULL excludes
 -- successor-less historical accepted facts (which simply aren't current). Sets
 -- status='superseded', closure_reason='superseded'. knowledge_to is
 -- GREATEST(now, knowledge_from) so a row whose knowledge_from was set in the
@@ -143,6 +171,7 @@ WHERE status = 'accepted'
   AND superseded_by IS NOT NULL
   AND valid_to IS NOT NULL
   AND valid_to <= sqlc.arg(now)
+  AND id = ANY(sqlc.arg(ids)::uuid[])
 RETURNING *;
 
 -- name: TransitionStatus :exec

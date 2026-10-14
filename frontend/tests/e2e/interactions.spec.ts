@@ -8,37 +8,13 @@ import {
   type SeedBehaviorResult,
 } from './helpers/test-api'
 import { fulfillJson } from './helpers/fulfill-json'
-
-interface InteractionItem {
-  id: string
-  source: string
-  source_ref?: string
-  occurred_at: string
-  direction: string
-  label: string
-  content_kind: string
-  message_count: number
-  is_group: boolean
-  venue_tags: Array<{ key: string; label: string }>
-  event?: {
-    title?: string
-    location?: string
-    attendee_count: number
-    start_time: string
-    end_time: string
-    html_link?: string
-  }
-  call?: {
-    service: string
-    answered?: boolean
-    has_voicemail: boolean
-    duration_seconds: number
-  }
-}
-
-interface InteractionPage {
-  items: InteractionItem[]
-}
+import {
+  fetchTimeline,
+  itemAgoDays,
+  itemWithSource,
+  itemsAgoDays,
+  itemsWithSource,
+} from './helpers/timeline-items'
 
 interface ContactEvent {
   id: string
@@ -60,20 +36,6 @@ const handleName = (seeded: SeedBehaviorResult, handle: string): string => {
   const entity = seeded.entities[handle]
   expect(entity, `declared handle ${handle} should be in the manifest`).toBeTruthy()
   return entity.name
-}
-
-async function fetchInteractions(
-  request: APIRequestContext,
-  contactId: string,
-  page?: number
-): Promise<InteractionPage> {
-  const params = page ? `?page=${page}` : ''
-  const response = await request.get(
-    `${API_BASE_URL}/api/v1/contacts/${contactId}/interactions${params}`,
-    { headers: API_HEADERS }
-  )
-  expect(response.ok()).toBe(true)
-  return (await response.json()).data as InteractionPage
 }
 
 async function fetchUpcoming(
@@ -138,106 +100,122 @@ test.describe('Interactions Section @area:interactions', () => {
   test('renders every recorded source with its row metadata', async ({ page, request }) => {
     const seeded = await testApi.seedBehavior('IXN-002')
     const contactId = handleId(seeded, 'subject')
-    const response = await fetchInteractions(request, contactId)
+    const response = await fetchTimeline(request, contactId)
     const rows = historyRows(page)
 
     await page.goto(`/contacts/${contactId}`)
     await expect(rows).toHaveCount(10)
 
     // spec: IXN-001.every-source-rendered
-    const expectedHandles = [
-      'email-row',
-      'gchat-row',
-      'whatsapp-row',
-      'telegram-row',
-      'messages-row',
-      'call-row',
-      'manual-row',
-      'todoist-row',
-      'anarlog-row',
+    const expectedSources = [
+      'email',
+      'gchat',
+      'whatsapp',
+      'telegram',
+      'messages',
+      'phone_calls',
+      'manual',
+      'todoist',
+      'anarlog_sessions',
     ]
-    for (const handle of expectedHandles) {
-      await expect(page.locator(`[data-interaction-id="${handleId(seeded, handle)}"]`)).toHaveCount(
-        1
-      )
+    for (const source of expectedSources) {
+      await expect(page.locator(`[data-source="${source}"]`)).toHaveCount(1)
+      expect(itemsWithSource(response.items, source)).toHaveLength(1)
     }
     await expect(page.locator('[data-source="gcal"]')).toHaveCount(1)
 
     for (const item of response.items) {
-      const row = page.locator(`[data-interaction-id="${item.id}"]`)
-      await expect(row).toHaveAttribute('data-interaction-id', item.id)
-      await expect(row).toHaveAttribute('data-source', item.source)
-      if (item.source === 'gcal') {
+      const source = item.members[0].source
+      const row = page.locator(`[data-interaction-id="${item.identity.id}"]`)
+      await expect(row).toHaveAttribute('data-interaction-id', item.identity.id)
+      await expect(row).toHaveAttribute('data-source', source)
+      if (source === 'gcal') {
         await expect(page.locator('[data-source="gcal"]')).toHaveCount(1)
       }
       // spec: IXN-002.source-badge
-      await expect(row.locator('[data-badge]')).toHaveText(sourceBadges[item.source])
+      await expect(row.locator('[data-badge]')).toHaveText(sourceBadges[source])
       // spec: IXN-002.timestamp-shown
       await expect(row.getByText(expectedDateTime(item.occurred_at), { exact: true })).toBeVisible()
       // spec: IXN-002.row-label
-      await expect(row.getByText(item.label, { exact: true }).first()).toBeVisible()
+      await expect(row.getByText(item.members[0].label, { exact: true }).first()).toBeVisible()
       // spec: IXN-002.overflow-affordance-reserved
-      await expect(row.getByRole('button', { name: 'More actions' })).toBeDisabled()
+      if (item.identity.kind === 'interaction') {
+        await expect(row.getByRole('button', { name: 'More actions' })).toBeEnabled()
+      } else {
+        await expect(row.getByRole('button', { name: 'More actions' })).toHaveCount(0)
+      }
     }
+    // The seeded iMessage burst is the non-correctable row of this world.
+    expect(itemWithSource(response.items, 'messages').identity.kind).toBe('message_burst')
 
-    const email = response.items.find(item => item.source === 'email')
+    const email = response.items.find(item => item.members[0].source === 'email')
     expect(email).toBeTruthy()
-    const emailRow = page.locator(`[data-interaction-id="${email!.id}"]`)
+    const emailRow = page.locator(`[data-interaction-id="${email!.identity.id}"]`)
     // spec: IXN-002.direction-shown
     await expect(emailRow.getByLabel('inbound')).toBeVisible()
     // spec: IXN-002.content-indicator
     await expect(emailRow.getByText('1 message', { exact: true })).toBeVisible()
-    expect(email!.venue_tags[0]).toBeTruthy()
-    await expect(emailRow.locator(`[data-venue-key="${email!.venue_tags[0].key}"]`)).toHaveText(
-      email!.venue_tags[0].label
-    )
+    expect(email!.members[0].venue_tags[0]).toBeTruthy()
+    await expect(
+      emailRow.locator(`[data-venue-key="${email!.members[0].venue_tags[0].key}"]`)
+    ).toHaveText(email!.members[0].venue_tags[0].label)
 
-    const messages = response.items.find(item => item.source === 'messages')
+    const messages = response.items.find(item => item.members[0].source === 'messages')
     expect(messages).toBeTruthy()
     await expect(
       page
-        .locator(`[data-interaction-id="${messages!.id}"]`)
+        .locator(`[data-interaction-id="${messages!.identity.id}"]`)
         .getByText('3 messages', { exact: true })
     ).toBeVisible()
-    const manual = response.items.find(item => item.source === 'manual')
+    const manual = response.items.find(item => item.members[0].source === 'manual')
     expect(manual).toBeTruthy()
     await expect(
-      page.locator(`[data-interaction-id="${manual!.id}"]`).getByLabel('outbound')
+      page.locator(`[data-interaction-id="${manual!.identity.id}"]`).getByLabel('outbound')
     ).toBeVisible()
     await expect(
-      page.locator(`[data-interaction-id="${manual!.id}"]`).getByText('No content', { exact: true })
+      page
+        .locator(`[data-interaction-id="${manual!.identity.id}"]`)
+        .getByText('No content', { exact: true })
     ).toBeVisible()
     // spec: IXN-009.contentless-says-none
     await expect(
-      page.locator(`[data-interaction-id="${manual!.id}"]`).getByRole('button', { name: /expand/i })
+      page
+        .locator(`[data-interaction-id="${manual!.identity.id}"]`)
+        .getByRole('button', { name: /expand/i })
     ).toHaveCount(0)
-    const todoist = response.items.find(item => item.source === 'todoist')
+    const todoist = response.items.find(item => item.members[0].source === 'todoist')
     expect(todoist).toBeTruthy()
     await expect(
       page
-        .locator(`[data-interaction-id="${todoist!.id}"]`)
+        .locator(`[data-interaction-id="${todoist!.identity.id}"]`)
         .getByText('No content', { exact: true })
     ).toBeVisible()
-    const note = response.items.find(item => item.source === 'anarlog_sessions')
+    const note = response.items.find(item => item.members[0].source === 'anarlog_sessions')
     expect(note).toBeTruthy()
     await expect(
-      page.locator(`[data-interaction-id="${note!.id}"]`).getByText('Meeting note', { exact: true })
+      page
+        .locator(`[data-interaction-id="${note!.identity.id}"]`)
+        .getByText('Meeting note', { exact: true })
     ).toBeVisible()
 
-    const gchat = response.items.find(item => item.source === 'gchat')
-    const whatsapp = response.items.find(item => item.source === 'whatsapp')
+    const gchat = response.items.find(item => item.members[0].source === 'gchat')
+    const whatsapp = response.items.find(item => item.members[0].source === 'whatsapp')
     expect(gchat).toBeTruthy()
     expect(whatsapp).toBeTruthy()
     // spec: IXN-002.group-marker
     await expect(
-      page.locator(`[data-interaction-id="${gchat!.id}"]`).getByText('Group', { exact: true })
+      page
+        .locator(`[data-interaction-id="${gchat!.identity.id}"]`)
+        .getByText('Group', { exact: true })
     ).toBeVisible()
     await expect(
-      page.locator(`[data-interaction-id="${whatsapp!.id}"]`).getByText('Group', { exact: true })
+      page
+        .locator(`[data-interaction-id="${whatsapp!.identity.id}"]`)
+        .getByText('Group', { exact: true })
     ).toHaveCount(0)
 
-    const calendar = response.items.find(item => item.source === 'gcal')
-    expect(calendar?.event).toBeTruthy()
+    const calendar = response.items.find(item => item.members[0].source === 'gcal')
+    expect(calendar?.members[0].event).toBeTruthy()
     const calendarRow = page.locator('[data-source="gcal"]')
     // spec: IXN-002.direction-shown
     await expect(calendarRow.getByLabel('mutual')).toBeVisible()
@@ -247,29 +225,36 @@ test.describe('Interactions Section @area:interactions', () => {
     // spec: IXN-002.calendar-row-event-details
     await expect(
       calendarRow.getByText(
-        expectedTimeRange(calendar!.event!.start_time, calendar!.event!.end_time),
+        expectedTimeRange(
+          calendar!.members[0].event!.start_time,
+          calendar!.members[0].event!.end_time
+        ),
         { exact: true }
       )
     ).toBeVisible()
-    await expect(calendarRow.getByText(calendar!.event!.location!, { exact: true })).toBeVisible()
     await expect(
-      calendarRow.getByText(`${calendar!.event!.attendee_count} attendees`, { exact: true })
+      calendarRow.getByText(calendar!.members[0].event!.location!, { exact: true })
     ).toBeVisible()
-    const calendarLink = calendarRow.getByRole('link', { name: calendar!.event!.title! })
+    await expect(
+      calendarRow.getByText(`${calendar!.members[0].event!.attendee_count} attendees`, {
+        exact: true,
+      })
+    ).toBeVisible()
+    const calendarLink = calendarRow.getByRole('link', { name: calendar!.members[0].event!.title! })
     await expect(calendarLink).toHaveAttribute('target', '_blank')
     await expect(calendarLink).toHaveAttribute('rel', 'noopener noreferrer')
-    await expect(calendarLink).toHaveAttribute('href', calendar!.event!.html_link!)
+    await expect(calendarLink).toHaveAttribute('href', calendar!.members[0].event!.html_link!)
 
-    const call = response.items.find(item => item.source === 'phone_calls')
-    expect(call?.call).toBeTruthy()
-    const callRow = page.locator(`[data-interaction-id="${call!.id}"]`)
+    const call = response.items.find(item => item.members[0].source === 'phone_calls')
+    expect(call?.members[0].call).toBeTruthy()
+    const callRow = page.locator(`[data-interaction-id="${call!.identity.id}"]`)
     // spec: IXN-002.call-row-details
     await expect(callRow.getByText('Voice call', { exact: true })).toBeVisible()
     await expect(callRow.getByText('Answered', { exact: true })).toBeVisible()
     const duration =
-      call!.call!.duration_seconds < 60
-        ? `${call!.call!.duration_seconds}s`
-        : `${Math.floor(call!.call!.duration_seconds / 60)}m ${call!.call!.duration_seconds % 60}s`
+      call!.members[0].call!.duration_seconds < 60
+        ? `${call!.members[0].call!.duration_seconds}s`
+        : `${Math.floor(call!.members[0].call!.duration_seconds / 60)}m ${call!.members[0].call!.duration_seconds % 60}s`
     await expect(callRow.getByText(duration, { exact: true })).toBeVisible()
     await expect(
       callRow.getByText(/message|Meeting note|No content/, { exact: false })
@@ -279,9 +264,9 @@ test.describe('Interactions Section @area:interactions', () => {
   test('pages the full history without gaps or duplicates', async ({ page, request }) => {
     const seeded = await testApi.seedBehavior('IXN-001')
     const contactId = handleId(seeded, 'subject')
-    const first = await fetchInteractions(request, contactId, 1)
-    const second = await fetchInteractions(request, contactId, 2)
-    const expectedIds = [...first.items, ...second.items].map(item => item.id)
+    const first = await fetchTimeline(request, contactId, { page: 1 })
+    const second = await fetchTimeline(request, contactId, { page: 2 })
+    const expectedIds = [...first.items, ...second.items].map(item => item.identity.id)
 
     await page.goto(`/contacts/${contactId}`)
     await expect(historyRows(page)).toHaveCount(first.items.length)
@@ -329,7 +314,7 @@ test.describe('Interactions Section @area:interactions', () => {
     const seeded = await testApi.seedBehavior('IXN-006')
     const contactId = handleId(seeded, 'subject')
     const events = await fetchUpcoming(request, contactId)
-    const interactions = await fetchInteractions(request, contactId)
+    const interactions = await fetchTimeline(request, contactId)
     expect(events).toHaveLength(13)
     await page.goto(`/contacts/${contactId}`)
 
@@ -377,7 +362,7 @@ test.describe('Interactions Section @area:interactions', () => {
             card.compareDocumentPosition(
               document.querySelector(`[data-interaction-id="${historyId}"]`)!
             ) & Node.DOCUMENT_POSITION_FOLLOWING,
-          handleId(seeded, 'past-row')
+          itemAgoDays(interactions.items, seeded.anchor, 'manual', 1).identity.id
         )
     ).resolves.toBeTruthy()
     const linkless = events.find(event => event.id === handleId(seeded, 'future-01'))
@@ -405,22 +390,28 @@ test.describe('Interactions Section @area:interactions', () => {
 
     // spec: IXN-006.no-interaction-row-for-future
     for (const event of events) {
-      expect(interactions.items.some(item => item.source_ref === event.id)).toBe(false)
+      expect(
+        interactions.items.some(item => item.members.some(member => member.source_ref === event.id))
+      ).toBe(false)
     }
   })
 
-  test('renders sparse and duplicated state honestly', async ({ browser, page }) => {
+  test('renders sparse and duplicated state honestly', async ({ browser, page, request }) => {
     const seeded = await testApi.seedBehavior('IXN-009')
     const duplicateContactId = handleId(seeded, 'dup-host')
+    const manualDuplicates = itemsAgoDays(
+      (await fetchTimeline(request, duplicateContactId)).items,
+      seeded.anchor,
+      'manual',
+      3
+    )
+    expect(manualDuplicates).toHaveLength(2)
     await page.goto(`/contacts/${duplicateContactId}`)
     // spec: IXN-009.duplicates-render-distinct
     await expect(historyRows(page)).toHaveCount(4)
-    await expect(
-      page.locator(`[data-interaction-id="${handleId(seeded, 'manual-dup-a')}"]`)
-    ).toHaveCount(1)
-    await expect(
-      page.locator(`[data-interaction-id="${handleId(seeded, 'manual-dup-b')}"]`)
-    ).toHaveCount(1)
+    for (const duplicate of manualDuplicates) {
+      await expect(page.locator(`[data-interaction-id="${duplicate.identity.id}"]`)).toHaveCount(1)
+    }
     await expect(page.locator('[data-source="gcal"]')).toHaveCount(2)
 
     const silentId = handleId(seeded, 'silent')
@@ -453,5 +444,81 @@ test.describe('Interactions Section @area:interactions', () => {
       { timeout: JOB_TIMEOUT_MS }
     )
     await errorContext.close()
+  })
+})
+
+test.describe('Call evidence @area:interactions', () => {
+  let testApi: TestAPI
+
+  test.beforeEach(async ({ request }, testInfo) => {
+    testApi = createTestAPI(request, testInfo)
+  })
+
+  test.afterEach(async () => {
+    await testApi.cleanup()
+  })
+
+  test('IXN-020: a missed call without voicemail is a distinct, cadence-inert row', async ({
+    page,
+    request,
+  }) => {
+    const seeded = await testApi.seedBehavior('IXN-020')
+    const contactId = handleId(seeded, 'subject')
+    const missedId = handleId(seeded, 'missed-call')
+    const response = await fetchTimeline(request, contactId)
+    const missed = response.items.find(item => item.identity.id === missedId)
+    expect(missed?.identity.kind).toBe('missed_call')
+    const newerId = itemAgoDays(response.items, seeded.anchor, 'manual', 1).identity.id
+    const olderId = itemAgoDays(response.items, seeded.anchor, 'manual', 3).identity.id
+
+    await page.goto(`/contacts/${contactId}`)
+    const rows = historyRows(page)
+    await expect(rows).toHaveCount(3)
+
+    // spec: IXN-020.distinct-missed-call-row
+    await expect(rows.nth(0)).toHaveAttribute('data-interaction-id', newerId)
+    await expect(rows.nth(1)).toHaveAttribute('data-missed-call-id', missedId)
+    await expect(rows.nth(2)).toHaveAttribute('data-interaction-id', olderId)
+    const missedRow = rows.nth(1)
+    await expect(missedRow).not.toHaveAttribute('data-interaction-id', /.*/)
+    await expect(missedRow.locator('[data-badge]')).toHaveText('Missed call')
+    await expect(
+      missedRow.getByText(expectedDateTime(missed!.occurred_at), { exact: true })
+    ).toBeVisible()
+    await expect(missedRow.getByText('Missed', { exact: true })).toBeVisible()
+    // spec: IXN-020.cadence-inert-shown
+    await expect(missedRow.getByText('Not counted toward cadence', { exact: true })).toBeVisible()
+    // spec: IXN-020.no-row-actions
+    // spec: IXN-002.overflow-affordance-reserved
+    await expect(missedRow.getByRole('button')).toHaveCount(0)
+    await expect(rows.nth(0).getByRole('button', { name: 'More actions' })).toBeEnabled()
+  })
+
+  test('IXN-021: a call the user placed never shows as missed', async ({ page, request }) => {
+    const seeded = await testApi.seedBehavior('IXN-021')
+    const contactId = handleId(seeded, 'subject')
+    const { items } = await fetchTimeline(request, contactId)
+    const callAgoDays: Record<string, number> = {
+      'outbound-connected': 1,
+      'outbound-no-answer': 2,
+      'inbound-voicemail': 3,
+    }
+    const row = (handle: string) =>
+      page.locator(
+        `[data-interaction-id="${itemAgoDays(items, seeded.anchor, 'phone_calls', callAgoDays[handle]).identity.id}"]`
+      )
+
+    await page.goto(`/contacts/${contactId}`)
+    await expect(historyRows(page)).toHaveCount(3)
+
+    // spec: IXN-021.connected-outbound-not-missed
+    await expect(row('outbound-connected').getByText('Connected', { exact: true })).toBeVisible()
+    await expect(row('outbound-connected').getByText(/missed/i)).toHaveCount(0)
+    // spec: IXN-021.unanswered-outbound-not-missed
+    await expect(row('outbound-no-answer').getByText('No answer', { exact: true })).toBeVisible()
+    await expect(row('outbound-no-answer').getByText(/missed/i)).toHaveCount(0)
+    // spec: IXN-021.missed-inbound-shows-missed
+    await expect(row('inbound-voicemail').getByText('Missed', { exact: true })).toBeVisible()
+    await expect(row('inbound-voicemail').getByText('Voicemail', { exact: true })).toBeVisible()
   })
 })

@@ -39,7 +39,7 @@ func setupInteractionTestRouter(t *testing.T) (*gin.Engine, func()) {
 	interactionRepo := repository.NewInteractionRepository(database.Queries)
 	contentService := service.NewInteractionContentService(interactionRepo, repository.NewCommsMessageRepository(database.Queries), repository.NewTelegramMessageRepository(database.Queries), repository.NewMessagesMessageRepository(database.Queries), repository.NewMeetingNoteRepository(database.Queries), repository.NewCalendarEventRepository(database.Queries), repository.NewPhoneCallRepository(database.Queries), repository.NewContactRepository(database.Queries))
 	contactHandler := handlers.NewContactHandler(contactService)
-	interactionHandler := handlers.NewInteractionHandler(interactionRepo, manualHandler, contentService)
+	interactionHandler := handlers.NewInteractionHandler(manualHandler, contentService)
 
 	router := gin.New()
 	router.Use(api.RequestIDMiddleware())
@@ -56,11 +56,7 @@ func setupInteractionTestRouter(t *testing.T) (*gin.Engine, func()) {
 			contacts.GET("/:id/interactions", interactionHandler.ListContactInteractions)
 			contacts.POST("/:id/interactions", interactionHandler.CreateInteraction)
 		}
-		interactions := v1.Group("/interactions")
-		{
-			interactions.GET("/:id/content", interactionHandler.GetInteractionContent)
-			interactions.DELETE("/:id", interactionHandler.DeleteInteraction)
-		}
+		v1.GET("/timeline-items/:kind/:id/content", interactionHandler.GetTimelineItemContent)
 	}
 
 	cleanup := func() {
@@ -166,22 +162,22 @@ func TestInteraction_CreateAndList(t *testing.T) {
 		items := data["items"].([]interface{})
 		assert.GreaterOrEqual(t, len(items), 2) // At least 2 from the creates above
 
-		// LIST rows carry the same wire shape as the create echo —
-		// description, direction, and source. Today both paths share
-		// interactionToResponse, so this pins the contract against the
-		// mapping ever forking.
-		var coffeeRow map[string]interface{}
+		// A LIST item carries the participation's direction, and its member
+		// carries the source and, for a described interaction, the description as
+		// its label.
+		var coffeeRow, coffeeMember map[string]interface{}
 		for _, item := range items {
 			row := item.(map[string]interface{})
-			assert.NotEmpty(t, row["source"], "list row should carry source")
+			member := row["members"].([]interface{})[0].(map[string]interface{})
+			assert.NotEmpty(t, member["source"], "list member should carry source")
 			assert.Contains(t, []interface{}{"outbound", "inbound", "mutual"}, row["direction"],
 				"list row should carry a valid direction")
-			if row["description"] == "Had coffee together" {
-				coffeeRow = row
+			if member["label"] == "Had coffee together" {
+				coffeeRow, coffeeMember = row, member
 			}
 		}
 		require.NotNil(t, coffeeRow, "created interaction should appear in the list with its description")
-		assert.Equal(t, "manual", coffeeRow["source"])
+		assert.Equal(t, "manual", coffeeMember["source"])
 		assert.Equal(t, "mutual", coffeeRow["direction"]) // create passed no direction; manual default is mutual
 
 		// Check pagination meta
@@ -234,69 +230,6 @@ func TestInteraction_ManualDeduplication(t *testing.T) {
 
 		// Should return the same interaction (deduped)
 		assert.Equal(t, firstID, secondID, "duplicate interaction within 30-min window should return existing")
-	})
-}
-
-func TestInteraction_SoftDelete(t *testing.T) {
-	testsupport.RequireDatabase(t)
-
-	t.Parallel()
-	router, cleanup := setupInteractionTestRouter(t)
-	defer cleanup()
-
-	contactID := createInteractionTestContact(t, router, "Delete Interaction Test User "+t.Name()+"-"+uuid.NewString()[:8])
-	defer deleteInteractionTestContact(t, router, contactID)
-
-	// Create an interaction
-	pastDate := accelerated.GetCurrentTime().Add(-48 * time.Hour).Format(time.RFC3339)
-	body, _ := json.Marshal(map[string]string{
-		"occurred_at": pastDate,
-	})
-	req, _ := http.NewRequest("POST", "/api/v1/contacts/"+contactID+"/interactions", bytes.NewBuffer(body))
-	req.Header.Set("Content-Type", "application/json")
-
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-	require.Equal(t, http.StatusCreated, w.Code)
-
-	var createResp api.APIResponse
-	err := json.Unmarshal(w.Body.Bytes(), &createResp)
-	require.NoError(t, err)
-	interactionData := createResp.Data.(map[string]interface{})
-	interactionID := interactionData["id"].(string)
-
-	t.Run("DeleteInteraction", func(t *testing.T) {
-		deleteReq, _ := http.NewRequest("DELETE", "/api/v1/interactions/"+interactionID, nil)
-		deleteW := httptest.NewRecorder()
-		router.ServeHTTP(deleteW, deleteReq)
-
-		assert.Equal(t, http.StatusNoContent, deleteW.Code)
-	})
-
-	t.Run("DeletedInteractionNotInList", func(t *testing.T) {
-		listReq, _ := http.NewRequest("GET", "/api/v1/contacts/"+contactID+"/interactions", nil)
-		listW := httptest.NewRecorder()
-		router.ServeHTTP(listW, listReq)
-
-		var listResp api.APIResponse
-		err := json.Unmarshal(listW.Body.Bytes(), &listResp)
-		require.NoError(t, err)
-
-		// Verify the deleted interaction is not in the list
-		data := listResp.Data.(map[string]interface{})
-		items := data["items"].([]interface{})
-		for _, item := range items {
-			interaction := item.(map[string]interface{})
-			assert.NotEqual(t, interactionID, interaction["id"], "soft-deleted interaction should not appear in list")
-		}
-	})
-
-	t.Run("DeleteNonExistentInteraction", func(t *testing.T) {
-		deleteReq, _ := http.NewRequest("DELETE", "/api/v1/interactions/00000000-0000-0000-0000-000000000000", nil)
-		deleteW := httptest.NewRecorder()
-		router.ServeHTTP(deleteW, deleteReq)
-
-		assert.Equal(t, http.StatusNotFound, deleteW.Code)
 	})
 }
 
@@ -497,8 +430,10 @@ func listInteractionPage(t *testing.T, router *gin.Engine, contactID string, lim
 	for _, item := range rows {
 		row, isObject := item.(map[string]interface{})
 		require.True(t, isObject)
-		id, hasID := row["id"].(string)
-		require.True(t, hasID, "every interaction row must carry an id")
+		identity, isObject := row["identity"].(map[string]interface{})
+		require.True(t, isObject, "every interaction row must carry an identity")
+		id, hasID := identity["id"].(string)
+		require.True(t, hasID, "every interaction identity must carry an id")
 		ids = append(ids, id)
 	}
 	return interactionPage{

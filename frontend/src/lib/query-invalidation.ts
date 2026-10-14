@@ -28,6 +28,7 @@ export type DomainEvent =
   | 'contact:skipped' // a cycle was skipped or a skip undone
   // Interaction events
   | 'interaction:created' // a manual / system interaction was logged
+  | 'interaction:corrected' // interactions were merged or participations removed
   // Import events
   | 'import:imported' // imported as new contact
   | 'import:linked' // linked to existing contact
@@ -87,6 +88,16 @@ const invalidationRules: Record<DomainEvent, InvalidationKey[]> = {
     (contactId: string) => contactKeys.detail(contactId),
     (contactId: string) => contactTaskKeys.forContact(contactId),
     (contactId: string) => interactionKeys.forContact(contactId),
+  ],
+  // A correction can change the timeline, cadence fields and follow-up tasks of
+  // every attendee of the corrected interaction, not only the contact it was
+  // made from, so it reaches every contact's keys.
+  'interaction:corrected': [
+    contactKeys.lists(),
+    contactKeys.overdue(),
+    contactKeys.details(),
+    contactTaskKeys.lists(),
+    interactionKeys.all,
   ],
 
   // Import events

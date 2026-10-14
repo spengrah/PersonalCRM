@@ -93,5 +93,6 @@ func newIngestDeps(t *testing.T, database *db.Database, bus *events.Bus) service
 		AddressBookReconciler: service.NewAddressBookReconcileService(enrichmentService, contactRepo, contactMethodRepo, externalRepo),
 		Venue: repository.NewVenueResolverRegistry(
 			repository.NewVenueRepository(database.Queries), nil, calendarRepo),
+		GroupBursts: service.NewGroupBurstPromoter(repository.NewMessagesMessageRepository(database.Queries), contactService),
 	}
 }

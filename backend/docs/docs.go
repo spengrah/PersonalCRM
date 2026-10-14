@@ -3788,38 +3788,132 @@ const docTemplate = `{
                 }
             }
         },
-        "/interactions/{id}": {
-            "delete": {
-                "tags": [
-                    "interactions"
+        "/interactions/merge": {
+            "post": {
+                "description": "Declares the listed interactions one interaction for every attendee. Answers with contact_id's resulting participation.",
+                "consumes": [
+                    "application/json"
                 ],
-                "summary": "Delete interaction",
-                "parameters": [
-                    {
-                        "type": "string",
-                        "format": "uuid",
-                        "description": "Interaction ID",
-                        "name": "id",
-                        "in": "path",
-                        "required": true
-                    }
-                ],
-                "responses": {
-                    "204": {
-                        "description": "Interaction deleted"
-                    }
-                }
-            }
-        },
-        "/interactions/{id}/content": {
-            "get": {
                 "produces": [
                     "application/json"
                 ],
                 "tags": [
                     "interactions"
                 ],
-                "summary": "Get interaction content",
+                "summary": "Merge interactions",
+                "parameters": [
+                    {
+                        "description": "Interactions to merge",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/handlers.InteractionMergeRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/api.APIResponse"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/handlers.InteractionMergeResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/api.APIResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/api.APIResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/interactions/merge/preview": {
+            "post": {
+                "description": "Answers exactly what POST /interactions/merge would answer for the same body, and writes nothing.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "interactions"
+                ],
+                "summary": "Preview an interaction merge",
+                "parameters": [
+                    {
+                        "description": "Interactions to merge",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/handlers.InteractionMergeRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/api.APIResponse"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/handlers.InteractionMergeResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/api.APIResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/api.APIResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/interactions/{id}/participants": {
+            "get": {
+                "description": "Lists the contacts with an effective participation in the interaction that holds the id (its merged interaction when the id was merged away), ordered by name: the contacts a removal can name.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "interactions"
+                ],
+                "summary": "List an interaction's participants",
                 "parameters": [
                     {
                         "type": "string",
@@ -3842,11 +3936,65 @@ const docTemplate = `{
                                     "type": "object",
                                     "properties": {
                                         "data": {
-                                            "$ref": "#/definitions/handlers.InteractionContentResponse"
+                                            "$ref": "#/definitions/handlers.InteractionParticipantsResponse"
                                         }
                                     }
                                 }
                             ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/api.APIResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/api.APIResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/interactions/{id}/removals": {
+            "post": {
+                "description": "Removes exactly the selected attendees' participations (scope contact_ids, or everyone) of the interaction that holds the id, whatever the reason.",
+                "consumes": [
+                    "application/json"
+                ],
+                "tags": [
+                    "interactions"
+                ],
+                "summary": "Remove participations of an interaction",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "format": "uuid",
+                        "description": "Interaction ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Removal scope and reason",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/handlers.InteractionRemovalRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "Participations removed"
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/api.APIResponse"
                         }
                     },
                     "404": {
@@ -4767,6 +4915,155 @@ const docTemplate = `{
                                     }
                                 }
                             ]
+                        }
+                    }
+                }
+            }
+        },
+        "/timeline-items/{kind}/{id}/assertions": {
+            "get": {
+                "description": "Read-only. Each entry is one assertion beside one displayed content item, keyed by that item's content_ref. Correction assertions are never returned.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "interactions"
+                ],
+                "summary": "Get timeline item assertions",
+                "parameters": [
+                    {
+                        "enum": [
+                            "interaction",
+                            "message_burst",
+                            "upcoming_event",
+                            "missed_call"
+                        ],
+                        "type": "string",
+                        "description": "Timeline item kind",
+                        "name": "kind",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "format": "uuid",
+                        "description": "Timeline item ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "format": "uuid",
+                        "description": "Participation context contact ID",
+                        "name": "contact_id",
+                        "in": "query",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/api.APIResponse"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/handlers.TimelineAssertionsResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/api.APIResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/api.APIResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/timeline-items/{kind}/{id}/content": {
+            "get": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "interactions"
+                ],
+                "summary": "Get timeline item content",
+                "parameters": [
+                    {
+                        "enum": [
+                            "interaction",
+                            "message_burst",
+                            "upcoming_event",
+                            "missed_call"
+                        ],
+                        "type": "string",
+                        "description": "Timeline item kind",
+                        "name": "kind",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "format": "uuid",
+                        "description": "Timeline item ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "format": "uuid",
+                        "description": "Participation context contact ID",
+                        "name": "contact_id",
+                        "in": "query",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/api.APIResponse"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/handlers.TimelineContentResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/api.APIResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/api.APIResponse"
                         }
                     }
                 }
@@ -5729,6 +6026,9 @@ const docTemplate = `{
                 "answered": {
                     "type": "boolean"
                 },
+                "direction": {
+                    "type": "string"
+                },
                 "duration_seconds": {
                     "type": "integer"
                 },
@@ -6138,6 +6438,15 @@ const docTemplate = `{
                 "body": {
                     "type": "string"
                 },
+                "channel": {
+                    "type": "string"
+                },
+                "container": {
+                    "type": "string"
+                },
+                "content_ref": {
+                    "type": "string"
+                },
                 "id": {
                     "type": "string"
                 },
@@ -6148,6 +6457,9 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "sent_at": {
+                    "type": "string"
+                },
+                "source": {
                     "type": "string"
                 },
                 "venue_key": {
@@ -6389,79 +6701,26 @@ const docTemplate = `{
                 }
             }
         },
-        "handlers.InteractionContentResponse": {
-            "type": "object",
-            "properties": {
-                "interaction_id": {
-                    "type": "string"
-                },
-                "kind": {
-                    "type": "string"
-                },
-                "meeting_notes": {
-                    "type": "array",
-                    "items": {
-                        "$ref": "#/definitions/handlers.MeetingNoteContentResponse"
-                    }
-                },
-                "messages": {
-                    "type": "array",
-                    "items": {
-                        "$ref": "#/definitions/handlers.ContentMessageResponse"
-                    }
-                }
-            }
-        },
         "handlers.InteractionListItemResponse": {
             "type": "object",
             "properties": {
-                "call": {
-                    "$ref": "#/definitions/handlers.CallSummaryResponse"
-                },
-                "contact_id": {
-                    "type": "string"
-                },
-                "content_kind": {
-                    "type": "string"
-                },
-                "created_at": {
-                    "type": "string"
-                },
-                "description": {
-                    "type": "string"
+                "cadence_inert": {
+                    "type": "boolean"
                 },
                 "direction": {
                     "type": "string"
                 },
-                "event": {
-                    "$ref": "#/definitions/handlers.EventSummaryResponse"
+                "identity": {
+                    "$ref": "#/definitions/handlers.TimelineIdentityResponse"
                 },
-                "id": {
-                    "type": "string"
-                },
-                "is_group": {
-                    "type": "boolean"
-                },
-                "label": {
-                    "type": "string"
-                },
-                "message_count": {
-                    "type": "integer"
+                "members": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/handlers.TimelineMemberResponse"
+                    }
                 },
                 "occurred_at": {
                     "type": "string"
-                },
-                "source": {
-                    "type": "string"
-                },
-                "source_ref": {
-                    "type": "string"
-                },
-                "venue_tags": {
-                    "type": "array",
-                    "items": {
-                        "$ref": "#/definitions/handlers.VenueTagResponse"
-                    }
                 }
             }
         },
@@ -6479,6 +6738,93 @@ const docTemplate = `{
                     "items": {
                         "$ref": "#/definitions/handlers.VenueTagResponse"
                     }
+                }
+            }
+        },
+        "handlers.InteractionMergeRequest": {
+            "type": "object",
+            "required": [
+                "contact_id",
+                "interaction_ids"
+            ],
+            "properties": {
+                "contact_id": {
+                    "type": "string"
+                },
+                "interaction_ids": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
+        "handlers.InteractionMergeResponse": {
+            "type": "object",
+            "properties": {
+                "interaction_id": {
+                    "type": "string"
+                },
+                "participation": {
+                    "$ref": "#/definitions/handlers.InteractionParticipationResponse"
+                }
+            }
+        },
+        "handlers.InteractionParticipantResponse": {
+            "type": "object",
+            "properties": {
+                "contact_id": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.InteractionParticipantsResponse": {
+            "type": "object",
+            "properties": {
+                "participants": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/handlers.InteractionParticipantResponse"
+                    }
+                }
+            }
+        },
+        "handlers.InteractionParticipationResponse": {
+            "type": "object",
+            "properties": {
+                "direction": {
+                    "type": "string"
+                },
+                "occurred_at": {
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.InteractionRemovalRequest": {
+            "type": "object",
+            "properties": {
+                "reason": {
+                    "type": "string"
+                },
+                "scope": {
+                    "$ref": "#/definitions/handlers.InteractionRemovalScope"
+                }
+            }
+        },
+        "handlers.InteractionRemovalScope": {
+            "type": "object",
+            "properties": {
+                "contact_ids": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "everyone": {
+                    "type": "boolean"
                 }
             }
         },
@@ -6567,7 +6913,19 @@ const docTemplate = `{
         "handlers.MeetingNoteContentResponse": {
             "type": "object",
             "properties": {
+                "channel": {
+                    "type": "string"
+                },
+                "container": {
+                    "type": "string"
+                },
+                "content_ref": {
+                    "type": "string"
+                },
                 "memo": {
+                    "type": "string"
+                },
+                "source": {
                     "type": "string"
                 },
                 "summary": {
@@ -7079,6 +7437,135 @@ const docTemplate = `{
                 },
                 "suggestion": {
                     "$ref": "#/definitions/handlers.MethodSuggestionResponse"
+                }
+            }
+        },
+        "handlers.TimelineAssertionResponse": {
+            "type": "object",
+            "properties": {
+                "assertion_id": {
+                    "type": "string"
+                },
+                "content_ref": {
+                    "type": "string"
+                },
+                "object": {
+                    "type": "string"
+                },
+                "predicate": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "subject": {
+                    "type": "string"
+                },
+                "value_bool": {
+                    "type": "boolean"
+                },
+                "value_date": {
+                    "type": "string"
+                },
+                "value_num": {
+                    "type": "number"
+                },
+                "value_text": {
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.TimelineAssertionsResponse": {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/handlers.TimelineAssertionResponse"
+                    }
+                }
+            }
+        },
+        "handlers.TimelineContentMemberResponse": {
+            "type": "object",
+            "properties": {
+                "kind": {
+                    "type": "string"
+                },
+                "meeting_notes": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/handlers.MeetingNoteContentResponse"
+                    }
+                },
+                "messages": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/handlers.ContentMessageResponse"
+                    }
+                },
+                "source": {
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.TimelineContentResponse": {
+            "type": "object",
+            "properties": {
+                "identity": {
+                    "$ref": "#/definitions/handlers.TimelineIdentityResponse"
+                },
+                "members": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/handlers.TimelineContentMemberResponse"
+                    }
+                }
+            }
+        },
+        "handlers.TimelineIdentityResponse": {
+            "type": "object",
+            "properties": {
+                "id": {
+                    "type": "string"
+                },
+                "kind": {
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.TimelineMemberResponse": {
+            "type": "object",
+            "properties": {
+                "call": {
+                    "$ref": "#/definitions/handlers.CallSummaryResponse"
+                },
+                "content_kind": {
+                    "type": "string"
+                },
+                "event": {
+                    "$ref": "#/definitions/handlers.EventSummaryResponse"
+                },
+                "is_group": {
+                    "type": "boolean"
+                },
+                "label": {
+                    "type": "string"
+                },
+                "message_count": {
+                    "type": "integer"
+                },
+                "source": {
+                    "type": "string"
+                },
+                "source_ref": {
+                    "type": "string"
+                },
+                "venue_tags": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/handlers.VenueTagResponse"
+                    }
                 }
             }
         },

@@ -64,6 +64,31 @@ func (q *Queries) ClaimMessagesMessages(ctx context.Context, arg ClaimMessagesMe
 	return items, nil
 }
 
+const ClearMessagesMessageOutboundPeer = `-- name: ClearMessagesMessageOutboundPeer :execrows
+UPDATE messages_message
+SET peer_handle = '',
+    peer_normalized = NULL,
+    matched_contact_id = NULL
+WHERE guid = $1
+  AND deleted_at IS NULL
+  AND is_outgoing
+  AND is_group_chat
+  AND (peer_handle <> '' OR peer_normalized IS NOT NULL OR matched_contact_id IS NOT NULL)
+`
+
+// Removes the member attribution from a stored, non-deleted outbound
+// group-chat row, leaving the state ingest stores for such a message. Touches
+// no other column: guid, chat, time, body, interaction link, processing and
+// claim state stay. Returns 0 rows when the row is absent, deleted, not an
+// outbound group-chat row, or already without attribution.
+func (q *Queries) ClearMessagesMessageOutboundPeer(ctx context.Context, guid string) (int64, error) {
+	result, err := q.db.Exec(ctx, ClearMessagesMessageOutboundPeer, guid)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const ClearMessagesMessageStaleClaim = `-- name: ClearMessagesMessageStaleClaim :exec
 UPDATE messages_message
 SET claimed_at = NULL,
@@ -87,8 +112,61 @@ func (q *Queries) ClearMessagesMessageStaleClaim(ctx context.Context, arg ClearM
 	return err
 }
 
+const ExistsMessagesCreditingReply = `-- name: ExistsMessagesCreditingReply :one
+SELECT EXISTS (
+    SELECT 1 FROM messages_message
+    WHERE chat_guid = $1
+      AND credits_reply
+      AND deleted_at IS NULL
+      AND sent_at >= $2 AND sent_at <= $3
+) AS found
+`
+
+type ExistsMessagesCreditingReplyParams struct {
+	ChatGuid string    `json:"chat_guid"`
+	FromTime time.Time `json:"from_time"`
+	ToTime   time.Time `json:"to_time"`
+}
+
+// Whether a live message that credits a reply was sent inside the closed span
+// of the chat. This is the one reply-eligibility decision: the ingest path
+// (the stored row's own time) and the aggregation path (a burst's window) both
+// read it. Only ingest of the user's own group message sets credits_reply, so
+// a row the enrichment added or cleared is never eligible, whatever its
+// processing state or attribution.
+func (q *Queries) ExistsMessagesCreditingReply(ctx context.Context, arg ExistsMessagesCreditingReplyParams) (bool, error) {
+	row := q.db.QueryRow(ctx, ExistsMessagesCreditingReply, arg.ChatGuid, arg.FromTime, arg.ToTime)
+	var found bool
+	err := row.Scan(&found)
+	return found, err
+}
+
+const FillMessagesMessageBody = `-- name: FillMessagesMessageBody :execrows
+UPDATE messages_message
+SET text = $1
+WHERE guid = $2
+  AND deleted_at IS NULL
+  AND (text IS NULL OR text = '')
+`
+
+type FillMessagesMessageBodyParams struct {
+	Body *string `json:"body"`
+	Guid string  `json:"guid"`
+}
+
+// Sets the body of a stored, non-deleted row that has none. Touches nothing
+// else: no processed, claim, interaction or contact column. Returns 0 rows
+// when the row is absent, deleted, or already has a body.
+func (q *Queries) FillMessagesMessageBody(ctx context.Context, arg FillMessagesMessageBodyParams) (int64, error) {
+	result, err := q.db.Exec(ctx, FillMessagesMessageBody, arg.Body, arg.Guid)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const GetMessagesMessage = `-- name: GetMessagesMessage :one
-SELECT id, guid, chat_guid, peer_handle, peer_normalized, text, message_type, sent_at, is_outgoing, is_group_chat, reply_to_guid, matched_contact_id, interaction_id, mac_host_id, processed_at, claimed_at, claimed_session_ref, deleted_at, created_at FROM messages_message
+SELECT id, guid, chat_guid, peer_handle, peer_normalized, text, message_type, sent_at, is_outgoing, is_group_chat, reply_to_guid, matched_contact_id, interaction_id, mac_host_id, processed_at, claimed_at, claimed_session_ref, deleted_at, created_at, credits_reply FROM messages_message
 WHERE guid = $1
   AND deleted_at IS NULL
 `
@@ -118,12 +196,13 @@ func (q *Queries) GetMessagesMessage(ctx context.Context, guid string) (*Message
 		&i.ClaimedSessionRef,
 		&i.DeletedAt,
 		&i.CreatedAt,
+		&i.CreditsReply,
 	)
 	return &i, err
 }
 
 const GetMessagesMessageByReplyTarget = `-- name: GetMessagesMessageByReplyTarget :one
-SELECT id, guid, chat_guid, peer_handle, peer_normalized, text, message_type, sent_at, is_outgoing, is_group_chat, reply_to_guid, matched_contact_id, interaction_id, mac_host_id, processed_at, claimed_at, claimed_session_ref, deleted_at, created_at FROM messages_message
+SELECT id, guid, chat_guid, peer_handle, peer_normalized, text, message_type, sent_at, is_outgoing, is_group_chat, reply_to_guid, matched_contact_id, interaction_id, mac_host_id, processed_at, claimed_at, claimed_session_ref, deleted_at, created_at, credits_reply FROM messages_message
 WHERE chat_guid = $1
   AND guid = $2
   AND deleted_at IS NULL
@@ -160,6 +239,7 @@ func (q *Queries) GetMessagesMessageByReplyTarget(ctx context.Context, arg GetMe
 		&i.ClaimedSessionRef,
 		&i.DeletedAt,
 		&i.CreatedAt,
+		&i.CreditsReply,
 	)
 	return &i, err
 }
@@ -201,6 +281,86 @@ func (q *Queries) HardDeleteMessagesMessagesByMacHost(ctx context.Context, macHo
 	return err
 }
 
+const InsertMessagesGroupEvidenceMessage = `-- name: InsertMessagesGroupEvidenceMessage :execrows
+INSERT INTO messages_message (
+    guid, chat_guid, peer_handle, text, message_type, sent_at,
+    is_outgoing, is_group_chat, mac_host_id, processed_at
+) VALUES (
+    $1, $2, $3, $4, 'text', $5,
+    $6, TRUE, $7, NOW()
+)
+ON CONFLICT (guid) DO NOTHING
+`
+
+type InsertMessagesGroupEvidenceMessageParams struct {
+	Guid       string     `json:"guid"`
+	ChatGuid   string     `json:"chat_guid"`
+	PeerHandle string     `json:"peer_handle"`
+	Text       *string    `json:"text"`
+	SentAt     time.Time  `json:"sent_at"`
+	IsOutgoing bool       `json:"is_outgoing"`
+	MacHostID  *uuid.UUID `json:"mac_host_id"`
+}
+
+// Adds a group-chat message as evidence only: stored processed with no
+// interaction link and no contact match, so no aggregation, sweep, promotion
+// or rematch picks it up, and credits_reply stays false so it is never read as
+// a reply. The caller leaves peer_handle empty for the user's own message.
+// Returns 0 rows when the guid is already stored.
+func (q *Queries) InsertMessagesGroupEvidenceMessage(ctx context.Context, arg InsertMessagesGroupEvidenceMessageParams) (int64, error) {
+	result, err := q.db.Exec(ctx, InsertMessagesGroupEvidenceMessage,
+		arg.Guid,
+		arg.ChatGuid,
+		arg.PeerHandle,
+		arg.Text,
+		arg.SentAt,
+		arg.IsOutgoing,
+		arg.MacHostID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const ListBodylessMessagesMessageGuids = `-- name: ListBodylessMessagesMessageGuids :many
+SELECT guid FROM messages_message
+WHERE deleted_at IS NULL
+  AND (text IS NULL OR text = '')
+  AND ($1::text IS NULL OR guid > $1::text)
+ORDER BY guid ASC
+LIMIT $2
+`
+
+type ListBodylessMessagesMessageGuidsParams struct {
+	After    *string `json:"after"`
+	RowLimit int32   `json:"row_limit"`
+}
+
+// Guids of stored, non-deleted rows with no body (NULL or empty text), in
+// guid order, keyset-paged by an exclusive @after guid. Whichever host pushed
+// the row. The caller asks for one row more than a page to learn whether
+// another page remains.
+func (q *Queries) ListBodylessMessagesMessageGuids(ctx context.Context, arg ListBodylessMessagesMessageGuidsParams) ([]string, error) {
+	rows, err := q.db.Query(ctx, ListBodylessMessagesMessageGuids, arg.After, arg.RowLimit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []string{}
+	for rows.Next() {
+		var guid string
+		if err := rows.Scan(&guid); err != nil {
+			return nil, err
+		}
+		items = append(items, guid)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const ListMessagesContainersForContact = `-- name: ListMessagesContainersForContact :many
 SELECT chat_guid, BOOL_OR(is_group_chat)::boolean AS is_group_chat
 FROM messages_message
@@ -234,8 +394,99 @@ func (q *Queries) ListMessagesContainersForContact(ctx context.Context, contactI
 	return items, nil
 }
 
+const ListMessagesGroupBurstWindows = `-- name: ListMessagesGroupBurstWindows :many
+WITH windows AS (
+    SELECT i.id AS interaction_id, i.contact_id, i.direction, i.occurred_at,
+           m.chat_guid,
+           MIN(m.sent_at)::timestamptz AS window_start,
+           MAX(m.sent_at)::timestamptz AS window_end
+    FROM interaction i
+    JOIN messages_message m ON m.interaction_id = i.id
+    WHERE i.source = 'messages'
+      AND i.deleted_at IS NULL
+      AND m.deleted_at IS NULL
+      AND m.is_group_chat
+      AND ($2::text IS NULL OR m.chat_guid = $2::text)
+      AND ($3::text IS NULL OR m.chat_guid > $3::text)
+      AND ($4::uuid IS NULL OR i.id = $4::uuid)
+      AND ($5::text IS NULL OR i.direction = $5::text)
+    GROUP BY i.id, i.contact_id, i.direction, i.occurred_at, m.chat_guid
+), matching AS (
+    SELECT w.interaction_id, w.contact_id, w.direction, w.occurred_at, w.chat_guid, w.window_start, w.window_end, DENSE_RANK() OVER (ORDER BY w.chat_guid) AS chat_rank
+    FROM windows w
+    WHERE $6::timestamptz IS NULL
+       OR (w.window_start <= $6::timestamptz
+           AND $6::timestamptz <= w.window_end)
+)
+SELECT interaction_id, contact_id, direction, occurred_at, chat_guid, window_start, window_end
+FROM matching
+WHERE chat_rank <= COALESCE($1::int, 2147483647)
+ORDER BY chat_guid, window_start, window_end, interaction_id
+`
+
+type ListMessagesGroupBurstWindowsParams struct {
+	ChatLimit     *int32     `json:"chat_limit"`
+	ChatGuid      *string    `json:"chat_guid"`
+	After         *string    `json:"after"`
+	InteractionID *uuid.UUID `json:"interaction_id"`
+	Direction     *string    `json:"direction"`
+	ContainsAt    *time.Time `json:"contains_at"`
+}
+
+type ListMessagesGroupBurstWindowsRow struct {
+	InteractionID uuid.UUID `json:"interaction_id"`
+	ContactID     uuid.UUID `json:"contact_id"`
+	Direction     string    `json:"direction"`
+	OccurredAt    time.Time `json:"occurred_at"`
+	ChatGuid      string    `json:"chat_guid"`
+	WindowStart   time.Time `json:"window_start"`
+	WindowEnd     time.Time `json:"window_end"`
+}
+
+// The one derivation of a group-chat burst's window: the closed span from the
+// earliest to the latest sent time of the live messages_message rows linked to
+// one live messages interaction. The group-chats listing, the
+// add_group_message containment test and the R12 promotion all read windows
+// through this query and compute none of their own.
+// Every filter is optional. Chats page by an exclusive @after chat_guid, and
+// @chat_limit bounds the number of distinct chats returned.
+func (q *Queries) ListMessagesGroupBurstWindows(ctx context.Context, arg ListMessagesGroupBurstWindowsParams) ([]*ListMessagesGroupBurstWindowsRow, error) {
+	rows, err := q.db.Query(ctx, ListMessagesGroupBurstWindows,
+		arg.ChatLimit,
+		arg.ChatGuid,
+		arg.After,
+		arg.InteractionID,
+		arg.Direction,
+		arg.ContainsAt,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []*ListMessagesGroupBurstWindowsRow{}
+	for rows.Next() {
+		var i ListMessagesGroupBurstWindowsRow
+		if err := rows.Scan(
+			&i.InteractionID,
+			&i.ContactID,
+			&i.Direction,
+			&i.OccurredAt,
+			&i.ChatGuid,
+			&i.WindowStart,
+			&i.WindowEnd,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const ListMessagesMessagesByChatWindow = `-- name: ListMessagesMessagesByChatWindow :many
-SELECT id, guid, chat_guid, peer_handle, peer_normalized, text, message_type, sent_at, is_outgoing, is_group_chat, reply_to_guid, matched_contact_id, interaction_id, mac_host_id, processed_at, claimed_at, claimed_session_ref, deleted_at, created_at FROM messages_message
+SELECT id, guid, chat_guid, peer_handle, peer_normalized, text, message_type, sent_at, is_outgoing, is_group_chat, reply_to_guid, matched_contact_id, interaction_id, mac_host_id, processed_at, claimed_at, claimed_session_ref, deleted_at, created_at, credits_reply FROM messages_message
 WHERE chat_guid = $1
   AND sent_at >= $2 AND sent_at <= $3
   AND deleted_at IS NULL
@@ -277,6 +528,7 @@ func (q *Queries) ListMessagesMessagesByChatWindow(ctx context.Context, arg List
 			&i.ClaimedSessionRef,
 			&i.DeletedAt,
 			&i.CreatedAt,
+			&i.CreditsReply,
 		); err != nil {
 			return nil, err
 		}
@@ -289,7 +541,7 @@ func (q *Queries) ListMessagesMessagesByChatWindow(ctx context.Context, arg List
 }
 
 const ListMessagesMessagesByInteractionIDs = `-- name: ListMessagesMessagesByInteractionIDs :many
-SELECT id, guid, chat_guid, peer_handle, peer_normalized, text, message_type, sent_at, is_outgoing, is_group_chat, reply_to_guid, matched_contact_id, interaction_id, mac_host_id, processed_at, claimed_at, claimed_session_ref, deleted_at, created_at FROM messages_message
+SELECT id, guid, chat_guid, peer_handle, peer_normalized, text, message_type, sent_at, is_outgoing, is_group_chat, reply_to_guid, matched_contact_id, interaction_id, mac_host_id, processed_at, claimed_at, claimed_session_ref, deleted_at, created_at, credits_reply FROM messages_message
 WHERE interaction_id = ANY($1::uuid[]) AND deleted_at IS NULL
 `
 
@@ -322,6 +574,7 @@ func (q *Queries) ListMessagesMessagesByInteractionIDs(ctx context.Context, inte
 			&i.ClaimedSessionRef,
 			&i.DeletedAt,
 			&i.CreatedAt,
+			&i.CreditsReply,
 		); err != nil {
 			return nil, err
 		}
@@ -334,10 +587,13 @@ func (q *Queries) ListMessagesMessagesByInteractionIDs(ctx context.Context, inte
 }
 
 const ListStrandedMessagesMessages = `-- name: ListStrandedMessagesMessages :many
-SELECT id, guid, chat_guid, peer_handle, peer_normalized, text, message_type, sent_at, is_outgoing, is_group_chat, reply_to_guid, matched_contact_id, interaction_id, mac_host_id, processed_at, claimed_at, claimed_session_ref, deleted_at, created_at FROM messages_message
+SELECT id, guid, chat_guid, peer_handle, peer_normalized, text, message_type, sent_at, is_outgoing, is_group_chat, reply_to_guid, matched_contact_id, interaction_id, mac_host_id, processed_at, claimed_at, claimed_session_ref, deleted_at, created_at, credits_reply FROM messages_message
 WHERE matched_contact_id IS NULL
   AND processed_at IS NULL
   AND deleted_at IS NULL
+  -- An outbound group-chat message is never attributed to a member: it names
+  -- no recipient, so no later contact can claim it.
+  AND NOT (is_outgoing AND is_group_chat)
 ORDER BY sent_at
 `
 
@@ -375,6 +631,7 @@ func (q *Queries) ListStrandedMessagesMessages(ctx context.Context) ([]*Messages
 			&i.ClaimedSessionRef,
 			&i.DeletedAt,
 			&i.CreatedAt,
+			&i.CreditsReply,
 		); err != nil {
 			return nil, err
 		}
@@ -387,7 +644,7 @@ func (q *Queries) ListStrandedMessagesMessages(ctx context.Context) ([]*Messages
 }
 
 const ListUnprocessedMessagesByContact = `-- name: ListUnprocessedMessagesByContact :many
-SELECT id, guid, chat_guid, peer_handle, peer_normalized, text, message_type, sent_at, is_outgoing, is_group_chat, reply_to_guid, matched_contact_id, interaction_id, mac_host_id, processed_at, claimed_at, claimed_session_ref, deleted_at, created_at FROM messages_message
+SELECT id, guid, chat_guid, peer_handle, peer_normalized, text, message_type, sent_at, is_outgoing, is_group_chat, reply_to_guid, matched_contact_id, interaction_id, mac_host_id, processed_at, claimed_at, claimed_session_ref, deleted_at, created_at, credits_reply FROM messages_message
 WHERE matched_contact_id = $1
   AND processed_at IS NULL
   AND (claimed_at IS NULL OR claimed_at < NOW() - INTERVAL '5 minutes')
@@ -424,6 +681,7 @@ func (q *Queries) ListUnprocessedMessagesByContact(ctx context.Context, matchedC
 			&i.ClaimedSessionRef,
 			&i.DeletedAt,
 			&i.CreatedAt,
+			&i.CreditsReply,
 		); err != nil {
 			return nil, err
 		}
@@ -436,7 +694,7 @@ func (q *Queries) ListUnprocessedMessagesByContact(ctx context.Context, matchedC
 }
 
 const ListUnprocessedMessagesByContactAndChat = `-- name: ListUnprocessedMessagesByContactAndChat :many
-SELECT id, guid, chat_guid, peer_handle, peer_normalized, text, message_type, sent_at, is_outgoing, is_group_chat, reply_to_guid, matched_contact_id, interaction_id, mac_host_id, processed_at, claimed_at, claimed_session_ref, deleted_at, created_at FROM messages_message
+SELECT id, guid, chat_guid, peer_handle, peer_normalized, text, message_type, sent_at, is_outgoing, is_group_chat, reply_to_guid, matched_contact_id, interaction_id, mac_host_id, processed_at, claimed_at, claimed_session_ref, deleted_at, created_at, credits_reply FROM messages_message
 WHERE matched_contact_id = $1
   AND chat_guid = $2
   AND processed_at IS NULL
@@ -479,6 +737,7 @@ func (q *Queries) ListUnprocessedMessagesByContactAndChat(ctx context.Context, a
 			&i.ClaimedSessionRef,
 			&i.DeletedAt,
 			&i.CreatedAt,
+			&i.CreditsReply,
 		); err != nil {
 			return nil, err
 		}
@@ -619,6 +878,18 @@ func (q *Queries) MarkMessagesMessagesProcessedForSession(ctx context.Context, a
 	return result.RowsAffected(), nil
 }
 
+const MessagesMessageGuidExists = `-- name: MessagesMessageGuidExists :one
+SELECT EXISTS (SELECT 1 FROM messages_message WHERE guid = $1) AS found
+`
+
+// Whether any row holds the guid, soft-deleted or not.
+func (q *Queries) MessagesMessageGuidExists(ctx context.Context, guid string) (bool, error) {
+	row := q.db.QueryRow(ctx, MessagesMessageGuidExists, guid)
+	var found bool
+	err := row.Scan(&found)
+	return found, err
+}
+
 const SummarizeMessagesByInteractionIDs = `-- name: SummarizeMessagesByInteractionIDs :many
 SELECT interaction_id, chat_guid, is_group_chat, COUNT(*)::bigint AS message_count
 FROM messages_message
@@ -659,13 +930,47 @@ func (q *Queries) SummarizeMessagesByInteractionIDs(ctx context.Context, interac
 	return items, nil
 }
 
+const TestGetMessagesMessageIncludingDeleted = `-- name: TestGetMessagesMessageIncludingDeleted :one
+SELECT id, guid, chat_guid, peer_handle, peer_normalized, text, message_type, sent_at, is_outgoing, is_group_chat, reply_to_guid, matched_contact_id, interaction_id, mac_host_id, processed_at, claimed_at, claimed_session_ref, deleted_at, created_at, credits_reply FROM messages_message WHERE guid = $1
+`
+
+// Test-only: reads a messages_message row by guid whether or not it is
+// soft-deleted. Production code MUST NOT call this.
+func (q *Queries) TestGetMessagesMessageIncludingDeleted(ctx context.Context, guid string) (*MessagesMessage, error) {
+	row := q.db.QueryRow(ctx, TestGetMessagesMessageIncludingDeleted, guid)
+	var i MessagesMessage
+	err := row.Scan(
+		&i.ID,
+		&i.Guid,
+		&i.ChatGuid,
+		&i.PeerHandle,
+		&i.PeerNormalized,
+		&i.Text,
+		&i.MessageType,
+		&i.SentAt,
+		&i.IsOutgoing,
+		&i.IsGroupChat,
+		&i.ReplyToGuid,
+		&i.MatchedContactID,
+		&i.InteractionID,
+		&i.MacHostID,
+		&i.ProcessedAt,
+		&i.ClaimedAt,
+		&i.ClaimedSessionRef,
+		&i.DeletedAt,
+		&i.CreatedAt,
+		&i.CreditsReply,
+	)
+	return &i, err
+}
+
 const TestInsertMessagesMessageLinked = `-- name: TestInsertMessagesMessageLinked :one
 INSERT INTO messages_message (
     guid, chat_guid, peer_handle, sent_at, is_outgoing, is_group_chat, interaction_id
 ) VALUES (
     $1, $2, $3, $4, $5, $6, $7
 )
-RETURNING id, guid, chat_guid, peer_handle, peer_normalized, text, message_type, sent_at, is_outgoing, is_group_chat, reply_to_guid, matched_contact_id, interaction_id, mac_host_id, processed_at, claimed_at, claimed_session_ref, deleted_at, created_at
+RETURNING id, guid, chat_guid, peer_handle, peer_normalized, text, message_type, sent_at, is_outgoing, is_group_chat, reply_to_guid, matched_contact_id, interaction_id, mac_host_id, processed_at, claimed_at, claimed_session_ref, deleted_at, created_at, credits_reply
 `
 
 type TestInsertMessagesMessageLinkedParams struct {
@@ -712,6 +1017,7 @@ func (q *Queries) TestInsertMessagesMessageLinked(ctx context.Context, arg TestI
 		&i.ClaimedSessionRef,
 		&i.DeletedAt,
 		&i.CreatedAt,
+		&i.CreditsReply,
 	)
 	return &i, err
 }
@@ -757,11 +1063,11 @@ const UpsertMessagesMessage = `-- name: UpsertMessagesMessage :one
 INSERT INTO messages_message (
     guid, chat_guid, peer_handle, peer_normalized,
     text, message_type, sent_at, is_outgoing, is_group_chat,
-    reply_to_guid, matched_contact_id, mac_host_id
+    reply_to_guid, matched_contact_id, mac_host_id, credits_reply
 ) VALUES (
     $1, $2, $3, $4,
     $5, $6, $7, $8, $9,
-    $10, $11, $12
+    $10, $11, $12, $13
 )
 ON CONFLICT (guid) DO UPDATE SET
     -- No-op update so RETURNING reliably returns the existing row. We
@@ -770,7 +1076,7 @@ ON CONFLICT (guid) DO UPDATE SET
     -- content (chat.db rows are immutable post-iOS 16 except for edits,
     -- which are out of v1 scope per spec §2 messages → edits/deletes).
     guid = EXCLUDED.guid
-RETURNING id, guid, chat_guid, peer_handle, peer_normalized, text, message_type, sent_at, is_outgoing, is_group_chat, reply_to_guid, matched_contact_id, interaction_id, mac_host_id, processed_at, claimed_at, claimed_session_ref, deleted_at, created_at
+RETURNING id, guid, chat_guid, peer_handle, peer_normalized, text, message_type, sent_at, is_outgoing, is_group_chat, reply_to_guid, matched_contact_id, interaction_id, mac_host_id, processed_at, claimed_at, claimed_session_ref, deleted_at, created_at, credits_reply
 `
 
 type UpsertMessagesMessageParams struct {
@@ -786,11 +1092,14 @@ type UpsertMessagesMessageParams struct {
 	ReplyToGuid      *string    `json:"reply_to_guid"`
 	MatchedContactID *uuid.UUID `json:"matched_contact_id"`
 	MacHostID        *uuid.UUID `json:"mac_host_id"`
+	CreditsReply     bool       `json:"credits_reply"`
 }
 
 // Insert with no-op on guid conflict. peer_normalized and matched_contact_id
 // come from the Pi ingest service identity-match path. mac_host_id is
-// provenance — multi-host dedup is by guid, not by host.
+// provenance — multi-host dedup is by guid, not by host. credits_reply is set
+// only when ingest stores the user's own group message; a conflict keeps the
+// stored row's value, so the RETURNING row is what reply eligibility reads.
 func (q *Queries) UpsertMessagesMessage(ctx context.Context, arg UpsertMessagesMessageParams) (*MessagesMessage, error) {
 	row := q.db.QueryRow(ctx, UpsertMessagesMessage,
 		arg.Guid,
@@ -805,6 +1114,7 @@ func (q *Queries) UpsertMessagesMessage(ctx context.Context, arg UpsertMessagesM
 		arg.ReplyToGuid,
 		arg.MatchedContactID,
 		arg.MacHostID,
+		arg.CreditsReply,
 	)
 	var i MessagesMessage
 	err := row.Scan(
@@ -827,6 +1137,7 @@ func (q *Queries) UpsertMessagesMessage(ctx context.Context, arg UpsertMessagesM
 		&i.ClaimedSessionRef,
 		&i.DeletedAt,
 		&i.CreatedAt,
+		&i.CreditsReply,
 	)
 	return &i, err
 }

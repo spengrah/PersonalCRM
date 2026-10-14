@@ -22,9 +22,10 @@
 //      a NULL handle_id, so it can only be tied to the scanned handle via
 //      the chats that handle belongs to.
 //
-//   3. Scan messages. Inbound rows match `message.handle_id IN
-//      (resolvedROWIDs)`; outbound rows match `message.is_from_me = 1 AND
-//      message.ROWID IN (chat_message_join rows of the resolved chats)`.
+//   3. Scan messages. Rows sent by the handle match `message.handle_id IN
+//      (resolvedROWIDs)`; every other row of the handle's chats (outbound,
+//      or a group chat's other senders) matches `message.ROWID IN
+//      (chat_message_join rows of the resolved chats)`.
 //      Bounded by `message.date >= sinceNanos [AND message.ROWID <
 //      progressBelowRowID]`, ordered `ROWID DESC`, budget-limited. The
 //      outbound branch is omitted entirely when the chat set is empty
@@ -89,8 +90,8 @@ public enum MessagesScanReader {
     }
 
     /// Resolve the distinct `chat.ROWID`s that any of `handleROWIDs`
-    /// belongs to, via `chat_handle_join`. Used to reach OUTBOUND rows
-    /// (NULL handle_id) sent in the scanned handle's conversations.
+    /// belongs to, via `chat_handle_join`. Used to reach the rows of the
+    /// scanned handle's conversations that the handle did not send.
     /// Returns an empty array if the handle has no chat memberships.
     public static func resolveChatROWIDs(
         db: Database,
@@ -110,8 +111,10 @@ public enum MessagesScanReader {
 
     /// Fetch one budget-limited page of messages for `canonicalHandle`
     /// at-or-after `since`, descending by ROWID, resuming strictly below
-    /// `progressBelowRowID` when set. Returns BOTH inbound rows (matched
-    /// by handle) and outbound rows (matched by chat membership).
+    /// `progressBelowRowID` when set. Returns the handle's own rows
+    /// (matched by handle) and every other row of its chats (matched by
+    /// chat membership): outbound rows and other senders in group chats.
+    /// The caller's publish rule decides which of them are published.
     ///
     /// Returns an EMPTY exhausted page (no rows, lowestRowID nil) when
     /// the handle resolves to zero ROWIDs (no chat.db history for it).
@@ -135,10 +138,10 @@ public enum MessagesScanReader {
         let sinceNanos = Int64(
             (since.timeIntervalSince1970 - ChatDBReader.appleEpochOffset) * 1e9)
 
-        // Inbound: handle_id IN (...). Outbound (NULL handle_id): the row
-        // is_from_me=1 and belongs to one of the handle's chats. The
-        // outbound branch is omitted when the chat set is empty, leaving
-        // the query identical to the inbound-only form.
+        // Sent by the handle: handle_id IN (...). Any other row belongs to
+        // one of the handle's chats. The chat branch is omitted when the
+        // chat set is empty, leaving the query identical to the
+        // handle-only form.
         let handlePlaceholders = Array(repeating: "?", count: handleROWIDs.count).joined(separator: ", ")
         var arguments: [DatabaseValueConvertible] = handleROWIDs
         let matchClause: String
@@ -148,9 +151,9 @@ public enum MessagesScanReader {
             let chatPlaceholders = Array(repeating: "?", count: chatROWIDs.count).joined(separator: ", ")
             matchClause = """
                 ( message.handle_id IN (\(handlePlaceholders))
-                  OR (message.is_from_me = 1 AND message.ROWID IN (
+                  OR message.ROWID IN (
                         SELECT cmj.message_id FROM chat_message_join AS cmj
-                        WHERE cmj.chat_id IN (\(chatPlaceholders)))) )
+                        WHERE cmj.chat_id IN (\(chatPlaceholders))) )
                 """
             arguments.append(contentsOf: chatROWIDs)
         }

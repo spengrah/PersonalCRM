@@ -1,43 +1,64 @@
-import { describe, expect, it } from 'vitest'
-import { fireEvent, render, screen, within } from '@testing-library/react'
+import { describe, expect, it, vi, beforeEach } from 'vitest'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 
 import type {
-  InteractionListItemResponse,
+  InteractionDirection,
+  TimelineMemberResponse,
   InteractionContentKind,
   CallService,
-  InteractionContentResponse,
+  TimelineContentResponse,
 } from '@/types/generated/contact'
-import { formatDateTime, InteractionRow } from '../interaction-row'
-import { InteractionContent } from '../interaction-content'
+import { TimelineDrillDown, TimelineRow } from '@/components/timeline'
+import { formatDateTime } from '@/components/timeline/format'
+import { InteractionDrillDown } from '../interaction-content'
 
-const baseItem = (
-  overrides: Partial<InteractionListItemResponse> = {}
-): InteractionListItemResponse => ({
-  id: 'ixn-test',
-  contact_id: 'contact-test',
-  source: 'manual',
-  occurred_at: '2026-01-02T03:04:00Z',
-  direction: 'inbound',
-  created_at: '2026-01-02T03:04:00Z',
-  label: 'Synthetic interaction',
-  content_kind: 'none',
-  message_count: 0,
-  is_group: false,
-  venue_tags: [],
-  ...overrides,
+const mocks = vi.hoisted(() => ({ getTimelineContent: vi.fn(), getTimelineAssertions: vi.fn() }))
+vi.mock('@/lib/interactions-api', () => ({
+  interactionsApi: {
+    getTimelineContent: mocks.getTimelineContent,
+    getTimelineAssertions: mocks.getTimelineAssertions,
+  },
+}))
+
+beforeEach(() => {
+  mocks.getTimelineContent.mockReset().mockReturnValue(new Promise(() => {}))
+  mocks.getTimelineAssertions.mockReset().mockResolvedValue({ items: [] })
 })
 
-function renderItem(overrides: Partial<InteractionListItemResponse> = {}) {
+type RowOverrides = Partial<TimelineMemberResponse> & {
+  id?: string
+  direction?: InteractionDirection
+}
+
+const baseItem = ({ id = 'ixn-test', direction = 'inbound', ...member }: RowOverrides = {}) => ({
+  identity: { kind: 'interaction' as const, id },
+  cadence_inert: false,
+  occurred_at: '2026-01-02T03:04:00Z',
+  direction,
+  members: [
+    {
+      source: 'manual',
+      label: 'Synthetic interaction',
+      content_kind: 'none' as const,
+      message_count: 0,
+      is_group: false,
+      venue_tags: [],
+      ...member,
+    },
+  ],
+})
+
+function renderItem(overrides: RowOverrides = {}) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   return render(
     <QueryClientProvider client={queryClient}>
-      <InteractionRow item={baseItem(overrides)} />
+      <TimelineRow item={baseItem(overrides)} context={{ contactId: 'contact-test' }} />
     </QueryClientProvider>
   )
 }
 
-describe('InteractionRow', () => {
+describe('TimelineRow on the contact page', () => {
   it.each([
     [45, '45s'],
     [372, '6m 12s'],
@@ -47,6 +68,7 @@ describe('InteractionRow', () => {
       content_kind: 'call',
       call: {
         service: 'voice',
+        direction: 'inbound',
         answered: true,
         has_voicemail: false,
         duration_seconds: duration,
@@ -62,7 +84,13 @@ describe('InteractionRow', () => {
     renderItem({
       source: 'phone_calls',
       content_kind: 'call',
-      call: { service, answered: true, has_voicemail: false, duration_seconds: 60 },
+      call: {
+        service,
+        direction: 'inbound',
+        answered: true,
+        has_voicemail: false,
+        duration_seconds: 60,
+      },
     })
     expect(screen.getByText(expected)).toBeVisible()
   })
@@ -73,6 +101,7 @@ describe('InteractionRow', () => {
       content_kind: 'call',
       call: {
         service: 'voice',
+        direction: 'inbound',
         answered: false,
         has_voicemail: true,
         duration_seconds: 0,
@@ -222,33 +251,59 @@ const message = (
   sender: string,
   sent_at: string,
   body: string,
-  venue_key = 'venue-a'
-) => ({ id, sender, is_outgoing: false, sent_at, body, venue_key })
-
-const messagesContent = (
-  messages: InteractionContentResponse['messages']
-): InteractionContentResponse => ({
-  interaction_id: 'ixn-content',
-  kind: 'messages',
-  messages,
-  meeting_notes: [],
+  container = 'venue-a'
+) => ({
+  id,
+  sender,
+  is_outgoing: false,
+  sent_at,
+  body,
+  venue_key: container,
+  source: 'gchat',
+  channel: 'group_chat' as const,
+  container,
+  content_ref: `ref-${id}`,
 })
 
-describe('InteractionContent', () => {
-  it('renders messages in API order with exact child text, including empty bodies', () => {
+const identity = { kind: 'interaction' as const, id: 'ixn-content' }
+const context = { contactId: 'contact-test' }
+
+const messagesContent = (messages: ReturnType<typeof message>[]): TimelineContentResponse => ({
+  identity,
+  members: [{ source: 'gchat', kind: 'messages', messages, meeting_notes: [] }],
+})
+
+function renderWithContent(
+  content: TimelineContentResponse,
+  ui: (client: QueryClient) => React.ReactElement
+) {
+  mocks.getTimelineContent.mockReset().mockResolvedValue(content)
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  const view = render(<QueryClientProvider client={client}>{ui(client)}</QueryClientProvider>)
+  return {
+    ...view,
+    rerenderUi: (next: React.ReactElement) =>
+      view.rerender(<QueryClientProvider client={client}>{next}</QueryClientProvider>),
+  }
+}
+
+describe('TimelineDrillDown on the contact page', () => {
+  it('renders messages in API order with exact child text, including empty bodies', async () => {
     const content = messagesContent([
       message('message-3', 'Sender C', '2026-01-02T03:06:00Z', ''),
       message('message-1', 'Sender A', '2026-01-02T03:04:00Z', 'First body'),
       message('message-2', 'Sender B', '2026-01-02T03:05:00Z', 'Second body'),
     ])
-    render(<InteractionContent isPending={false} isError={false} content={content} />)
+    renderWithContent(content, () => <TimelineDrillDown identity={identity} context={context} />)
+    await waitFor(() => expect(document.querySelectorAll('[data-message-id]')).toHaveLength(3))
     const nodes = Array.from(document.querySelectorAll('[data-message-id]'))
     expect(nodes.map(node => node.getAttribute('data-message-id'))).toEqual([
       'message-3',
       'message-1',
       'message-2',
     ])
-    content.messages.forEach((expectedMessage, index) => {
+    const expected = content.members[0].messages
+    expected.forEach((expectedMessage, index) => {
       const node = nodes[index]
       expect(node.querySelector('[data-message-sender]')?.textContent).toBe(expectedMessage.sender)
       expect(node.querySelector('[data-message-timestamp]')?.textContent).toBe(
@@ -259,90 +314,61 @@ describe('InteractionContent', () => {
     expect(nodes[0].querySelector('[data-message-body]')?.textContent).toBe('')
   })
 
-  it('renders HTML-looking message bodies as literal text without elements', () => {
+  it('renders HTML-looking message bodies as literal text without elements', async () => {
     const content = messagesContent([
       message('message-html', 'Sender', '2026-01-02T03:04:00Z', '<b>not bold</b>'),
     ])
-    render(<InteractionContent isPending={false} isError={false} content={content} />)
-    const region = document.querySelector('[data-content-region]') as HTMLElement
+    renderWithContent(content, () => <TimelineDrillDown identity={identity} context={context} />)
+    const region = (await screen.findByText('<b>not bold</b>')).closest(
+      '[data-content-region]'
+    ) as HTMLElement
     expect(region.querySelector('[data-message-body]')).toHaveTextContent('<b>not bold</b>')
     expect(region.querySelector('b')).not.toBeInTheDocument()
   })
 
-  it('filters messages by venue and renders all messages when the filter is absent', () => {
+  it('filters messages by venue and renders all messages when the filter is absent', async () => {
     const content = messagesContent([
       message('message-a', 'Sender A', '2026-01-02T03:04:00Z', 'A', 'venue-a'),
       message('message-b', 'Sender B', '2026-01-02T03:05:00Z', 'B', 'venue-b'),
     ])
-    const { rerender } = render(
-      <InteractionContent
-        isPending={false}
-        isError={false}
-        content={content}
-        venueFilter="venue-b"
-      />
-    )
-    expect(document.querySelectorAll('[data-message-id]')).toHaveLength(1)
+    const view = renderWithContent(content, () => (
+      <TimelineDrillDown identity={identity} context={context} venueFilter="venue-b" />
+    ))
+    await waitFor(() => expect(document.querySelectorAll('[data-message-id]')).toHaveLength(1))
     expect(document.querySelector('[data-message-id]')).toHaveAttribute(
       'data-message-id',
       'message-b'
     )
-    rerender(<InteractionContent isPending={false} isError={false} content={content} />)
+    view.rerenderUi(<TimelineDrillDown identity={identity} context={context} />)
     expect(document.querySelectorAll('[data-message-id]')).toHaveLength(2)
   })
 
-  it('discloses the evidence scope only when it differs from the recorded count', () => {
-    const content = messagesContent([
-      message('message-a', 'Sender A', '2026-01-02T03:04:00Z', 'A', 'venue-a'),
-      message('message-b', 'Sender B', '2026-01-02T03:05:00Z', 'B', 'venue-b'),
-      message('message-c', 'Sender C', '2026-01-02T03:06:00Z', 'C', 'venue-b'),
-    ])
-    const scope = () => document.querySelector('[data-evidence-scope]')
-
-    // Window wider than the interaction: the common case behind "header says 6,
-    // thread shows 10".
-    const { rerender } = render(
-      <InteractionContent isPending={false} isError={false} content={content} recordedCount={2} />
-    )
-    expect(scope()).toHaveTextContent('Showing 3 messages from this conversation')
-    expect(scope()).toHaveTextContent('2 recorded for this interaction')
-
-    // A venue filter narrows BELOW the recorded count — also a mismatch, and
-    // also disclosed, so the row's count never over-promises either way.
-    rerender(
-      <InteractionContent
-        isPending={false}
-        isError={false}
-        content={content}
-        venueFilter="venue-a"
-        recordedCount={2}
-      />
-    )
-    expect(scope()).toHaveTextContent('Showing 1 message from this conversation')
-
-    // Agreement is silent: no note when the counts already match.
-    rerender(
-      <InteractionContent isPending={false} isError={false} content={content} recordedCount={3} />
-    )
-    expect(scope()).not.toBeInTheDocument()
-
-    // No recorded count supplied (a caller that cannot know it) stays silent
-    // rather than inventing a comparison.
-    rerender(<InteractionContent isPending={false} isError={false} content={content} />)
-    expect(scope()).not.toBeInTheDocument()
-  })
-
-  it('renders notes in API order, preserves null fields, and shows provenance once', () => {
-    const content: InteractionContentResponse = {
-      interaction_id: 'ixn-notes',
-      kind: 'meeting_note',
-      messages: [],
-      meeting_notes: [
-        { title: undefined, summary: 'Summary A', memo: '<i>memo A</i>' },
-        { title: 'Title B', summary: 'Summary B', memo: 'Memo B' },
+  it('renders notes in API order, preserves null fields, and shows provenance once', async () => {
+    const note = (title: string | undefined, summary: string, memo: string, ref: string) => ({
+      title,
+      summary,
+      memo,
+      source: 'anarlog_sessions',
+      channel: 'meeting' as const,
+      container: 'anarlog_sessions:session-1',
+      content_ref: ref,
+    })
+    const content: TimelineContentResponse = {
+      identity,
+      members: [
+        {
+          source: 'gcal',
+          kind: 'meeting_note',
+          messages: [],
+          meeting_notes: [
+            note(undefined, 'Summary A', '<i>memo A</i>', 'ref-a'),
+            note('Title B', 'Summary B', 'Memo B', 'ref-b'),
+          ],
+        },
       ],
     }
-    render(<InteractionContent isPending={false} isError={false} content={content} />)
+    renderWithContent(content, () => <TimelineDrillDown identity={identity} context={context} />)
+    await screen.findByText('Summary A')
     const notes = Array.from(document.querySelectorAll('[data-meeting-note]'))
     expect(notes).toHaveLength(2)
     expect(notes[0].querySelector('[data-note-title]')).not.toBeInTheDocument()
@@ -363,14 +389,100 @@ describe('InteractionContent', () => {
     expect(document.querySelector('[data-content-region] i')).not.toBeInTheDocument()
   })
 
-  it('renders loading and error states with exact copy', () => {
-    const { rerender } = render(
-      <InteractionContent isPending={true} isError={false} content={undefined} />
+  it('renders loading and error states with exact copy', async () => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    const { unmount } = render(
+      <QueryClientProvider client={client}>
+        <TimelineDrillDown identity={identity} context={context} />
+      </QueryClientProvider>
     )
     expect(document.querySelector('[data-content-region]')).toHaveTextContent('Loading content…')
-    rerender(<InteractionContent isPending={false} isError={true} content={undefined} />)
-    expect(document.querySelector('[data-content-region]')).toHaveTextContent(
-      'Failed to load content.'
+    unmount()
+    mocks.getTimelineContent.mockReset().mockRejectedValue(new Error('boom'))
+    render(
+      <QueryClientProvider
+        client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}
+      >
+        <TimelineDrillDown identity={identity} context={context} />
+      </QueryClientProvider>
     )
+    await waitFor(() =>
+      expect(document.querySelector('[data-content-region]')).toHaveTextContent(
+        'Failed to load content.'
+      )
+    )
+  })
+})
+
+describe('InteractionDrillDown evidence scope', () => {
+  const rowItem = (messageCount: number) => ({
+    ...baseItem({ content_kind: 'messages', message_count: messageCount }),
+    identity,
+  })
+  const drillDown = (messageCount: number, venueFilter?: string) => (
+    <InteractionDrillDown
+      item={rowItem(messageCount)}
+      identity={identity}
+      context={context}
+      venueFilter={venueFilter}
+    />
+  )
+
+  it('discloses the evidence scope only when it differs from the recorded count', async () => {
+    const content = messagesContent([
+      message('message-a', 'Sender A', '2026-01-02T03:04:00Z', 'A', 'venue-a'),
+      message('message-b', 'Sender B', '2026-01-02T03:05:00Z', 'B', 'venue-b'),
+      message('message-c', 'Sender C', '2026-01-02T03:06:00Z', 'C', 'venue-b'),
+    ])
+    const scope = () => document.querySelector('[data-evidence-scope]')
+
+    // Window wider than the interaction: the common case behind "header says 6,
+    // thread shows 10".
+    const view = renderWithContent(content, () => drillDown(2))
+    await waitFor(() => expect(scope()).toBeInTheDocument())
+    expect(scope()).toHaveTextContent('Showing 3 messages from this conversation')
+    expect(scope()).toHaveTextContent('2 recorded for this interaction')
+
+    // A venue filter narrows BELOW the recorded count — also a mismatch, and
+    // also disclosed, so the row's count never over-promises either way.
+    view.rerenderUi(drillDown(2, 'venue-a'))
+    expect(scope()).toHaveTextContent('Showing 1 message from this conversation')
+
+    // Agreement is silent: no note when the counts already match.
+    view.rerenderUi(drillDown(3))
+    expect(scope()).not.toBeInTheDocument()
+  })
+})
+
+describe('InteractionDrillDown assertions read', () => {
+  const drillDown = (
+    <InteractionDrillDown
+      item={{ ...baseItem({ content_kind: 'messages', message_count: 1 }), identity }}
+      identity={identity}
+      context={context}
+    />
+  )
+  const content = messagesContent([
+    message('message-a', 'Sender A', '2026-01-02T03:04:00Z', 'A', 'venue-a'),
+  ])
+  const failure = () => document.querySelector('[data-assertions-error]')
+
+  // A failed read of the assertions beside the content (IXN-023) must not
+  // look like content no assertion cites.
+  it('says a failed assertions read failed, and stays silent on an empty one', async () => {
+    mocks.getTimelineAssertions.mockRejectedValue(new Error('unavailable'))
+    const view = renderWithContent(content, () => drillDown)
+    await waitFor(() => expect(failure()).toHaveTextContent('Failed to load assertions.'))
+    expect(document.querySelector('[data-message-id]')).toHaveAttribute(
+      'data-message-id',
+      'message-a'
+    )
+    view.unmount()
+
+    mocks.getTimelineAssertions.mockReset().mockResolvedValue({ items: [] })
+    renderWithContent(content, () => drillDown)
+    await waitFor(() => expect(document.querySelector('[data-message-id]')).toBeInTheDocument())
+    await waitFor(() => expect(mocks.getTimelineAssertions).toHaveBeenCalled())
+    expect(failure()).not.toBeInTheDocument()
   })
 })

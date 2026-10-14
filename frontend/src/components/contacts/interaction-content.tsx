@@ -1,71 +1,55 @@
-import type { InteractionContentResponse } from '@/types/generated/contact'
-import { formatDateTime } from './interaction-row'
+import { TimelineDrillDown } from '@/components/timeline'
+import type { ParticipationContext, TimelineIdentity, TimelineItem } from '@/components/timeline'
+import { visibleMessages } from '@/components/timeline/visible-messages'
+import { useTimelineAssertions, useTimelineContent } from '@/hooks/use-interactions'
+import { assertionAnnotations } from './content-assertions'
 
-interface InteractionContentProps {
-  isPending: boolean
-  isError: boolean
-  content?: InteractionContentResponse
+interface InteractionDrillDownProps {
+  item: TimelineItem
+  identity: TimelineIdentity
+  context: ParticipationContext
   venueFilter?: string
-  /** The row's own message count — how many messages are recorded against this
-   * interaction. The expanded evidence is drawn from the surrounding thread
-   * window and a venue filter narrows it further, so the two legitimately
-   * differ; when they do, say so rather than letting the row's count read as a
-   * promise about what is displayed. */
-  recordedCount?: number
 }
 
-export function InteractionContent({
-  isPending,
-  isError,
-  content,
+// The contact page's drill-down: the timeline drill-down plus, above it, the
+// disclosure that the thread window shown and the messages recorded against the
+// interaction are drawn from different sets. The recorded count is the row's;
+// the shown count is what the drill-down displays (the same cached read). The
+// assertions citing a displayed content item show beside it (IXN-023); a failed
+// assertions read says so rather than looking like an item no assertion cites.
+export function InteractionDrillDown({
+  item,
+  identity,
+  context,
   venueFilter,
-  recordedCount,
-}: InteractionContentProps) {
-  const visible =
-    content?.kind === 'messages'
-      ? content.messages.filter(message => !venueFilter || message.venue_key === venueFilter)
-      : []
-  const countsDiffer = recordedCount != null && visible.length !== recordedCount
+}: InteractionDrillDownProps) {
+  const content = useTimelineContent(identity, context.contactId)
+  const assertions = useTimelineAssertions(identity, context.contactId)
+  const messageMembers = content.data?.members.filter(member => member.kind === 'messages') ?? []
+  const shown = messageMembers.reduce(
+    (total, member) => total + visibleMessages(member.messages, venueFilter).length,
+    0
+  )
+  const recorded = item.members.reduce((total, member) => total + member.message_count, 0)
   return (
-    <div data-content-region className="mt-4 rounded bg-gray-50 p-4 text-sm text-gray-700">
-      {isPending ? (
-        'Loading content…'
-      ) : isError ? (
-        'Failed to load content.'
-      ) : content?.kind === 'messages' ? (
-        <div className="space-y-3">
-          {countsDiffer && (
-            <p data-evidence-scope className="text-xs text-gray-500">
-              Showing {visible.length} message{visible.length === 1 ? '' : 's'} from this
-              conversation · {recordedCount} recorded for this interaction
-            </p>
-          )}
-          {visible.map(message => (
-            <div key={message.id} data-message-id={message.id} className="space-y-1">
-              <div data-message-sender>{message.sender}</div>
-              <div data-message-timestamp>{formatDateTime(message.sent_at)}</div>
-              <div data-message-body className="whitespace-pre-wrap">
-                {message.body}
-              </div>
-            </div>
-          ))}
-        </div>
-      ) : content?.kind === 'meeting_note' ? (
-        <div className="space-y-3">
-          {content.meeting_notes.map((note, index) => (
-            <div key={`${note.title ?? 'note'}-${index}`} data-meeting-note className="space-y-1">
-              {note.title != null && <div data-note-title>{note.title}</div>}
-              {note.summary != null && <div data-note-summary>{note.summary}</div>}
-              {note.memo != null && (
-                <div data-note-memo className="whitespace-pre-wrap">
-                  {note.memo}
-                </div>
-              )}
-            </div>
-          ))}
-          <p>Meeting notes are processed on-device.</p>
-        </div>
-      ) : null}
-    </div>
+    <>
+      {messageMembers.length > 0 && shown !== recorded && (
+        <p data-evidence-scope className="mt-4 text-xs text-gray-500">
+          Showing {shown} message{shown === 1 ? '' : 's'} from this conversation · {recorded}{' '}
+          recorded for this interaction
+        </p>
+      )}
+      <TimelineDrillDown
+        identity={identity}
+        context={context}
+        venueFilter={venueFilter}
+        annotations={assertions.data && assertionAnnotations(assertions.data.items)}
+      />
+      {assertions.isError && (
+        <p data-assertions-error className="mt-2 text-xs text-gray-500">
+          Failed to load assertions.
+        </p>
+      )}
+    </>
   )
 }

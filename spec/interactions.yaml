@@ -42,7 +42,7 @@ behaviors:
       - key: group-marker
         text: the row visibly distinguishes group interactions from direct interactions
       - key: overflow-affordance-reserved
-        text: the row reserves an action affordance for later interaction workflows without enabling writes
+        text: a row of a correctable interaction carries an action affordance for interaction workflows, and a row that is not correctable shows none
       - key: calendar-row-event-details
         text: a calendar row summarizes its event time, place, attendee size, and link when available
       - key: call-row-details
@@ -162,16 +162,17 @@ behaviors:
       - key: duplicates-render-distinct
         text: separately recorded interactions remain distinct even when they appear duplicative
       - key: empty-state-explicit
-        text: a contact with no recorded interactions receives an explicit empty state
+        text: a contact with no recorded interactions or missed calls receives an explicit empty state
     provenance: [.agents/spec/contact-interactions-surface.md]
 
   - id: IXN-010
     title: The contact interactions surface is read-only end to end
     type: invariant
-    status: current
+    status: retired
     surface: api
     statement: the contact interactions surface exposes only reads, adds no mutation endpoint or interaction writer, and leaves interaction creation to the existing recording paths.
     provenance: [.agents/spec/contact-interactions-surface.md]
+    notes: Retired when the user's corrections of interactions became writes on this surface. Merging interactions is IXN-016 and removing participations is IXN-018; their answers and refusals are IXN-029.
 
   - id: IXN-011
     title: Content assembly is reusable outside HTTP delivery
@@ -254,3 +255,407 @@ behaviors:
       - key: empty-arrays-not-null
         text: absent messages or meeting notes are represented by empty arrays rather than null
     provenance: [.agents/spec/contact-interactions-surface.md, InteractionContentService]
+
+  - id: IXN-015
+    title: Every correctable interaction resolves to one interaction node, and message bursts resolve to none
+    type: data
+    status: current
+    surface: none
+    given: an observation of a correctable source recorded by any sync, ingest or manual path
+    when: the observation is recorded
+    then:
+      - key: one-node-per-observation
+        text: the observation resolves to exactly one interaction node, assigned once when the observation is recorded
+      - key: shared-per-source-object
+        text: observations of the same calendar event, phone call, task or Anarlog session share one interaction node, whichever contact they belong to and however the participant's observation is keyed
+      - key: email-thread-day
+        text: observations of the same email thread on the same local day share one interaction node whichever contact they belong to, and the same thread on another day has another node
+      - key: manual-own-node
+        text: a manual entry has an interaction node of its own, shared with no other observation
+      - key: overlapping-events-stay-two
+        text: overlapping calendar events with the same attendees remain two interactions with two nodes
+      - key: bursts-have-no-node
+        text: a message burst from Telegram, iMessage, Google Chat or WhatsApp resolves to no interaction node, however it is extended or promoted to mutual
+      - key: assigned-node-kept
+        text: a later write to the observation (extension, promotion to mutual, re-link, soft delete, or the transfer to a surviving contact in a contact merge) leaves its interaction node unchanged
+    provenance: [.agents/spec/2026-10-13-interaction-review-readiness.md]
+    notes: Merging interactions and removing participations act on interaction nodes in later behaviors of this domain; this behavior fixes only which node each observation belongs to.
+
+  - id: IXN-016
+    title: A merge declares one interaction for every attendee
+    type: business-logic
+    status: current
+    surface: api
+    given: two or more interactions the user declares to be one, and a contact observed in at least one of them
+    when: the user merges them
+    then:
+      - key: one-participation-per-attendee
+        text: every attendee of the merged interactions holds one effective participation in the result, under the interaction the first listed one belongs to
+      - key: own-members-only
+        text: each contact's participation in the result derives from that contact's own observations of the merged interactions only, so an attendee observed in one of them keeps that one's participation
+      - key: no-observation-no-participation
+        text: a contact with no observation in any merged interaction gains no participation and no cadence change
+      - key: remerge-counts-once
+        text: a merged interaction merged again with another gives each attendee one participation across all of them
+      - key: merged-away-id-acts-on-merged
+        text: naming an interaction that was already merged into another acts on the interaction it was merged into
+      - key: answer-is-first-root
+        text: the merge answers with the interaction the first listed one belongs to
+    provenance: [.agents/spec/2026-10-13-interaction-review-readiness.md]
+    notes: A merge is a judgment of event identity, global across attendees. Unmerge is out of scope.
+
+  - id: IXN-017
+    title: A merged interaction counts once per contact, combining only that contact's members
+    type: business-logic
+    status: current
+    surface: api
+    given: a merge of interactions in which a contact was observed
+    when: the contact's participation in the merged interaction is derived
+    then:
+      - key: mixed-directions-mutual-at-latest
+        text: an inbound and an outbound member of the same contact, in either order, make one mutual participation at the latest of that contact's member times
+      - key: shared-direction-kept
+        text: members of one shared direction make one participation of that direction at the latest of that contact's member times
+      - key: mutual-member-makes-mutual
+        text: any mutual member makes the participation mutual
+      - key: no-inherited-member
+        text: no contact inherits another attendee's member, so a contact present only in an earlier member keeps that member's direction and time
+      - key: preview-equals-merge
+        text: the merge preview answers exactly what the merge answers for the same request
+      - key: preview-writes-nothing
+        text: the merge preview changes no interaction, judgment, cadence field or task and publishes nothing
+    provenance: [.agents/spec/2026-10-13-interaction-review-readiness.md]
+    notes: Nothing invents a direction or a time. If mutual would be wrong, the interactions are not one interaction and the user does not merge them.
+
+  - id: IXN-018
+    title: A removal removes exactly the selected attendees' participations and binds to the observations judged
+    type: business-logic
+    status: current
+    surface: api
+    given: an interaction and a removal scope naming some of its attendees or everyone, with a reason of duplicate, did not attend or did not happen
+    when: the user removes participations
+    then:
+      - key: scope-removes-exactly-selected
+        text: the selected attendees' participations are removed and every other attendee's participation stays
+      - key: everyone-removes-every-attendee
+        text: removing everyone removes every attendee's participation
+      - key: everyone-covers-later-observed
+        text: removing everyone also covers an attendee that a later re-observation of the same source object adds
+      - key: re-observation-stays-removed
+        text: a later re-observation of a removed source object stays removed
+      - key: binds-to-judged-members
+        text: a removal covers the source objects of the interaction as it stood when the user judged it and never a source object merged in afterwards
+      - key: covers-every-member
+        text: a removal on a merged interaction covers every member's source object for the selected attendees, including a member the attendee had no observation of when judged
+      - key: reason-independent-of-scope
+        text: the reason is recorded and never changes what the scope removes
+      - key: merged-away-id-acts-on-merged
+        text: naming an interaction that was merged into another acts on the interaction it was merged into
+      - key: survives-contact-merge
+        text: a removal survives a later merge of the removed contact into another contact
+    provenance: [.agents/spec/2026-10-13-interaction-review-readiness.md]
+    notes: The removal dialog pre-selects the current contact; the request always names its scope explicitly.
+
+  - id: IXN-019
+    title: A merged interaction shows every member's source and content, each content item attributed to its own channel
+    type: ux
+    status: current
+    surface: ui
+    given: an interaction the user declared one from several members appears in a contact's history
+    when: its row is viewed and then expanded
+    then:
+      - key: one-row-every-member-source
+        text: the merged interaction is one row, no row remains for a member on its own, and the row identifies the source of every member
+      - key: member-content-in-own-section
+        text: the expanded evidence shows each member's content in a section of its own
+      - key: content-attributed-to-own-channel
+        text: every content item of the expanded evidence is attributed to its own channel, whichever member it belongs to
+      - key: unmerged-shows-its-one-source
+        text: an interaction that was not merged is one row with its one source and its content
+    provenance: [.agents/spec/2026-10-13-interaction-review-readiness.md]
+    notes: The row and its evidence render from a typed identity and a participation context (IXN-022), so the same member sections appear wherever the components are used.
+
+  - id: IXN-022
+    title: Every timeline item has a typed identity that decides its actions
+    type: invariant
+    status: current
+    surface: none
+    statement: every timeline item has a typed identity whose kind decides which actions it offers, only the kind interaction offering corrections, and the row and drill-down render from that identity plus a participation context, independent of the contact page.
+    provenance: [.agents/spec/2026-10-13-interaction-review-readiness.md]
+    notes: The kinds are interaction, message burst, upcoming event and missed call. No source decides whether an item is correctable.
+
+  - id: IXN-026
+    title: The identity backfill gives every stored live correctable observation its interaction node
+    type: data
+    status: current
+    surface: none
+    given: observations stored before interaction nodes existed
+    when: the identity backfill runs
+    then:
+      - key: live-correctable-get-node
+        text: every live observation of a correctable source receives its interaction node under the same per-source rule that live recording uses
+      - key: shared-per-source-object
+        text: observations of the same source object share one node
+      - key: bursts-and-soft-deleted-untouched
+        text: message bursts and soft-deleted observations are left without a node
+      - key: no-other-column-changes
+        text: no column of any observation other than its interaction node changes
+      - key: idempotent
+        text: running the backfill again changes no observation and creates no node
+    provenance: [.agents/spec/2026-10-13-interaction-review-readiness.md]
+
+  - id: IXN-029
+    title: The correction requests answer with the result or refuse without writing
+    type: api
+    status: current
+    surface: api
+    given: a merge, merge preview or removal request
+    when: the request is answered
+    then:
+      - key: merge-answers-participation
+        text: a merge or preview answers success with the merged interaction and the requesting contact's resulting direction and time
+      - key: removal-answers-no-content
+        text: a removal answers success with no content once the correction, the cadence recompute and the local follow-up changes are committed
+      - key: fewer-than-two-refused
+        text: a merge or preview naming fewer than two distinct interactions is refused as invalid
+      - key: unknown-interaction-not-found
+        text: a merge or preview naming something that is no interaction, such as a message burst or a contact, is refused as not found
+      - key: contact-refused
+        text: a merge or preview for a contact that does not exist is refused as not found, and for a contact with no participation in the named interactions as invalid
+      - key: removal-body-refused
+        text: a removal with no scope, both scopes, an empty contact list or a reason outside duplicate, did not attend and did not happen is refused as invalid
+      - key: removal-unknown-interaction-not-found
+        text: a removal of something that is no interaction is refused as not found
+      - key: non-participant-refused
+        text: a removal naming a contact that does not take part in the interaction is refused as invalid
+      - key: no-participant-refused
+        text: a removal of an interaction in which no contact takes part any longer is refused as invalid
+      - key: refusal-writes-nothing
+        text: a refused request changes no interaction, judgment, cadence field or task and publishes nothing
+      - key: removal-is-only-delete
+        text: the removal request is the only way over HTTP to remove a participation; the surface has no request that deletes an interaction
+    provenance: [.agents/spec/2026-10-13-interaction-review-readiness.md]
+    notes: No correction answer carries an assertion, predicate or provenance (KNW-038).
+
+  - id: IXN-020
+    title: A missed call without voicemail appears as cadence-inert evidence
+    type: ux
+    status: current
+    surface: ui
+    given: a contact called and the user missed the call, which left no voicemail
+    when: the contact's interaction history is viewed
+    then:
+      - key: distinct-missed-call-row
+        text: the missed call appears at its time as a row distinct from recorded interactions
+      - key: cadence-inert-shown
+        text: the row visibly states that the missed call did not count toward cadence
+      - key: no-row-actions
+        text: the row offers no actions
+    provenance: [.agents/spec/2026-10-13-interaction-review-readiness.md]
+    notes: The missed call stays a call record with no interaction (ING-039); IXN-024 owns its list item and IXN-025 its cadence-inertness at ingest.
+
+  - id: IXN-021
+    title: A call the user placed never shows as missed
+    type: ux
+    status: current
+    surface: ui
+    given: a contact's history includes calls
+    when: the call rows are rendered
+    then:
+      - key: connected-outbound-not-missed
+        text: an outbound call with positive duration shows as connected, never as missed
+      - key: unanswered-outbound-not-missed
+        text: an outbound call with zero duration shows as an unanswered attempt, never as missed
+      - key: missed-inbound-shows-missed
+        text: an inbound call the user did not answer shows as missed, including one that left a voicemail
+    provenance: [.agents/spec/2026-10-13-interaction-review-readiness.md]
+    notes: Missed names an inbound call the user did not answer. The call record's direction and duration decide the state; the recorded interaction direction is unchanged (ING-039).
+
+  - id: IXN-024
+    title: The contact interaction list includes missed calls without voicemail as their own items
+    type: api
+    status: current
+    surface: api
+    given: a contact missed an inbound call that left no voicemail
+    when: the contact's interactions are listed
+    then:
+      - key: missed-call-item
+        text: the missed call is an item of kind missed_call identified by the call record's id, while recorded interactions are items of kind interaction
+      - key: cadence-inert-marked
+        text: the missed-call item is marked cadence-inert and interaction items are not
+      - key: missed-call-summary
+        text: the missed-call item carries the call summary that call interactions carry, including the call's direction
+      - key: ordered-among-items
+        text: missed-call items order, paginate, and count by the call's time among the contact's interactions
+      - key: voicemail-stays-interaction
+        text: a missed call that left a voicemail remains an interaction item
+      - key: own-calls-only
+        text: another contact's missed calls are absent
+    provenance: [.agents/spec/2026-10-13-interaction-review-readiness.md, InteractionContentService.ListTimeline]
+    notes: A missed call has no content container, so a venue filter excludes it; date filters apply to the call's time.
+
+  - id: IXN-025
+    title: A missed call without voicemail never bears cadence
+    type: business-logic
+    status: current
+    surface: none
+    given: a contact with cadence fields, an awaiting-reply window, an active skip and a live follow-up task
+    when: an inbound call the user missed, which left no voicemail, is ingested for that contact
+    then:
+      - no interaction is recorded for the contact
+      - the contact's cadence fields, awaiting-reply window and skip state are unchanged
+      - the contact's follow-up tasks are unchanged and no follow-up operation is enqueued
+    provenance: [.agents/spec/2026-10-13-interaction-review-readiness.md, decideCallInteraction]
+
+  - id: IXN-033
+    title: The contact interaction list carries one typed item per effective participation
+    type: api
+    status: current
+    surface: api
+    given: a contact with recorded interactions, some merged, some removed and some duplicative, and with missed calls
+    when: the contact's interactions are listed
+    then:
+      - key: typed-identity
+        text: each item carries a typed identity naming its kind and its own id, and no other field of an item or member names an item identity; a recorded interaction is identified by its interaction, a message burst by its observation and a missed call by its call record
+      - key: merged-once-combined
+        text: an interaction merged from several interactions is one item for the contact, whose direction combines the contact's own members' directions and whose time is the latest of those members' times
+      - key: members-listed
+        text: an interaction item lists its members, including a member only another attendee took part in, each with the source, label, content kind, message count, group marker, venue tags and event or call summary of its own, ordered by time; every other item is its own one member
+      - key: removed-absent
+        text: a participation the user removed is absent from the contact's list
+      - key: unmerged-distinct
+        text: interactions that were not merged stay separate items, even when they look duplicative
+      - key: effective-time-order-and-filters
+        text: items order newest first by their effective time with a deterministic tie-breaker, and date bounds, pagination totals and the venue filter apply to items, the venue filter keeping an item when any of its members would be kept and dropping missed calls
+    provenance: [.agents/spec/2026-10-13-interaction-review-readiness.md, InteractionContentService.ListTimeline]
+    notes: Missed-call items are IXN-024's; the requests that produce merged and removed participations are IXN-029's.
+
+  - id: IXN-034
+    title: A timeline item's content is read by its typed identity, each content item attributed to its own container
+    type: api
+    status: current
+    surface: api
+    given: a timeline item of a contact, which may be a merged interaction
+    when: its content is read in the participation context of that contact
+    then:
+      - key: members-grouped
+        text: the answer names the item's identity and groups each member's messages and meeting notes under that member, in the order the list gives the members
+      - key: item-attribution
+        text: every message and meeting note carries its own source, the kind of its own container and that container
+      - key: no-alias-container
+        text: a content item's container is never resolved through a merge, so each item keeps the container of its own source object inside a merged interaction
+      - key: stable-content-ref
+        text: every content item carries an opaque reference that is the same for the same source message or note in every read, whichever contact's copy the read selected
+      - key: merged-away-id
+        text: naming an interaction that was merged into another reads the interaction it was merged into
+      - key: other-kinds
+        text: a message burst reads as one member, a missed call as one call member with no content, and an upcoming event as one member holding its linked meeting notes
+      - key: invalid-400
+        text: an unknown kind, a malformed id, and a missing or malformed contact are refused as invalid
+      - key: not-found-404
+        text: an id that names no item of its kind, and a contact that does not exist, are refused as not found
+    provenance: [.agents/spec/2026-10-13-interaction-review-readiness.md, InteractionContentService.GetTimelineContent]
+    notes: The content a member holds is what the per-interaction content read of IXN-014 gives for that member.
+
+  - id: IXN-036
+    title: An interaction's effective participants are readable, the contacts a removal can name
+    type: api
+    status: current
+    surface: api
+    given: an interaction whose participations may have been merged or removed
+    when: its participants are read
+    then:
+      - key: lists-effective-participants
+        text: the answer lists every contact with an effective participation in the interaction, each by contact id and display name
+      - key: removed-absent
+        text: a contact whose participation was removed is absent
+      - key: merged-reads-merged
+        text: naming an interaction that was merged into another, or the one it was merged into, reads the participants of the merged interaction
+      - key: no-interaction-not-found
+        text: an id that names no interaction, such as a message burst or a contact, is refused as not found
+    provenance: [.agents/spec/2026-10-13-interaction-review-readiness.md, InteractionCorrectionService.Participants]
+    notes: The read derives nothing of its own; it reads the effective participation the correction requests (IXN-029) act on.
+
+  - id: IXN-037
+    title: The user removes participations of an interaction from its row
+    type: ux
+    status: current
+    surface: ui
+    given: a contact's history holds a correctable interaction that the contact and another attendee took part in
+    when: the user removes it from its row's action menu
+    then:
+      - key: menu-offers-remove
+        text: a correctable interaction's row offers Remove, and a message burst, upcoming event or missed call offers no correction
+      - key: names-interaction
+        text: the removal names the interaction it acts on
+      - key: attendees-current-preselected
+        text: the removal lists the interaction's attendees with the current contact pre-selected, and offers everyone
+      - key: reason-required
+        text: the removal asks for a reason of duplicate, did not attend or did not happen, and cannot be submitted without one
+      - key: default-removes-current-only
+        text: submitting the default removes the interaction from the current contact's history only, and the other attendee keeps it
+      - key: everyone-removes-every-attendee
+        text: choosing everyone removes the interaction from every attendee's history
+      - key: cadence-refreshes-without-reload
+        text: after submitting, the row leaves the history and the contact's recent activity shows the recomputed values without a reload
+    provenance: [.agents/spec/2026-10-13-interaction-review-readiness.md]
+    notes: The removal is the request of IXN-018; the attendees it lists are IXN-036's.
+
+  - id: IXN-038
+    title: The user merges interactions selected on a contact's history
+    type: ux
+    status: current
+    surface: ui
+    given: a contact's history holds two correctable interactions, one of them shared with another attendee, beside items that are not correctable
+    when: the user selects interactions and confirms a merge
+    then:
+      - key: menu-offers-merge
+        text: a correctable interaction's row offers Merge, which starts selecting interactions with that one selected
+      - key: only-correctable-selectable
+        text: only correctable interactions can be selected; a message burst or missed call cannot
+      - key: two-needed
+        text: the merge cannot be confirmed with fewer than two interactions selected
+      - key: confirmation-side-by-side
+        text: the confirmation shows the selected interactions side by side and says the merge applies to every attendee
+      - key: states-preview-result
+        text: the confirmation states the current contact's resulting direction and time as the merge preview answers them
+      - key: one-row-as-stated
+        text: after confirming, the history shows one row in place of the selected interactions, with the direction and time the confirmation stated
+    provenance: [.agents/spec/2026-10-13-interaction-review-readiness.md]
+    notes: The merge is the request of IXN-016 and IXN-017; the frontend computes no merged direction or time of its own.
+
+  - id: IXN-023
+    title: The drill-down shows, read-only, the assertions that cite its content
+    type: ux
+    status: current
+    surface: ui
+    given: a timeline item whose displayed content an assertion's provenance cites
+    when: its row is expanded on the contact page
+    then:
+      - key: assertion-beside-cited-content
+        text: each such assertion appears beside the content item it cites, stating its subject, predicate, value and recorded review status
+      - key: read-only-no-review-controls
+        text: the assertions offer no accept or reject control, no baseline, no verdict and no way into the knowledge graph
+    provenance: [.agents/spec/2026-10-13-interaction-review-readiness.md, InteractionDrillDown]
+    notes: Which assertions appear is IXN-039. Reviewing them belongs to a later claim-review surface.
+
+  - id: IXN-039
+    title: A timeline item's assertions are those whose provenance cites its displayed content
+    type: api
+    status: current
+    surface: api
+    given: a timeline item of a contact, and assertions whose provenance cites content rows
+    when: the item's assertions are read in the participation context of that contact
+    then:
+      - key: cites-displayed-content
+        text: every assertion whose provenance cites a content item the item's content read displays is returned once for that item, keyed by the item's content reference and carrying its predicate, subject, value and recorded review status; provenance citing any contact's copy of a displayed message cites that message
+      - key: undisplayed-content-omitted
+        text: an assertion citing only content the item's content read does not display is not returned
+      - key: merged-any-member
+        text: on a merged interaction, an assertion citing any member's displayed content is returned
+      - key: corrections-never-returned
+        text: an assertion under a correction predicate of the catalog is never returned, whatever its provenance cites
+      - key: no-cited-content-empty
+        text: an item with no cited content answers an empty list
+    provenance: [.agents/spec/2026-10-13-interaction-review-readiness.md, TimelineAssertionService.ListTimelineAssertions]
+    notes: The displayed content is IXN-034's content read for the same identity and contact. This read is the one HTTP read of the assertion store (KNW-038).

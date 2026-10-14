@@ -35,12 +35,26 @@ func (s *stubDeclineInteractionRepo) FindBySourceRefTx(_ context.Context, _ pgx.
 	s.findCalls++
 	s.lastFindKey = [3]string{contactID.String(), source, sourceRef}
 	if s.found != nil {
+		if s.found.InteractionNodeID == nil {
+			node := uuid.New()
+			s.found.InteractionNodeID = &node
+		}
 		return s.found, nil
 	}
 	if s.findErr != nil {
 		return nil, s.findErr
 	}
 	return nil, db.ErrNotFound
+}
+
+// GetInteractionTreeTx answers that the observation's interaction node is the
+// only node of its alias tree.
+func (s *stubDeclineInteractionRepo) GetInteractionTreeTx(_ context.Context, _ pgx.Tx, nodeID uuid.UUID) (*repository.InteractionTree, error) {
+	return &repository.InteractionTree{Root: nodeID, Nodes: []uuid.UUID{nodeID}}, nil
+}
+
+func (s *stubDeclineInteractionRepo) ListRecordedParticipationTx(context.Context, pgx.Tx, uuid.UUID) ([]repository.RecordedEntry, error) {
+	return nil, nil
 }
 
 func (s *stubDeclineInteractionRepo) SoftDeleteInteractionTx(_ context.Context, _ pgx.Tx, id uuid.UUID) error {
@@ -59,11 +73,29 @@ type stubDeclineContactRepo struct {
 	recomputeErr   error
 }
 
+func (s *stubDeclineContactRepo) LockContactForDateRecomputeTx(context.Context, pgx.Tx, uuid.UUID) error {
+	return nil
+}
+
 func (s *stubDeclineContactRepo) RecomputeContactDatesAfterDeleteTx(_ context.Context, _ pgx.Tx, contactID uuid.UUID, deletedAt time.Time, _ config.WatchdogConfig) error {
 	s.recomputeCalls++
 	s.lastContactID = contactID
 	s.lastDeletedAt = deletedAt
 	return s.recomputeErr
+}
+
+// stubDeclineNodeRepo stubs declineNodeRepo.
+type stubDeclineNodeRepo struct{}
+
+func (stubDeclineNodeRepo) AcquireCorrectionLocksTx(context.Context, pgx.Tx, ...uuid.UUID) error {
+	return nil
+}
+
+// stubDeclineCadence stubs declineCadence.
+type stubDeclineCadence struct{}
+
+func (stubDeclineCadence) RecomputeAfterCorrection(context.Context, pgx.Tx, uuid.UUID, []repository.RecordedParticipation, time.Time) error {
+	return nil
 }
 
 func mustDeclineEnv(t *testing.T, p events.CalendarDeclinedPayload) *events.Envelope {
@@ -95,7 +127,7 @@ func TestCalendarDeclineHandler_InteractionFound_SoftDeletesAndRecomputes(t *tes
 		Direction:  repository.InteractionDirectionMutual,
 	}}
 	cr := &stubDeclineContactRepo{}
-	h := NewCalendarDeclineHandler(ir, cr, config.TestConfig().Watchdog)
+	h := NewCalendarDeclineHandler(ir, cr, stubDeclineNodeRepo{}, stubDeclineCadence{}, config.TestConfig().Watchdog)
 
 	env := mustDeclineEnv(t, events.CalendarDeclinedPayload{
 		Version: 1, ContactID: cid, EventID: eventUUID, OccurredAt: occurredAt,
@@ -116,7 +148,7 @@ func TestCalendarDeclineHandler_InteractionNotFound_NoOp(t *testing.T) {
 	cid := uuid.New()
 	ir := &stubDeclineInteractionRepo{} // default findErr → db.ErrNotFound
 	cr := &stubDeclineContactRepo{}
-	h := NewCalendarDeclineHandler(ir, cr, config.TestConfig().Watchdog)
+	h := NewCalendarDeclineHandler(ir, cr, stubDeclineNodeRepo{}, stubDeclineCadence{}, config.TestConfig().Watchdog)
 
 	env := mustDeclineEnv(t, events.CalendarDeclinedPayload{
 		Version: 1, ContactID: cid, EventID: uuid.New().String(),
@@ -133,7 +165,7 @@ func TestCalendarDeclineHandler_InteractionNotFound_NoOp(t *testing.T) {
 func TestCalendarDeclineHandler_InvalidPayload_Errors(t *testing.T) {
 	ir := &stubDeclineInteractionRepo{}
 	cr := &stubDeclineContactRepo{}
-	h := NewCalendarDeclineHandler(ir, cr, config.TestConfig().Watchdog)
+	h := NewCalendarDeclineHandler(ir, cr, stubDeclineNodeRepo{}, stubDeclineCadence{}, config.TestConfig().Watchdog)
 
 	t.Run("nil contact_id", func(t *testing.T) {
 		env := mustDeclineEnv(t, events.CalendarDeclinedPayload{
@@ -169,7 +201,7 @@ func TestCalendarDeclineHandler_RecomputeContactNotFound_BenignNoOp(t *testing.T
 		Direction:  repository.InteractionDirectionMutual,
 	}}
 	cr := &stubDeclineContactRepo{recomputeErr: db.ErrNotFound}
-	h := NewCalendarDeclineHandler(ir, cr, config.TestConfig().Watchdog)
+	h := NewCalendarDeclineHandler(ir, cr, stubDeclineNodeRepo{}, stubDeclineCadence{}, config.TestConfig().Watchdog)
 
 	env := mustDeclineEnv(t, events.CalendarDeclinedPayload{
 		Version: 1, ContactID: cid, EventID: uuid.New().String(), OccurredAt: occurredAt,
@@ -188,7 +220,7 @@ func TestCalendarDeclineHandler_RecomputeOtherError_Propagates(t *testing.T) {
 		OccurredAt: occurredAt, Direction: repository.InteractionDirectionMutual,
 	}}
 	cr := &stubDeclineContactRepo{recomputeErr: errors.New("db down")}
-	h := NewCalendarDeclineHandler(ir, cr, config.TestConfig().Watchdog)
+	h := NewCalendarDeclineHandler(ir, cr, stubDeclineNodeRepo{}, stubDeclineCadence{}, config.TestConfig().Watchdog)
 
 	env := mustDeclineEnv(t, events.CalendarDeclinedPayload{
 		Version: 1, ContactID: cid, EventID: uuid.New().String(), OccurredAt: occurredAt,

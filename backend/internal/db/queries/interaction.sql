@@ -10,7 +10,7 @@ ORDER BY occurred_at DESC
 LIMIT $2 OFFSET $3;
 
 -- name: CreateInteraction :one
-INSERT INTO interaction (contact_id, source, source_ref, occurred_at, description, direction, venue_id)
+INSERT INTO interaction (contact_id, source, source_ref, occurred_at, description, direction, venue_id, interaction_node_id)
 VALUES (
     sqlc.arg('contact_id'),
     sqlc.arg('source'),
@@ -18,9 +18,25 @@ VALUES (
     sqlc.arg('occurred_at'),
     sqlc.narg('description'),
     COALESCE(sqlc.narg('direction'), 'mutual'),
-    sqlc.narg('venue_id')
+    sqlc.narg('venue_id'),
+    sqlc.narg('interaction_node_id')
 )
 RETURNING *;
+
+-- name: ResolveInteractionNode :one
+-- The observation step's resolution: finds or creates the interaction node of
+-- an observation by the per-source identity rule (resolve_interaction_node in
+-- migration 087, the one implementation). A burst source returns no row (no node).
+SELECT resolve_interaction_node(sqlc.arg('source')::text, sqlc.narg('source_ref')::text) AS node_id;
+
+-- name: AssignInteractionNode :exec
+-- Gives a row that has no interaction node its node, when a source observes it
+-- again. The IS NULL guard makes an assigned node permanent: this is the only
+-- statement besides the create insert that writes interaction_node_id.
+UPDATE interaction
+SET interaction_node_id = sqlc.arg('interaction_node_id')
+WHERE id = sqlc.arg('id')
+  AND interaction_node_id IS NULL;
 
 -- name: UpdateInteractionDirection :one
 -- Promote an outbound interaction to mutual when a reply arrives (in-place update)
@@ -44,6 +60,12 @@ WHERE contact_id = $1 AND deleted_at IS NULL;
 SELECT * FROM interaction
 WHERE contact_id = $1 AND source = $2 AND source_ref = $3 AND deleted_at IS NULL
 LIMIT 1;
+
+-- name: TestGetInteractionNode :one
+-- Test-only read of an interaction node's subtype row, for backfill fixtures
+-- that check a node's source and persisted identity key.
+SELECT * FROM interaction_node
+WHERE node_id = sqlc.arg(node_id);
 
 -- name: TestGetInteractionIncludingDeleted :one
 -- Test-only read for migration fixtures that verify a deleted interaction is
@@ -172,16 +194,17 @@ WHERE id = sqlc.arg(id)
 RETURNING *;
 
 -- name: HasResponseAfter :one
--- Returns TRUE if any later inbound/mutual interaction exists for the
--- contact after the given outreach time. Used by the FollowUpManager's
+-- Returns TRUE if any later inbound/mutual effective participation exists for
+-- the contact after the given outreach time. Used by the FollowUpManager's
 -- out-of-order guard: an outbound event arriving after a response has
 -- already landed must not produce a stale follow-up.
+-- Reads effective participation (migration 089), so a response a correction
+-- removed is no response, and a merged participation answers as one.
 SELECT EXISTS (
-    SELECT 1 FROM interaction
+    SELECT 1 FROM effective_participation
     WHERE contact_id = sqlc.arg('contact_id')
       AND direction IN ('inbound', 'mutual')
-      AND occurred_at > sqlc.arg('outreach_at')
-      AND deleted_at IS NULL
+      AND occurred_at > sqlc.arg('outreach_at')::timestamptz
     LIMIT 1
 ) AS has_response;
 
@@ -201,15 +224,18 @@ ORDER BY source_ref;
 -- Test-only: inserts an interaction with a caller-supplied id, source, and
 -- source_ref and a NULL venue_id, bypassing the recorder. Used by the venue
 -- backfill migration test to stand up pre-existing (venue-less) interactions
--- that the 069 backfill then populates. Production code MUST NOT call this.
-INSERT INTO interaction (id, contact_id, source, source_ref, occurred_at, direction)
+-- that the 069 backfill then populates. The caller supplies the interaction
+-- node, which the repository wrapper resolves through the observation step.
+-- Production code MUST NOT call this.
+INSERT INTO interaction (id, contact_id, source, source_ref, occurred_at, direction, interaction_node_id)
 VALUES (
     sqlc.arg('id'),
     sqlc.arg('contact_id'),
     sqlc.arg('source'),
     sqlc.narg('source_ref'),
     sqlc.arg('occurred_at'),
-    sqlc.arg('direction')
+    sqlc.arg('direction'),
+    sqlc.narg('interaction_node_id')
 )
 RETURNING *;
 
@@ -226,54 +252,116 @@ RETURNING *;
 -- sync-enqueue lock in external_sync.sql.
 SELECT pg_advisory_xact_lock(hashtextextended(sqlc.arg('lock_key')::text, 0));
 
--- name: ListContactInteractionsFiltered :many
-SELECT * FROM interaction
-WHERE contact_id = sqlc.arg('contact_id')
-  AND deleted_at IS NULL
-  AND (sqlc.narg('from_time')::timestamptz IS NULL OR occurred_at >= sqlc.narg('from_time'))
-  AND (sqlc.narg('to_time')::timestamptz IS NULL OR occurred_at < sqlc.narg('to_time'))
-  AND (
-    (sqlc.narg('venue_source')::text IS NULL AND sqlc.narg('venue_container')::text IS NULL)
-    OR (
-      sqlc.narg('venue_source')::text IS NOT NULL AND sqlc.narg('venue_container')::text IS NOT NULL
-      AND CASE
-        WHEN sqlc.narg('venue_source')::text IN ('email', 'gchat', 'whatsapp') THEN EXISTS (
-          SELECT 1 FROM comms_message cm WHERE cm.interaction_id = interaction.id AND cm.deleted_at IS NULL
-            AND cm.source = sqlc.narg('venue_source')::text AND cm.thread_id = sqlc.narg('venue_container')::text)
-        WHEN sqlc.narg('venue_source')::text = 'telegram' THEN EXISTS (
-          SELECT 1 FROM telegram_message tm WHERE tm.interaction_id = interaction.id AND tm.deleted_at IS NULL
-            AND tm.telegram_chat_id::text = sqlc.narg('venue_container')::text)
-        WHEN sqlc.narg('venue_source')::text = 'messages' THEN EXISTS (
-          SELECT 1 FROM messages_message mm WHERE mm.interaction_id = interaction.id AND mm.deleted_at IS NULL
-            AND mm.chat_guid = sqlc.narg('venue_container')::text)
-        ELSE FALSE
-      END
-    )
-  )
-ORDER BY occurred_at DESC, id DESC
-LIMIT sqlc.arg('limit_count') OFFSET sqlc.arg('offset_count');
+-- name: ListObservationsInVenue :many
+-- The given live observations whose content sits in the venue: the base venue
+-- filter of a contact's interaction list. A source that has no content
+-- container matches nothing.
+SELECT interaction.id FROM interaction
+WHERE interaction.id = ANY(sqlc.arg('observation_ids')::uuid[])
+  AND interaction.deleted_at IS NULL
+  AND CASE
+    WHEN sqlc.arg('venue_source')::text IN ('email', 'gchat', 'whatsapp') THEN EXISTS (
+      SELECT 1 FROM comms_message cm WHERE cm.interaction_id = interaction.id AND cm.deleted_at IS NULL
+        AND cm.source = sqlc.arg('venue_source')::text AND cm.thread_id = sqlc.arg('venue_container')::text)
+    WHEN sqlc.arg('venue_source')::text = 'telegram' THEN EXISTS (
+      SELECT 1 FROM telegram_message tm WHERE tm.interaction_id = interaction.id AND tm.deleted_at IS NULL
+        AND tm.telegram_chat_id::text = sqlc.arg('venue_container')::text)
+    WHEN sqlc.arg('venue_source')::text = 'messages' THEN EXISTS (
+      SELECT 1 FROM messages_message mm WHERE mm.interaction_id = interaction.id AND mm.deleted_at IS NULL
+        AND mm.chat_guid = sqlc.arg('venue_container')::text)
+    ELSE FALSE
+  END;
 
--- name: CountContactInteractionsFiltered :one
-SELECT COUNT(*) FROM interaction
-WHERE contact_id = sqlc.arg('contact_id')
-  AND deleted_at IS NULL
-  AND (sqlc.narg('from_time')::timestamptz IS NULL OR occurred_at >= sqlc.narg('from_time'))
-  AND (sqlc.narg('to_time')::timestamptz IS NULL OR occurred_at < sqlc.narg('to_time'))
-  AND (
-    (sqlc.narg('venue_source')::text IS NULL AND sqlc.narg('venue_container')::text IS NULL)
-    OR (
-      sqlc.narg('venue_source')::text IS NOT NULL AND sqlc.narg('venue_container')::text IS NOT NULL
-      AND CASE
-        WHEN sqlc.narg('venue_source')::text IN ('email', 'gchat', 'whatsapp') THEN EXISTS (
-          SELECT 1 FROM comms_message cm WHERE cm.interaction_id = interaction.id AND cm.deleted_at IS NULL
-            AND cm.source = sqlc.narg('venue_source')::text AND cm.thread_id = sqlc.narg('venue_container')::text)
-        WHEN sqlc.narg('venue_source')::text = 'telegram' THEN EXISTS (
-          SELECT 1 FROM telegram_message tm WHERE tm.interaction_id = interaction.id AND tm.deleted_at IS NULL
-            AND tm.telegram_chat_id::text = sqlc.narg('venue_container')::text)
-        WHEN sqlc.narg('venue_source')::text = 'messages' THEN EXISTS (
-          SELECT 1 FROM messages_message mm WHERE mm.interaction_id = interaction.id AND mm.deleted_at IS NULL
-            AND mm.chat_guid = sqlc.narg('venue_container')::text)
-        ELSE FALSE
-      END
-    )
-  );
+-- Effective participation reads (arc seam S4). Each reads the one derivation,
+-- the effective_participation and interaction_observation_verdict views of
+-- migration 089; none derives participation of its own.
+
+-- name: ListEffectiveParticipationForContact :many
+-- One row per effective participation of the contact, latest first.
+SELECT * FROM effective_participation ep
+WHERE ep.contact_id = sqlc.arg('contact_id')
+ORDER BY ep.occurred_at DESC, ep.members->0->>'observation_id';
+
+-- name: ListInteractionParticipants :many
+-- The effective participants of the interaction whose alias tree holds
+-- node_id (the root or any node merged into it), each with its entry for the
+-- root. Only the contacts observed on the tree are derived.
+SELECT * FROM effective_participation ep
+WHERE ep.interaction_node_id = interaction_node_root(sqlc.arg('node_id')::uuid)
+  AND ep.contact_id = ANY(ARRAY(
+      SELECT i.contact_id FROM interaction i
+      WHERE i.interaction_node_id IN (
+          SELECT interaction_alias_tree(interaction_node_root(sqlc.arg('node_id')::uuid)))
+        AND i.deleted_at IS NULL))
+ORDER BY ep.contact_id;
+
+-- name: GetObservationVerdict :one
+-- Whether a correction excludes the live observation, with the contact and
+-- root its effective entry is keyed by.
+SELECT
+    v.contact_id,
+    v.root_node_id,
+    v.excluded
+FROM interaction_observation_verdict v
+WHERE v.observation_id = sqlc.arg('observation_id');
+
+-- name: GetEffectiveParticipationOfObservation :one
+-- The contact's effective entry that holds the observation as a member. The
+-- root qual (NULL for a message burst) narrows the derivation to that entry.
+SELECT * FROM effective_participation ep
+WHERE ep.contact_id = sqlc.arg('contact_id')
+  AND ep.interaction_node_id IS NOT DISTINCT FROM sqlc.narg('root_node_id')::uuid
+  AND ep.members @> jsonb_build_array(jsonb_build_object('observation_id', sqlc.arg('observation_id')::uuid));
+
+-- name: ListInteractionAliasTree :many
+-- Every node of the alias tree that holds node_id, each with its own alias
+-- (NULL for the root). No row when node_id names no interaction node.
+SELECT n.id, n.merged_into
+FROM node n
+WHERE n.type = 'interaction'
+  AND n.id IN (
+      SELECT interaction_alias_tree(interaction_node_root(sqlc.arg('node_id')::uuid)))
+  AND EXISTS (
+      SELECT 1 FROM node q WHERE q.id = sqlc.arg('node_id')::uuid AND q.type = 'interaction')
+ORDER BY n.id;
+
+-- name: ListLiveContactsObservedOnNodes :many
+-- The live contacts with a live observation on any of the interaction nodes,
+-- whether or not a correction excludes it: the contacts a merge of those
+-- nodes recomputes.
+SELECT DISTINCT i.contact_id
+FROM interaction i
+JOIN live_contact c ON c.id = i.contact_id
+WHERE i.interaction_node_id = ANY(sqlc.arg('node_ids')::uuid[])
+  AND i.deleted_at IS NULL
+ORDER BY i.contact_id;
+
+-- name: InteractionRecordingSuppressedFollowUp :one
+-- Whether the recording of the observation suppressed its follow-up (a send
+-- task's completion, CAD-012): read from the interaction.recorded event that
+-- recording published, which is keyed by the observation's id under its
+-- source. An observation recorded without that event suppressed nothing.
+SELECT EXISTS (
+    SELECT 1
+    FROM interaction i
+    JOIN event e ON e.source = i.source AND e.source_id = i.id::text
+    WHERE i.id = @id
+      AND e.kind = 'interaction.recorded'
+      AND COALESCE((e.payload->>'suppress_follow_up')::boolean, false)
+)::boolean AS suppressed;
+
+-- name: ListInteractionsByIDs :many
+-- Live interactions with the given ids, in no particular order.
+SELECT * FROM interaction
+WHERE id = ANY(@ids::uuid[]) AND deleted_at IS NULL;
+
+
+-- name: ListInteractionTreeObservations :many
+-- The live observations, of any contact, on every node of the alias tree under
+-- each root, with the root they belong to: the members of each merged
+-- interaction. The alias is read only to find the tree.
+SELECT sqlc.embed(i), r.root_id::uuid AS root_id
+FROM unnest(sqlc.arg('root_ids')::uuid[]) AS r(root_id)
+CROSS JOIN LATERAL interaction_alias_tree(r.root_id) AS t(node_id)
+JOIN interaction i ON i.interaction_node_id = t.node_id AND i.deleted_at IS NULL
+ORDER BY i.occurred_at, i.id;

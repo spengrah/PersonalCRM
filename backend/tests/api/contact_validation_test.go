@@ -1375,14 +1375,14 @@ func TestContactAPI_GetContactValidation(t *testing.T) {
 }
 
 // TestContactAPI_KnowledgeProjectionWireKeys binds the client-visible
-// projection clause of KNW-033: the contact payload's derived location,
-// birthday, and how_met fields are the ONLY projection of the knowledge
-// graph, so they must actually appear as wire keys on the contact response.
+// projection clause of KNW-038: the contact payload's derived location,
+// birthday, and how_met fields are a projection of the knowledge graph, so
+// they must actually appear as wire keys on the contact response.
 // The create path persists these values solely as assertions
 // (KnowledgeCacheUpdater is the sole writer of the derived cache columns —
 // CreateContact/UpdateContact SQL never touch them), so a GET response
 // carrying them proves graph knowledge really is projected into the contact
-// payload. The statement's no-endpoint clause is bound by
+// payload. The statement's one-read clause is bound by
 // TestKnowledgeRouteAbsence_AssertionStoreInvisible in
 // cmd/crm-api/knowledge_route_absence_test.go; together the citing set
 // covers both clauses.
@@ -1393,7 +1393,7 @@ func TestContactAPI_KnowledgeProjectionWireKeys(t *testing.T) {
 	router, cleanup := setupContactValidationTestRouter(t)
 	defer cleanup()
 
-	// spec: KNW-033
+	// spec: KNW-038
 	ns := uuid.New().String()[:8]
 	location := "Projection City " + ns
 	howMet := "Met at projection test conference " + ns

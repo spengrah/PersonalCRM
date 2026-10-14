@@ -15,6 +15,7 @@ import (
 type MacHostRouteDeps struct {
 	HostRepo    auth.MacHostKeyValidator
 	Handler     *MacHostHandler
+	Enrichment  *MessagesEnrichmentHandler
 	AuthLimiter auth.MacHostAuthLimiterConfig
 }
 
@@ -28,6 +29,9 @@ type MacHostRouteDeps struct {
 //   - POST /api/v1/host/:id/sync/:source/cursor    (host bearer auth)
 //   - GET  /api/v1/host/:id/sync/:source/known-ids (host bearer auth; per-source tombstone reconciliation)
 //   - GET  /api/v1/host/:id/known-identifiers      (host bearer auth; cross-source canonical phone/email set)
+//   - GET  /api/v1/host/:id/messages/enrichment/missing-bodies (host bearer auth; guids of body-less messages)
+//   - GET  /api/v1/host/:id/messages/enrichment/group-chats    (host bearer auth; group chats with their burst windows)
+//   - POST /api/v1/host/:id/messages/enrichment    (host bearer auth; fill bodies, add group messages, clear outbound attribution)
 //
 // Caller is responsible for adding the admin routes via
 // RegisterMacHostAdminRoutes against their own global-API-key-protected
@@ -48,6 +52,9 @@ func RegisterMacHostRoutes(router *gin.Engine, deps MacHostRouteDeps) {
 		macDaemon.POST("/host/:id/sync/:source/cursor", deps.Handler.CommitCursor)
 		macDaemon.GET("/host/:id/sync/:source/known-ids", deps.Handler.KnownIDs)
 		macDaemon.GET("/host/:id/known-identifiers", deps.Handler.KnownIdentifiers)
+		macDaemon.GET("/host/:id/messages/enrichment/missing-bodies", deps.Enrichment.ListMissingBodies)
+		macDaemon.GET("/host/:id/messages/enrichment/group-chats", deps.Enrichment.ListGroupChats)
+		macDaemon.POST("/host/:id/messages/enrichment", deps.Enrichment.ApplyItems)
 	}
 }
 

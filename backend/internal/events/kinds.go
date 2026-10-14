@@ -99,6 +99,15 @@ const (
 	KindAssertionSuperseded      Kind = "assertion.superseded"
 	KindAssertionRejected        Kind = "assertion.rejected"
 	KindAssertionProvenanceAdded Kind = "assertion.provenance_added"
+
+	// Interaction-correction event — published by the correction routes
+	// (InteractionCorrectionService) inside the transaction that commits a
+	// merge or removal of interactions (source="interaction_correction"). It
+	// names the correction, the root interaction node of the result and the
+	// contacts whose cadence the correction recomputed. No consumer: the
+	// correction's cadence and follow-up effects commit in its own tx, and the
+	// event row lands for audit.
+	KindInteractionCorrected Kind = "interaction.corrected"
 )
 
 // AllKinds enumerates every defined Kind. Used by tests to guard that
@@ -130,6 +139,7 @@ var AllKinds = []Kind{
 	KindAssertionSuperseded,
 	KindAssertionRejected,
 	KindAssertionProvenanceAdded,
+	KindInteractionCorrected,
 }
 
 // Envelope is the wire/DB shape passed through Bus.Publish. Payload is
@@ -564,6 +574,24 @@ type AssertionEventPayload struct {
 	PredicateKey  string    `json:"predicate_key"`
 }
 
+// Correction kinds carried by InteractionCorrectedPayload.Correction.
+const (
+	CorrectionMerge   = "merge"
+	CorrectionRemoval = "removal"
+)
+
+// InteractionCorrectedPayload is the payload for KindInteractionCorrected.
+// Correction is CorrectionMerge or CorrectionRemoval; InteractionNodeID is the
+// root interaction node of the result (a merge's winner, a removal's
+// interaction root); RecomputedContactIDs are the contacts whose cadence fields
+// and follow-up tasks the correction recomputed, in id order.
+type InteractionCorrectedPayload struct {
+	Version              int         `json:"version"` // start at 1
+	Correction           string      `json:"correction"`
+	InteractionNodeID    uuid.UUID   `json:"interaction_node_id"`
+	RecomputedContactIDs []uuid.UUID `json:"recomputed_contact_ids"`
+}
+
 // kindPayloadTypes is the canonical Kind → payload-type registry used by
 // Marshal and Unmarshal to assert type-vs-kind consistency at runtime. Add
 // a row each time a new Kind + payload struct are introduced. Keep in sync
@@ -597,6 +625,7 @@ var kindPayloadTypes = map[Kind]reflect.Type{
 	KindAssertionSuperseded:      reflect.TypeOf(AssertionEventPayload{}),
 	KindAssertionRejected:        reflect.TypeOf(AssertionEventPayload{}),
 	KindAssertionProvenanceAdded: reflect.TypeOf(AssertionEventPayload{}),
+	KindInteractionCorrected:     reflect.TypeOf(InteractionCorrectedPayload{}),
 }
 
 // IsKnownKind reports whether kind has a registered payload type. Used by

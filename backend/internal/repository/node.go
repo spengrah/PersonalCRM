@@ -12,11 +12,12 @@ import (
 )
 
 // Node type constants. The node registry is the uniform anchor every graph
-// entity (person, entity subtype, venue) is addressable through.
+// entity (person, entity subtype, venue, interaction) is addressable through.
 const (
-	NodeTypePerson = "person"
-	NodeTypeVenue  = "venue"
-	NodeTypeEntity = "entity"
+	NodeTypePerson      = "person"
+	NodeTypeVenue       = "venue"
+	NodeTypeEntity      = "entity"
+	NodeTypeInteraction = "interaction"
 )
 
 // Node is the thin, uniform registry row every graph entity attaches to. For a

@@ -263,6 +263,9 @@ type GCalEventShape struct {
 	// a one-attendee meeting is one the account ORGANIZES without being on the
 	// attendee list, from which the provider synthesizes the accepted response.
 	SoleAttendee bool
+	// CoAttendees are further attendee emails, each an accepted attendee beside
+	// the peer, so every contact owning one is matched to the same event.
+	CoAttendees []string
 }
 
 // GCalEvent builds a past meeting the account attended together with the target
@@ -312,17 +315,21 @@ func (g *Generator) GCalEventWithShape(target ContactSpec, intent MatchIntent, s
 		Start:    &calendarapi.EventDateTime{DateTime: start.Format(time.RFC3339)},
 		End:      &calendarapi.EventDateTime{DateTime: end.Format(time.RFC3339)},
 	}
+	coAttendees := make([]*calendarapi.EventAttendee, len(shape.CoAttendees))
+	for i, email := range shape.CoAttendees {
+		coAttendees[i] = &calendarapi.EventAttendee{Email: email, ResponseStatus: "accepted", DisplayName: "Synthetic Attendee"}
+	}
 	if shape.SoleAttendee {
 		// Organizer-not-attendee: getUserResponse falls through to the organizer
 		// and synthesizes "accepted", and buildAttendeeList skips appending an
 		// organizer that is self — so the stored list is the peer alone.
-		ev.Attendees = []*calendarapi.EventAttendee{peer}
+		ev.Attendees = append([]*calendarapi.EventAttendee{peer}, coAttendees...)
 		ev.Organizer = &calendarapi.EventOrganizer{Email: account, Self: true}
 	} else {
-		ev.Attendees = []*calendarapi.EventAttendee{
+		ev.Attendees = append([]*calendarapi.EventAttendee{
 			{Email: account, Self: true, ResponseStatus: "accepted"},
 			peer,
-		}
+		}, coAttendees...)
 	}
 	return GCalEventSpec{
 		AccountID: account, Event: ev, GcalEventID: gcalEventID, Intent: intent, PeerEmail: attendeeEmail,
@@ -570,7 +577,23 @@ func (g *Generator) MacContactForSource(target ContactSpec, intent MatchIntent, 
 		email = g.unknownEmail()
 	}
 	displayName := g.Prefix() + "MacContact " + fmt.Sprint(seq)
+	return g.macContactEnvelope(source, entityID, displayName, email, intent, hostID)
+}
 
+// AnarlogHumanFor builds the anarlog_humans external_contact.upserted envelope
+// that registers humanID (an anarlog human UUID, the id a meeting note tags as a
+// participant) as the target contact: the email matches the target, so the ingest
+// writes the anarlog_human_id identity linked to it. The caller picks humanID, so
+// a tagged participant id is derived rather than drawn, and no generator
+// sequence advances.
+func (g *Generator) AnarlogHumanFor(target ContactSpec, humanID uuid.UUID, hostID uuid.UUID) (MacContactSpec, error) {
+	if target.Email == "" {
+		return MacContactSpec{}, fmt.Errorf("anarlog human for %q: the target carries no email to match on", target.FullName)
+	}
+	return g.macContactEnvelope("anarlog_humans", humanID.String(), g.Prefix()+"AnarlogHuman "+humanID.String(), target.Email, MatchSeeded, hostID)
+}
+
+func (g *Generator) macContactEnvelope(source, entityID, displayName, email string, intent MatchIntent, hostID uuid.UUID) (MacContactSpec, error) {
 	payload := events.ExternalContactUpsertedPayload{
 		Version:     1,
 		HostID:      hostID,
