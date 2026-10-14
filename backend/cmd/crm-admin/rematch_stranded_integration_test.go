@@ -107,6 +107,4 @@ func TestRematchStranded_Integration_NeverAttributesAGroupOutboundOrAnAddedMessa
 	require.NotEqual(t, addedContact.ID, ingestedContact.ID)
 }
 
-func strPtr(s string) *string { return &s }
-
 func newGuid(prefix string) string { return prefix + "-" + uuid.NewString() }
