@@ -122,14 +122,22 @@ func emailRef(contactID uuid.UUID, thread, day string) string {
 	return contactID.String() + ":" + thread + ":" + day
 }
 
-// linkEmail stores an email message in a thread and links it to an observation.
+// linkEmail stores an email message in a thread, sent when the observation
+// occurred, and links it to the observation.
 func (e *correctionEnv) linkEmail(t *testing.T, observation *repository.Interaction, thread, external string) repository.CommsMessage {
+	t.Helper()
+	return e.linkEmailSentAt(t, observation, thread, external, observation.OccurredAt)
+}
+
+// linkEmailSentAt stores an email message in a thread, sent at sentAt, and links
+// it to an observation.
+func (e *correctionEnv) linkEmailSentAt(t *testing.T, observation *repository.Interaction, thread, external string, sentAt time.Time) repository.CommsMessage {
 	t.Helper()
 	comms := repository.NewCommsMessageRepository(e.database.Queries)
 	subject, body, peer := "Synthetic subject "+thread, "Synthetic body "+external, "synthetic-peer"
 	row, err := comms.UpsertMessage(e.ctx, repository.UpsertCommsMessageParams{
 		Source: repository.InteractionSourceEmail, ExternalID: external, ThreadID: &thread, Subject: &subject, Body: &body,
-		PeerHandle: &peer, Direction: repository.InteractionDirectionInbound, SentAt: observation.OccurredAt, MatchedContactID: observation.ContactID,
+		PeerHandle: &peer, Direction: repository.InteractionDirectionInbound, SentAt: sentAt, MatchedContactID: observation.ContactID,
 	})
 	require.NoError(t, err)
 	require.NoError(t, comms.MarkMessagesProcessed(e.ctx, []uuid.UUID{row.ID}, observation.ID))

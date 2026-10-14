@@ -252,13 +252,15 @@ func TestTimelineAssertions_CitationSurvivesContactMergeDedup(t *testing.T) {
 	e := newCorrectionEnv(t)
 
 	// A and B each hold a copy of one email message, and a claim cites A's
-	// copy. Merging A into B tombstones A's duplicate copy and keeps B's, which
-	// B's drill-down displays: the claim still cites that message.
+	// copy. Merging A into B tombstones A's duplicate copy and keeps B's, and
+	// leaves B two observations of the thread-day: A's, the later, holding only
+	// the tombstoned copy, and B's own, holding the surviving one. B's
+	// drill-down displays the surviving copy: the claim still cites that message.
 	a, b := e.contact(t, "monthly"), e.contact(t, "monthly")
 	thread, day, external := e.ref("thread"), "2026-01-02", e.ref("message")
-	aObservation := e.record(t, a, repository.InteractionSourceEmail, emailRef(a, thread, day), repository.InteractionDirectionInbound, e.at(0))
+	aObservation := e.record(t, a, repository.InteractionSourceEmail, emailRef(a, thread, day), repository.InteractionDirectionInbound, e.at(1))
 	bObservation := e.record(t, b, repository.InteractionSourceEmail, emailRef(b, thread, day), repository.InteractionDirectionInbound, e.at(0))
-	aCopy := e.linkEmail(t, aObservation, thread, external)
+	aCopy := e.linkEmailSentAt(t, aObservation, thread, external, bObservation.OccurredAt)
 	bCopy := e.linkEmail(t, bObservation, thread, external)
 	claim := e.claim(t, a, repository.SourceKindCommsMessage, aCopy.ID, true)
 	_, err := e.contacts.MergeContacts(e.ctx, service.MergeContactsRequest{SourceContactID: a, TargetContactID: b})

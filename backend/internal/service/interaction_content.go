@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -144,13 +145,29 @@ func (s *InteractionContentService) applySenderNames(ctx context.Context, rows [
 }
 
 func (s *InteractionContentService) EnrichPage(ctx context.Context, interactions []repository.Interaction) (map[uuid.UUID]InteractionEnrichment, error) {
-	out := make(map[uuid.UUID]InteractionEnrichment, len(interactions))
-	if len(interactions) == 0 {
+	members := make([]observationMember, len(interactions))
+	for i, row := range interactions {
+		members[i] = singleMember(row)
+	}
+	return s.enrichMembers(ctx, members)
+}
+
+// enrichMembers enriches each member, keyed by its representative's id. The
+// content linked to an observation (messages, a call) is read from every
+// observation of the member; the rest derives from the representative's source
+// ref, which every observation of one interaction node shares.
+func (s *InteractionContentService) enrichMembers(ctx context.Context, members []observationMember) (map[uuid.UUID]InteractionEnrichment, error) {
+	out := make(map[uuid.UUID]InteractionEnrichment, len(members))
+	if len(members) == 0 {
 		return out, nil
 	}
+	interactions := make([]repository.Interaction, len(members))
 	bySource := map[string][]uuid.UUID{}
-	for _, row := range interactions {
-		bySource[row.Source] = append(bySource[row.Source], row.ID)
+	for i, member := range members {
+		interactions[i] = member.representative
+		for _, row := range member.observations {
+			bySource[row.Source] = append(bySource[row.Source], row.ID)
+		}
 	}
 	commsIDs := append(append([]uuid.UUID{}, bySource[repository.InteractionSourceEmail]...), bySource[repository.InteractionSourceGChat]...)
 	commsIDs = append(commsIDs, bySource[repository.InteractionSourceWhatsApp]...)
@@ -226,25 +243,28 @@ func (s *InteractionContentService) EnrichPage(ctx context.Context, interactions
 			callsByID[*row.InteractionID] = row
 		}
 	}
-	for _, row := range interactions {
+	for _, member := range members {
+		row := member.representative
 		weighted, count := []weightedVenue{}, int64(0)
-		switch row.Source {
-		case repository.InteractionSourceEmail, repository.InteractionSourceGChat, repository.InteractionSourceWhatsApp:
-			for _, item := range commsByID[row.ID] {
-				count += item.MessageCount
-				if item.ThreadID != nil {
-					weighted = append(weighted, weightedVenue{deriveVenue(item.Source, *item.ThreadID, "", nil, item.LatestSubject, false), item.MessageCount})
+		for _, observation := range member.ids() {
+			switch row.Source {
+			case repository.InteractionSourceEmail, repository.InteractionSourceGChat, repository.InteractionSourceWhatsApp:
+				for _, item := range commsByID[observation] {
+					count += item.MessageCount
+					if item.ThreadID != nil {
+						weighted = append(weighted, weightedVenue{deriveVenue(item.Source, *item.ThreadID, "", nil, item.LatestSubject, false), item.MessageCount})
+					}
 				}
-			}
-		case repository.InteractionSourceTelegram:
-			for _, item := range tgByID[row.ID] {
-				count += item.MessageCount
-				weighted = append(weighted, weightedVenue{deriveVenue("telegram", strconv.FormatInt(item.ChatID, 10), item.ChatType, item.ChatTitle, nil, false), item.MessageCount})
-			}
-		case repository.InteractionSourceMessages:
-			for _, item := range msgByID[row.ID] {
-				count += item.MessageCount
-				weighted = append(weighted, weightedVenue{deriveVenue("messages", item.ChatGuid, "", nil, nil, item.IsGroupChat), item.MessageCount})
+			case repository.InteractionSourceTelegram:
+				for _, item := range tgByID[observation] {
+					count += item.MessageCount
+					weighted = append(weighted, weightedVenue{deriveVenue("telegram", strconv.FormatInt(item.ChatID, 10), item.ChatType, item.ChatTitle, nil, false), item.MessageCount})
+				}
+			case repository.InteractionSourceMessages:
+				for _, item := range msgByID[observation] {
+					count += item.MessageCount
+					weighted = append(weighted, weightedVenue{deriveVenue("messages", item.ChatGuid, "", nil, nil, item.IsGroupChat), item.MessageCount})
+				}
 			}
 		}
 		tags := venueTags(weighted)
@@ -269,8 +289,11 @@ func (s *InteractionContentService) EnrichPage(ctx context.Context, interactions
 			}
 		}
 		var call *CallContent
-		if found, ok := callsByID[row.ID]; ok {
-			call = callContent(found)
+		for _, observation := range member.ids() {
+			if found, ok := callsByID[observation]; ok {
+				call = callContent(found)
+				break
+			}
 		}
 		out[row.ID] = InteractionEnrichment{Label: deriveLabel(row, eventTitle, weighted), ContentKind: contentKind(row.Source, noteCount), MessageCount: int(count), IsGroup: anyGroup(tags), VenueTags: tags, Event: event, Call: call}
 	}
@@ -283,12 +306,14 @@ func (s *InteractionContentService) GetContent(ctx context.Context, id uuid.UUID
 	if err != nil {
 		return nil, err
 	}
-	return s.contentOf(ctx, *interaction)
+	return s.contentOf(ctx, singleMember(*interaction))
 }
 
-// contentOf assembles the content of one observation by its source.
-func (s *InteractionContentService) contentOf(ctx context.Context, interaction repository.Interaction) (*InteractionContent, error) {
-	id := interaction.ID
+// contentOf assembles the content of a member by its representative's source:
+// the messages linked to any of its observations, or what the representative's
+// source ref names.
+func (s *InteractionContentService) contentOf(ctx context.Context, member observationMember) (*InteractionContent, error) {
+	interaction, ids := member.representative, member.ids()
 	result := &InteractionContent{Messages: []ContentMessage{}, MeetingNotes: []MeetingNoteContent{}}
 	switch interaction.Source {
 	case repository.InteractionSourceGCal:
@@ -335,16 +360,16 @@ func (s *InteractionContentService) contentOf(ctx context.Context, interaction r
 	result.Kind = "messages"
 	switch interaction.Source {
 	case repository.InteractionSourceEmail, repository.InteractionSourceGChat, repository.InteractionSourceWhatsApp:
-		rows, err := s.comms.ListByInteractionIDs(ctx, []uuid.UUID{id})
+		rows, err := s.comms.ListByInteractionIDs(ctx, ids)
 		if err != nil {
 			return nil, err
 		}
-		result.Messages, err = s.expandComms(ctx, id, rows)
+		result.Messages, err = s.expandComms(ctx, ids, rows)
 		if err != nil {
 			return nil, err
 		}
 	case repository.InteractionSourceTelegram:
-		rows, err := s.telegram.ListByInteractionIDs(ctx, []uuid.UUID{id})
+		rows, err := s.telegram.ListByInteractionIDs(ctx, ids)
 		if err != nil {
 			return nil, err
 		}
@@ -353,7 +378,7 @@ func (s *InteractionContentService) contentOf(ctx context.Context, interaction r
 			return nil, err
 		}
 	case repository.InteractionSourceMessages:
-		rows, err := s.messages.ListByInteractionIDs(ctx, []uuid.UUID{id})
+		rows, err := s.messages.ListByInteractionIDs(ctx, ids)
 		if err != nil {
 			return nil, err
 		}
@@ -532,7 +557,7 @@ func deriveSenderDetail(source string, outgoing bool, peer *string, metadata []b
 	return "Unknown", false
 }
 
-func (s *InteractionContentService) expandComms(ctx context.Context, interactionID uuid.UUID, linked []repository.CommsMessage) ([]ContentMessage, error) {
+func (s *InteractionContentService) expandComms(ctx context.Context, interactionIDs []uuid.UUID, linked []repository.CommsMessage) ([]ContentMessage, error) {
 	type bounds struct {
 		source, thread string
 		from, to       time.Time
@@ -546,7 +571,7 @@ func (s *InteractionContentService) expandComms(ctx context.Context, interaction
 			// but must be rendered directly and carries no venue key.
 			key := row.Source + "\x00" + row.ExternalID
 			old, exists := chosen[key]
-			if !exists || (isExpanded(row, interactionID) && !isExpanded(old, interactionID)) || (isExpanded(row, interactionID) == isExpanded(old, interactionID) && bytes.Compare(row.ID[:], old.ID[:]) < 0) {
+			if !exists || (isExpanded(row, interactionIDs) && !isExpanded(old, interactionIDs)) || (isExpanded(row, interactionIDs) == isExpanded(old, interactionIDs) && bytes.Compare(row.ID[:], old.ID[:]) < 0) {
 				chosen[key] = row
 			}
 			continue
@@ -570,7 +595,7 @@ func (s *InteractionContentService) expandComms(ctx context.Context, interaction
 		for _, row := range rows {
 			key := row.Source + "\x00" + row.ExternalID
 			old, exists := chosen[key]
-			if !exists || (isExpanded(row, interactionID) && !isExpanded(old, interactionID)) || (isExpanded(row, interactionID) == isExpanded(old, interactionID) && bytes.Compare(row.ID[:], old.ID[:]) < 0) {
+			if !exists || (isExpanded(row, interactionIDs) && !isExpanded(old, interactionIDs)) || (isExpanded(row, interactionIDs) == isExpanded(old, interactionIDs) && bytes.Compare(row.ID[:], old.ID[:]) < 0) {
 				chosen[key] = row
 			}
 		}
@@ -796,8 +821,8 @@ func joinNames(first, last *string) string {
 	}
 	return strings.Join(names, " ")
 }
-func isExpanded(row repository.CommsMessage, id uuid.UUID) bool {
-	return row.InteractionID != nil && *row.InteractionID == id
+func isExpanded(row repository.CommsMessage, ids []uuid.UUID) bool {
+	return row.InteractionID != nil && slices.Contains(ids, *row.InteractionID)
 }
 func sortContentMessages(rows []ContentMessage) {
 	sort.Slice(rows, func(i, j int) bool {
