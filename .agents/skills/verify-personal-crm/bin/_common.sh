@@ -5,8 +5,9 @@
 
 SKILL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 REPO_ROOT="$(git -C "$SKILL_DIR" rev-parse --show-toplevel)"
-# Playwright browsers live at the MAIN checkout root, shared by all worktrees
-# (same anchor as frontend/playwright.config.ts).
+# Playwright browsers and the Go build cache live at the MAIN checkout root,
+# shared by all worktrees (same anchors as frontend/playwright.config.ts and the
+# Makefile).
 MAIN_ROOT="$(dirname "$(git -C "$REPO_ROOT" rev-parse --path-format=absolute --git-common-dir)")"
 
 # Slot 0-399 from the checkout path. Override with VERIFY_SLOT on a collision.
@@ -44,7 +45,7 @@ fi
 verify_database_url() { bash "$REPO_ROOT/scripts/e2e-pg.sh" url "$VERIFY_DB_NAME"; }
 VERIFY_DATABASE_URL="$(verify_database_url)"
 
-export GOCACHE="${GOCACHE:-$REPO_ROOT/.gocache}"
+export GOCACHE="${GOCACHE:-$MAIN_ROOT/.gocache}"
 
 port_pids() { bash "$REPO_ROOT/scripts/port-pids.sh" "$1" 2>/dev/null || true; }
 

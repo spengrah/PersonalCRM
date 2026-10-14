@@ -17,8 +17,14 @@ MAIN_REPO_ROOT := $(shell cd "$$(dirname "$$(git rev-parse --path-format=absolut
 PLAYWRIGHT_BROWSERS_PATH := $(MAIN_REPO_ROOT)/.playwright-browsers
 export PLAYWRIGHT_BROWSERS_PATH
 
-# Go build cache (workspace-local by default; override via env).
-GOCACHE ?= $(REPO_ROOT)/.gocache
+# Go build cache, anchored on the main checkout like PLAYWRIGHT_BROWSERS_PATH so
+# every linked worktree shares one warm cache instead of rebuilding cold. Sharing
+# is safe: entries are keyed by a hash of each build's inputs, so branches never
+# see each other's results, and concurrent go processes may use one cache. It
+# stays on the workspace volume, not the home cache, which a container rebuild
+# wipes. A sandboxed agent (Codex workspace-write) reads it but silently drops
+# new entries unless this path is one of its writable roots. Override via env.
+GOCACHE ?= $(MAIN_REPO_ROOT)/.gocache
 export GOCACHE
 
 # Build stamping — mirrors build-images.yml; vars live in backend/internal/health/health.go.
