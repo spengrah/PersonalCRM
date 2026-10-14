@@ -45,7 +45,7 @@ func TestInteractionCorrection_IsSP1State(t *testing.T) {
 	e := newCorrectionEnv(t)
 
 	t.Run("a merge aliases the later-listed root to the first without a tombstone and asserts same_interaction_as", func(t *testing.T) {
-		// spec: KNW-037
+		// spec: KNW-037.merge-is-alias-plus-declaration, KNW-037.user-provenance-per-act
 		a := e.contact(t, "monthly")
 		nodeA := e.meeting(t, a, e.event(t), e.at(0))
 		nodeB := e.meeting(t, a, e.event(t), e.at(1))
@@ -65,7 +65,7 @@ func TestInteractionCorrection_IsSP1State(t *testing.T) {
 	})
 
 	t.Run("removing a contact writes one not_participant_in per member node with the reason", func(t *testing.T) {
-		// spec: KNW-037
+		// spec: KNW-037.removal-of-named-attendees-is-edge, KNW-037.user-provenance-per-act, KNW-037.reason-readable-per-removal
 		a := e.contact(t, "monthly")
 		nodeX := e.meeting(t, a, e.event(t), e.at(0))
 		nodeY := e.call(t, a, e.ref("call"), repository.InteractionDirectionInbound, e.at(1))
@@ -86,7 +86,7 @@ func TestInteractionCorrection_IsSP1State(t *testing.T) {
 	})
 
 	t.Run("removing everyone writes one removed_for_everyone per member node with the reason", func(t *testing.T) {
-		// spec: KNW-037
+		// spec: KNW-037.removal-for-everyone-is-fact, KNW-037.reason-readable-per-removal
 		a := e.contact(t, "monthly")
 		nodeX := e.meeting(t, a, e.event(t), e.at(0))
 		nodeY := e.meeting(t, a, e.event(t), e.at(1))
@@ -104,8 +104,29 @@ func TestInteractionCorrection_IsSP1State(t *testing.T) {
 		}
 	})
 
+	t.Run("a removal writes nothing for a member an earlier act removed for everyone", func(t *testing.T) {
+		// spec: KNW-037.removal-of-named-attendees-is-edge, KNW-037.reason-readable-per-removal
+		a := e.contact(t, "monthly")
+		nodeX := e.meeting(t, a, e.event(t), e.at(0))
+		nodeY := e.meeting(t, a, e.event(t), e.at(1))
+		first, second := service.RemovalReasonDidNotHappen, service.RemovalReasonDidNotAttend
+		e.remove(t, nodeX, everyoneBody(first))
+		e.merge(t, a, nodeX, nodeY)
+
+		e.remove(t, nodeX, removalBody(second, a))
+
+		require.Empty(t, e.correctionAssertions(t, nodeX, "not_participant_in"), "X stays judged by the everyone-removal alone")
+		facts := e.correctionAssertions(t, nodeX, "removed_for_everyone")
+		require.Len(t, facts, 1)
+		e.requireUserLocator(t, facts[0], &first)
+		removals := e.correctionAssertions(t, nodeY, "not_participant_in")
+		require.Len(t, removals, 1)
+		require.Equal(t, a, removals[0].SubjectNodeID)
+		e.requireUserLocator(t, removals[0], &second)
+	})
+
 	t.Run("two correction acts carry different locator source ids", func(t *testing.T) {
-		// spec: KNW-037
+		// spec: KNW-037.user-provenance-per-act
 		a, b := e.contact(t, "monthly"), e.contact(t, "monthly")
 		ev := e.event(t)
 		node := e.meeting(t, a, ev, e.at(0))
@@ -121,7 +142,7 @@ func TestInteractionCorrection_IsSP1State(t *testing.T) {
 	})
 
 	t.Run("a later merge leaves every earlier correction and the earlier members as they were", func(t *testing.T) {
-		// spec: KNW-037
+		// spec: KNW-037.judged-members-and-scope-stay-readable
 		a, b := e.contact(t, "monthly"), e.contact(t, "monthly")
 		ev := e.event(t)
 		nodeX := e.meeting(t, a, ev, e.at(0))
@@ -149,7 +170,7 @@ func TestInteractionCorrection_IsSP1State(t *testing.T) {
 	})
 
 	t.Run("merges and removals change no observation or content row", func(t *testing.T) {
-		// spec: KNW-037
+		// spec: KNW-037.raw-evidence-survives
 		// A database of its own, so the meeting note's linkage window holds the
 		// one calendar event this case syncs.
 		database, _ := newIsolatedRiverTestDB(t, t.Context())

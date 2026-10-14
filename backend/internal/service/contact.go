@@ -1396,6 +1396,18 @@ func (s *ContactService) MergeContacts(ctx context.Context, req MergeContactsReq
 	sourceUUID := req.SourceContactID
 	targetUUID := req.TargetContactID
 
+	if s.knowledge == nil {
+		return nil, errors.New("merge contacts: knowledge writer not wired (pass assertSvc+knowledgeCache to NewContactService)")
+	}
+	// The graph merge's locks (7-graph) before any row write: a correction
+	// takes its correction locks before it locks a contact's row, so taking
+	// them only at the graph merge, after the target's row is written, could
+	// deadlock against a correction naming the target or an interaction node
+	// the source's assertions name.
+	if err := s.knowledge.assertSvc.LockNodeMergeTx(ctx, tx, req.SourceContactID, req.TargetContactID); err != nil {
+		return nil, fmt.Errorf("lock source and target nodes for merge: %w", err)
+	}
+
 	// 1. Delete duplicate contact methods (same normalized value and type)
 	if err := txQueries.DeleteDuplicateContactMethods(ctx, db.DeleteDuplicateContactMethodsParams{
 		SourceContactID: sourceUUID,
@@ -1632,10 +1644,6 @@ func (s *ContactService) MergeContacts(ctx context.Context, req MergeContactsReq
 	nodeRepo := repository.NewNodeRepository(txQueries)
 	if err := nodeRepo.UpdateNodeCanonicalLabelTx(ctx, tx, req.TargetContactID, updateReq.FullName); err != nil {
 		return nil, fmt.Errorf("sync target person node label: %w", err)
-	}
-
-	if s.knowledge == nil {
-		return nil, errors.New("merge contacts: knowledge writer not wired (pass assertSvc+knowledgeCache to NewContactService)")
 	}
 
 	// 7-graph. Graph merge FIRST: tombstone the source person node

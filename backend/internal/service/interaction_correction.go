@@ -361,10 +361,13 @@ func (s *InteractionCorrectionService) Remove(ctx context.Context, req Interacti
 		if err != nil {
 			return fmt.Errorf("list corrections of node %s: %w", node, err)
 		}
+		// A member an earlier act removed for everyone, or removed a selected
+		// contact from, stays judged by that act, and this act writes nothing
+		// for it (R46).
+		if removedForEveryone(existing, node) {
+			continue
+		}
 		if req.Everyone {
-			if removedForEveryone(existing, node) {
-				continue
-			}
 			yes := true
 			if _, err := s.asserts.AssertTx(ctx, tx, AssertRequest{
 				SubjectNodeID: node,

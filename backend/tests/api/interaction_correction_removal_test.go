@@ -3,9 +3,11 @@ package api
 import (
 	"bytes"
 	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
+	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/service"
 	"personal-crm/backend/tests/testsupport"
@@ -73,6 +75,24 @@ func TestInteractionRemoval_RemovesSelectedParticipations(t *testing.T) {
 
 		require.Empty(t, e.correctable(t, alice), "removed from Y as well, alice has no participation")
 		require.Len(t, e.correctable(t, bob), 1)
+	})
+
+	t.Run("a removal binds to a judged member merged away into one the contact still attends", func(t *testing.T) {
+		// spec: IXN-018.binds-to-judged-members
+		alice, bob := e.contact(t, "monthly"), e.contact(t, "monthly")
+		ev, callRef := e.event(t), e.ref("call")
+		meetingX := e.meeting(t, alice, ev, e.at(0))
+		e.meeting(t, bob, ev, e.at(0))
+		callY := e.call(t, alice, callRef, repository.InteractionDirectionMutual, e.at(1))
+
+		e.remove(t, meetingX, removalBody(service.RemovalReasonDidNotAttend, alice))
+		e.merge(t, bob, callY, meetingX)
+
+		eps := e.correctable(t, alice)
+		require.Len(t, eps, 1, "alice keeps her participation through Y")
+		require.Equal(t, callY, *eps[0].InteractionNodeID)
+		require.Len(t, eps[0].Members, 1)
+		require.Equal(t, callY, *eps[0].Members[0].InteractionNodeID)
 	})
 
 	t.Run("the reason never changes what a scope removes", func(t *testing.T) {
@@ -239,4 +259,69 @@ func TestInteractionRemoval_SerializesWithAssertionWrites(t *testing.T) {
 		require.FailNow(t, "the assertion write did not finish")
 	}
 	require.Empty(t, e.correctable(t, contact))
+}
+
+// A removal and a concurrent contact merge whose source's assertions name the
+// removal's interaction serialize on the correction locks without a deadlock
+// (corrections.c11). Contact A was removed from member X; contact B
+// participates through member Y; X and Y are merged. Removing B takes the
+// correction locks on X, Y and B and then B's row. Merging A into B writes
+// B's row and re-points A's not_participant_in on X, so it takes its
+// correction locks, on A, B and X, before its row writes, as a correction
+// does; taking them only after would hold B's row while waiting for the locks
+// the removal holds while it waits for B's row.
+func TestInteractionRemoval_SerializesWithContactMerge(t *testing.T) {
+	// spec: IXN-018.survives-contact-merge
+	testsupport.RequireDatabase(t)
+	t.Parallel()
+	e := newCorrectionEnv(t)
+	a, b := e.contact(t, "monthly"), e.contact(t, "monthly")
+	nodeX := e.meeting(t, a, e.event(t), e.at(0))
+	nodeY := e.meeting(t, b, e.event(t), e.at(1))
+	e.remove(t, nodeX, removalBody(service.RemovalReasonDidNotAttend, a))
+	e.merge(t, b, nodeX, nodeY)
+
+	holder, err := e.database.Pool.Begin(e.ctx)
+	require.NoError(t, err)
+	defer func() { _ = holder.Rollback(e.ctx) }()
+	require.NoError(t, e.nodes.AcquireCorrectionLocksTx(e.ctx, holder, nodeX))
+	holderPID, err := db.New(holder).TestBackendPID(e.ctx)
+	require.NoError(t, err)
+	waiting := func(n int64) func() bool {
+		return func() bool {
+			got, err := e.database.Queries.TestCountBackendsWaitingOn(e.ctx, holderPID)
+			return err == nil && got == n
+		}
+	}
+
+	removal := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		removal <- e.post(t, "/api/v1/interactions/"+nodeX.String()+"/removals", removalBody(service.RemovalReasonDidNotAttend, b))
+	}()
+	require.Eventually(t, waiting(1), 10*time.Second, 10*time.Millisecond, "the removal never queued on X's correction lock")
+	merge := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		merge <- e.post(t, "/api/v1/contacts/"+b.String()+"/merge", map[string]any{"source_contact_id": a.String()})
+	}()
+	require.Eventually(t, waiting(2), 10*time.Second, 10*time.Millisecond, "the contact merge never queued on a correction lock")
+	require.NoError(t, holder.Rollback(e.ctx))
+
+	w := responseWithin(t, removal, "removal")
+	require.Equal(t, http.StatusNoContent, w.Code, w.Body.String())
+	w = responseWithin(t, merge, "contact merge")
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	require.Empty(t, e.correctable(t, b))
+}
+
+// responseWithin returns the response done delivers, failing the test when
+// none arrives within ten seconds.
+func responseWithin(t *testing.T, done <-chan *httptest.ResponseRecorder, what string) *httptest.ResponseRecorder {
+	t.Helper()
+	select {
+	case w := <-done:
+		return w
+	case <-time.After(10 * time.Second):
+		require.FailNowf(t, "request did not finish", "the %s did not finish", what)
+		return nil
+	}
 }

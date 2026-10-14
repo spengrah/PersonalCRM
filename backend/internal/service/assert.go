@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"hash/fnv"
+	"maps"
 	"sort"
 	"strconv"
 	"strings"
@@ -629,10 +630,6 @@ func (s *AssertService) validateLocators(ctx context.Context, tx pgx.Tx, predica
 	return nil
 }
 
-// correctionMergePredicate is the correction predicate a merge writes; every
-// other correction predicate is a removal.
-const correctionMergePredicate = "same_interaction_as"
-
 // correctionReasonField is the locator field a removal records its reason in.
 const correctionReasonField = "reason"
 
@@ -653,23 +650,16 @@ func validateCorrectionLocators(predicate *repository.Predicate, locators []Prov
 		return validationError("correction predicate %q requires source_kind and producer_kind %q, got %q/%q",
 			predicate.Key, repository.SourceKindUser, loc.SourceKind, loc.ProducerKind)
 	}
-	if predicate.Key == correctionMergePredicate {
+	// The merge's predicate carries no reason; every other correction
+	// predicate is a removal's.
+	if predicate.Key == correctionPredicateMerge {
 		return nil
 	}
-	if loc.Field == nil || *loc.Field != correctionReasonField || loc.Quote == nil || !isRemovalReason(*loc.Quote) {
+	if loc.Field == nil || *loc.Field != correctionReasonField || loc.Quote == nil || !IsRemovalReason(*loc.Quote) {
 		return validationError("removal predicate %q requires field %q with quote duplicate, did_not_attend or did_not_happen",
 			predicate.Key, correctionReasonField)
 	}
 	return nil
-}
-
-func isRemovalReason(reason string) bool {
-	switch reason {
-	case "duplicate", "did_not_attend", "did_not_happen":
-		return true
-	default:
-		return false
-	}
 }
 
 // hasAnyScalar reports whether any value_* field is set.
@@ -1828,48 +1818,21 @@ type repointedAssertion struct {
 //     slot and then runs the D6-step-4 valid-time supersession against any
 //     different-value overlapping prior so exactly one stays current.
 //
-// Concurrency: the caller's merge tx tombstones the loser node (deleted_at) BEFORE
-// this runs, and the single-cardinality re-points hold the per-slot advisory lock,
-// so a concurrent single-card assert on an affected slot serializes. The repoint
-// UPDATE is additionally savepoint-protected against a raced identical proposition
-// (multi-card has no slot lock). What this does NOT guard is a writer that asserts
-// a BRAND-NEW fact/edge on the loser node AFTER this one-time scan but before the
-// merge commits (write-skew on the loser node) — that row would strand on the
-// tombstoned loser. SP1 has NO concurrent assertion producers (extractors/agents
-// are SP3/SP4; the only writers are the synchronous, user-serialized contact
-// create/update/merge paths), so this cannot occur today; SP3 must add loser-node
-// serialization (e.g. a node advisory lock) when concurrent producers arrive.
+// Concurrency: the merge takes the correction lock on loser, on winner and on
+// every interaction node a re-pointed row, a collider or a slot row names, then
+// the slot locks, before it writes (lockNodeMerge), so a concurrent assertion
+// write naming an interaction node beside either node serializes with it. The
+// repoint UPDATE is additionally savepoint-protected against a raced identical
+// proposition (multi-card has no slot lock). A caller that writes other rows in
+// the merge tx first takes these locks before those writes (LockNodeMergeTx).
+// A write of an assertion that names no interaction node takes no correction
+// lock, so one asserting a brand-new fact on the loser after the locked read
+// would strand on the tombstoned loser; SP1's only such writers are the
+// user-serialized contact create/update/merge paths, and SP3 must serialize
+// its concurrent producers with the loser node when they arrive.
 func (s *AssertService) MergeAssertionsTx(ctx context.Context, tx pgx.Tx, loser, winner uuid.UUID) error {
-	rows, err := s.assertionRepo.ListAssertionsTouchingNodeTx(ctx, tx, loser)
+	plans, err := s.lockNodeMerge(ctx, tx, loser, winner)
 	if err != nil {
-		return fmt.Errorf("list loser assertions: %w", err)
-	}
-
-	// Pass 1: rewrite + recompute, and collect the slot locks the LIVE
-	// single-cardinality rows imply.
-	plans := make([]repointedAssertion, 0, len(rows))
-	var slots []writeSlot
-	lockNodes := make(map[uuid.UUID]struct{})
-	for i := range rows {
-		plan, err := s.planRepoint(ctx, tx, &rows[i], loser, winner)
-		if err != nil {
-			return err
-		}
-		plans = append(plans, plan)
-		// The row's nodes before and after the re-point: a winner-side collider
-		// names the latter.
-		collectCorrectionNodes(lockNodes, plan.predicate, rows[i].SubjectNodeID, rows[i].ObjectNodeID)
-		collectCorrectionNodes(lockNodes, plan.predicate, plan.canonSubject, plan.canonObject)
-		// A self-loop row is closed, not re-pointed into a slot, so it implies no lock.
-		if plan.live && !plan.selfLoop && plan.predicate.Cardinality == repository.PredicateCardinalitySingle {
-			slots = append(slots, writeSlot{plan.predicate, plan.canonKey, plan.canonSubject, plan.canonObject})
-		}
-	}
-
-	// The correction lock on every interaction node a re-pointed row, a collider
-	// or a slot row names, then every implied slot lock in sorted order
-	// (deadlock-safe across concurrent asserts touching any affected slot).
-	if err := s.lockForWrite(ctx, tx, lockNodes, slots); err != nil {
 		return err
 	}
 
@@ -1882,6 +1845,97 @@ func (s *AssertService) MergeAssertionsTx(ctx context.Context, tx pgx.Tx, loser,
 		}
 	}
 	return nil
+}
+
+// LockNodeMergeTx takes every lock MergeAssertionsTx(loser, winner) takes, in
+// the same one ordered acquisition, and writes nothing. A merge that writes
+// other rows in its tx before the assertion merge calls it before those
+// writes: a correction takes its correction locks before any row lock, so a
+// merge that took them only after its row writes could hold a row a
+// correction waits for while waiting for that correction's locks.
+// MergeAssertionsTx's own acquisition is then a no-op.
+func (s *AssertService) LockNodeMergeTx(ctx context.Context, tx pgx.Tx, loser, winner uuid.UUID) error {
+	_, err := s.lockNodeMerge(ctx, tx, loser, winner)
+	return err
+}
+
+// lockNodeMerge plans the merge of loser into winner and takes its locks
+// (lockForWrite), returning the plan read under them. Every write of an
+// assertion naming an interaction node takes the correction lock on both of
+// its nodes, so once loser and winner are held no such row enters or leaves
+// the loser's rows. A row written between the first read and the grant can
+// name a node or slot the round did not lock; the locked re-read then finds
+// it, and the round is rolled back, releasing its locks, and repeats with the
+// larger set. So the merge takes its complete correction-lock set in one
+// ordered acquisition and never adds a node to a set it holds.
+func (s *AssertService) lockNodeMerge(ctx context.Context, tx pgx.Tx, loser, winner uuid.UUID) ([]repointedAssertion, error) {
+	_, nodes, slots, err := s.planMerge(ctx, tx, loser, winner)
+	if err != nil {
+		return nil, err
+	}
+	for {
+		round, err := tx.Begin(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("begin merge lock savepoint: %w", err)
+		}
+		heldNodes, heldSlots := maps.Clone(nodes), slotLockKeys(slots)
+		var plans []repointedAssertion
+		err = s.lockForWrite(ctx, round, heldNodes, slots)
+		if err == nil {
+			plans, nodes, slots, err = s.planMerge(ctx, round, loser, winner)
+		}
+		if err == nil && containsAll(heldNodes, nodes) && containsAll(heldSlots, slotLockKeys(slots)) {
+			if err := round.Commit(ctx); err != nil {
+				return nil, fmt.Errorf("release merge lock savepoint: %w", err)
+			}
+			return plans, nil
+		}
+		if rbErr := round.Rollback(ctx); rbErr != nil {
+			return nil, fmt.Errorf("roll back merge lock savepoint: %w", rbErr)
+		}
+		if err != nil {
+			return nil, err
+		}
+	}
+}
+
+// planMerge reads the loser's assertions and plans each one's re-point onto
+// winner (pass 1), without writing. It returns the plans, the correction-lock
+// set the merge needs (loser, winner, and every interaction node a row names
+// before and after its re-point, where a winner-side collider names the
+// latter) and the slots the live single-cardinality re-points land in.
+func (s *AssertService) planMerge(ctx context.Context, tx pgx.Tx, loser, winner uuid.UUID) ([]repointedAssertion, map[uuid.UUID]struct{}, []writeSlot, error) {
+	rows, err := s.assertionRepo.ListAssertionsTouchingNodeTx(ctx, tx, loser)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("list loser assertions: %w", err)
+	}
+	plans := make([]repointedAssertion, 0, len(rows))
+	var slots []writeSlot
+	nodes := map[uuid.UUID]struct{}{loser: {}, winner: {}}
+	for i := range rows {
+		plan, err := s.planRepoint(ctx, tx, &rows[i], loser, winner)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		plans = append(plans, plan)
+		collectCorrectionNodes(nodes, plan.predicate, rows[i].SubjectNodeID, rows[i].ObjectNodeID)
+		collectCorrectionNodes(nodes, plan.predicate, plan.canonSubject, plan.canonObject)
+		// A self-loop row is closed, not re-pointed into a slot, so it implies no lock.
+		if plan.live && !plan.selfLoop && plan.predicate.Cardinality == repository.PredicateCardinalitySingle {
+			slots = append(slots, writeSlot{plan.predicate, plan.canonKey, plan.canonSubject, plan.canonObject})
+		}
+	}
+	return plans, nodes, slots, nil
+}
+
+// containsAll reports whether every key of sub is in set.
+func containsAll[K comparable](set, sub map[K]struct{}) bool {
+	for k := range sub {
+		if _, ok := set[k]; !ok {
+			return false
+		}
+	}
+	return true
 }
 
 // planRepoint rewrites one loser assertion's node references onto the winner,
@@ -2335,12 +2389,7 @@ func (s *AssertService) lockForWrite(ctx context.Context, tx pgx.Tx, nodes map[u
 	if err := s.collectSlotCorrectionNodes(ctx, tx, nodes, slots); err != nil {
 		return err
 	}
-	keys := make(map[int64]struct{})
-	for _, sl := range slots {
-		for _, k := range slotLockKeysFor(sl.predicate, sl.canonKey, sl.canonSubject, sl.canonObject) {
-			keys[k] = struct{}{}
-		}
-	}
+	keys := slotLockKeys(slots)
 	if len(keys) == 0 {
 		return s.acquireCorrectionLocks(ctx, tx, nodes)
 	}
@@ -2370,6 +2419,17 @@ func (s *AssertService) lockForWrite(ctx context.Context, tx pgx.Tx, nodes map[u
 			return err
 		}
 	}
+}
+
+// slotLockKeys returns the slot lock keys of every slot.
+func slotLockKeys(slots []writeSlot) map[int64]struct{} {
+	keys := make(map[int64]struct{})
+	for _, sl := range slots {
+		for _, k := range slotLockKeysFor(sl.predicate, sl.canonKey, sl.canonSubject, sl.canonObject) {
+			keys[k] = struct{}{}
+		}
+	}
+	return keys
 }
 
 // collectSlotCorrectionNodes adds the interaction nodes the accepted rows of
