@@ -526,6 +526,10 @@ func (s *InteractionCorrectionService) recompute(ctx context.Context, tx pgx.Tx,
 func (s *InteractionCorrectionService) recordedParticipation(
 	ctx context.Context, tx pgx.Tx, contactID uuid.UUID, judged []uuid.UUID,
 ) ([]repository.RecordedParticipation, *repository.ApplyInteractionRequest, time.Time, error) {
+	contact, err := s.contacts.GetContactTx(ctx, tx, contactID)
+	if err != nil {
+		return nil, nil, time.Time{}, err
+	}
 	entries, err := s.interactions.ListEffectiveParticipationTx(ctx, tx, contactID)
 	if err != nil {
 		return nil, nil, time.Time{}, err
@@ -557,7 +561,7 @@ func (s *InteractionCorrectionService) recordedParticipation(
 		}
 		switch entry.Direction {
 		case repository.InteractionDirectionOutbound:
-			outbounds = append(outbounds, awaitCandidate{req: req, observationID: last.ID})
+			outbounds = append(outbounds, awaitCandidate{req: req, observationID: last.ID, recordedAt: last.RecordedAt})
 		default:
 			if latestResponse == nil || req.OccurredAt.After(latestResponse.OccurredAt) {
 				r := req
@@ -571,7 +575,7 @@ func (s *InteractionCorrectionService) recordedParticipation(
 		}
 		return recorded[i].OccurredAt.Before(recorded[j].OccurredAt)
 	})
-	awaited, err := s.awaitedOutbound(ctx, tx, outbounds, latestResponse)
+	awaited, err := s.awaitedOutbound(ctx, tx, contact, outbounds, latestResponse)
 	if err != nil {
 		return nil, nil, time.Time{}, err
 	}
@@ -579,23 +583,29 @@ func (s *InteractionCorrectionService) recordedParticipation(
 }
 
 // awaitCandidate is an outbound entry and the member observation whose
-// recording gave the entry its effect.
+// recording gave the entry its effect, with when it was recorded.
 type awaitCandidate struct {
 	req           repository.ApplyInteractionRequest
 	observationID uuid.UUID
+	recordedAt    time.Time
 }
 
 // awaitedOutbound is the outbound a follow-up awaits a reply to under the
 // follow-up rules: the latest outbound entry whose recording did not suppress
-// its follow-up (a send's completion never opens or moves one, CAD-012), when
-// no inbound or mutual entry is later. Nil when there is none.
+// its follow-up (a send's completion never opens or moves one, CAD-012) and
+// whose window no CRM skip of contact ended (a window the user ended with a
+// skip stays ended, as the cadence replay keeps it), when no inbound or mutual
+// entry is later. Nil when there is none.
 func (s *InteractionCorrectionService) awaitedOutbound(
-	ctx context.Context, tx pgx.Tx, outbounds []awaitCandidate, latestResponse *repository.ApplyInteractionRequest,
+	ctx context.Context, tx pgx.Tx, contact *repository.Contact, outbounds []awaitCandidate, latestResponse *repository.ApplyInteractionRequest,
 ) (*repository.ApplyInteractionRequest, error) {
 	sort.SliceStable(outbounds, func(i, j int) bool { return outbounds[i].req.OccurredAt.After(outbounds[j].req.OccurredAt) })
 	for _, candidate := range outbounds {
 		if latestResponse != nil && latestResponse.OccurredAt.After(candidate.req.OccurredAt) {
 			return nil, nil
+		}
+		if contact.AwaitingReplyEndedBySkip(candidate.recordedAt) {
+			continue
 		}
 		suppressed, err := s.interactions.RecordingSuppressedFollowUpTx(ctx, tx, candidate.observationID)
 		if err != nil {

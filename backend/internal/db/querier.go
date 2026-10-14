@@ -2691,6 +2691,11 @@ type Querier interface {
 	// given backend. Scoped to one blocker, so a parallel sibling waiting on an
 	// unrelated lock cannot satisfy the poll.
 	TestCountBackendsBlockedBy(ctx context.Context, blockerPid int32) (int64, error)
+	// Race-test only: how many active backends wait on the given backend, directly
+	// or behind another waiter. Two transactions that queue for one row lock the
+	// given backend holds wait in line: the second is blocked by the first waiter,
+	// not by the holder, so TestCountBackendsBlockedBy counts only the first.
+	TestCountBackendsWaitingOn(ctx context.Context, blockerPid int32) (int64, error)
 	// Test-only: counts venue-type nodes that no live interaction references via
 	// venue_id. Used by the venue backfill test to assert the no-orphan-node guard.
 	TestCountOrphanVenueNodes(ctx context.Context) (int64, error)

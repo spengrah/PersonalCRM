@@ -1153,6 +1153,23 @@ WHERE state = 'active'
   AND pid <> sqlc.arg(blocker_pid)::int
   AND pg_blocking_pids(pid) @> ARRAY[sqlc.arg(blocker_pid)::int];
 
+-- name: TestCountBackendsWaitingOn :one
+-- Race-test only: how many active backends wait on the given backend, directly
+-- or behind another waiter. Two transactions that queue for one row lock the
+-- given backend holds wait in line: the second is blocked by the first waiter,
+-- not by the holder, so TestCountBackendsBlockedBy counts only the first.
+WITH RECURSIVE waiting(pid) AS (
+    SELECT a.pid FROM pg_stat_activity a
+    WHERE a.state = 'active'
+      AND a.pid <> sqlc.arg(blocker_pid)::int
+      AND pg_blocking_pids(a.pid) @> ARRAY[sqlc.arg(blocker_pid)::int]
+  UNION
+    SELECT a.pid FROM pg_stat_activity a
+    JOIN waiting w ON pg_blocking_pids(a.pid) @> ARRAY[w.pid]
+    WHERE a.state = 'active'
+)
+SELECT count(*)::bigint FROM waiting;
+
 -- name: TestInsertNonFinalRiverJob :exec
 -- Reset/additive-seed test only: plant ONE queued (non-finalized) river_job so a
 -- test can assert the additive --seed preflight REFUSES while --reset-and-seed

@@ -2754,6 +2754,31 @@ func (q *Queries) TestCountBackendsBlockedBy(ctx context.Context, blockerPid int
 	return column_1, err
 }
 
+const TestCountBackendsWaitingOn = `-- name: TestCountBackendsWaitingOn :one
+WITH RECURSIVE waiting(pid) AS (
+    SELECT a.pid FROM pg_stat_activity a
+    WHERE a.state = 'active'
+      AND a.pid <> $1::int
+      AND pg_blocking_pids(a.pid) @> ARRAY[$1::int]
+  UNION
+    SELECT a.pid FROM pg_stat_activity a
+    JOIN waiting w ON pg_blocking_pids(a.pid) @> ARRAY[w.pid]
+    WHERE a.state = 'active'
+)
+SELECT count(*)::bigint FROM waiting
+`
+
+// Race-test only: how many active backends wait on the given backend, directly
+// or behind another waiter. Two transactions that queue for one row lock the
+// given backend holds wait in line: the second is blocked by the first waiter,
+// not by the holder, so TestCountBackendsBlockedBy counts only the first.
+func (q *Queries) TestCountBackendsWaitingOn(ctx context.Context, blockerPid int32) (int64, error) {
+	row := q.db.QueryRow(ctx, TestCountBackendsWaitingOn, blockerPid)
+	var column_1 int64
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
 const TestCountPlainViews = `-- name: TestCountPlainViews :one
 SELECT count(*)::bigint FROM information_schema.views
 WHERE table_schema = 'public' AND table_name = $1::text

@@ -163,6 +163,16 @@ type Contact struct {
 	UpdatedAt                time.Time  `json:"updated_at"`
 }
 
+// AwaitingReplyEndedBySkip reports whether the CRM skip recorded on the
+// contact ended the awaiting-reply window of a participation recorded at
+// recordedAt: the skip came at or after that recording. A participation
+// recorded after the skip opens a window of its own. The correction
+// recompute's cadence replay and its follow-up reconciliation both place the
+// skip by this rule.
+func (c *Contact) AwaitingReplyEndedBySkip(recordedAt time.Time) bool {
+	return c.AwaitingReplySkipEndedAt != nil && !recordedAt.After(*c.AwaitingReplySkipEndedAt)
+}
+
 // CreateContactRequest represents the request to create a contact
 type CreateContactRequest struct {
 	FullName      string     `json:"full_name"`
@@ -787,10 +797,21 @@ func (r *ContactRepository) RecomputeContactDatesAfterDeleteTx(ctx context.Conte
 }
 
 // LockContactForDateRecomputeTx acquires the contact-row FOR UPDATE lock
-// inside the caller's tx. Exposed so the recompute lock-ordering regression
-// test can hold the lock from a concurrent tx. Returns db.ErrNotFound when
+// inside the caller's tx (LockContactCadenceTx). Returns db.ErrNotFound when
 // the contact is soft-deleted.
 func (r *ContactRepository) LockContactForDateRecomputeTx(ctx context.Context, tx pgx.Tx, contactID uuid.UUID) error {
+	return LockContactCadenceTx(ctx, tx, contactID)
+}
+
+// LockContactCadenceTx takes the contact's cadence row lock (FOR UPDATE on
+// the contact row) in the caller's tx and holds it until the tx ends. Every
+// cadence write that decides its values from the contact's current cadence
+// state takes it before that read, and after any correction lock its tx
+// takes: a correction recompute holds the same lock, so the read sees either
+// the state before the correction, with the correction waiting for this tx,
+// or the state the committed correction left. Returns db.ErrNotFound when
+// the contact is soft-deleted.
+func LockContactCadenceTx(ctx context.Context, tx pgx.Tx, contactID uuid.UUID) error {
 	if _, err := db.New(tx).LockContactForDateRecompute(ctx, contactID); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return db.ErrNotFound

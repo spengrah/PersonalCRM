@@ -212,8 +212,9 @@ func (h *CadenceUpdater) HandleEvent(ctx context.Context, tx pgx.Tx, env *events
 
 // ApplyInteraction is the direct-invoke entry point for
 // ExtendInteraction + PromoteInteractionToMutual. Reads the current
-// contact row (for prev-cadence + cadence string) inside the caller's
-// tx, then dispatches through applyTx. No claim is taken because these
+// contact row (for prev-cadence + cadence string) under its cadence row
+// lock inside the caller's tx (lockedContactTx), then dispatches through
+// applyTx. No claim is taken because these
 // paths do NOT emit interaction.recorded and therefore cannot collide
 // with a queued worker. The request type is defined in repository
 // (alongside RecordInteractionRequest) so ContactService can reference
@@ -225,7 +226,7 @@ func (h *CadenceUpdater) ApplyInteraction(ctx context.Context, tx pgx.Tx, req re
 	if h.mode == CadenceModeOff {
 		return nil
 	}
-	contact, err := h.contacts.GetContactTx(ctx, tx, req.ContactID)
+	contact, err := h.lockedContactTx(ctx, tx, req.ContactID)
 	if err != nil {
 		return fmt.Errorf("get contact for apply interaction: %w", err)
 	}
@@ -364,7 +365,8 @@ func (h *CadenceUpdater) ApplyContactByDirectSet(ctx context.Context, tx pgx.Tx,
 // interaction correction routes (CAD-047). participation is the contact's
 // effective participation after the correction, in the order its effects were
 // recorded; judgedRecordedAt is when the contact's observations the correction
-// judged were last recorded. The caller holds the contact's row lock.
+// judged were last recorded. The contact's current state is read under its
+// cadence row lock (lockedContactTx), which the correction already holds.
 //
 // last_contacted, last_interaction_at, last_outreach_at, last_response_at and
 // awaiting_reply_until become what replaying participation through the normal
@@ -379,7 +381,7 @@ func (h *CadenceUpdater) RecomputeAfterCorrection(ctx context.Context, tx pgx.Tx
 	if h.mode == CadenceModeOff {
 		return nil
 	}
-	current, err := h.contacts.GetContactTx(ctx, tx, contactID)
+	current, err := h.lockedContactTx(ctx, tx, contactID)
 	if err != nil {
 		return fmt.Errorf("get contact for correction recompute: %w", err)
 	}
@@ -456,9 +458,9 @@ func (h *CadenceUpdater) replayTx(ctx context.Context, tx pgx.Tx, contact *repos
 	}); err != nil {
 		return nil, fmt.Errorf("write creation state: %w", err)
 	}
-	skipEnded := contact.AwaitingReplySkipEndedAt
+	skipPending := contact.AwaitingReplySkipEndedAt != nil
 	endWindow := func() error {
-		skipEnded = nil
+		skipPending = false
 		return h.applyTx(ctx, sp, cadenceWriteRequest{
 			ContactID:               contact.ID,
 			Branch:                  repository.CadenceBranchUnconditional,
@@ -466,7 +468,7 @@ func (h *CadenceUpdater) replayTx(ctx context.Context, tx pgx.Tx, contact *repos
 		})
 	}
 	for _, p := range participations {
-		if skipEnded != nil && p.RecordedAt.After(*skipEnded) {
+		if skipPending && !contact.AwaitingReplyEndedBySkip(p.RecordedAt) {
 			if err := endWindow(); err != nil {
 				return nil, fmt.Errorf("replay skip-ended window: %w", err)
 			}
@@ -480,12 +482,23 @@ func (h *CadenceUpdater) replayTx(ctx context.Context, tx pgx.Tx, contact *repos
 			return nil, fmt.Errorf("replay participation: %w", err)
 		}
 	}
-	if skipEnded != nil {
+	if skipPending {
 		if err := endWindow(); err != nil {
 			return nil, fmt.Errorf("replay skip-ended window: %w", err)
 		}
 	}
 	return h.contacts.GetContactTx(ctx, sp, contact.ID)
+}
+
+// lockedContactTx reads the contact's current cadence state for a write that
+// decides its values from it. It takes the contact's cadence row lock first
+// (repository.LockContactCadenceTx), so the decision and its write are
+// serialized with a correction recompute of the contact.
+func (h *CadenceUpdater) lockedContactTx(ctx context.Context, tx pgx.Tx, contactID uuid.UUID) (*repository.Contact, error) {
+	if err := repository.LockContactCadenceTx(ctx, tx, contactID); err != nil {
+		return nil, err
+	}
+	return h.contacts.GetContactTx(ctx, tx, contactID)
 }
 
 // sameInstant reports whether two optional timestamps hold the same value.

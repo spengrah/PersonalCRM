@@ -143,10 +143,16 @@ func (e *correctionEnv) sendCompleted(t *testing.T, contactID uuid.UUID, at time
 	ix, err := e.recorder.HandleEvent(e.ctx, tx, env)
 	require.NoError(t, err)
 	require.NoError(t, tx.Commit(e.ctx))
+	e.finalizeRecorded(t, todoist.SourceName, ix.ID)
+}
 
-	// The recorder applied the recorded event inline; its queued consumer jobs
-	// are no-ops on this never-started client, so finalize them for teardown.
-	recorded, err := e.events.FindEventBySource(e.ctx, todoist.SourceName, ix.ID.String())
+// finalizeRecorded cancels the queued consumer jobs of the interaction.recorded
+// event the recorder published for interaction ix under source. The recorder
+// applied the event inline; its queued jobs are no-ops on this never-started
+// client, so they are finalized for teardown.
+func (e *correctionEnv) finalizeRecorded(t *testing.T, source string, ix uuid.UUID) {
+	t.Helper()
+	recorded, err := e.events.FindEventBySource(e.ctx, source, ix.String())
 	require.NoError(t, err)
 	res, err := e.riverClient.JobList(e.ctx, river.NewJobListParams().States(rivertype.JobStateAvailable).First(10000))
 	require.NoError(t, err)
@@ -213,7 +219,7 @@ func TestInteractionCorrection_ReconcilesFollowUps(t *testing.T) {
 	})
 
 	t.Run("removing the reply that completed a follow-up keeps it completed and opens a new one for the outbound", func(t *testing.T) {
-		// spec: CAD-048.completed-never-reopened, CAD-048.new-follow-up-by-rules
+		// spec: CAD-048.completed-never-created, CAD-048.new-follow-up-by-rules
 		a := e.contact(t, "monthly")
 		_, task := e.liveFollowUp(t, a, e.ref("call"), e.at(20))
 		reply := e.call(t, a, e.ref("call"), repository.InteractionDirectionInbound, e.at(30))
@@ -221,7 +227,7 @@ func TestInteractionCorrection_ReconcilesFollowUps(t *testing.T) {
 
 		e.remove(t, reply, removalBody(service.RemovalReasonDidNotHappen, a))
 
-		require.Equal(t, repository.ContactTaskStateCompleted, e.task(t, task.ID).State, "a completed task is never reopened")
+		require.Equal(t, repository.ContactTaskStateCompleted, e.task(t, task.ID).State, "a completed task is never created")
 		tasks := e.followUps(t, a)
 		require.Len(t, tasks, 2)
 		var opened *repository.ContactTask
@@ -235,6 +241,54 @@ func TestInteractionCorrection_ReconcilesFollowUps(t *testing.T) {
 		require.Equal(t, cadence.AwaitingReplyUntil(e.at(20), config.TestConfig().Watchdog.DaysForCadence("monthly")).Format(todoist.DateFormat),
 			opened.Metadata["due_date"])
 		require.Contains(t, e.ops(t, opened.ID), consumerjobs.TaskOpCreate)
+	})
+
+	t.Run("after a skip ended an outbound's window, removing its later reply opens no follow-up", func(t *testing.T) {
+		// spec: CAD-048.new-follow-up-by-rules, CAD-047.skip-ended-window-stays-ended
+		a := e.contact(t, "monthly")
+		e.call(t, a, e.ref("call"), repository.InteractionDirectionOutbound, e.at(20))
+		opened := e.followUps(t, a)
+		require.Len(t, opened, 1)
+		e.skip(t, a)
+		require.Equal(t, repository.ContactTaskStateCompleted, e.task(t, opened[0].ID).State, "the skip ended the follow-up")
+		reply := e.call(t, a, e.ref("call"), repository.InteractionDirectionInbound, e.at(30))
+		ops := e.ops(t, opened[0].ID)
+
+		e.remove(t, reply, removalBody(service.RemovalReasonDidNotHappen, a))
+
+		require.False(t, e.fields(t, a).AwaitingReply)
+		tasks := e.followUps(t, a)
+		require.Len(t, tasks, 1, "the skip-ended window warrants no new follow-up")
+		require.Equal(t, repository.ContactTaskStateCompleted, tasks[0].State, "a completed task is never created")
+		require.Equal(t, ops, e.ops(t, opened[0].ID), "no Todoist op is queued")
+	})
+
+	t.Run("after a skip, an outbound recorded later still gets its follow-up when its reply is removed", func(t *testing.T) {
+		// spec: CAD-048.new-follow-up-by-rules, CAD-047.skip-ended-window-stays-ended
+		a := e.contact(t, "monthly")
+		e.call(t, a, e.ref("call"), repository.InteractionDirectionOutbound, e.at(10))
+		e.skip(t, a)
+		e.call(t, a, e.ref("call"), repository.InteractionDirectionOutbound, e.at(20))
+		reply := e.call(t, a, e.ref("call"), repository.InteractionDirectionInbound, e.at(30))
+		closed := e.followUps(t, a)
+		require.Len(t, closed, 2)
+
+		e.remove(t, reply, removalBody(service.RemovalReasonDidNotHappen, a))
+
+		require.True(t, e.fields(t, a).AwaitingReply, "the later outbound's window is open again")
+		tasks := e.followUps(t, a)
+		require.Len(t, tasks, 3)
+		var created *repository.ContactTask
+		for i := range tasks {
+			if tasks[i].ID != closed[0].ID && tasks[i].ID != closed[1].ID {
+				created = &tasks[i]
+			}
+		}
+		require.NotNil(t, created)
+		require.Equal(t, repository.ContactTaskStatePendingRemoteCreate, created.State)
+		require.Equal(t, cadence.AwaitingReplyUntil(e.at(20), config.TestConfig().Watchdog.DaysForCadence("monthly")).Format(todoist.DateFormat),
+			created.Metadata["due_date"])
+		require.Contains(t, e.ops(t, created.ID), consumerjobs.TaskOpCreate)
 	})
 
 	t.Run("merging an outbound with its later inbound closes the follow-up the outbound opened", func(t *testing.T) {

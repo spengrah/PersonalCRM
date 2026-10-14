@@ -276,6 +276,11 @@ func (s *ContactService) SkipCycle(ctx context.Context, id uuid.UUID) (contact *
 		}
 	}()
 
+	// The skip is decided from the contact's current next-contact date, read
+	// under its cadence row lock.
+	if err = repository.LockContactCadenceTx(ctx, tx, id); err != nil {
+		return nil, err
+	}
 	contactRepo := repository.NewContactRepository(db.New(tx))
 	contact, err = contactRepo.GetContact(ctx, id)
 	if err != nil {
@@ -344,6 +349,11 @@ func (s *ContactService) UndoSkip(ctx context.Context, id uuid.UUID) (contact *r
 		}
 	}()
 
+	// Undo is decided from the contact's current skip state, read under its
+	// cadence row lock.
+	if err = repository.LockContactCadenceTx(ctx, tx, id); err != nil {
+		return nil, err
+	}
 	contactRepo := repository.NewContactRepository(db.New(tx))
 	contact, err = contactRepo.GetContact(ctx, id)
 	if err != nil {
@@ -528,6 +538,11 @@ func (s *ContactService) UpdateContact(ctx context.Context, id uuid.UUID, req re
 	contactMethodRepo := repository.NewContactMethodRepository(txQueries)
 	nodeRepo := repository.NewNodeRepository(txQueries)
 
+	// contact_by below is derived from the contact's current last_contacted,
+	// read under its cadence row lock.
+	if err = repository.LockContactCadenceTx(ctx, tx, id); err != nil {
+		return nil, err
+	}
 	existingContact, err := contactRepo.GetContact(ctx, id)
 	if err != nil {
 		return nil, err
@@ -759,25 +774,13 @@ func (s *ContactService) RecordInteractionTx(
 	}
 
 	// 3. Verify contact exists (avoids FK violation returning unhelpful error).
-	contact, err := s.contactRepo.GetContactTx(ctx, tx, req.ContactID)
-	if err != nil {
+	if _, err := s.contactRepo.GetContactTx(ctx, tx, req.ContactID); err != nil {
 		return nil, err // propagates db.ErrNotFound
 	}
 
-	// 4. Capture pre-cadence snapshot + cadence-at-emit from the
-	// in-memory contact BEFORE the write. This is the pre-image the
-	// interaction.recorded V2 payload carries so CadenceUpdater can
-	// replay against a deterministic prev snapshot.
-	prevSnap := repository.ContactCadenceFieldsFromContact(contact)
-	var cadenceAtEmit *string
-	if contact.Cadence != nil && *contact.Cadence != "" {
-		c := *contact.Cadence
-		cadenceAtEmit = &c
-	}
-
-	// 5. Observation step, then create the interaction record, in the caller's
-	// tx. The step runs before the write and before any cadence or follow-up
-	// effect below.
+	// 4. Observation step, in the caller's tx. The step runs before the write
+	// and before any cadence or follow-up effect below, and takes the
+	// correction lock on the observation's interaction node.
 	nodeID, err := s.interactionRepo.ObserveInteractionTx(ctx, tx, repository.InteractionObservation{
 		ContactID:  req.ContactID,
 		Source:     req.Source,
@@ -788,6 +791,29 @@ func (s *ContactService) RecordInteractionTx(
 	if err != nil {
 		return nil, fmt.Errorf("observe interaction: %w", err)
 	}
+
+	// 5. Capture pre-cadence snapshot + cadence-at-emit BEFORE the write,
+	// under the contact's cadence row lock, taken after the correction lock
+	// as a correction takes them. This is the pre-image the
+	// interaction.recorded V2 payload carries so CadenceUpdater can replay
+	// against a deterministic prev snapshot; the lock keeps it current until
+	// this tx commits, so no correction recompute lands between the snapshot
+	// and the cadence write decided from it.
+	if err := repository.LockContactCadenceTx(ctx, tx, req.ContactID); err != nil {
+		return nil, err
+	}
+	contact, err := s.contactRepo.GetContactTx(ctx, tx, req.ContactID)
+	if err != nil {
+		return nil, err
+	}
+	prevSnap := repository.ContactCadenceFieldsFromContact(contact)
+	var cadenceAtEmit *string
+	if contact.Cadence != nil && *contact.Cadence != "" {
+		c := *contact.Cadence
+		cadenceAtEmit = &c
+	}
+
+	// 6. Create the interaction record in the caller's tx.
 	interaction, err := s.interactionRepo.CreateInteractionTx(ctx, tx, repository.CreateInteractionRequest{
 		ContactID:         req.ContactID,
 		Source:            req.Source,
@@ -802,7 +828,7 @@ func (s *ContactService) RecordInteractionTx(
 		return nil, fmt.Errorf("create interaction: %w", err)
 	}
 
-	// 6. Verdict read (arc seam S3): whether a correction excludes the
+	// 7. Verdict read (arc seam S3): whether a correction excludes the
 	// observation and, when it is effective, the contact's effective
 	// participation it belongs to. Every cadence or follow-up effect of this
 	// write follows it.
@@ -811,7 +837,7 @@ func (s *ContactService) RecordInteractionTx(
 		return nil, fmt.Errorf("observation verdict: %w", err)
 	}
 
-	// 7. Direct-path cadence + follow-up. When publishesEvent=false the
+	// 8. Direct-path cadence + follow-up. When publishesEvent=false the
 	// caller is NOT going through the event bus (non-bus wrappers: Todoist
 	// action / cadence task completion, Anarlog sessions, service-layer
 	// tests). No interaction.recorded will be emitted, so the effect is
