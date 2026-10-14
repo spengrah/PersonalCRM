@@ -14,6 +14,8 @@ import { InteractionContent } from '../interaction-content'
 const baseItem = (
   overrides: Partial<InteractionListItemResponse> = {}
 ): InteractionListItemResponse => ({
+  kind: 'interaction',
+  cadence_inert: false,
   id: 'ixn-test',
   contact_id: 'contact-test',
   source: 'manual',
@@ -47,6 +49,7 @@ describe('InteractionRow', () => {
       content_kind: 'call',
       call: {
         service: 'voice',
+        direction: 'inbound',
         answered: true,
         has_voicemail: false,
         duration_seconds: duration,
@@ -62,7 +65,13 @@ describe('InteractionRow', () => {
     renderItem({
       source: 'phone_calls',
       content_kind: 'call',
-      call: { service, answered: true, has_voicemail: false, duration_seconds: 60 },
+      call: {
+        service,
+        direction: 'inbound',
+        answered: true,
+        has_voicemail: false,
+        duration_seconds: 60,
+      },
     })
     expect(screen.getByText(expected)).toBeVisible()
   })
@@ -73,6 +82,7 @@ describe('InteractionRow', () => {
       content_kind: 'call',
       call: {
         service: 'voice',
+        direction: 'inbound',
         answered: false,
         has_voicemail: true,
         duration_seconds: 0,

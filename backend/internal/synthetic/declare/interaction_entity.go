@@ -9,6 +9,7 @@ import (
 
 	"personal-crm/backend/internal/events"
 	"personal-crm/backend/internal/repository"
+	"personal-crm/backend/internal/service"
 	"personal-crm/backend/internal/synthetic/factory"
 	"personal-crm/backend/internal/synthetic/replay"
 
@@ -96,13 +97,33 @@ func (p *messageInteractionPlan) validate() error {
 	return nil
 }
 
+// CallOutcome is how a declared phone call went. It fixes the staged call
+// record; the call ingest decision table (ING-039) decides the interaction
+// recorded for it, which is none for CallMissed, a missed call without
+// voicemail.
+type CallOutcome int
+
+const (
+	CallAnswered CallOutcome = iota
+	CallVoicemail
+	CallMissed
+	CallOutboundConnected
+	CallOutboundNoAnswer
+)
+
 type phoneCallInteractionPlan struct {
 	name, contact string
+	outcome       CallOutcome
 	props         interactionPlanProps
 }
 
 func (p *phoneCallInteractionPlan) handle() string { return p.name }
-func (p *phoneCallInteractionPlan) kind() string   { return "interaction" }
+func (p *phoneCallInteractionPlan) kind() string {
+	if p.outcome == CallMissed {
+		return "missed_call"
+	}
+	return "interaction"
+}
 func (p *phoneCallInteractionPlan) refs() []string { return []string{p.contact} }
 func (p *phoneCallInteractionPlan) validate() error {
 	if strings.TrimSpace(p.name) == "" {
@@ -191,8 +212,13 @@ func MessageInteraction(handle, contactHandle, source string, props ...Interacti
 	return p
 }
 
+// PhoneCallInteraction declares an answered inbound call.
 func PhoneCallInteraction(handle, contactHandle string, props ...InteractionProp) Entity {
-	p := &phoneCallInteractionPlan{name: handle, contact: contactHandle}
+	return PhoneCall(handle, contactHandle, CallAnswered, props...)
+}
+
+func PhoneCall(handle, contactHandle string, outcome CallOutcome, props ...InteractionProp) Entity {
+	p := &phoneCallInteractionPlan{name: handle, contact: contactHandle, outcome: outcome}
 	for _, prop := range props {
 		prop(&p.props)
 	}
@@ -462,23 +488,50 @@ func runPhoneCallInteraction(ctx context.Context, h *replay.Harness, p *phoneCal
 	if spec, ok := st.specs[p.contact]; ok && spec.Phone != "" {
 		peer = spec.Phone
 	}
-	answered := true
-	callRepo := repository.NewPhoneCallRepository(h.Database().Queries)
-	call, err := callRepo.UpsertCall(ctx, repository.UpsertPhoneCallParams{
+	// Each outcome's staged call fields. Call ingest's own decision table then
+	// decides the interaction, its direction and its description.
+	call := repository.UpsertPhoneCallParams{
 		CallUniqueID: h.Generator().Prefix() + "call-" + p.name,
-		PeerHandle:   peer, PeerNormalized: peer,
-		Service: repository.PhoneCallServiceVoice, Direction: repository.PhoneCallDirectionInbound,
-		Answered: &answered, HasVoicemail: false, DurationSeconds: 372, StartedAt: target,
+		PeerHandle:   peer, PeerNormalized: peer, Service: repository.PhoneCallServiceVoice,
+		Direction: repository.PhoneCallDirectionInbound, StartedAt: target,
 		MatchedContactID: &contactID, MacHostID: func() *uuid.UUID { id := h.MacHostID(); return &id }(),
-	})
+	}
+	answered, unanswered := true, false
+	switch p.outcome {
+	case CallAnswered:
+		call.Answered, call.DurationSeconds = &answered, 372
+	case CallVoicemail:
+		call.Answered, call.HasVoicemail, call.DurationSeconds = &unanswered, true, 24
+	case CallMissed:
+		call.Answered = &unanswered
+	case CallOutboundConnected:
+		call.Direction, call.DurationSeconds = repository.PhoneCallDirectionOutbound, 372
+	case CallOutboundNoAnswer:
+		call.Direction = repository.PhoneCallDirectionOutbound
+	default:
+		return Seeded{}, fmt.Errorf("phone call %q: unknown outcome %d", p.name, p.outcome)
+	}
+	record, direction, description := service.DecideCallInteraction(
+		call.Direction == repository.PhoneCallDirectionOutbound, call.Answered, call.HasVoicemail, call.DurationSeconds, call.Service)
+	callRepo := repository.NewPhoneCallRepository(h.Database().Queries)
+	staged, err := callRepo.UpsertCall(ctx, call)
 	if err != nil {
 		return Seeded{}, fmt.Errorf("insert phone call %q: %w", p.name, err)
 	}
-	interaction, err := h.InteractionRepo().TestInsertInteraction(ctx, uuid.New(), contactID, repository.InteractionSourcePhoneCalls, nil, target, repository.InteractionDirectionInbound)
+	if !record {
+		if err := callRepo.MarkProcessed(ctx, repository.MarkProcessedParams{ID: staged.ID}); err != nil {
+			return Seeded{}, fmt.Errorf("mark missed call %q processed: %w", p.name, err)
+		}
+		return Seeded{Kind: "missed_call", ID: staged.ID.String(), Name: p.name}, nil
+	}
+	interaction, err := h.InteractionRepo().TestInsertInteraction(ctx, uuid.New(), contactID, repository.InteractionSourcePhoneCalls, nil, target, direction)
 	if err != nil {
 		return Seeded{}, fmt.Errorf("insert phone interaction %q: %w", p.name, err)
 	}
-	if err := callRepo.MarkProcessed(ctx, repository.MarkProcessedParams{ID: call.ID, InteractionID: &interaction.ID}); err != nil {
+	if _, err := h.InteractionRepo().UpdateInteractionTimestamp(ctx, interaction.ID, target, &description); err != nil {
+		return Seeded{}, fmt.Errorf("describe phone interaction %q: %w", p.name, err)
+	}
+	if err := callRepo.MarkProcessed(ctx, repository.MarkProcessedParams{ID: staged.ID, InteractionID: &interaction.ID}); err != nil {
 		return Seeded{}, fmt.Errorf("link phone interaction %q: %w", p.name, err)
 	}
 	return Seeded{Kind: "interaction", ID: interaction.ID.String(), Name: p.name}, nil

@@ -17,6 +17,8 @@ import (
 	"personal-crm/backend/internal/auth"
 	"personal-crm/backend/internal/config"
 	"personal-crm/backend/internal/consumer"
+	"personal-crm/backend/internal/consumer/consumerjobs"
+	"personal-crm/backend/internal/contacttask"
 	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/events"
 	"personal-crm/backend/internal/repository"
@@ -584,6 +586,84 @@ func TestIngestCall_MissedInboundNoVoicemail_NoInteractionWritten(t *testing.T) 
 	require.NoError(t, err)
 	require.Nil(t, contact.LastContacted, "missed-no-voicemail must NOT bump last_contacted")
 	require.Nil(t, contact.LastOutreachAt, "missed-no-voicemail must NOT bump last_outreach_at")
+}
+
+// A missed call without voicemail bears no cadence: ingesting one for a contact
+// whose cadence state it could move records no interaction and leaves that
+// state exactly as it was.
+//
+// spec: IXN-025
+func TestIngestCall_MissedInboundNoVoicemail_LeavesCadenceStateUntouched(t *testing.T) {
+	testsupport.RequireDatabase(t)
+	t.Parallel()
+	env := setupPhoneCallIngestEnv(t)
+	ctx := t.Context()
+	taskRepo := repository.NewContactTaskRepository(env.database.Queries)
+
+	// Cadence fields, an awaiting-reply window, an active skip and a live
+	// follow-up task: everything a recorded inbound call could move.
+	monthly := "monthly"
+	_, err := env.contactRepo.UpdateContact(ctx, env.seededContact, repository.UpdateContactRequest{FullName: "PhoneCall cadence subject", Cadence: &monthly})
+	require.NoError(t, err)
+	now := accelerated.GetCurrentTime().UTC().Truncate(time.Second)
+	day := 24 * time.Hour
+	contacted, outreach := now.Add(-20*day), now.Add(-3*day)
+	contactBy, awaiting := now.Add(10*day), now.Add(4*day)
+	require.NoError(t, env.contactRepo.TestSeedContactCadenceFields(ctx, env.seededContact, repository.TestCadenceSeed{
+		LastContacted: &contacted, LastInteractionAt: &outreach, LastOutreachAt: &outreach, LastResponseAt: &contacted,
+		ContactBy: &contactBy, AwaitingReplyUntil: &awaiting,
+	}))
+	require.NoError(t, env.contactRepo.TestSeedContactSkipState(ctx, env.seededContact, now.Add(40*day), now.Add(-time.Hour), "synthetic skip"))
+	task, err := taskRepo.CreateContactTask(ctx, repository.CreateContactTaskRequest{
+		ContactID: env.seededContact, Provider: todoist.SourceName, Kind: contacttask.KindReachOut,
+		Lifecycle: contacttask.LifecycleFollowUpLoop, ExternalTaskID: env.sourcePrefix + "follow-up",
+		State: string(repository.ContactTaskStateManaged),
+	})
+	require.NoError(t, err)
+
+	cadenceState := func() []any {
+		c, err := env.contactRepo.GetContact(ctx, env.seededContact)
+		require.NoError(t, err)
+		return []any{c.Cadence, c.LastContacted, c.LastInteractionAt, c.LastOutreachAt, c.LastResponseAt, c.ContactBy,
+			c.AwaitingReplyUntil, c.LastSkippedAt, c.LastSkippedContactBy, c.LastSkipReason}
+	}
+	followUps := func() ([]repository.ContactTask, int64) {
+		tasks, err := taskRepo.ListContactTasksByContact(ctx, env.seededContact)
+		require.NoError(t, err)
+		ops, err := taskRepo.CountRiverJobsByContactTask(ctx, consumerjobs.TodoistTaskOpArgs{}.Kind(), task.ID)
+		require.NoError(t, err)
+		return tasks, ops
+	}
+	interactions := func() []repository.Interaction {
+		rows, err := env.interactionRpo.ListContactInteractions(ctx, env.seededContact, 100, 0)
+		require.NoError(t, err)
+		return rows
+	}
+	stateBefore, interactionsBefore := cadenceState(), interactions()
+	tasksBefore, opsBefore := followUps()
+
+	// The call is newer than every cadence column, so a cadence-bearing
+	// write would move them.
+	callID := env.sourcePrefix + "missed-cadence"
+	ev := buildCallEvent(t, events.KindCallReceived, env.pairedHostID, callID, env.seededPhone, func(p *events.CallPayload) {
+		answered := false
+		p.Answered = &answered
+		p.HasVoicemail = false
+		p.DurationSeconds = 0
+		p.StartedAt = now
+	})
+	w := postIngestCall(t, env, map[string]any{"events": []any{ev}})
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	resp := parseIngestResp(t, w)
+	require.Equal(t, 1, resp.Accepted, "errors=%+v", resp.Errors)
+
+	_, err = env.interactionRpo.FindBySourceRef(ctx, env.seededContact, "phone_calls", callID)
+	require.ErrorIs(t, err, db.ErrNotFound, "a missed call without voicemail records no interaction")
+	require.Equal(t, interactionsBefore, interactions(), "no observation is recorded for the contact")
+	require.Equal(t, stateBefore, cadenceState(), "cadence fields, awaiting-reply window and skip state are unchanged")
+	tasksAfter, opsAfter := followUps()
+	require.Equal(t, tasksBefore, tasksAfter, "follow-up tasks are unchanged")
+	require.Equal(t, opsBefore, opsAfter, "no Todoist operation is enqueued for the follow-up")
 }
 
 // TestIngestCall_UpsertFailure_RollsBackBatch (T14) injects a phone_call

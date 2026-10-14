@@ -16,7 +16,7 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// decideCallInteraction — pure decision-table verification.
+// DecideCallInteraction — pure decision-table verification.
 // Covers every row of the content-delivered cadence table (spec
 // §`phone_calls` source).
 // ---------------------------------------------------------------------------
@@ -24,7 +24,7 @@ import (
 func TestDecideCallInteraction_AnsweredInbound(t *testing.T) {
 	// T1: inbound answered → interaction created, direction inbound.
 	answered := true
-	create, dir, desc := decideCallInteraction(false, &answered, false, 42, "voice")
+	create, dir, desc := DecideCallInteraction(false, &answered, false, 42, "voice")
 	require.True(t, create)
 	require.Equal(t, "inbound", dir)
 	require.Contains(t, desc, "voice")
@@ -34,7 +34,7 @@ func TestDecideCallInteraction_AnsweredInbound(t *testing.T) {
 func TestDecideCallInteraction_VoicemailInbound(t *testing.T) {
 	// T2: inbound, not answered, has voicemail → interaction created.
 	answered := false
-	create, dir, desc := decideCallInteraction(false, &answered, true, 15, "voice")
+	create, dir, desc := DecideCallInteraction(false, &answered, true, 15, "voice")
 	require.True(t, create)
 	require.Equal(t, "inbound", dir)
 	require.Contains(t, desc, "voicemail")
@@ -46,7 +46,7 @@ func TestDecideCallInteraction_MissedInbound_NoVoicemail(t *testing.T) {
 	// staging row IS created; the event-log row IS published; only the
 	// interaction row is skipped per content-delivered cadence).
 	answered := false
-	create, dir, desc := decideCallInteraction(false, &answered, false, 0, "voice")
+	create, dir, desc := DecideCallInteraction(false, &answered, false, 0, "voice")
 	require.False(t, create)
 	require.Empty(t, dir)
 	require.Empty(t, desc)
@@ -55,7 +55,7 @@ func TestDecideCallInteraction_MissedInbound_NoVoicemail(t *testing.T) {
 func TestDecideCallInteraction_MissedInbound_AnsweredNil(t *testing.T) {
 	// Same as T3 but answered=nil (payload had it omitted). No
 	// voicemail → no interaction.
-	create, _, _ := decideCallInteraction(false, nil, false, 0, "voice")
+	create, _, _ := DecideCallInteraction(false, nil, false, 0, "voice")
 	require.False(t, create)
 }
 
@@ -64,7 +64,7 @@ func TestDecideCallInteraction_ConnectedOutbound(t *testing.T) {
 	for _, service := range []string{"voice", "facetime_audio", "facetime_video"} {
 		for _, duration := range []int32{1, 60} {
 			for _, answered := range []*bool{nil, newBool(false), newBool(true)} {
-				create, dir, desc := decideCallInteraction(true, answered, false, duration, service)
+				create, dir, desc := DecideCallInteraction(true, answered, false, duration, service)
 				require.True(t, create)
 				require.Equal(t, "mutual", dir)
 				require.Contains(t, desc, "sec")
@@ -77,7 +77,7 @@ func TestDecideCallInteraction_ConnectedOutbound(t *testing.T) {
 func TestDecideCallInteraction_MissedOutbound(t *testing.T) {
 	// T5: outbound missed (duration = 0) → interaction created, the
 	// "attempted to reach" signal. Description marks it "missed".
-	create, dir, desc := decideCallInteraction(true, nil, false, 0, "voice")
+	create, dir, desc := DecideCallInteraction(true, nil, false, 0, "voice")
 	require.True(t, create)
 	require.Equal(t, "outbound", dir)
 	require.Contains(t, desc, "missed")
@@ -85,13 +85,13 @@ func TestDecideCallInteraction_MissedOutbound(t *testing.T) {
 
 func TestDecideCallInteraction_FaceTimeAudio_RendersLabel(t *testing.T) {
 	answered := true
-	_, _, desc := decideCallInteraction(false, &answered, false, 30, "facetime_audio")
+	_, _, desc := DecideCallInteraction(false, &answered, false, 30, "facetime_audio")
 	require.Contains(t, desc, "FaceTime audio")
 }
 
 func TestDecideCallInteraction_FaceTimeVideo_RendersLabel(t *testing.T) {
 	answered := true
-	_, _, desc := decideCallInteraction(false, &answered, false, 30, "facetime_video")
+	_, _, desc := DecideCallInteraction(false, &answered, false, 30, "facetime_video")
 	require.Contains(t, desc, "FaceTime video")
 }
 

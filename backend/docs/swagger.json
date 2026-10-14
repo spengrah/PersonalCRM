@@ -5868,6 +5868,9 @@
                 "answered": {
                     "type": "boolean"
                 },
+                "direction": {
+                    "type": "string"
+                },
                 "duration_seconds": {
                     "type": "integer"
                 },
@@ -6554,6 +6557,9 @@
         "handlers.InteractionListItemResponse": {
             "type": "object",
             "properties": {
+                "cadence_inert": {
+                    "type": "boolean"
+                },
                 "call": {
                     "$ref": "#/definitions/handlers.CallSummaryResponse"
                 },
@@ -6580,6 +6586,9 @@
                 },
                 "is_group": {
                     "type": "boolean"
+                },
+                "kind": {
+                    "type": "string"
                 },
                 "label": {
                     "type": "string"

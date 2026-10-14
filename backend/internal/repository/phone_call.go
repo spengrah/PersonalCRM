@@ -82,6 +82,19 @@ func (r *PhoneCallRepository) ListByInteractionIDs(ctx context.Context, ids []uu
 	return out, nil
 }
 
+// ListByIDs returns the staged calls with the given ids, in no particular order.
+func (r *PhoneCallRepository) ListByIDs(ctx context.Context, ids []uuid.UUID) ([]PhoneCall, error) {
+	rows, err := r.queries.ListPhoneCallsByIDs(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]PhoneCall, len(rows))
+	for i, row := range rows {
+		out[i] = convertDbPhoneCall(row)
+	}
+	return out, nil
+}
+
 // TestInsertPhoneCallLinked inserts a staged call already linked to an
 // interaction. Test-only: production ingestion links the staging row through
 // MarkProcessed after recording the interaction.

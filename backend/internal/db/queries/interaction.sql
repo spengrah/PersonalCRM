@@ -252,57 +252,94 @@ RETURNING *;
 -- sync-enqueue lock in external_sync.sql.
 SELECT pg_advisory_xact_lock(hashtextextended(sqlc.arg('lock_key')::text, 0));
 
--- name: ListContactInteractionsFiltered :many
-SELECT * FROM interaction
-WHERE contact_id = sqlc.arg('contact_id')
-  AND deleted_at IS NULL
-  AND (sqlc.narg('from_time')::timestamptz IS NULL OR occurred_at >= sqlc.narg('from_time'))
-  AND (sqlc.narg('to_time')::timestamptz IS NULL OR occurred_at < sqlc.narg('to_time'))
-  AND (
-    (sqlc.narg('venue_source')::text IS NULL AND sqlc.narg('venue_container')::text IS NULL)
-    OR (
-      sqlc.narg('venue_source')::text IS NOT NULL AND sqlc.narg('venue_container')::text IS NOT NULL
-      AND CASE
-        WHEN sqlc.narg('venue_source')::text IN ('email', 'gchat', 'whatsapp') THEN EXISTS (
-          SELECT 1 FROM comms_message cm WHERE cm.interaction_id = interaction.id AND cm.deleted_at IS NULL
-            AND cm.source = sqlc.narg('venue_source')::text AND cm.thread_id = sqlc.narg('venue_container')::text)
-        WHEN sqlc.narg('venue_source')::text = 'telegram' THEN EXISTS (
-          SELECT 1 FROM telegram_message tm WHERE tm.interaction_id = interaction.id AND tm.deleted_at IS NULL
-            AND tm.telegram_chat_id::text = sqlc.narg('venue_container')::text)
-        WHEN sqlc.narg('venue_source')::text = 'messages' THEN EXISTS (
-          SELECT 1 FROM messages_message mm WHERE mm.interaction_id = interaction.id AND mm.deleted_at IS NULL
-            AND mm.chat_guid = sqlc.narg('venue_container')::text)
-        ELSE FALSE
-      END
+-- name: ListContactTimelineFiltered :many
+-- One page of a contact's interaction history, as (kind, id) keys.
+-- Two kinds share the time axis: 'interaction' (a live interaction row) and
+-- 'missed_call' (an unanswered inbound call that left no voicemail, which
+-- ingest stores as a phone_call with no interaction; see migration 055). The
+-- kinds argument selects which kinds the page holds. A missed call has no
+-- content container, so any venue filter excludes it.
+SELECT item.kind, item.id FROM (
+  SELECT 'interaction'::text AS kind, interaction.id, interaction.occurred_at FROM interaction
+  WHERE 'interaction' = ANY(sqlc.arg('kinds')::text[])
+    AND interaction.contact_id = sqlc.arg('contact_id')
+    AND interaction.deleted_at IS NULL
+    AND (sqlc.narg('from_time')::timestamptz IS NULL OR interaction.occurred_at >= sqlc.narg('from_time'))
+    AND (sqlc.narg('to_time')::timestamptz IS NULL OR interaction.occurred_at < sqlc.narg('to_time'))
+    AND (
+      (sqlc.narg('venue_source')::text IS NULL AND sqlc.narg('venue_container')::text IS NULL)
+      OR (
+        sqlc.narg('venue_source')::text IS NOT NULL AND sqlc.narg('venue_container')::text IS NOT NULL
+        AND CASE
+          WHEN sqlc.narg('venue_source')::text IN ('email', 'gchat', 'whatsapp') THEN EXISTS (
+            SELECT 1 FROM comms_message cm WHERE cm.interaction_id = interaction.id AND cm.deleted_at IS NULL
+              AND cm.source = sqlc.narg('venue_source')::text AND cm.thread_id = sqlc.narg('venue_container')::text)
+          WHEN sqlc.narg('venue_source')::text = 'telegram' THEN EXISTS (
+            SELECT 1 FROM telegram_message tm WHERE tm.interaction_id = interaction.id AND tm.deleted_at IS NULL
+              AND tm.telegram_chat_id::text = sqlc.narg('venue_container')::text)
+          WHEN sqlc.narg('venue_source')::text = 'messages' THEN EXISTS (
+            SELECT 1 FROM messages_message mm WHERE mm.interaction_id = interaction.id AND mm.deleted_at IS NULL
+              AND mm.chat_guid = sqlc.narg('venue_container')::text)
+          ELSE FALSE
+        END
+      )
     )
-  )
-ORDER BY occurred_at DESC, id DESC
+  UNION ALL
+  SELECT 'missed_call'::text AS kind, phone_call.id, phone_call.started_at AS occurred_at FROM phone_call
+  WHERE 'missed_call' = ANY(sqlc.arg('kinds')::text[])
+    AND phone_call.matched_contact_id = sqlc.arg('contact_id')
+    AND phone_call.interaction_id IS NULL
+    AND phone_call.direction = 'inbound'
+    AND phone_call.answered IS NOT TRUE
+    AND NOT phone_call.has_voicemail
+    AND sqlc.narg('venue_source')::text IS NULL AND sqlc.narg('venue_container')::text IS NULL
+    AND (sqlc.narg('from_time')::timestamptz IS NULL OR phone_call.started_at >= sqlc.narg('from_time'))
+    AND (sqlc.narg('to_time')::timestamptz IS NULL OR phone_call.started_at < sqlc.narg('to_time'))
+) AS item
+ORDER BY item.occurred_at DESC, item.id DESC
 LIMIT sqlc.arg('limit_count') OFFSET sqlc.arg('offset_count');
 
--- name: CountContactInteractionsFiltered :one
-SELECT COUNT(*) FROM interaction
-WHERE contact_id = sqlc.arg('contact_id')
-  AND deleted_at IS NULL
-  AND (sqlc.narg('from_time')::timestamptz IS NULL OR occurred_at >= sqlc.narg('from_time'))
-  AND (sqlc.narg('to_time')::timestamptz IS NULL OR occurred_at < sqlc.narg('to_time'))
-  AND (
-    (sqlc.narg('venue_source')::text IS NULL AND sqlc.narg('venue_container')::text IS NULL)
-    OR (
-      sqlc.narg('venue_source')::text IS NOT NULL AND sqlc.narg('venue_container')::text IS NOT NULL
-      AND CASE
-        WHEN sqlc.narg('venue_source')::text IN ('email', 'gchat', 'whatsapp') THEN EXISTS (
-          SELECT 1 FROM comms_message cm WHERE cm.interaction_id = interaction.id AND cm.deleted_at IS NULL
-            AND cm.source = sqlc.narg('venue_source')::text AND cm.thread_id = sqlc.narg('venue_container')::text)
-        WHEN sqlc.narg('venue_source')::text = 'telegram' THEN EXISTS (
-          SELECT 1 FROM telegram_message tm WHERE tm.interaction_id = interaction.id AND tm.deleted_at IS NULL
-            AND tm.telegram_chat_id::text = sqlc.narg('venue_container')::text)
-        WHEN sqlc.narg('venue_source')::text = 'messages' THEN EXISTS (
-          SELECT 1 FROM messages_message mm WHERE mm.interaction_id = interaction.id AND mm.deleted_at IS NULL
-            AND mm.chat_guid = sqlc.narg('venue_container')::text)
-        ELSE FALSE
-      END
+-- name: CountContactTimelineFiltered :one
+-- Counts the items ListContactTimelineFiltered pages over, under the same
+-- arguments.
+SELECT COUNT(*) FROM (
+  SELECT interaction.id FROM interaction
+  WHERE 'interaction' = ANY(sqlc.arg('kinds')::text[])
+    AND interaction.contact_id = sqlc.arg('contact_id')
+    AND interaction.deleted_at IS NULL
+    AND (sqlc.narg('from_time')::timestamptz IS NULL OR interaction.occurred_at >= sqlc.narg('from_time'))
+    AND (sqlc.narg('to_time')::timestamptz IS NULL OR interaction.occurred_at < sqlc.narg('to_time'))
+    AND (
+      (sqlc.narg('venue_source')::text IS NULL AND sqlc.narg('venue_container')::text IS NULL)
+      OR (
+        sqlc.narg('venue_source')::text IS NOT NULL AND sqlc.narg('venue_container')::text IS NOT NULL
+        AND CASE
+          WHEN sqlc.narg('venue_source')::text IN ('email', 'gchat', 'whatsapp') THEN EXISTS (
+            SELECT 1 FROM comms_message cm WHERE cm.interaction_id = interaction.id AND cm.deleted_at IS NULL
+              AND cm.source = sqlc.narg('venue_source')::text AND cm.thread_id = sqlc.narg('venue_container')::text)
+          WHEN sqlc.narg('venue_source')::text = 'telegram' THEN EXISTS (
+            SELECT 1 FROM telegram_message tm WHERE tm.interaction_id = interaction.id AND tm.deleted_at IS NULL
+              AND tm.telegram_chat_id::text = sqlc.narg('venue_container')::text)
+          WHEN sqlc.narg('venue_source')::text = 'messages' THEN EXISTS (
+            SELECT 1 FROM messages_message mm WHERE mm.interaction_id = interaction.id AND mm.deleted_at IS NULL
+              AND mm.chat_guid = sqlc.narg('venue_container')::text)
+          ELSE FALSE
+        END
+      )
     )
-  );
+  UNION ALL
+  SELECT phone_call.id FROM phone_call
+  WHERE 'missed_call' = ANY(sqlc.arg('kinds')::text[])
+    AND phone_call.matched_contact_id = sqlc.arg('contact_id')
+    AND phone_call.interaction_id IS NULL
+    AND phone_call.direction = 'inbound'
+    AND phone_call.answered IS NOT TRUE
+    AND NOT phone_call.has_voicemail
+    AND sqlc.narg('venue_source')::text IS NULL AND sqlc.narg('venue_container')::text IS NULL
+    AND (sqlc.narg('from_time')::timestamptz IS NULL OR phone_call.started_at >= sqlc.narg('from_time'))
+    AND (sqlc.narg('to_time')::timestamptz IS NULL OR phone_call.started_at < sqlc.narg('to_time'))
+) AS item;
+
 
 -- Effective participation reads (arc seam S4). Each reads the one derivation,
 -- the effective_participation and interaction_observation_verdict views of
@@ -381,3 +418,9 @@ SELECT EXISTS (
       AND e.kind = 'interaction.recorded'
       AND COALESCE((e.payload->>'suppress_follow_up')::boolean, false)
 )::boolean AS suppressed;
+
+-- name: ListInteractionsByIDs :many
+-- Live interactions with the given ids, in no particular order. Hydrates the
+-- interaction keys of a ListContactTimelineFiltered page.
+SELECT * FROM interaction
+WHERE id = ANY(@ids::uuid[]) AND deleted_at IS NULL;

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"sort"
 	"strconv"
 	"strings"
@@ -26,10 +27,16 @@ type EventContent struct {
 }
 type CallContent struct {
 	Service         string
+	Direction       string
 	Answered        *bool
 	HasVoicemail    bool
 	DurationSeconds int
 }
+
+func callContent(call repository.PhoneCall) *CallContent {
+	return &CallContent{Service: call.Service, Direction: call.Direction, Answered: call.Answered, HasVoicemail: call.HasVoicemail, DurationSeconds: int(call.DurationSeconds)}
+}
+
 type InteractionEnrichment struct {
 	Label        string
 	ContentKind  string
@@ -233,11 +240,92 @@ func (s *InteractionContentService) EnrichPage(ctx context.Context, interactions
 		}
 		var call *CallContent
 		if found, ok := callsByID[row.ID]; ok {
-			call = &CallContent{found.Service, found.Answered, found.HasVoicemail, int(found.DurationSeconds)}
+			call = callContent(found)
 		}
 		out[row.ID] = InteractionEnrichment{Label: deriveLabel(row, eventTitle, weighted), ContentKind: contentKind(row.Source, noteCount), MessageCount: int(count), IsGroup: anyGroup(tags), VenueTags: tags, Event: event, Call: call}
 	}
 	return out, nil
+}
+
+// TimelineItem is one item of a contact's interaction history. Kind is
+// repository.TimelineKindInteraction for a recorded interaction, or
+// repository.TimelineKindMissedCall for a missed call without voicemail, whose
+// ID is the call's own id.
+type TimelineItem struct {
+	Kind          string
+	ID, ContactID uuid.UUID
+	Source        string
+	SourceRef     *string
+	OccurredAt    time.Time
+	Description   *string
+	Direction     string
+	CreatedAt     time.Time
+	Enrichment    InteractionEnrichment
+}
+
+// ListTimeline returns one page of a contact's interaction history, each
+// interaction enriched as EnrichPage enriches it.
+func (s *InteractionContentService) ListTimeline(ctx context.Context, p repository.InteractionListFilterParams) ([]TimelineItem, error) {
+	keys, err := s.interactions.ListContactTimelineFiltered(ctx, p)
+	if err != nil {
+		return nil, err
+	}
+	interactionIDs, callIDs := []uuid.UUID{}, []uuid.UUID{}
+	for _, key := range keys {
+		switch key.Kind {
+		case repository.TimelineKindInteraction:
+			interactionIDs = append(interactionIDs, key.ID)
+		case repository.TimelineKindMissedCall:
+			callIDs = append(callIDs, key.ID)
+		default:
+			return nil, fmt.Errorf("unknown timeline kind %q", key.Kind)
+		}
+	}
+	interactions, err := s.interactions.ListInteractionsByIDs(ctx, interactionIDs)
+	if err != nil {
+		return nil, err
+	}
+	page := make([]repository.Interaction, 0, len(interactions))
+	for _, row := range interactions {
+		page = append(page, row)
+	}
+	enrichment, err := s.EnrichPage(ctx, page)
+	if err != nil {
+		return nil, err
+	}
+	calls, err := s.phoneCalls.ListByIDs(ctx, callIDs)
+	if err != nil {
+		return nil, err
+	}
+	callsByID := make(map[uuid.UUID]repository.PhoneCall, len(calls))
+	for _, call := range calls {
+		callsByID[call.ID] = call
+	}
+	items := make([]TimelineItem, len(keys))
+	for i, key := range keys {
+		if key.Kind == repository.TimelineKindMissedCall {
+			call, ok := callsByID[key.ID]
+			if !ok {
+				return nil, fmt.Errorf("missed call %s left the page between reads", key.ID)
+			}
+			items[i] = TimelineItem{
+				Kind: key.Kind, ID: call.ID, ContactID: p.ContactID, Source: repository.InteractionSourcePhoneCalls,
+				OccurredAt: call.StartedAt, Direction: call.Direction, CreatedAt: call.CreatedAt,
+				Enrichment: InteractionEnrichment{Label: "Missed call", ContentKind: contentKind(repository.InteractionSourcePhoneCalls, 0), VenueTags: []VenueTag{}, Call: callContent(call)},
+			}
+			continue
+		}
+		row, ok := interactions[key.ID]
+		if !ok {
+			return nil, fmt.Errorf("interaction %s left the page between reads", key.ID)
+		}
+		items[i] = TimelineItem{
+			Kind: key.Kind, ID: row.ID, ContactID: row.ContactID, Source: row.Source, SourceRef: row.SourceRef,
+			OccurredAt: row.OccurredAt, Description: row.Description, Direction: row.Direction, CreatedAt: row.CreatedAt,
+			Enrichment: enrichment[row.ID],
+		}
+	}
+	return items, nil
 }
 
 func (s *InteractionContentService) GetContent(ctx context.Context, id uuid.UUID) (*InteractionContent, error) {
@@ -350,6 +438,12 @@ type weightedVenue struct {
 }
 
 func deriveLabel(interaction repository.Interaction, eventTitle *string, venues []weightedVenue) string {
+	// A call row renders its state from the call record. The description call
+	// ingest stored is a frozen rendering of that state, and it says "missed"
+	// for an outbound call nobody answered, which the user placed.
+	if interaction.Source == repository.InteractionSourcePhoneCalls {
+		return "Phone call"
+	}
 	if interaction.Description != nil && *interaction.Description != "" {
 		return *interaction.Description
 	}
@@ -366,8 +460,6 @@ func deriveLabel(interaction repository.Interaction, eventTitle *string, venues 
 		return best.tag.Label
 	}
 	switch interaction.Source {
-	case repository.InteractionSourcePhoneCalls:
-		return "Phone call"
 	case repository.InteractionSourceGCal, repository.InteractionSourceAnarlogSessions:
 		return "Meeting"
 	case repository.InteractionSourceManual:

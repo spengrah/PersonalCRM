@@ -208,7 +208,7 @@ func (s *IngestService) handleCall(
 	// be created (missed inbound with no voicemail); the staging row
 	// still exists for audit + the future contact-timeline UI's union
 	// projection.
-	createInteraction, interactionDirection, description := decideCallInteraction(
+	createInteraction, interactionDirection, description := DecideCallInteraction(
 		isOutbound,
 		answeredForStaging,
 		hasVoicemail,
@@ -348,9 +348,10 @@ func (s *IngestService) handleCall(
 	return nil, nil
 }
 
-// decideCallInteraction applies the content-delivered decision table
+// DecideCallInteraction applies the content-delivered decision table
 // (spec §`phone_calls` source). Returns
-// (createInteraction, direction, description).
+// (createInteraction, direction, description). Synthetic call fixtures
+// record their calls through it, so they store what ingest stores.
 //
 //	| direction | answered | duration | has_voicemail | create | direction      |
 //	|-----------|----------|----------|---------------|--------|----------------|
@@ -364,7 +365,7 @@ func (s *IngestService) handleCall(
 // connected call and is mutual; zero duration remains an outbound
 // "attempted to reach" signal. Description distinguishes connected / missed
 // for the future contact-timeline UI.
-func decideCallInteraction(
+func DecideCallInteraction(
 	isOutbound bool,
 	answered *bool,
 	hasVoicemail bool,

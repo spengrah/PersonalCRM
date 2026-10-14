@@ -19,6 +19,20 @@ func init() {
 
 	Register(Declaration{Behavior: "IXN-001", Entities: pagingInteractionEntities()})
 
+	Register(Declaration{Behavior: "IXN-020", Entities: []Entity{
+		Contact("subject", Methods(MethodPhone)),
+		LoggedInteraction("older-row", "subject", "manual", AgoDays(3)),
+		PhoneCall("missed-call", "subject", CallMissed, AgoDays(2)),
+		LoggedInteraction("newer-row", "subject", "manual", AgoDays(1)),
+	}})
+
+	Register(Declaration{Behavior: "IXN-021", Entities: []Entity{
+		Contact("subject", Methods(MethodPhone)),
+		PhoneCall("outbound-connected", "subject", CallOutboundConnected, AgoDays(1)),
+		PhoneCall("outbound-no-answer", "subject", CallOutboundNoAnswer, AgoDays(2)),
+		PhoneCall("inbound-voicemail", "subject", CallVoicemail, AgoDays(3)),
+	}})
+
 	Register(Declaration{Behavior: "IXN-006", Entities: []Entity{
 		Contact("subject", Methods(MethodEmail)),
 		LoggedInteraction("past-row", "subject", "manual", AgoDays(1)),

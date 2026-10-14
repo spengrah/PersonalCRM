@@ -98,3 +98,8 @@ WHERE call_unique_id = @call_unique_id;
 -- name: ListPhoneCallsByInteractionIDs :many
 SELECT * FROM phone_call
 WHERE interaction_id = ANY(@interaction_ids::uuid[]);
+
+-- name: ListPhoneCallsByIDs :many
+-- Hydrates the missed-call keys of a ListContactTimelineFiltered page.
+SELECT * FROM phone_call
+WHERE id = ANY(@ids::uuid[]);

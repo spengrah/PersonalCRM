@@ -250,24 +250,98 @@ func (r *InteractionRepository) CountContactInteractions(ctx context.Context, co
 	return r.queries.CountContactInteractions(ctx, contactID)
 }
 
+// Timeline item kinds of a contact's interaction history. A missed call is an
+// unanswered inbound call that left no voicemail: ingest records it with no
+// interaction, so it shares the history's time axis without bearing cadence.
+const (
+	TimelineKindInteraction = "interaction"
+	TimelineKindMissedCall  = "missed_call"
+)
+
+// TimelineKey identifies one item of a contact's interaction history: an
+// interaction id for TimelineKindInteraction, a phone_call id for
+// TimelineKindMissedCall.
+type TimelineKey struct {
+	Kind string
+	ID   uuid.UUID
+}
+
+var timelineKindsAll = []string{TimelineKindInteraction, TimelineKindMissedCall}
+
+// ListContactTimelineFiltered returns one page of a contact's interaction
+// history, interactions and missed calls together, newest first.
+func (r *InteractionRepository) ListContactTimelineFiltered(ctx context.Context, p InteractionListFilterParams) ([]TimelineKey, error) {
+	return r.listTimeline(ctx, timelineKindsAll, p)
+}
+
+// CountContactTimelineFiltered counts the items ListContactTimelineFiltered
+// pages over.
+func (r *InteractionRepository) CountContactTimelineFiltered(ctx context.Context, p InteractionListFilterParams) (int64, error) {
+	return r.countTimeline(ctx, timelineKindsAll, p)
+}
+
+// ListContactInteractionsFiltered returns one page of a contact's interactions
+// alone, under the same filters and order as the timeline.
 func (r *InteractionRepository) ListContactInteractionsFiltered(ctx context.Context, p InteractionListFilterParams) ([]Interaction, error) {
-	rows, err := r.queries.ListContactInteractionsFiltered(ctx, db.ListContactInteractionsFilteredParams{
-		ContactID: p.ContactID, VenueSource: p.VenueSource, VenueContainer: p.VenueContainer,
-		FromTime: p.From, ToTime: p.To, LimitCount: p.Limit, OffsetCount: p.Offset,
-	})
+	keys, err := r.listTimeline(ctx, []string{TimelineKindInteraction}, p)
 	if err != nil {
 		return nil, err
 	}
-	out := make([]Interaction, len(rows))
-	for i, row := range rows {
-		out[i] = convertDbInteraction(row)
+	ids := make([]uuid.UUID, len(keys))
+	for i, key := range keys {
+		ids[i] = key.ID
+	}
+	byID, err := r.ListInteractionsByIDs(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]Interaction, len(keys))
+	for i, key := range keys {
+		row, ok := byID[key.ID]
+		if !ok {
+			return nil, fmt.Errorf("interaction %s left the page between reads", key.ID)
+		}
+		out[i] = row
 	}
 	return out, nil
 }
 
 func (r *InteractionRepository) CountContactInteractionsFiltered(ctx context.Context, p InteractionListFilterParams) (int64, error) {
-	return r.queries.CountContactInteractionsFiltered(ctx, db.CountContactInteractionsFilteredParams{
-		ContactID: p.ContactID, VenueSource: p.VenueSource, VenueContainer: p.VenueContainer,
+	return r.countTimeline(ctx, []string{TimelineKindInteraction}, p)
+}
+
+// ListInteractionsByIDs returns the live interactions with the given ids,
+// keyed by id.
+func (r *InteractionRepository) ListInteractionsByIDs(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]Interaction, error) {
+	rows, err := r.queries.ListInteractionsByIDs(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[uuid.UUID]Interaction, len(rows))
+	for _, row := range rows {
+		out[row.ID] = convertDbInteraction(row)
+	}
+	return out, nil
+}
+
+func (r *InteractionRepository) listTimeline(ctx context.Context, kinds []string, p InteractionListFilterParams) ([]TimelineKey, error) {
+	rows, err := r.queries.ListContactTimelineFiltered(ctx, db.ListContactTimelineFilteredParams{
+		Kinds: kinds, ContactID: p.ContactID, VenueSource: p.VenueSource, VenueContainer: p.VenueContainer,
+		FromTime: p.From, ToTime: p.To, LimitCount: p.Limit, OffsetCount: p.Offset,
+	})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]TimelineKey, len(rows))
+	for i, row := range rows {
+		out[i] = TimelineKey{Kind: row.Kind, ID: row.ID}
+	}
+	return out, nil
+}
+
+func (r *InteractionRepository) countTimeline(ctx context.Context, kinds []string, p InteractionListFilterParams) (int64, error) {
+	return r.queries.CountContactTimelineFiltered(ctx, db.CountContactTimelineFilteredParams{
+		Kinds: kinds, ContactID: p.ContactID, VenueSource: p.VenueSource, VenueContainer: p.VenueContainer,
 		FromTime: p.From, ToTime: p.To,
 	})
 }
