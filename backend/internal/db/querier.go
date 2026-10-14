@@ -2819,6 +2819,12 @@ type Querier interface {
 	// process's job. Available (not scheduled) precisely because the fetch has to
 	// be POSSIBLE for "it was never fetched" to mean anything.
 	TestInsertAvailableRematchJobForContact(ctx context.Context, arg TestInsertAvailableRematchJobForContactParams) (int64, error)
+	// Test-only: inserts an interaction observation with a caller-supplied id, the
+	// way the identity-backfill (migration 088) fixture stands up rows that carry no
+	// interaction node. The column list is explicit and names only columns that
+	// exist from schema 087 onward, so the fixture keeps working as later migrations
+	// add columns to interaction. Production code MUST NOT call this.
+	TestInsertBackfillObservation(ctx context.Context, arg TestInsertBackfillObservationParams) error
 	// TEST ONLY. See TestInsertExternalContactRawEmails. Same rationale for
 	// calendar_event.attendees.
 	TestInsertCalendarEventRawAttendees(ctx context.Context, arg TestInsertCalendarEventRawAttendeesParams) (*CalendarEvent, error)
@@ -2940,6 +2946,11 @@ type Querier interface {
 	// would otherwise fetch and finalize it within milliseconds, and the assertion
 	// that depends on it staying unfinalized would pass or fail on a race.
 	TestInsertUnfinalizedRecorderJobForEvent(ctx context.Context, eventID string) (int64, error)
+	// Test-only: reads every observation of a contact, soft-deleted ones included,
+	// for the identity-backfill (migration 088) fixture. The column list is explicit
+	// and names only columns that exist from schema 087 onward, so the same read
+	// runs at 087 and at the latest schema. Production code MUST NOT call this.
+	TestListBackfillObservations(ctx context.Context, contactID uuid.UUID) ([]*TestListBackfillObservationsRow, error)
 	// Index-definition test only: enumerate every index on one table with
 	// Postgres's own deterministic indexdef reconstruction, so a test can assert the
 	// exact key columns + partial predicate of an index whose PREDICATE is the

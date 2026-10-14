@@ -3051,6 +3051,44 @@ func (q *Queries) TestInsertAvailableRematchJobForContact(ctx context.Context, a
 	return id, err
 }
 
+const TestInsertBackfillObservation = `-- name: TestInsertBackfillObservation :exec
+INSERT INTO interaction (id, contact_id, source, source_ref, occurred_at, direction)
+VALUES (
+    $1,
+    $2,
+    $3,
+    $4,
+    $5,
+    $6
+)
+`
+
+type TestInsertBackfillObservationParams struct {
+	ID         uuid.UUID `json:"id"`
+	ContactID  uuid.UUID `json:"contact_id"`
+	Source     string    `json:"source"`
+	SourceRef  *string   `json:"source_ref"`
+	OccurredAt time.Time `json:"occurred_at"`
+	Direction  string    `json:"direction"`
+}
+
+// Test-only: inserts an interaction observation with a caller-supplied id, the
+// way the identity-backfill (migration 088) fixture stands up rows that carry no
+// interaction node. The column list is explicit and names only columns that
+// exist from schema 087 onward, so the fixture keeps working as later migrations
+// add columns to interaction. Production code MUST NOT call this.
+func (q *Queries) TestInsertBackfillObservation(ctx context.Context, arg TestInsertBackfillObservationParams) error {
+	_, err := q.db.Exec(ctx, TestInsertBackfillObservation,
+		arg.ID,
+		arg.ContactID,
+		arg.Source,
+		arg.SourceRef,
+		arg.OccurredAt,
+		arg.Direction,
+	)
+	return err
+}
+
 const TestInsertContactAtID = `-- name: TestInsertContactAtID :exec
 INSERT INTO contact (id, full_name) VALUES ($1, $2)
 `
@@ -3356,6 +3394,64 @@ func (q *Queries) TestInsertUnfinalizedRecorderJobForEvent(ctx context.Context, 
 	var id int64
 	err := row.Scan(&id)
 	return id, err
+}
+
+const TestListBackfillObservations = `-- name: TestListBackfillObservations :many
+SELECT id, contact_id, source, source_ref, occurred_at, description, created_at,
+       deleted_at, direction, venue_id, interaction_node_id
+FROM interaction
+WHERE contact_id = $1
+ORDER BY id
+`
+
+type TestListBackfillObservationsRow struct {
+	ID                uuid.UUID  `json:"id"`
+	ContactID         uuid.UUID  `json:"contact_id"`
+	Source            string     `json:"source"`
+	SourceRef         *string    `json:"source_ref"`
+	OccurredAt        time.Time  `json:"occurred_at"`
+	Description       *string    `json:"description"`
+	CreatedAt         *time.Time `json:"created_at"`
+	DeletedAt         *time.Time `json:"deleted_at"`
+	Direction         string     `json:"direction"`
+	VenueID           *uuid.UUID `json:"venue_id"`
+	InteractionNodeID *uuid.UUID `json:"interaction_node_id"`
+}
+
+// Test-only: reads every observation of a contact, soft-deleted ones included,
+// for the identity-backfill (migration 088) fixture. The column list is explicit
+// and names only columns that exist from schema 087 onward, so the same read
+// runs at 087 and at the latest schema. Production code MUST NOT call this.
+func (q *Queries) TestListBackfillObservations(ctx context.Context, contactID uuid.UUID) ([]*TestListBackfillObservationsRow, error) {
+	rows, err := q.db.Query(ctx, TestListBackfillObservations, contactID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []*TestListBackfillObservationsRow{}
+	for rows.Next() {
+		var i TestListBackfillObservationsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.ContactID,
+			&i.Source,
+			&i.SourceRef,
+			&i.OccurredAt,
+			&i.Description,
+			&i.CreatedAt,
+			&i.DeletedAt,
+			&i.Direction,
+			&i.VenueID,
+			&i.InteractionNodeID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const TestListIndexDefsForTable = `-- name: TestListIndexDefsForTable :many

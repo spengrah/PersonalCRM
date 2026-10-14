@@ -1652,3 +1652,30 @@ WHERE table_schema = 'public'
   AND is_nullable = 'YES'
   AND column_default ILIKE '%now()%'
 ORDER BY table_name, column_name;
+
+-- name: TestInsertBackfillObservation :exec
+-- Test-only: inserts an interaction observation with a caller-supplied id, the
+-- way the identity-backfill (migration 088) fixture stands up rows that carry no
+-- interaction node. The column list is explicit and names only columns that
+-- exist from schema 087 onward, so the fixture keeps working as later migrations
+-- add columns to interaction. Production code MUST NOT call this.
+INSERT INTO interaction (id, contact_id, source, source_ref, occurred_at, direction)
+VALUES (
+    sqlc.arg('id'),
+    sqlc.arg('contact_id'),
+    sqlc.arg('source'),
+    sqlc.narg('source_ref'),
+    sqlc.arg('occurred_at'),
+    sqlc.arg('direction')
+);
+
+-- name: TestListBackfillObservations :many
+-- Test-only: reads every observation of a contact, soft-deleted ones included,
+-- for the identity-backfill (migration 088) fixture. The column list is explicit
+-- and names only columns that exist from schema 087 onward, so the same read
+-- runs at 087 and at the latest schema. Production code MUST NOT call this.
+SELECT id, contact_id, source, source_ref, occurred_at, description, created_at,
+       deleted_at, direction, venue_id, interaction_node_id
+FROM interaction
+WHERE contact_id = sqlc.arg('contact_id')
+ORDER BY id;

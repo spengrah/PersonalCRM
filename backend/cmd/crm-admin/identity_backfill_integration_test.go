@@ -6,6 +6,11 @@
 // and --migrate then applies 087 and 088. Cases that read the backfilled rows
 // share one world built once, because rolling the schema back and forth is the
 // slow step; the idempotence case runs last because it rolls 088 back.
+//
+// The fixture does not depend on later schema. Contacts and calendar events are
+// seeded at the latest schema through their repositories, before any rollback.
+// The observations are inserted at 087 and read at 087 and at the latest schema
+// only through test queries whose column lists exist at both.
 package main
 
 import (
@@ -31,8 +36,8 @@ type backfillWorld struct {
 	cloneURL, migrationsPath string
 	contacts                 []uuid.UUID
 	ids                      map[string]uuid.UUID // observation name → interaction id
-	before                   map[uuid.UUID]db.Interaction
-	after                    map[uuid.UUID]db.Interaction
+	before                   map[uuid.UUID]db.TestListBackfillObservationsRow
+	after                    map[uuid.UUID]db.TestListBackfillObservationsRow
 	nodesBefore, nodesAfter  int64
 }
 
@@ -53,21 +58,16 @@ func openQueries(t *testing.T, ctx context.Context, url string) *db.Queries {
 }
 
 // readObservations reads every seeded observation, soft-deleted ones included.
-func (w *backfillWorld) readObservations(t *testing.T, ctx context.Context, q *db.Queries) map[uuid.UUID]db.Interaction {
+func (w *backfillWorld) readObservations(t *testing.T, ctx context.Context, q *db.Queries) map[uuid.UUID]db.TestListBackfillObservationsRow {
 	t.Helper()
-	out := map[uuid.UUID]db.Interaction{}
+	out := map[uuid.UUID]db.TestListBackfillObservationsRow{}
 	for _, contactID := range w.contacts {
-		rows, err := q.ListContactInteractions(ctx, db.ListContactInteractionsParams{ContactID: contactID, Limit: 1000})
+		rows, err := q.TestListBackfillObservations(ctx, contactID)
 		require.NoError(t, err)
 		for _, row := range rows {
 			out[row.ID] = *row
 		}
 	}
-	deleted, err := q.TestGetInteractionIncludingDeleted(ctx, db.TestGetInteractionIncludingDeletedParams{
-		ContactID: w.contacts[0], Source: "phone_calls", SourceRef: strPtr("call-deleted"),
-	})
-	require.NoError(t, err)
-	out[deleted.ID] = *deleted
 	require.Len(t, out, len(w.ids), "every seeded observation is read back")
 	return out
 }
@@ -94,6 +94,10 @@ func rollAppTo(t *testing.T, databaseURL, migrationsPath string, version uint) {
 	require.NoError(t, dbErr)
 }
 
+// backfillBaseVersion is migration 087, the schema the observations are seeded
+// at: it has interaction.interaction_node_id, which the fixture leaves NULL.
+const backfillBaseVersion = 87
+
 // newBackfillWorld seeds observations at the schema before migration 087 and
 // returns the world after crm-admin --migrate has run over it.
 func newBackfillWorld(t *testing.T) *backfillWorld {
@@ -102,15 +106,16 @@ func newBackfillWorld(t *testing.T) *backfillWorld {
 	cloneURL, migrationsPath := newMigrateClone(t)
 	w := &backfillWorld{cloneURL: cloneURL, migrationsPath: migrationsPath, ids: map[string]uuid.UUID{}}
 
-	// Seed at the schema between 087 and 088: the sqlc fixture insert takes a nil
-	// node, and every other column is the base schema's. The pre-087 rollback
-	// then drops the column and leaves exactly the base-schema rows.
+	// Contacts and calendar events do not need a NULL interaction node, so they
+	// are seeded at the latest schema through the repositories, before any
+	// rollback. The pool closes before the schema rolls back under it.
 	require.NoError(t, db.RunMigrations(ctx, cloneURL, migrationsPath))
-	rollAppTo(t, cloneURL, migrationsPath, 87) // before 088
-
-	q := openQueries(t, ctx, cloneURL)
-	contactRepo := repository.NewContactRepository(q)
-	calendarRepo := repository.NewCalendarEventRepository(q)
+	occurred := time.Date(2026, 10, 1, 15, 0, 0, 0, time.UTC)
+	seedPool, err := pgxpool.New(ctx, cloneURL)
+	require.NoError(t, err)
+	seedQueries := db.New(seedPool)
+	contactRepo := repository.NewContactRepository(seedQueries)
+	calendarRepo := repository.NewCalendarEventRepository(seedQueries)
 	for _, name := range []string{"contact A", "contact B", "contact C"} {
 		c, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{FullName: name})
 		require.NoError(t, err)
@@ -118,16 +123,6 @@ func newBackfillWorld(t *testing.T) *backfillWorld {
 	}
 	a, b, c := w.contacts[0], w.contacts[1], w.contacts[2]
 
-	occurred := time.Date(2026, 10, 1, 15, 0, 0, 0, time.UTC)
-	observe := func(name string, contactID uuid.UUID, source string, sourceRef *string) {
-		t.Helper()
-		row, err := q.TestInsertInteraction(ctx, db.TestInsertInteractionParams{
-			ID: uuid.New(), ContactID: contactID, Source: source, SourceRef: sourceRef,
-			OccurredAt: occurred, Direction: "mutual",
-		})
-		require.NoError(t, err)
-		w.ids[name] = row.ID
-	}
 	event := func(gcalID string) string {
 		t.Helper()
 		ev, err := calendarRepo.Upsert(ctx, repository.UpsertCalendarEventRequest{
@@ -137,8 +132,29 @@ func newBackfillWorld(t *testing.T) *backfillWorld {
 		require.NoError(t, err)
 		return ev.ID.String()
 	}
-
 	e1, e2 := event("event-1"), event("event-2")
+	// Live gcal observations whose calendar_event row is gone: the events are
+	// deleted here, the observations of them are inserted below.
+	gone1, gone2 := event("event-gone-1"), event("event-gone-2")
+	require.NoError(t, calendarRepo.DeleteByGcalID(ctx, "event-gone-1", "calendar-1", "account-1"))
+	require.NoError(t, calendarRepo.DeleteByGcalID(ctx, "event-gone-2", "calendar-1", "account-1"))
+	seedPool.Close()
+
+	// The base-schema rows: roll to 087 by explicit version, then insert through
+	// queries whose column lists exist at 087 (the fixture insert takes no node).
+	rollAppTo(t, cloneURL, migrationsPath, backfillBaseVersion)
+
+	q := openQueries(t, ctx, cloneURL)
+	observe := func(name string, contactID uuid.UUID, source string, sourceRef *string) {
+		t.Helper()
+		id := uuid.New()
+		require.NoError(t, q.TestInsertBackfillObservation(ctx, db.TestInsertBackfillObservationParams{
+			ID: id, ContactID: contactID, Source: source, SourceRef: sourceRef,
+			OccurredAt: occurred, Direction: "mutual",
+		}))
+		w.ids[name] = id
+	}
+
 	observe("gcal e1 A", a, "gcal", &e1)
 	observe("gcal e1 B", b, "gcal", &e1)
 	observe("gcal e2 A", a, "gcal", &e2)
@@ -160,13 +176,9 @@ func newBackfillWorld(t *testing.T) *backfillWorld {
 	observe("manual 1", a, "manual", nil)
 	observe("manual 2", a, "manual", nil)
 
-	// Live gcal observations whose calendar_event row is gone.
-	gone1, gone2 := event("event-gone-1"), event("event-gone-2")
 	observe("gone1 A", a, "gcal", &gone1)
 	observe("gone1 B", b, "gcal", &gone1)
 	observe("gone2 A", a, "gcal", &gone2)
-	require.NoError(t, calendarRepo.DeleteByGcalID(ctx, "event-gone-1", "calendar-1", "account-1"))
-	require.NoError(t, calendarRepo.DeleteByGcalID(ctx, "event-gone-2", "calendar-1", "account-1"))
 
 	for _, source := range []string{"messages", "telegram", "whatsapp", "gchat"} {
 		observe("burst "+source, a, source, strPtr("burst-"+source))
@@ -181,12 +193,13 @@ func newBackfillWorld(t *testing.T) *backfillWorld {
 	}
 
 	rollAppDownOne(t, cloneURL, migrationsPath) // one step down from pinned 087 → before 087
+	// A fresh pool: the schema changed under the seeding pool's cached plans.
+	q = openQueries(t, ctx, cloneURL)
 	w.nodesBefore = countNodes(t, ctx, q)
 
 	var out bytes.Buffer
 	require.NoError(t, runMigrate(ctx, cloneURL, migrationsPath, &out))
 
-	// A fresh pool: the schema changed under the seeding pool's cached plans.
 	q = openQueries(t, ctx, cloneURL)
 	w.after = w.readObservations(t, ctx, q)
 	w.nodesAfter = countNodes(t, ctx, q)
@@ -265,7 +278,7 @@ func TestIdentityBackfill(t *testing.T) {
 	})
 
 	t.Run("rolling 088 back and migrating again leaves every observation on its node and creates no node", func(t *testing.T) {
-		rollAppTo(t, w.cloneURL, w.migrationsPath, 87) // before 088
+		rollAppTo(t, w.cloneURL, w.migrationsPath, backfillBaseVersion) // before 088
 		var out bytes.Buffer
 		require.NoError(t, runMigrate(ctx, w.cloneURL, w.migrationsPath, &out))
 
