@@ -15,7 +15,7 @@ import (
 	"github.com/google/uuid"
 )
 
-// Timeline item kinds (arc §4). An item is an interaction exactly when its
+// Timeline item kinds. An item is an interaction exactly when its
 // effective participation has an interaction node, and a message burst exactly
 // when it has none; an upcoming event and a missed call have identities of their
 // own. A kind never lists sources: what a source is decides nothing here.
