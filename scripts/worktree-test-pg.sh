@@ -12,8 +12,17 @@
 # Which checkouts use one (cluster_active below): every linked worktree, and
 # the main checkout only when no Docker daemon answers. With Docker, the main
 # checkout uses the shared crm-postgres:5432. CI and CRM_WORKTREE_PG=0 never
-# use one. The instance id derives from the checkout's absolute git-dir, which
-# is stable for the main checkout and for each linked worktree.
+# use one.
+#
+# Lifetime: every instance has an OWNER, the process named by
+# CRM_WORKTREE_PG_OWNER (the Makefile passes its own make process; the verify
+# skill passes a placeholder process that bin/cleanup ends). The instance id is
+# <checkout id>-<owner pid>, where the checkout id derives from the checkout's
+# absolute git-dir, so two runs in one checkout never share or tear down each
+# other's instance. `ensure` starts a detached watcher with each new instance;
+# when the owner exits, the watcher stops the server and deletes the instance.
+# Every `ensure` and `reap` also deletes any instance whose owner has exited,
+# which catches a watcher that was killed with its run.
 #
 # The base DB is named personal_crm_test (the harness refuses any other base),
 # so isolation comes from a separate INSTANCE, not a separate DB name. No Go
@@ -22,17 +31,19 @@
 # sets from `url` below.
 #
 # Subcommands:
-#   url       Pure value, side-effect-FREE, render-safe. Emits the running
-#             per-checkout TEST_DATABASE_URL or nothing. NEVER starts a server,
+#   url       Pure value, side-effect-FREE, render-safe. Emits the owner's
+#             running TEST_DATABASE_URL or nothing. NEVER starts a server,
 #             NEVER warns. Safe to expand during `make -n` / variable eval.
-#   ensure    Side-effecting provisioner (stderr-visible). initdb + start +
-#             role/db/extension provisioning. On failure: loud actionable
-#             stderr + exit per CRM_WORKTREE_PG mode (non-strict: 0; strict: !=0).
-#   stop      pg_ctl stop this worktree's instance (keep data dir).
-#   teardown  stop + remove this worktree's data dir.
-#   reap      Prune instances whose worktree no longer exists.
-#   status    Human-readable state of this worktree's instance.
-#   port      Print this worktree's resolved port (no side effects).
+#   ensure    Side-effecting provisioner (stderr-visible). Deletes instances
+#             whose owner has exited, then initdb + start + role/db/extension
+#             provisioning + the watcher. Requires CRM_WORKTREE_PG_OWNER. On
+#             failure: loud actionable stderr + exit per CRM_WORKTREE_PG mode
+#             (non-strict: 0; strict: !=0), and the failed instance is deleted.
+#   release   Stop + delete the owner's instance now.
+#   teardown  Stop + delete every instance of this checkout, whatever its owner.
+#   reap      Stop + delete every instance whose owner has exited.
+#   status    Human-readable state of the owner's instance.
+#   port      Print the owner's port, else this checkout's seed (no side effects).
 #   psql-bin  Print the absolute path of the discovered Postgres 16 psql (no
 #             side effects); fails when no toolchain qualifies. Callers that
 #             talk to this cluster use it rather than whatever psql is on PATH.
@@ -41,6 +52,10 @@
 #   CRM_WORKTREE_PG       unset|1|auto -> auto + soft fallback (default)
 #                         0            -> force shared instance (inert)
 #                         strict|require -> auto, but `ensure` fails hard on error
+#   CRM_WORKTREE_PG_OWNER pid of the process whose exit ends the instance.
+#                         Required by ensure and release; without it url emits
+#                         nothing. A long-lived owner (e.g. your shell's $$)
+#                         keeps one instance warm across runs.
 #   CRM_WORKTREE_PG_HOME  base dir for instances (default: $XDG_CACHE_HOME/crm-test-pg
 #                         else $HOME/.cache/crm-test-pg). Outside every worktree.
 #   CRM_WORKTREE_PG_COUNT_FILE  test hook: append a line on every real invocation.
@@ -55,10 +70,11 @@
 #                               numeric values warn and fall back to 120. Mainly a
 #                               test hook. On timeout `ensure` degrades per mode
 #                               (proceeds against a running instance, else falls
-#                               back to shared); stop/teardown/reap fail loud.
+#                               back to shared); release/teardown/reap fail loud.
 set -euo pipefail
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/docker-answers.sh
-source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/docker-answers.sh"
+source "$SCRIPT_DIR/lib/docker-answers.sh"
 
 # --- Test hook: count real invocations (render-guard laziness assertion) ----
 if [ -n "${CRM_WORKTREE_PG_COUNT_FILE:-}" ]; then
@@ -130,11 +146,38 @@ pg_home() {
   fi
 }
 
-# Per-worktree id = first 16 hex of sha256(absolute git-dir) (64 bits).
+# Per-checkout id = first 16 hex of sha256(absolute git-dir) (64 bits).
 worktree_id() {
   local gd
   gd=$(worktree_git_dir) || return 1
   sha256_hex "$gd" | head -c 16
+}
+
+# The owner pid from CRM_WORKTREE_PG_OWNER; fails when unset or not a pid.
+owner_pid() {
+  case "${CRM_WORKTREE_PG_OWNER:-}" in
+    ''|*[!0-9]*|0) return 1 ;;
+    *) printf '%s' "$CRM_WORKTREE_PG_OWNER" ;;
+  esac
+}
+
+# The owner's instance in this checkout: <checkout id>-<owner pid>.
+instance_id() {
+  local wid owner
+  wid=$(worktree_id) || return 1
+  owner=$(owner_pid) || return 1
+  printf '%s-%s' "$wid" "$owner"
+}
+
+# The pid whose liveness keeps instance <id>: the owner in its name. An
+# instance named before owners existed (bare checkout id) has none, so its own
+# postmaster stands in, and it is deleted once that server is down.
+# TODO: drop the bare-id case once no branch predates owner-scoped instances.
+instance_keeper() {
+  case "$1" in
+    *-*) printf '%s' "${1##*-}" ;;
+    *) head -1 "$(data_dir "$1")/postmaster.pid" 2>/dev/null || true ;;
+  esac
 }
 
 # Port seed from the id (BASE_PORT + int(id[:4],16) % PORT_SPAN). The actual
@@ -302,7 +345,7 @@ LOCK_STALE_SECS=120
 # of blocking forever. Resolved ONCE, at top-level scope (NOT local to with_lock)
 # so both lock backends AND cmd_ensure's rc-124 messages can reference it without
 # tripping `set -u`. rc 124 is the timeout sentinel (matches timeout(1)); the
-# locked callbacks (_ensure_locked/_stop_locked/_teardown_locked/_reap_one) return
+# locked callbacks (_ensure_locked/destroy_instance/_reap_if_exited) return
 # only 0/1 today, so 124 can't collide — a future callback returning 124 would be
 # misread as a lock timeout.
 # Resolve the VALUE here (silently) so it is ready before any dispatch; the
@@ -326,10 +369,10 @@ if [ "${CRM_WORKTREE_PG_LOCK_TIMEOUT+set}" = set ]; then
 fi
 
 # Loud, actionable warning shared by both lock backends on a wait timeout. Names
-# the DIRECT pg_ctl recovery: stop/teardown/reap all contend on this same lock,
+# the DIRECT pg_ctl recovery: release/teardown/reap all contend on this same lock,
 # so they cannot recover a leaked one.
 _lock_timeout_warn() {
-  warn "timed out after ${LOCK_TIMEOUT_SECS}s waiting for lock $1; if a per-worktree postmaster leaked this lock, stop it DIRECTLY: pg_ctl -D <datadir> -m fast stop (make test-pg-teardown/stop would block on this same lock)."
+  warn "timed out after ${LOCK_TIMEOUT_SECS}s waiting for lock $1; if a per-worktree postmaster leaked this lock, stop it DIRECTLY: pg_ctl -D <datadir> -m fast stop (make test-pg-teardown would block on this same lock)."
 }
 
 with_lock() {
@@ -414,17 +457,18 @@ _allocate_port_locked() {
   return 1
 }
 
-# True if some OTHER worktree's meta records port <p>. CONSERVATIVE BY DESIGN:
+# True if some OTHER instance's meta records port <p>. CONSERVATIVE BY DESIGN:
 # any sibling meta with PORT=p reserves the port, whether it is running,
-# claimed-and-starting, or stopped-but-persisted-for-restart. It deliberately
+# claimed-and-starting, or stopped. It deliberately
 # does NOT try to reclaim a "looks dead" sibling claim: a freshly-claimed
 # sibling (STATE=claimed, no PID yet, server not yet listening) is
 # indistinguishable from a dead one in the window between its meta-write and its
 # pg_ctl start, so reclaiming on "looks dead" would let two worktrees pick the
-# same port. Reclamation is handled by the owners instead: a worktree's own
-# failed start clears ITS OWN meta (clear_meta_claim), and a worktree that no
-# longer exists is pruned by `reap` — so a conservative reservation neither
-# permanently leaks a port nor double-allocates one.
+# same port. Reclamation is handled by the owners instead: an instance's own
+# failed start clears ITS OWN meta (clear_meta_claim), and an instance whose
+# owner has exited is deleted by its watcher or by the next ensure/reap — so a
+# conservative reservation neither permanently leaks a port nor double-allocates
+# one.
 port_claimed_by_sibling() {
   local self_id="$1" p="$2" mf other_id other_port
   shopt -s nullglob
@@ -473,7 +517,7 @@ clear_meta_claim() {
 # ===========================================================================
 cmd_url() {
   cluster_active || return 0
-  local id; id=$(worktree_id) || return 0
+  local id; id=$(instance_id) || return 0
   instance_running "$id" || return 0   # not yet ensured -> emit nothing
   local port; port=$(meta_get "$id" PORT) || return 0
   instance_url "$port"
@@ -500,8 +544,18 @@ cmd_ensure() {
   # Inert cases: not active. No warning (these are normal, not failures).
   cluster_active || return 0
 
-  local id; id=$(worktree_id) || { _ensure_fail "$mode" "could not derive worktree id"; return $?; }
-  # Serialize same-worktree ensure/stop/teardown under the per-worktree lock.
+  # A missing owner is a caller bug, not an environment problem, so it fails in
+  # every mode: an instance without an owner would never be cleaned up.
+  owner_pid >/dev/null || { warn "ensure needs CRM_WORKTREE_PG_OWNER, the pid of the process whose exit ends the instance (got '${CRM_WORKTREE_PG_OWNER:-}')"; return 2; }
+  local id; id=$(instance_id) || { _ensure_fail "$mode" "could not derive worktree id"; return $?; }
+  reap_exited_owners
+  # The watcher is born with the instance directory, so even a failed start
+  # leaves nothing behind once the owner exits.
+  mkdir -p "$(pg_home)"
+  if mkdir "$(instance_dir "$id")" 2>/dev/null; then
+    spawn_watcher "$id"
+  fi
+  # Serialize same-instance ensure/release/teardown under the per-instance lock.
   # Capture rc (|| rc=$? keeps set -e from aborting on a non-zero return) so a
   # lock timeout (124) maps to an HONEST outcome instead of hard-failing the
   # Makefile ensure prereq even in non-strict mode.
@@ -556,7 +610,7 @@ _ensure_locked() {
       # clear meta REGARDLESS of the stop result (`|| true`): meta is cheap and
       # reversible, and clearing it enables graceful shared-instance fallback; a
       # residual un-stoppable postmaster is the documented wedge, recoverable via
-      # `make test-pg-teardown`. (Contrast teardown/reap, which gate the
+      # `make test-pg-teardown`. (Contrast destroy_instance, which gates the
       # DESTRUCTIVE rm on a verified stop.)
       force_stop_instance "$id" || true
       clear_meta_claim "$id"
@@ -610,7 +664,7 @@ _ensure_locked() {
   # pg_ctl and, crucially, for the postmaster it daemonizes. flock locks live on
   # the OPEN FILE DESCRIPTION, so a postmaster that inherited fd 200 would hold
   # this instance's lock for its ENTIRE lifetime — wedging every later ensure/
-  # stop/teardown/reap on that instance. `200>&-` closes it only for this child;
+  # release/teardown/reap on that instance. `200>&-` closes it only for this child;
   # the shell's own fd 200 (the lock holder) is untouched.
   if ! "$bindir/pg_ctl" -D "$datadir" -w -t 30 \
       -o "-p $port -c max_connections=$MAX_CONNECTIONS -c listen_addresses=127.0.0.1 -c unix_socket_directories=$sockdir" \
@@ -709,7 +763,7 @@ provision_instance() {
 }
 
 # ===========================================================================
-# Force-stop helper (shared by the warm-failure block, teardown, and reap)
+# Force-stop helper (shared by the warm-failure block and destroy_instance)
 # ===========================================================================
 # True iff the instance's postmaster is still alive (reads postmaster.pid, which
 # real pg_ctl removes on a clean stop; a stale/dead pid reads as not-alive).
@@ -740,130 +794,96 @@ force_stop_instance() {
   return 0
 }
 
-# ===========================================================================
-# Subcommand: stop
-# ===========================================================================
-cmd_stop() {
-  local id; id=$(worktree_id) || return 0
-  with_lock "$(instance_dir "$id")/lock" _stop_locked "$id"
-}
-
-_stop_locked() {
-  local id="$1" datadir; datadir=$(data_dir "$id")
-  local bindir; bindir=$(resolve_bindir 2>/dev/null || true)
-  if [ -n "$bindir" ] && [ -s "$datadir/PG_VERSION" ]; then
-    "$bindir/pg_ctl" -D "$datadir" -m fast stop >/dev/null 2>&1 || true
-  fi
-  # Demote meta to claimed (port persisted for fast restart, server not running).
-  local port; port=$(meta_get "$id" PORT 2>/dev/null || true)
-  if [ -n "$port" ]; then
-    write_meta_claim "$id" "$port"
-  fi
-  return 0
-}
-
-# ===========================================================================
-# Subcommand: teardown
-# ===========================================================================
-cmd_teardown() {
-  local id; id=$(worktree_id) || return 0
-  with_lock "$(instance_dir "$id")/lock" _teardown_locked "$id"
-}
-
-_teardown_locked() {
+# Stop instance <id> and delete it. The delete waits for a VERIFIED stop:
+# deleting a live server's data dir is worse than leaving it, and defeats
+# manual `pg_ctl -D <datadir>` recovery. Returns non-zero, keeping the data dir,
+# when the postmaster survives. Callers hold the instance lock.
+destroy_instance() {
   local id="$1"
-  _stop_locked "$id"
-  # Force-stop and VERIFY the server is down before deleting its data dir.
-  # _stop_locked is a best-effort `-m fast` (skipped entirely when the toolchain
-  # doesn't resolve, e.g. psql missing). Deleting a live server's data dir is
-  # worse than the wedge and defeats manual `pg_ctl -D <datadir>` recovery — so
-  # only rm on a verified stop; otherwise keep the data dir and warn.
   if force_stop_instance "$id"; then
     rm -rf "$(instance_dir "$id")" "$(socket_dir "$id")" 2>/dev/null || true
+    return 0
+  fi
+  warn "could not stop the postmaster for instance $id; keeping its data dir ($(data_dir "$id")) intact. Stop it manually ('$(resolve_pg_ctl 2>/dev/null || echo pg_ctl) -D $(data_dir "$id") -m immediate stop' or kill the postmaster pid), then run 'make test-pg-reap'."
+  return 1
+}
+
+# Start the watcher for instance <id> in its own session, so that neither a
+# terminal interrupt nor a kill of the run's process group reaches it. Its
+# stdio and the lock fd 200 are closed, so it holds open neither the caller's
+# pipes nor the instance lock (#600).
+spawn_watcher() {
+  local id="$1"
+  if command -v perl >/dev/null 2>&1; then
+    perl -MPOSIX -e 'POSIX::setsid(); exec @ARGV or die' bash "$SCRIPT_DIR/worktree-test-pg.sh" _watch "$id" \
+      </dev/null >/dev/null 2>&1 200>&- &
   else
-    warn "teardown: could not stop the postmaster for instance $id; keeping its data dir ($(data_dir "$id")) intact. Stop it manually ('$(resolve_pg_ctl 2>/dev/null || echo pg_ctl) -D <datadir> -m immediate stop' or kill the postmaster pid), then re-run 'make test-pg-teardown'."
+    bash "$SCRIPT_DIR/worktree-test-pg.sh" _watch "$id" </dev/null >/dev/null 2>&1 200>&- &
   fi
 }
 
-# ===========================================================================
-# Subcommand: reap  (prune instances whose worktree no longer exists)
-# ===========================================================================
-cmd_reap() {
-  local home; home=$(pg_home)
+# Internal: wait for the owner of instance <id> to exit, then destroy it.
+cmd_watch() {
+  local id="$1" owner; owner=$(instance_keeper "$id")
+  trap '' HUP INT TERM
+  cd /
+  while pid_alive "$owner"; do sleep 1; done
+  with_lock "$(instance_dir "$id")/lock" destroy_instance "$id"
+}
+
+# Destroy every instance whose owner has exited. Operates ONLY under the
+# instance home, never :5432, never Docker. A busy lock or an unstoppable
+# server skips that instance (`|| true`) so it cannot strand the others.
+reap_exited_owners() {
+  local home dir id; home=$(pg_home)
   [ -d "$home" ] || return 0
-
-  # Enumerate live worktrees. `git worktree list` must be run from inside a git
-  # repo; if it fails (non-worktree cwd) we MUST abort rather than treat the
-  # empty result as "all worktrees gone" — that would reap every instance.
-  local porcelain
-  if ! porcelain=$(git worktree list --porcelain 2>/dev/null); then
-    warn "reap aborted: not inside a git repository (run from a checkout/worktree)"
-    return 1
-  fi
-
-  # Compute the id of every live worktree. Use `git -C <wt>` with NO inherited
-  # GIT_DIR — a normal reap has none, and an empty GIT_DIR='' is a FATAL error
-  # to git ("not a git repository: ''"), so `env -u GIT_DIR` guarantees the
-  # query resolves the target worktree's git-dir instead of silently yielding
-  # nothing for every worktree.
-  local live_ids="" wt gd
-  while IFS= read -r line; do
-    case "$line" in
-      worktree\ *)
-        wt="${line#worktree }"
-        gd=$(env -u GIT_DIR git -C "$wt" rev-parse --absolute-git-dir 2>/dev/null || true)
-        [ -n "$gd" ] && live_ids="$live_ids $(sha256_hex "$gd" | head -c 16)"
-        ;;
-    esac
-  done <<EOF
-$porcelain
-EOF
-
-  # Defensive guard: the current process is ALWAYS inside at least one worktree,
-  # so a non-empty `git worktree list` that yields ZERO live ids means the
-  # git-dir resolution itself failed (e.g. a future regression). Abort rather
-  # than interpret "no live ids" as "everything is dead" — never delete all.
-  if [ -z "${live_ids// /}" ]; then
-    warn "reap aborted: computed an empty live-worktree set (refusing to treat all instances as dead)"
-    return 1
-  fi
-
-  local bindir; bindir=$(resolve_bindir 2>/dev/null || true)
-  local mf id
   shopt -s nullglob
-  for mf in "$home"/*/meta; do
-    id=$(basename "$(dirname "$mf")")
-    case " $live_ids " in
-      *" $id "*) continue ;;   # still live; keep
-    esac
-    # Dead worktree: stop (if running) + remove the data dir, serialized under
-    # the per-worktree lock (same as ensure/stop/teardown). Operates ONLY under
-    # $home — never :5432, never Docker. Guard with `|| true`: under set -e a
-    # non-zero with_lock (e.g. a 124 lock timeout on one wedged instance) would
-    # abort the loop and strand the reap of every remaining instance.
-    with_lock "$(instance_dir "$id")/lock" _reap_one "$id" "$bindir" || true
+  for dir in "$home"/*/; do
+    id=$(basename "$dir")
+    pid_alive "$(instance_keeper "$id")" && continue
+    with_lock "$(instance_dir "$id")/lock" _reap_if_exited "$id" || true
   done
   shopt -u nullglob
 }
 
-_reap_one() {
-  local id="$1" bindir="$2" datadir; datadir=$(data_dir "$id")
-  if [ -n "$bindir" ] && [ -s "$datadir/PG_VERSION" ]; then
-    "$bindir/pg_ctl" -D "$datadir" -m fast stop >/dev/null 2>&1 || true
-  fi
-  if force_stop_instance "$id"; then
-    rm -rf "$(instance_dir "$id")" "$(socket_dir "$id")" 2>/dev/null || true
-    echo "reaped per-worktree pg instance $id (worktree gone)"
-  else
-    warn "reap: could not stop the postmaster for instance $id; keeping its data dir ($datadir) intact (stop it manually, then re-run 'make test-pg-reap')."
-  fi
+# Re-checked under the lock: a bare-id instance's postmaster may have started
+# while this waited for the lock.
+_reap_if_exited() {
+  local id="$1"
+  pid_alive "$(instance_keeper "$id")" && return 0
+  destroy_instance "$id" && echo "reaped test pg instance $id (owner exited)" >&2
 }
+
+# ===========================================================================
+# Subcommands: release / teardown / reap
+# ===========================================================================
+cmd_release() {
+  local id; id=$(instance_id) || { warn "release needs CRM_WORKTREE_PG_OWNER"; return 2; }
+  [ -d "$(instance_dir "$id")" ] || return 0
+  with_lock "$(instance_dir "$id")/lock" destroy_instance "$id"
+}
+
+# Every instance of this checkout, whatever its owner: the recovery for a
+# wedged instance. A concurrent run in this checkout loses its server.
+cmd_teardown() {
+  local wid dir id rc=0; wid=$(worktree_id) || return 0
+  shopt -s nullglob
+  for dir in "$(pg_home)/$wid" "$(pg_home)/$wid"-*; do
+    [ -d "$dir" ] || continue
+    id=$(basename "$dir")
+    with_lock "$(instance_dir "$id")/lock" destroy_instance "$id" || rc=1
+  done
+  shopt -u nullglob
+  return $rc
+}
+
+cmd_reap() { reap_exited_owners; }
 
 # ===========================================================================
 # Subcommand: status / port
 # ===========================================================================
 cmd_status() {
-  local id; id=$(worktree_id) || { echo "could not derive worktree id"; return 0; }
+  local id; id=$(instance_id) || { echo "no CRM_WORKTREE_PG_OWNER set"; return 0; }
   local port; port=$(meta_get "$id" PORT 2>/dev/null || true)
   if [ -z "$port" ]; then echo "id=$id not provisioned"; return 0; fi
   if instance_running "$id"; then
@@ -874,8 +894,10 @@ cmd_status() {
 }
 
 cmd_port() {
-  local id; id=$(worktree_id) || return 0
-  meta_get "$id" PORT 2>/dev/null || seed_port "$id"
+  local id
+  if id=$(instance_id) && meta_get "$id" PORT 2>/dev/null; then return 0; fi
+  id=$(worktree_id) || return 0
+  seed_port "$id"
 }
 
 cmd_psql_bin() {
@@ -891,7 +913,7 @@ main() {
   # Warn about an invalid lock-timeout knob only for side-effecting subcommands;
   # the render-safe read-only ones (url/active/port/status) must stay silent.
   case "$sub" in
-    ensure|stop|teardown|reap)
+    ensure|release|teardown|reap)
       [ -n "$LOCK_TIMEOUT_KNOB_INVALID" ] && \
         warn "ignoring invalid CRM_WORKTREE_PG_LOCK_TIMEOUT='${CRM_WORKTREE_PG_LOCK_TIMEOUT:-}' (want a positive integer); using ${LOCK_TIMEOUT_SECS}s" ;;
   esac
@@ -899,14 +921,15 @@ main() {
     url)      cmd_url ;;
     active)   cmd_active ;;
     ensure)   cmd_ensure ;;
-    stop)     cmd_stop ;;
+    release)  cmd_release ;;
     teardown) cmd_teardown ;;
     reap)     cmd_reap ;;
     status)   cmd_status ;;
     port)     cmd_port ;;
     psql-bin) cmd_psql_bin ;;
+    _watch)   cmd_watch "${2:?}" ;;
     *)
-      echo "usage: worktree-test-pg.sh {url|active|ensure|stop|teardown|reap|status|port|psql-bin}" >&2
+      echo "usage: worktree-test-pg.sh {url|active|ensure|release|teardown|reap|status|port|psql-bin}" >&2
       return 2
       ;;
   esac

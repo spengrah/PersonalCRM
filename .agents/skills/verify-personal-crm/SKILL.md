@@ -23,7 +23,7 @@ Run `.agents/skills/verify-personal-crm/bin/launch`. It:
 
 1. Refuses if this checkout already has an instance recorded, if either port is busy, or if a `next dev` already runs from this checkout's `frontend/` (two dev servers corrupt the shared `frontend/.next`). If the user's `make dev` runs from the same checkout, verify from a worktree instead.
 2. Refuses if `frontend/node_modules` is missing. In a worktree, run `make worktree-deps`; in the main checkout, `cd frontend && bun install --frozen-lockfile`.
-3. Starts Postgres if needed with `scripts/e2e-pg.sh ensure`: the shared `crm-postgres` container when a Docker daemon answers; otherwise this checkout's own cluster from `scripts/worktree-test-pg.sh` (Postgres 16 binaries, no Docker, no sudo); native Postgres on port 5432 when neither is available. It then creates a fresh database with `scripts/e2e-db-reset.sh`, which refuses if a foreign `crm-api` is attached to it.
+3. Starts Postgres if needed with `scripts/e2e-pg.sh ensure`: the shared `crm-postgres` container when a Docker daemon answers; otherwise this checkout's own cluster from `scripts/worktree-test-pg.sh` (Postgres 16 binaries, no Docker, no sudo), which lives until `bin/cleanup`; native Postgres on port 5432 when neither is available. It then creates a fresh database with `scripts/e2e-db-reset.sh`, which refuses if a foreign `crm-api` is attached to it.
 4. Seeds it with `crm-admin --seed --profile standard` (migrations run first). Set `VERIFY_SEED_PROFILE` to seed another profile.
 5. Builds `crm-api` from this checkout, stamped with `HEAD`, and starts it with the E2E environment (`.env.example.testing`, `CRM_ENV=testing`, `ENABLE_EXTERNAL_SYNC=true`, `EVENT_BUS_INGEST_ENABLED=true`). It never reads `.env`, so no real credentials or accounts are loaded.
 6. Starts `next dev --turbopack` with `NEXT_PUBLIC_API_URL` pointing at this backend.
@@ -103,7 +103,7 @@ Proof standards:
 
 ## Cleanup
 
-Run `.agents/skills/verify-personal-crm/bin/cleanup`. It stops the two servers by their recorded PIDs (checking the command line first, never by process name), drops the verify database, and removes `.agents/log/verify/instance/`. It leaves Postgres running and never touches `.agents/log/verify/runs/`. It is safe after a failed or partial launch, and it warns, without killing anything, if something else still holds a port.
+Run `.agents/skills/verify-personal-crm/bin/cleanup`. It stops the two servers by their recorded PIDs (checking the command line first, never by process name), drops the verify database, stops and deletes the checkout cluster launch started, and removes `.agents/log/verify/instance/`. It leaves the shared `crm-postgres` container and native Postgres running and never touches `.agents/log/verify/runs/`. It is safe after a failed or partial launch, and it warns, without killing anything, if something else still holds a port.
 
 ## Gotchas
 

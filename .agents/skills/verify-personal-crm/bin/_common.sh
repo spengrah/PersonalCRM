@@ -15,11 +15,6 @@ VERIFY_FRONTEND_PORT=$(( 3400 + VERIFY_SLOT ))
 VERIFY_BACKEND_PORT=$(( 8400 + VERIFY_SLOT ))
 # e2e-db-reset.sh only accepts personal_crm_test or personal_crm_test_<suffix>.
 VERIFY_DB_NAME="personal_crm_test_verify_${VERIFY_SLOT}"
-# scripts/e2e-pg.sh picks the PostgreSQL: the shared crm-postgres:5432 when a
-# Docker daemon answers, else this checkout's own cluster, else native :5432.
-# bin/launch re-reads this after it has started that PostgreSQL.
-verify_database_url() { bash "$REPO_ROOT/scripts/e2e-pg.sh" url "$VERIFY_DB_NAME"; }
-VERIFY_DATABASE_URL="$(verify_database_url)"
 VERIFY_BASE_URL="http://127.0.0.1:${VERIFY_FRONTEND_PORT}"
 VERIFY_API_URL="http://127.0.0.1:${VERIFY_BACKEND_PORT}"
 # Same key the E2E stack uses (.env.example.testing). Never the real .env.
@@ -28,6 +23,26 @@ VERIFY_API_KEY="dev-api-key-change-in-production"
 VERIFY_ROOT="$REPO_ROOT/.agents/log/verify"   # gitignored via .agents/log/*
 INSTANCE_DIR="$VERIFY_ROOT/instance"       # pids, logs, binary: removed by cleanup
 RUNS_DIR="$VERIFY_ROOT/runs"               # evidence: never removed by cleanup
+
+# A cluster from scripts/worktree-test-pg.sh lives as long as its owner
+# process. bin/launch starts a placeholder owner and records it here;
+# bin/cleanup ends it and releases the cluster.
+PG_OWNER_FILE="$INSTANCE_DIR/pg-owner.pid"
+PG_OWNER_CMD="sleep 2147483647"
+# Never an owner inherited from the caller: releasing that would end the
+# caller's cluster.
+if [ -f "$PG_OWNER_FILE" ]; then
+  CRM_WORKTREE_PG_OWNER="$(cat "$PG_OWNER_FILE")"
+  export CRM_WORKTREE_PG_OWNER
+else
+  unset CRM_WORKTREE_PG_OWNER
+fi
+
+# scripts/e2e-pg.sh picks the PostgreSQL: the shared crm-postgres:5432 when a
+# Docker daemon answers, else this checkout's own cluster, else native :5432.
+# bin/launch re-reads this after it has started that PostgreSQL.
+verify_database_url() { bash "$REPO_ROOT/scripts/e2e-pg.sh" url "$VERIFY_DB_NAME"; }
+VERIFY_DATABASE_URL="$(verify_database_url)"
 
 export GOCACHE="${GOCACHE:-$REPO_ROOT/.gocache}"
 

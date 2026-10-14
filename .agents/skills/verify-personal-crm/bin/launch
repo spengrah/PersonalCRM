@@ -13,7 +13,7 @@ source "$(dirname "$0")/_common.sh"
 
 fail() { echo "✗ launch: $*" >&2; exit 1; }
 
-if [ -f "$INSTANCE_DIR/backend.pid" ] || [ -f "$INSTANCE_DIR/frontend.pid" ]; then
+if [ -f "$INSTANCE_DIR/backend.pid" ] || [ -f "$INSTANCE_DIR/frontend.pid" ] || [ -f "$PG_OWNER_FILE" ]; then
   fail "an instance is already recorded in $INSTANCE_DIR. Run bin/doctor, or bin/cleanup first."
 fi
 for p in "$VERIFY_FRONTEND_PORT" "$VERIFY_BACKEND_PORT"; do
@@ -51,6 +51,13 @@ backend_env() {
 }
 
 echo "→ postgres"
+# Own group (job control), like the servers below, so it outlives this shell.
+set -m
+nohup $PG_OWNER_CMD >/dev/null 2>&1 &
+echo $! > "$PG_OWNER_FILE"
+set +m
+CRM_WORKTREE_PG_OWNER="$(cat "$PG_OWNER_FILE")"
+export CRM_WORKTREE_PG_OWNER
 bash "$REPO_ROOT/scripts/e2e-pg.sh" ensure > "$INSTANCE_DIR/postgres.log" 2>&1 \
   || fail "postgres did not start; see $INSTANCE_DIR/postgres.log"
 # The URL depends on which PostgreSQL ensure started.

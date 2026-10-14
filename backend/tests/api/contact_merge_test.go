@@ -803,7 +803,7 @@ func TestContactMerge_Integration(t *testing.T) {
 		assert.Equal(t, sourceResponse, merged.LastContacted.UTC(), "last_contacted takes the source's newer value")
 		assert.Equal(t, sourceResponse, merged.LastResponseAt.UTC(), "last_response_at takes the source's newer value")
 		assert.Equal(t, targetOutreach, merged.LastOutreachAt.UTC(), "last_outreach_at keeps the target's newer value")
-		assert.Equal(t, cadence.CalculateContactBy(sourceResponse, cadence.CadenceMonthly).UTC(), merged.ContactBy.UTC(),
+		assert.Equal(t, cadence.CalendarDate(cadence.CalculateContactBy(sourceResponse, cadence.CadenceMonthly)), cadence.CalendarDate(*merged.ContactBy),
 			"contact_by is re-derived from the merged last_contacted")
 		assert.Equal(t, targetResponse, merged.LastInteractionAt.UTC(), "a merge does not bump last_interaction_at")
 	})

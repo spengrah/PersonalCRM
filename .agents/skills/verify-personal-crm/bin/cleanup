@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 # Tear down the instance bin/launch recorded: stop its two servers (by recorded
-# PID, never by process name), drop its database, remove .agents/log/verify/instance/.
-# Leaves Postgres running (shared with dev and E2E) and never touches
-# .agents/log/verify/runs/, where the evidence lives. Safe after a failed launch.
+# PID, never by process name), drop its database, stop and delete the
+# checkout cluster launch started (if any), remove .agents/log/verify/instance/.
+# Leaves the shared crm-postgres container and native Postgres running (shared
+# with dev and E2E) and never touches .agents/log/verify/runs/, where the
+# evidence lives. Safe after a failed launch.
 set -uo pipefail
 source "$(dirname "$0")/_common.sh"
 
@@ -27,6 +29,14 @@ if verify_psql postgres -tAc "SELECT 1" >/dev/null 2>&1; then
   verify_psql postgres -qc "DROP DATABASE IF EXISTS $VERIFY_DB_NAME WITH (FORCE);" && echo "dropped database $VERIFY_DB_NAME"
 else
   echo "postgres unreachable; database $VERIFY_DB_NAME not dropped"
+fi
+
+# End the cluster's placeholder owner, then release the cluster now rather than
+# leaving it to the watcher. Release is a no-op when launch used Docker or
+# native Postgres.
+if [ -n "${CRM_WORKTREE_PG_OWNER:-}" ]; then
+  pid_is "$CRM_WORKTREE_PG_OWNER" "$PG_OWNER_CMD" && kill "$CRM_WORKTREE_PG_OWNER" 2>/dev/null
+  bash "$REPO_ROOT/scripts/worktree-test-pg.sh" release && echo "released this checkout's verify cluster (if any)"
 fi
 
 rm -rf "$INSTANCE_DIR"

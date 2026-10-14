@@ -10,6 +10,10 @@
 #   native    Otherwise: the system PostgreSQL on localhost:5432
 #             (scripts/start-postgres-native.sh, Debian only).
 #
+# In worktree mode the cluster lives as long as CRM_WORKTREE_PG_OWNER: the
+# Makefile's make process for local E2E, the verify skill's placeholder process
+# for verify. Every subcommand reads it from the environment.
+#
 # In worktree mode the integration-test harness owns personal_crm_test as its
 # base database in the same cluster, so local E2E uses personal_crm_test_e2e
 # there and scripts/e2e-db-reset.sh refuses to reset personal_crm_test.

@@ -107,7 +107,7 @@ func TestSkipClock_AdvancesOneCycleLaterOf(t *testing.T) {
 		require.NoError(t, err)
 		base := today.Add(12 * time.Hour)
 		if offset > 0 {
-			base = seeded.In(time.Local).Add(12 * time.Hour)
+			base = time.Date(seeded.Year(), seeded.Month(), seeded.Day(), 12, 0, 0, 0, time.Local)
 		}
 		want := cadence.CalculateContactBy(base, cadence.CadenceMonthly)
 		require.Equal(t, cadence.CalendarDate(want), cadence.CalendarDate(*got.ContactBy))
