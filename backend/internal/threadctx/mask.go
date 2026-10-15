@@ -23,8 +23,8 @@ import (
 //   - formatted identifiers (email addresses, URLs, @handles, phone numbers of
 //     seven or more digits);
 //   - the CRM's contact names and the names and handles the sources give each
-//     participant, matched as whole words regardless of case: each full name and
-//     each of its words;
+//     participant, matched as whole words regardless of case and never across a
+//     formatted identifier: each full name and each of its words;
 //   - names the dictionary does not cover: a capitalized word that does not
 //     begin a sentence or line, and every remaining word of an address header
 //     (from, to, cc, bcc, reply-to, sender).
@@ -32,9 +32,9 @@ import (
 // A participant's names and handles become its role label (ME, THEM,
 // PERSON_n); anything else becomes a numbered placeholder (NAME_n, EMAIL_n,
 // PHONE_n, URL_n, HANDLE_n), one per distinct value within the request.
-// Weekday, month and relative-time words never match a name, and calendar
-// dates are not phone numbers, so they survive. A name outside the dictionary
-// that begins a sentence survives.
+// Weekday, month and relative-time words never match a name, and no
+// identifier takes a calendar date or any part of one, so they survive. A name
+// outside the dictionary that begins a sentence survives.
 //
 // Question IDs and option keys are identifiers and pass through unchanged.
 type Masker struct {
@@ -127,9 +127,41 @@ var identifierPattern = regexp.MustCompile(`(?i)(https?://\S+|www\.\S+)|([a-z0-9
 
 var identifierCategories = []string{"URL", "EMAIL", "HANDLE", "PHONE"}
 
-// calendarDate matches a numeric date such as 2026-10-17 or 17.10.2026, which
-// the phone pattern would otherwise take.
-var calendarDate = regexp.MustCompile(`^\d{1,4}[./-]\d{1,2}[./-]\d{1,4}$`)
+// numericRun matches numbers joined by dots, slashes or hyphens. A numeric
+// date is a whole run, never part of a longer one such as 01.23.45.67.89.
+var numericRun = regexp.MustCompile(`\d+(?:[./-]\d+)+`)
+
+// calendarDate matches a numeric date such as 2026-10-17, 17.10.2026 or 10/17/26.
+var calendarDate = regexp.MustCompile(`^(?:\d{4}[./-]\d{1,2}[./-]\d{1,2}|\d{1,2}[./-]\d{1,2}[./-](?:\d{2}|\d{4}))$`)
+
+// namedDate matches a date with a month name, such as "Oct 17", "17 October",
+// "Oct. 17th, 2026" or "17th of Oct".
+var namedDate = func() *regexp.Regexp {
+	month := `(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\b\.?`
+	day := `\d{1,2}(?:st|nd|rd|th)?`
+	year := `(?:,?\s+\d{4})?`
+	return regexp.MustCompile(`(?i)\b(?:` + day + `\s+(?:of\s+)?` + month + year + `|` + month + `\s+` + day + year + `)\b`)
+}()
+
+// withoutDates returns text with every calendar date blanked out, byte for
+// byte, so no identifier match takes a date or any part of one.
+func withoutDates(text string) string {
+	out := []byte(text)
+	blank := func(m []int) {
+		for i := m[0]; i < m[1]; i++ {
+			out[i] = 0
+		}
+	}
+	for _, m := range numericRun.FindAllStringIndex(text, -1) {
+		if calendarDate.MatchString(text[m[0]:m[1]]) {
+			blank(m)
+		}
+	}
+	for _, m := range namedDate.FindAllStringIndex(text, -1) {
+		blank(m)
+	}
+	return string(out)
+}
 
 // protectedWords never match a name: weekdays, months and relative-time words.
 var protectedWords = map[string]bool{}
@@ -164,9 +196,6 @@ func identifier(text string) (category, value string, ok bool) {
 func normalizeIdentifier(category, text string) (string, string, bool) {
 	if category != "PHONE" {
 		return category, strings.ToLower(text), true
-	}
-	if calendarDate.MatchString(text) {
-		return "", "", false
 	}
 	digits := strings.Map(func(r rune) rune {
 		if unicode.IsDigit(r) {
@@ -252,7 +281,8 @@ func newMasking(names []repository.ContactName, participants map[Role]Participan
 }
 
 // addName adds a name's full word sequence and each of its words as terms. A
-// term two identities share names neither, so it gets an identity of its own.
+// term two identities share names neither, so that term alone gets an identity
+// of its own; the name's other terms keep naming its identity.
 func (s *masking) addName(terms map[string]string, name, identity string) {
 	tokens := tokenize(name)
 	if len(tokens) == 0 {
@@ -260,7 +290,8 @@ func (s *masking) addName(terms map[string]string, name, identity string) {
 	}
 	add := func(term string) {
 		if existing, ok := terms[term]; ok && existing != identity {
-			identity = "term:" + term
+			terms[term] = "term:" + term
+			return
 		}
 		terms[term] = identity
 	}
@@ -300,7 +331,7 @@ type span struct {
 // word outside an identifier is a name.
 func (s *masking) mask(text string, addressHeader bool) string {
 	var spans []span
-	for _, match := range identifierPattern.FindAllStringIndex(text, -1) {
+	for _, match := range identifierPattern.FindAllStringIndex(withoutDates(text), -1) {
 		category, value, ok := identifier(text[match[0]:match[1]])
 		if !ok {
 			continue
@@ -311,26 +342,19 @@ func (s *masking) mask(text string, addressHeader bool) string {
 		}
 		spans = append(spans, span{match[0], match[1], s.placeholder(identity, category)})
 	}
-	inIdentifier := func(t token) bool {
-		return slices.ContainsFunc(spans, func(sp span) bool { return t.start < sp.end && sp.start < t.end })
-	}
-	var words []token
-	for _, t := range tokenize(text) {
-		if !inIdentifier(t) {
-			words = append(words, t)
+	for _, words := range runsBetween(text, spans) {
+		for i := 0; i < len(words); {
+			if n, identity := s.lookup(text, words[i:]); n > 0 {
+				spans = append(spans, span{words[i].start, words[i+n-1].end, s.placeholder(identity, "NAME")})
+				i += n
+				continue
+			}
+			t := words[i]
+			if !protectedWords[t.lower] && !isDigits(t.lower) && (addressHeader || (capitalized(t.word) && !beginsSentence(text, t.start))) {
+				spans = append(spans, span{t.start, t.end, s.placeholder("word:"+t.lower, "NAME")})
+			}
+			i++
 		}
-	}
-	for i := 0; i < len(words); {
-		if n, identity := s.lookup(text, words[i:]); n > 0 {
-			spans = append(spans, span{words[i].start, words[i+n-1].end, s.placeholder(identity, "NAME")})
-			i += n
-			continue
-		}
-		t := words[i]
-		if !protectedWords[t.lower] && !isDigits(t.lower) && (addressHeader || (capitalized(t.word) && !beginsSentence(text, t.start))) {
-			spans = append(spans, span{t.start, t.end, s.placeholder("word:"+t.lower, "NAME")})
-		}
-		i++
 	}
 	slices.SortFunc(spans, func(a, b span) int { return a.start - b.start })
 	var out strings.Builder
@@ -342,6 +366,26 @@ func (s *masking) mask(text string, addressHeader bool) string {
 	}
 	out.WriteString(text[last:])
 	return out.String()
+}
+
+// runsBetween returns the words of text outside the identifier spans, which
+// are in text order, split into runs at each span: no name match crosses an
+// identifier, so every span rendered is disjoint from the others.
+func runsBetween(text string, identifiers []span) [][]token {
+	runs := [][]token{nil}
+	next := 0
+	for _, t := range tokenize(text) {
+		for next < len(identifiers) && identifiers[next].end <= t.start {
+			next++
+			runs = append(runs, nil)
+		}
+		if next < len(identifiers) && identifiers[next].start < t.end {
+			runs = append(runs, nil)
+			continue
+		}
+		runs[len(runs)-1] = append(runs[len(runs)-1], t)
+	}
+	return runs
 }
 
 // lookup returns how many words, from the first, form the longest dictionary

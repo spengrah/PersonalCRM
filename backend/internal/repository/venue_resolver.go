@@ -136,7 +136,8 @@ func (r *VenueResolverRegistry) ResolveGCalVenueTx(ctx context.Context, tx pgx.T
 // (gcal_event_id, gcal_calendar_id, google_account_id) 3-tuple. The 3-tuple is
 // calendar_event's real uniqueness; length-prefixing prevents a delimiter in any
 // component from aliasing a different tuple. MUST stay byte-identical to the 069
-// migration's gcal container expression.
+// migration's gcal container expression and the thread_content view's (091);
+// threadctx's TestContentFacts_AgreeWithContexts checks the view against it.
 func GCalVenueContainerID(gcalEventID, gcalCalendarID, googleAccountID string) string {
 	return lengthPrefix(gcalEventID) + "|" + lengthPrefix(gcalCalendarID) + "|" + lengthPrefix(googleAccountID)
 }

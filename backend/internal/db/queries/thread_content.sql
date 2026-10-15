@@ -5,8 +5,8 @@
 -- name: ListThreadContent :many
 -- Every stored copy of every message of one thread at or before the cut-off.
 -- Copies of one message share message_key; the builder keeps each message once.
-SELECT venue_id, venue_kind, message_key, sent_at, from_user, sender_key,
-       peer_contact_id, sender_aliases, body, headers
+SELECT venue_id, venue_kind, message_key, sent_at, from_user, peer_key,
+       peer_contact_id, peer_aliases, user_aliases, body, headers
 FROM thread_content
 WHERE venue_id = @venue_id
   AND sent_at <= @cut_off

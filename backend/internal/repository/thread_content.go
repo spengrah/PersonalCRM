@@ -20,14 +20,20 @@ type ThreadContentRow struct {
 	SentAt     time.Time
 	// FromUser is true for the user's own message and for a meeting note.
 	FromUser bool
-	// SenderKey is the sender's source identity, empty when FromUser.
-	SenderKey string
+	// PeerKey is the source identity of the copy's peer: the sender of a
+	// received message, the recipient of the user's own. Empty when the source
+	// names no recipient.
+	PeerKey string
 	// PeerContactID is the live contact the copy is attributed to: the sender
 	// of a received message, a recipient of the user's own.
 	PeerContactID *uuid.UUID
-	SenderAliases []string
-	Body          string
-	Headers       []byte
+	// PeerAliases are the names and handles the source gives the copy's peer.
+	PeerAliases []string
+	// UserAliases are the names and handles the source gives the user on the
+	// user's own message.
+	UserAliases []string
+	Body        string
+	Headers     []byte
 }
 
 // ContactName is one name the CRM holds for a live contact.
@@ -55,7 +61,7 @@ func (r *ThreadContentRepository) ListThreadContent(ctx context.Context, venueID
 	}
 	out := make([]ThreadContentRow, len(rows))
 	for i, row := range rows {
-		out[i] = ThreadContentRow{VenueKind: row.VenueKind, MessageKey: row.MessageKey, SentAt: row.SentAt, FromUser: row.FromUser, SenderKey: row.SenderKey, PeerContactID: row.PeerContactID, SenderAliases: row.SenderAliases, Body: row.Body, Headers: row.Headers}
+		out[i] = ThreadContentRow{VenueKind: row.VenueKind, MessageKey: row.MessageKey, SentAt: row.SentAt, FromUser: row.FromUser, PeerKey: row.PeerKey, PeerContactID: row.PeerContactID, PeerAliases: row.PeerAliases, UserAliases: row.UserAliases, Body: row.Body, Headers: row.Headers}
 	}
 	return out, nil
 }

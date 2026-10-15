@@ -347,6 +347,77 @@ func TestContentFacts_AgreeWithContexts(t *testing.T) {
 		assert.Equal(t, threadctx.KindMeeting, c.Kind)
 		assert.Equal(t, []string{"agreed on the venue"}, texts(c))
 	})
+
+	// The meeting venue comes from the resolver that records calendar
+	// interactions, so the view's calendar venue key is checked against it.
+	t.Run("a calendar meeting with notes in the window", func(t *testing.T) {
+		calendar := repository.NewCalendarEventRepository(e.database.Queries)
+		title := "Planning | review"
+		event, err := calendar.Upsert(e.ctx, repository.UpsertCalendarEventRequest{GcalEventID: "event|" + uuid.NewString(), GcalCalendarID: "calendar:" + uuid.NewString(), GoogleAccountID: "account-" + uuid.NewString(), Title: &title, StartTime: e.at(140), EndTime: e.at(160), Status: "confirmed", SyncedAt: e.at(140)})
+		require.NoError(t, err)
+		tx, err := e.database.Pool.Begin(e.ctx)
+		require.NoError(t, err)
+		defer func() { _ = tx.Rollback(e.ctx) }()
+		thread, err := repository.NewVenueResolverRegistry(e.venues, nil, calendar).ResolveGCalVenueTx(e.ctx, tx, event.ID)
+		require.NoError(t, err)
+		require.NotNil(t, thread)
+		summary, linked := "agreed on the agenda", "event"
+		_, err = e.notes.InsertMeetingNoteTx(e.ctx, tx, repository.InsertMeetingNoteParams{AnarlogSessionID: uuid.New(), Summary: &summary, LinkedKind: &linked, LinkedID: &event.ID, LinkageState: repository.LinkageStateLinked, MeetingAt: e.at(150)})
+		require.NoError(t, err)
+		require.NoError(t, tx.Commit(e.ctx))
+
+		assert.True(t, agree(t, *thread))
+		c := e.build(t, *thread, upTo)
+		assert.Equal(t, threadctx.KindMeeting, c.Kind)
+		assert.Equal(t, []string{"agreed on the agenda"}, texts(c))
+	})
+}
+
+// The names the source gives the recipient of the user's own message are
+// masked as that recipient's role.
+func TestMask_RecipientNamesFromTheSource(t *testing.T) {
+	t.Parallel()
+	e := newBuilderEnv(t)
+	masker, err := threadctx.LoadMasker(e.ctx, repository.NewThreadContentRepository(e.database.Queries))
+	require.NoError(t, err)
+	maskOnly := func(t *testing.T, thread threadctx.VenueID) threadctx.MaskedRequest {
+		t.Helper()
+		masked, err := masker.Mask(e.ctx, e.build(t, thread, e.at(1)), nil)
+		require.NoError(t, err)
+		return masked
+	}
+	// toTelegram stores the user's own message in a private chat with peer.
+	toTelegram := func(t *testing.T, contact *uuid.UUID) threadctx.VenueID {
+		t.Helper()
+		peer := rand.Int64N(1 << 40)
+		thread := e.venue(t, repository.InteractionSourceTelegram, repository.VenueKindDM, strconv.FormatInt(peer, 10))
+		text, first := "Zerelia can do Friday", "Zerelia"
+		_, err := e.database.Queries.InsertFullTelegramMessageForTest(e.ctx, db.InsertFullTelegramMessageForTestParams{TelegramMessageID: 1, TelegramChatID: peer, ChatType: "private", MessageText: &text, MessageType: "text", SentAt: e.at(1), IsOutgoing: true, MatchedContactID: contact, PeerUserID: &peer, PeerFirstName: &first})
+		require.NoError(t, err)
+		return thread
+	}
+
+	t.Run("an outgoing Telegram message to a contact", func(t *testing.T) {
+		a := e.contact(t)
+		masked := maskOnly(t, toTelegram(t, &a))
+		assert.Equal(t, "THEM can do Friday", masked.Entries()[0].Text)
+	})
+
+	t.Run("an outgoing Telegram message to someone who is not a contact", func(t *testing.T) {
+		masked := maskOnly(t, toTelegram(t, nil))
+		assert.Equal(t, "THEM can do Friday", masked.Entries()[0].Text)
+	})
+
+	t.Run("an email recipient named in the address headers", func(t *testing.T) {
+		a := e.contact(t)
+		gmailThread := "thread-" + uuid.NewString()
+		thread := e.venue(t, repository.InteractionSourceEmail, repository.VenueKindEmailThread, gmailThread)
+		e.store(t, commsCopy{source: repository.InteractionSourceEmail, thread: gmailThread, external: uuid.NewString(), direction: repository.InteractionDirectionOutbound, peer: "z.q@example.test", body: "Zerelia, the agenda is attached", contact: a, at: e.at(1), metadata: map[string]any{"from": "me@example.test", "to": []string{"z.q@example.test"}, "to_names": []string{"Zerelia Quill"}}})
+
+		masked := maskOnly(t, thread)
+		assert.Equal(t, "THEM, the agenda is attached", masked.Entries()[0].Text)
+		assertGone(t, masked, "zerelia", "quill", "z.q@")
+	})
 }
 
 // The masker built from the CRM masks a stored contact's name.

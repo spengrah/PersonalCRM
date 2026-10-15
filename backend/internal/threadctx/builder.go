@@ -90,18 +90,19 @@ type party struct {
 
 // assemble turns a thread's content rows, ordered by time, into its entries and
 // participants. Rows sharing a message key are copies of one message: the
-// message becomes one entry, and the copies name its sender's contact or, for
-// the user's own message, its recipients.
+// message becomes one entry, and each copy names its peer, the sender of a
+// received message or a recipient of the user's own, with the names and handles
+// the source gives that peer.
 func assemble(rows []repository.ThreadContentRow, attendees []uuid.UUID) (Context, error) {
-	// A sender identity's contact is the one any of its copies is attributed to,
+	// A peer identity's contact is the one any of its copies is attributed to,
 	// so the participant does not split when only some copies are matched.
-	senderContacts := map[string]uuid.UUID{}
+	peerContacts := map[string]uuid.UUID{}
 	for _, row := range rows {
-		if row.FromUser || row.PeerContactID == nil {
+		if row.PeerKey == "" || row.PeerContactID == nil {
 			continue
 		}
-		if known, ok := senderContacts[row.SenderKey]; !ok || bytes.Compare(row.PeerContactID[:], known[:]) < 0 {
-			senderContacts[row.SenderKey] = *row.PeerContactID
+		if known, ok := peerContacts[row.PeerKey]; !ok || bytes.Compare(row.PeerContactID[:], known[:]) < 0 {
+			peerContacts[row.PeerKey] = *row.PeerContactID
 		}
 	}
 
@@ -118,6 +119,20 @@ func assemble(rows []repository.ThreadContentRow, attendees []uuid.UUID) (Contex
 		return p
 	}
 	byContact := func(id uuid.UUID) *party { return join("contact:"+id.String(), &id) }
+	// peer returns the participant a copy names as its peer, and nil when the
+	// copy names none.
+	peer := func(row repository.ThreadContentRow) *party {
+		if contact, ok := peerContacts[row.PeerKey]; ok {
+			return byContact(contact)
+		}
+		if row.PeerContactID != nil {
+			return byContact(*row.PeerContactID)
+		}
+		if row.PeerKey != "" {
+			return join("source:"+row.PeerKey, nil)
+		}
+		return nil
+	}
 
 	type message struct {
 		from    *party
@@ -132,20 +147,16 @@ func assemble(rows []repository.ThreadContentRow, attendees []uuid.UUID) (Contex
 			end++
 		}
 		first := rows[start]
-		var from *party
-		if first.FromUser {
-			from = me
-			for _, copy := range rows[start:end] {
-				if copy.PeerContactID != nil {
-					byContact(*copy.PeerContactID)
-				}
-			}
-		} else if contact, ok := senderContacts[first.SenderKey]; ok {
-			from = byContact(contact)
-		} else {
-			from = join("source:"+first.SenderKey, nil)
+		from := me
+		if !first.FromUser {
+			from = peer(first)
 		}
-		from.aliases = append(from.aliases, first.SenderAliases...)
+		for _, copy := range rows[start:end] {
+			me.aliases = append(me.aliases, copy.UserAliases...)
+			if p := peer(copy); p != nil {
+				p.aliases = append(p.aliases, copy.PeerAliases...)
+			}
+		}
 		headers, err := renderHeaders(first.Headers)
 		if err != nil {
 			return Context{}, err

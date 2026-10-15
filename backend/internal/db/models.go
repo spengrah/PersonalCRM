@@ -736,9 +736,10 @@ type ThreadContent struct {
 	MessageKey    string     `json:"message_key"`
 	SentAt        time.Time  `json:"sent_at"`
 	FromUser      bool       `json:"from_user"`
-	SenderKey     string     `json:"sender_key"`
+	PeerKey       string     `json:"peer_key"`
 	PeerContactID *uuid.UUID `json:"peer_contact_id"`
-	SenderAliases []string   `json:"sender_aliases"`
+	PeerAliases   []string   `json:"peer_aliases"`
+	UserAliases   []string   `json:"user_aliases"`
 	Body          string     `json:"body"`
 	Headers       []byte     `json:"headers"`
 }

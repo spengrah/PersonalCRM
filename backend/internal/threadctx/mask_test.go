@@ -75,6 +75,14 @@ func hostedText(r threadctx.MaskedRequest) string {
 	return strings.Join(parts, "\n")
 }
 
+func entryTexts(entries []threadctx.Entry) []string {
+	out := make([]string, len(entries))
+	for i, entry := range entries {
+		out[i] = entry.Text
+	}
+	return out
+}
+
 func assertGone(t *testing.T, r threadctx.MaskedRequest, identifiers ...string) {
 	t.Helper()
 	text := strings.ToLower(hostedText(r))
@@ -113,6 +121,15 @@ func TestMask_NoContactIdentifierSurvives(t *testing.T) {
 		assertGone(t, r, "juniper", "tobias")
 	})
 
+	t.Run("a full name split by an email address", func(t *testing.T) {
+		r := mask(t, dm("Juniper <jo.k.77@example.test> Okafor"))
+		assertGone(t, r, "juniper", "jo.k.77", "okafor")
+	})
+
+	t.Run("a phone number shaped like a date", func(t *testing.T) {
+		assertGone(t, mask(t, dm("call 555-01-04 tonight")), "555", "01-04")
+	})
+
 	t.Run("an identifier in metadata", func(t *testing.T) {
 		c := dm("dinner?")
 		c.Entries[0].Headers = map[string]string{"subject": "Juni + Tobias: call 555 010 4477 or write to supper-club@example.test"}
@@ -133,6 +150,23 @@ func TestMask_ConsistentPlaceholdersAndTimeWords(t *testing.T) {
 		assert.Equal(t, first, second)
 		assertGone(t, mask(t, c), "jun", "okafor")
 	})
+
+	t.Run("a first name two people share", func(t *testing.T) {
+		wren := uuid.MustParse("00000000-0000-4000-8000-000000000003")
+		c := dm("Juniper Wren called", "Juni called", "Juniper Okafor called")
+		c.Participants[threadctx.RoleThem] = threadctx.Participant{ContactID: &wren}
+		dictionary := []repository.ContactName{{ContactID: juniper, Name: "Juniper Okafor"}, {ContactID: wren, Name: "Juniper Wren"}, {ContactID: wren, Name: "Juni"}}
+		masked, err := threadctx.NewMasker(dictionary).Mask(t.Context(), c, nil)
+		require.NoError(t, err)
+		assert.Equal(t, []string{"THEM called", "THEM called", "NAME_1 called"}, entryTexts(masked.Entries()))
+	})
+
+	for _, text := range []string{"call 5550104477 2026-10-17", "call 5550104477 17 Oct"} {
+		t.Run("a calendar date beside a phone number: "+text, func(t *testing.T) {
+			masked := mask(t, dm(text)).Entries()[0].Text
+			assert.Equal(t, strings.Replace(text, "5550104477", "PHONE_1", 1), masked)
+		})
+	}
 
 	for _, words := range []string{"Friday", "tomorrow", "next week", "Oct 17", "2026-10-17"} {
 		t.Run(words, func(t *testing.T) {

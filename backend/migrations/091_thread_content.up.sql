@@ -1,5 +1,5 @@
 -- One definition of a thread's content: every content row of every live venue,
--- one row per stored copy, with the source identity of its sender.
+-- one row per stored copy, with the source identity of its peer.
 --
 -- The thread-context builder (internal/threadctx) reads a thread's context, its
 -- latest content time and the threads that gained content in a window from this
@@ -13,12 +13,15 @@
 --                        matched contact).
 --   sent_at              the content's own time (a meeting note's meeting_at).
 --   from_user            the user wrote it: an outbound message or a meeting note.
---   sender_key           the sender's source identity, prefixed by source, for a
---                        message the user did not write; never a display name.
---                        Empty for the user's own content.
+--   peer_key             the source identity of the copy's peer, prefixed by
+--                        source: the sender of a received message, the recipient
+--                        of the user's own. Never a display name. Empty when the
+--                        source names no recipient.
 --   peer_contact_id      the live contact the copy is attributed to: the sender of
 --                        a received message, a recipient of the user's own.
---   sender_aliases       the names and handles the source gives the sender.
+--   peer_aliases         the names and handles the source gives the copy's peer.
+--   user_aliases         the names and handles the source gives the user on the
+--                        user's own message.
 --   body                 the text.
 --   headers              email address headers and subject, a meeting note's title.
 CREATE VIEW thread_content AS
@@ -28,19 +31,46 @@ SELECT
     (cm.source || ':' || cm.external_id)::text AS message_key,
     cm.sent_at,
     cm.direction = 'outbound' AS from_user,
-    (CASE WHEN cm.direction = 'inbound'
+    -- An inbound row's peer is its sender. An outbound gchat row's peer is the
+    -- user's own address, and an outbound group message names none; every other
+    -- outbound peer is a recipient, which an email's address headers name beside
+    -- its address.
+    (CASE
+        WHEN cm.direction = 'inbound'
         THEN cm.source || ':' || COALESCE(NULLIF(cm.peer_normalized, ''), cm.peer_handle, '')
+        WHEN cm.source <> 'gchat'
+        THEN COALESCE(cm.source || ':' || COALESCE(NULLIF(cm.peer_normalized, ''), NULLIF(cm.peer_handle, '')), '')
         ELSE ''
-    END)::text AS sender_key,
+    END)::text AS peer_key,
     lc.id AS peer_contact_id,
-    array_remove(ARRAY[
+    (CASE
+        WHEN cm.direction = 'inbound' THEN array_remove(ARRAY[
+            NULLIF(cm.source_metadata->>'from_name', ''),
+            NULLIF(cm.source_metadata->>'push_name', ''),
+            NULLIF(cm.source_metadata->>'from', ''),
+            NULLIF(cm.peer_handle, '')
+        ], NULL)
+        WHEN cm.source = 'gchat' THEN ARRAY[]::text[]
+        ELSE array_remove(ARRAY[NULLIF(cm.peer_handle, '')], NULL) || ARRAY(
+            SELECT names.name
+            FROM (VALUES ('to', 'to_names'), ('cc', 'cc_names'), ('bcc', 'bcc_names')) AS field(addresses, names)
+            CROSS JOIN LATERAL jsonb_array_elements_text(CASE
+                WHEN jsonb_typeof(cm.source_metadata->field.addresses) = 'array'
+                THEN cm.source_metadata->field.addresses ELSE '[]'::jsonb END
+            ) WITH ORDINALITY AS addresses(address, n)
+            JOIN LATERAL jsonb_array_elements_text(CASE
+                WHEN jsonb_typeof(cm.source_metadata->field.names) = 'array'
+                THEN cm.source_metadata->field.names ELSE '[]'::jsonb END
+            ) WITH ORDINALITY AS names(name, n) ON names.n = addresses.n
+            WHERE lower(addresses.address) = lower(cm.peer_handle)
+              AND names.name <> '')
+    END)::text[] AS peer_aliases,
+    (CASE WHEN cm.direction = 'inbound' THEN ARRAY[]::text[] ELSE array_remove(ARRAY[
         NULLIF(cm.source_metadata->>'from_name', ''),
         NULLIF(cm.source_metadata->>'push_name', ''),
         NULLIF(cm.source_metadata->>'from', ''),
-        -- An inbound row's peer is its sender; an outbound gchat row's peer is
-        -- the user's own address. Every other outbound peer is a recipient.
-        CASE WHEN cm.direction = 'inbound' OR cm.source = 'gchat' THEN NULLIF(cm.peer_handle, '') END
-    ], NULL)::text[] AS sender_aliases,
+        CASE WHEN cm.source = 'gchat' THEN NULLIF(cm.peer_handle, '') END
+    ], NULL) END)::text[] AS user_aliases,
     COALESCE(cm.body, '') AS body,
     jsonb_strip_nulls(jsonb_build_object(
         'from', cm.source_metadata->'from',
@@ -70,18 +100,20 @@ SELECT
     'telegram:' || tm.telegram_chat_id::text || ':' || tm.telegram_message_id::text,
     tm.sent_at,
     tm.is_outgoing,
+    -- A private chat's peer fields name its other side in both directions; an
+    -- outgoing group message carries none.
     CASE WHEN NOT tm.is_outgoing
         THEN 'telegram:' || COALESCE(tm.peer_user_id::text, NULLIF(tm.peer_username, ''), tm.peer_phone, '')
-        ELSE ''
+        ELSE COALESCE('telegram:' || COALESCE(tm.peer_user_id::text, NULLIF(tm.peer_username, ''), NULLIF(tm.peer_phone, '')), '')
     END,
     lc.id,
-    -- An outgoing row's peer fields name the chat's other side, not the user.
-    CASE WHEN tm.is_outgoing THEN ARRAY[]::text[] ELSE array_remove(ARRAY[
+    array_remove(ARRAY[
         NULLIF(concat_ws(' ', NULLIF(tm.peer_first_name, ''), NULLIF(tm.peer_last_name, '')), ''),
         NULLIF(tm.peer_first_name, ''),
         NULLIF(tm.peer_username, ''),
         NULLIF(tm.peer_phone, '')
-    ], NULL) END,
+    ], NULL),
+    ARRAY[]::text[],
     COALESCE(tm.message_text, ''),
     '{}'::jsonb
 FROM telegram_message tm
@@ -101,12 +133,14 @@ SELECT
     'messages:' || mm.guid,
     mm.sent_at,
     mm.is_outgoing,
+    -- An outgoing group message names no recipient.
     CASE WHEN NOT mm.is_outgoing
         THEN 'messages:' || COALESCE(NULLIF(mm.peer_normalized, ''), mm.peer_handle, '')
-        ELSE ''
+        ELSE COALESCE('messages:' || COALESCE(NULLIF(mm.peer_normalized, ''), NULLIF(mm.peer_handle, '')), '')
     END,
     lc.id,
-    CASE WHEN mm.is_outgoing THEN ARRAY[]::text[] ELSE array_remove(ARRAY[NULLIF(mm.peer_handle, '')], NULL) END,
+    array_remove(ARRAY[NULLIF(mm.peer_handle, '')], NULL),
+    ARRAY[]::text[],
     COALESCE(mm.text, ''),
     '{}'::jsonb
 FROM messages_message mm
@@ -131,6 +165,7 @@ SELECT
     TRUE,
     '',
     NULL,
+    ARRAY[]::text[],
     ARRAY[]::text[],
     concat_ws(E'\n\n', NULLIF(mn.summary, ''), NULLIF(mn.memo, '')),
     jsonb_strip_nulls(jsonb_build_object('title', to_jsonb(NULLIF(mn.title, ''))))
