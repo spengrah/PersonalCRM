@@ -142,7 +142,7 @@ func texts(c threadctx.Context) []string {
 	return out
 }
 
-// PR1.c1: a thread context holds every message at or before the cut-off once,
+// A thread context holds every message at or before the cut-off once,
 // however many per-contact copies the store keeps, and nothing after it.
 func TestBuild_EachMessageOnceUpToCutOff(t *testing.T) {
 	t.Parallel()
@@ -195,7 +195,7 @@ func TestBuild_EachMessageOnceUpToCutOff(t *testing.T) {
 	})
 }
 
-// PR1.c2: participants are labeled by role from source identity, never from
+// Participants are labeled by role from source identity, never from
 // display names; each keeps one role across the context with its contact or none.
 func TestBuild_RolesFromSourceIdentity(t *testing.T) {
 	t.Parallel()
@@ -248,7 +248,7 @@ func TestBuild_RolesFromSourceIdentity(t *testing.T) {
 	})
 }
 
-// PR1.c3: the input hash is equal for equal content up to the cut-off, changes
+// The input hash is equal for equal content up to the cut-off, changes
 // when that content changes, and ignores content after the cut-off.
 func TestBuild_InputHash(t *testing.T) {
 	t.Parallel()
@@ -280,7 +280,7 @@ func TestBuild_InputHash(t *testing.T) {
 	})
 }
 
-// PR1.c4: a thread's latest content time and the threads that gained content in
+// A thread's latest content time and the threads that gained content in
 // a window agree with the contexts built at those cut-offs.
 func TestContentFacts_AgreeWithContexts(t *testing.T) {
 	t.Parallel()
@@ -349,7 +349,7 @@ func TestContentFacts_AgreeWithContexts(t *testing.T) {
 	})
 }
 
-// PR1.c5: the masker built from the CRM masks a stored contact's name.
+// The masker built from the CRM masks a stored contact's name.
 func TestLoadMasker_MasksStoredContactNames(t *testing.T) {
 	t.Parallel()
 	e := newBuilderEnv(t)

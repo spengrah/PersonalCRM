@@ -83,7 +83,7 @@ func assertGone(t *testing.T, r threadctx.MaskedRequest, identifiers ...string) 
 	}
 }
 
-// PR1.c5: no synthetic contact's name, nickname, phone number or email address
+// No synthetic contact's name, nickname, phone number or email address
 // survives anywhere in a masked request.
 func TestMask_NoContactIdentifierSurvives(t *testing.T) {
 	t.Run("a name in a message body", func(t *testing.T) {
@@ -121,7 +121,7 @@ func TestMask_NoContactIdentifierSurvives(t *testing.T) {
 	})
 }
 
-// PR1.c6: placeholders are consistent within one thread context, and weekday
+// Placeholders are consistent within one thread context, and weekday
 // words, relative-time words and calendar dates survive masking.
 func TestMask_ConsistentPlaceholdersAndTimeWords(t *testing.T) {
 	t.Run("one person named by full name and by nickname", func(t *testing.T) {
@@ -142,7 +142,7 @@ func TestMask_ConsistentPlaceholdersAndTimeWords(t *testing.T) {
 	}
 }
 
-// PR1.c7: a name the dictionary does not cover is masked when it does not begin
+// A name the dictionary does not cover is masked when it does not begin
 // a sentence or line, and every word of an address header is masked.
 func TestMask_NamesOutsideTheDictionary(t *testing.T) {
 	t.Run("a capitalized first name of a non-contact", func(t *testing.T) {
