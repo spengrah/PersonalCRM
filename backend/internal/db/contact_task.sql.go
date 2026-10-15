@@ -1029,6 +1029,86 @@ func (q *Queries) ListManagedContactTasks(ctx context.Context, provider string) 
 	return items, nil
 }
 
+const ListObligationMergeCollisions = `-- name: ListObligationMergeCollisions :many
+SELECT src.id, src.contact_id, src.provider, src.kind, src.external_task_id, src.state, src.metadata, src.created_at, src.updated_at, src.idempotency_key, src.lifecycle, src.obligation_thread_id, src.obligation_debtor, src.obligation_basis, src.obligation_cut_off, tgt.id, tgt.contact_id, tgt.provider, tgt.kind, tgt.external_task_id, tgt.state, tgt.metadata, tgt.created_at, tgt.updated_at, tgt.idempotency_key, tgt.lifecycle, tgt.obligation_thread_id, tgt.obligation_debtor, tgt.obligation_basis, tgt.obligation_cut_off
+FROM contact_task src
+JOIN contact_task tgt
+  ON tgt.obligation_thread_id = src.obligation_thread_id
+ AND tgt.contact_id = $1
+ AND tgt.lifecycle = 'obligation'
+ AND tgt.obligation_debtor = 'contact'
+ AND tgt.state IN ('managed', 'pending_remote_create')
+WHERE src.contact_id = $2
+  AND src.lifecycle = 'obligation'
+  AND src.obligation_debtor = 'contact'
+  AND src.state IN ('managed', 'pending_remote_create')
+ORDER BY src.created_at, src.id
+`
+
+type ListObligationMergeCollisionsParams struct {
+	TargetContactID uuid.UUID `json:"target_contact_id"`
+	SourceContactID uuid.UUID `json:"source_contact_id"`
+}
+
+type ListObligationMergeCollisionsRow struct {
+	ContactTask   ContactTask `json:"contact_task"`
+	ContactTask_2 ContactTask `json:"contact_task_2"`
+}
+
+// Merge-time pairs of open obligations a participant owes on one thread, one
+// held by the source and one by the target: idx_contact_task_obligation_open
+// refuses repointing the source's while the target's is open.
+func (q *Queries) ListObligationMergeCollisions(ctx context.Context, arg ListObligationMergeCollisionsParams) ([]*ListObligationMergeCollisionsRow, error) {
+	rows, err := q.db.Query(ctx, ListObligationMergeCollisions, arg.TargetContactID, arg.SourceContactID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []*ListObligationMergeCollisionsRow{}
+	for rows.Next() {
+		var i ListObligationMergeCollisionsRow
+		if err := rows.Scan(
+			&i.ContactTask.ID,
+			&i.ContactTask.ContactID,
+			&i.ContactTask.Provider,
+			&i.ContactTask.Kind,
+			&i.ContactTask.ExternalTaskID,
+			&i.ContactTask.State,
+			&i.ContactTask.Metadata,
+			&i.ContactTask.CreatedAt,
+			&i.ContactTask.UpdatedAt,
+			&i.ContactTask.IdempotencyKey,
+			&i.ContactTask.Lifecycle,
+			&i.ContactTask.ObligationThreadID,
+			&i.ContactTask.ObligationDebtor,
+			&i.ContactTask.ObligationBasis,
+			&i.ContactTask.ObligationCutOff,
+			&i.ContactTask_2.ID,
+			&i.ContactTask_2.ContactID,
+			&i.ContactTask_2.Provider,
+			&i.ContactTask_2.Kind,
+			&i.ContactTask_2.ExternalTaskID,
+			&i.ContactTask_2.State,
+			&i.ContactTask_2.Metadata,
+			&i.ContactTask_2.CreatedAt,
+			&i.ContactTask_2.UpdatedAt,
+			&i.ContactTask_2.IdempotencyKey,
+			&i.ContactTask_2.Lifecycle,
+			&i.ContactTask_2.ObligationThreadID,
+			&i.ContactTask_2.ObligationDebtor,
+			&i.ContactTask_2.ObligationBasis,
+			&i.ContactTask_2.ObligationCutOff,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const ListObligationTasksByThread = `-- name: ListObligationTasksByThread :many
 SELECT id, contact_id, provider, kind, external_task_id, state, metadata, created_at, updated_at, idempotency_key, lifecycle, obligation_thread_id, obligation_debtor, obligation_basis, obligation_cut_off FROM contact_task
 WHERE lifecycle = 'obligation'
@@ -1151,6 +1231,27 @@ func (q *Queries) RepointManualContactTasksToContact(ctx context.Context, arg Re
 	return err
 }
 
+const RepointObligationContactTasksToContact = `-- name: RepointObligationContactTasksToContact :exec
+UPDATE contact_task
+SET contact_id = $1,
+    updated_at = NOW()
+WHERE contact_id = $2
+  AND lifecycle = 'obligation'
+`
+
+type RepointObligationContactTasksToContactParams struct {
+	TargetContactID uuid.UUID `json:"target_contact_id"`
+	SourceContactID uuid.UUID `json:"source_contact_id"`
+}
+
+// Merge-time repoint of the source contact's obligation tasks to the target,
+// all states, after ListObligationMergeCollisions' pairs are resolved: a user's
+// obligation is keyed by its thread alone, so moving it collides with nothing.
+func (q *Queries) RepointObligationContactTasksToContact(ctx context.Context, arg RepointObligationContactTasksToContactParams) error {
+	_, err := q.db.Exec(ctx, RepointObligationContactTasksToContact, arg.TargetContactID, arg.SourceContactID)
+	return err
+}
+
 const SetContactTaskExternalIDOnly = `-- name: SetContactTaskExternalIDOnly :exec
 UPDATE contact_task
 SET external_task_id = $2,
@@ -1170,6 +1271,25 @@ type SetContactTaskExternalIDOnlyParams struct {
 // without flipping the row back to 'managed'.
 func (q *Queries) SetContactTaskExternalIDOnly(ctx context.Context, arg SetContactTaskExternalIDOnlyParams) error {
 	_, err := q.db.Exec(ctx, SetContactTaskExternalIDOnly, arg.ID, arg.ExternalTaskID)
+	return err
+}
+
+const SetObligationBasis = `-- name: SetObligationBasis :exec
+UPDATE contact_task
+SET obligation_basis = $1,
+    updated_at = NOW()
+WHERE id = $2
+  AND lifecycle = 'obligation'
+`
+
+type SetObligationBasisParams struct {
+	Basis *string   `json:"basis"`
+	ID    uuid.UUID `json:"id"`
+}
+
+// Sets an obligation task's basis; a commitment supersedes a reply.
+func (q *Queries) SetObligationBasis(ctx context.Context, arg SetObligationBasisParams) error {
+	_, err := q.db.Exec(ctx, SetObligationBasis, arg.Basis, arg.ID)
 	return err
 }
 

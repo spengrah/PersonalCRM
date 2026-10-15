@@ -1605,6 +1605,10 @@ type Querier interface {
 	ListOAuthCredentialStatuses(ctx context.Context, provider string) ([]*ListOAuthCredentialStatusesRow, error)
 	// List all OAuth credentials for a provider
 	ListOAuthCredentials(ctx context.Context, provider string) ([]*OauthCredential, error)
+	// Merge-time pairs of open obligations a participant owes on one thread, one
+	// held by the source and one by the target: idx_contact_task_obligation_open
+	// refuses repointing the source's while the target's is open.
+	ListObligationMergeCollisions(ctx context.Context, arg ListObligationMergeCollisionsParams) ([]*ListObligationMergeCollisionsRow, error)
 	// Every obligation task on a thread, open or closed, oldest first.
 	ListObligationTasksByThread(ctx context.Context, threadID *uuid.UUID) ([]*ContactTask, error)
 	// The given live observations whose content sits in the venue: the base venue
@@ -2008,6 +2012,10 @@ type Querier interface {
 	// the message guid, not the contact — collision-free. NOTE: the table has
 	// no updated_at column (049); do not set one.
 	RepointMessagesMessageContact(ctx context.Context, arg RepointMessagesMessageContactParams) error
+	// Merge-time repoint of the source contact's obligation tasks to the target,
+	// all states, after ListObligationMergeCollisions' pairs are resolved: a user's
+	// obligation is keyed by its thread alone, so moving it collides with nothing.
+	RepointObligationContactTasksToContact(ctx context.Context, arg RepointObligationContactTasksToContactParams) error
 	// Re-point call staging rows from the merge source to the target.
 	// Uniqueness is on call_unique_id — collision-free. NOTE: phone_call has
 	// no updated_at column (055); do not set one.
@@ -2169,6 +2177,8 @@ type Querier interface {
 	SetMacHostHeartbeatAtForTest(ctx context.Context, arg SetMacHostHeartbeatAtForTestParams) error
 	// Records the merge alias (loser → winner) and tombstones the loser node.
 	SetNodeMergedInto(ctx context.Context, arg SetNodeMergedIntoParams) error
+	// Sets an obligation task's basis; a commitment supersedes a reply.
+	SetObligationBasis(ctx context.Context, arg SetObligationBasisParams) error
 	// Test-only: backdates a log row's started_at so retention tests can plant rows
 	// older than the cutoff without driving the real write path (which always
 	// stamps the current app-clock time). Production code must never call this.

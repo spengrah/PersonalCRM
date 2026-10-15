@@ -1596,7 +1596,8 @@ func (s *ContactService) MergeContacts(ctx context.Context, req MergeContactsReq
 	// lifecycle='manual'). Automated rows (cadence_due/followup_loop)
 	// transfer to the survivor whenever no unique index blocks the move; a
 	// transfer that loses a race to a concurrent insert falls back to
-	// closing rather than failing the merge. The rest close, with a durable
+	// closing rather than failing the merge. Obligation rows follow the
+	// survivor in every state. The rest close, with a durable
 	// remote close only for rows carrying a real external id. No row is ever
 	// deleted by a merge — orphan cleanup of merge-closed automated tasks is
 	// tracked separately (issue #811).
@@ -1616,10 +1617,18 @@ func (s *ContactService) MergeContacts(ctx context.Context, req MergeContactsReq
 		Int("transferred_tasks", len(transferredRefs)).
 		Msg("merge: transferred automated contact tasks to survivor")
 	awaitedBefore := liveFollowUpAwaited(transferredRefs, sourceAwaited, targetAwaited)
-	closedRefs, err := s.contactTaskRepo.CompleteLiveTasksForContactTx(ctx, tx, req.SourceContactID, todoist.MetadataKeyPendingTempID)
+	// Obligation tasks move to the survivor in every state; an open
+	// obligation the target already holds for the same thread and owing
+	// participant absorbs the source's, and the task that loses closes.
+	closedRefs, err := s.contactTaskRepo.TransferObligationTasksForMergeTx(ctx, tx, req.SourceContactID, req.TargetContactID, todoist.MetadataKeyPendingTempID)
+	if err != nil {
+		return nil, fmt.Errorf("transfer obligation tasks: %w", err)
+	}
+	closedAutomated, err := s.contactTaskRepo.CompleteLiveTasksForContactTx(ctx, tx, req.SourceContactID, todoist.MetadataKeyPendingTempID)
 	if err != nil {
 		return nil, fmt.Errorf("close live contact tasks: %w", err)
 	}
+	closedRefs = append(closedRefs, closedAutomated...)
 	// Remote-close enqueue for rows with a REAL external id (non-empty and
 	// not a pending temp id — mirrors every existing close path's
 	// isPendingTempID gate; the close worker has no temp-id guard of its

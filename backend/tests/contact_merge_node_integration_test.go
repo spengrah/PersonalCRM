@@ -11,6 +11,7 @@ import (
 
 	"personal-crm/backend/internal/accelerated"
 	"personal-crm/backend/internal/consumer"
+	"personal-crm/backend/internal/contacttask"
 	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/events"
 	"personal-crm/backend/internal/repository"
@@ -785,5 +786,136 @@ func TestMergeAssertions_Integration(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, c, moved.SubjectNodeID, "fact subject moved through to the final winner")
 		assert.Equal(t, repository.AssertionStatusAccepted, moved.Status)
+	})
+}
+
+// TestMergeContacts_ObligationTasks pins store.c26: after a merge the source
+// holds no live obligation and no live obligation task; each moves to the
+// target, and an open obligation the target already holds for the same thread
+// and owing party absorbs the source's (G7a, R17).
+func TestMergeContacts_ObligationTasks(t *testing.T) {
+	ctx := t.Context()
+	h := newMergeNodeHarness(t, ctx)
+	tasks := repository.NewContactTaskRepository(h.database.Queries)
+
+	var threads []uuid.UUID
+	t.Cleanup(func() {
+		// Obligation tasks reference their thread node, so they go first.
+		for _, cid := range h.contactIDs {
+			rows, _ := tasks.ListContactTasksByContact(ctx, cid)
+			for _, row := range rows {
+				_ = tasks.DeleteContactTask(ctx, row.ID)
+			}
+		}
+		_, _ = h.support.DeleteNodesByIds(ctx, threads)
+	})
+
+	contact := func(t *testing.T, name string) uuid.UUID {
+		t.Helper()
+		c, _, err := h.contactSvc.CreateContact(ctx, repository.CreateContactRequest{FullName: name}, nil)
+		require.NoError(t, err)
+		h.track(c.ID)
+		return c.ID
+	}
+	thread := func(t *testing.T) uuid.UUID {
+		t.Helper()
+		id := uuid.New()
+		_, err := h.nodeRepo.CreateNode(ctx, id, repository.NodeTypeVenue, "obligation merge thread")
+		require.NoError(t, err)
+		threads = append(threads, id)
+		return id
+	}
+	open := func(t *testing.T, contactID, threadID uuid.UUID, debtor, basis, due string) *repository.ContactTask {
+		t.Helper()
+		kind := contacttask.KindReachOut
+		if debtor == repository.ObligationDebtorUser && basis == repository.ObligationBasisCommitment {
+			kind = contacttask.KindReminder
+		}
+		tx, err := h.database.Pool.Begin(ctx)
+		require.NoError(t, err)
+		defer func() { _ = tx.Rollback(ctx) }()
+		task, err := tasks.CreateObligationTaskTx(ctx, tx, repository.CreateObligationTaskRequest{
+			ContactID: contactID,
+			Provider:  "todoist",
+			Kind:      kind,
+			State:     repository.ContactTaskStatePendingRemoteCreate,
+			Metadata:  map[string]any{"due_date": due},
+			Obligation: repository.TaskObligation{
+				ThreadID: threadID, Debtor: debtor, Basis: basis, CutOff: nowMicro(),
+			},
+		})
+		require.NoError(t, err)
+		require.NoError(t, tx.Commit(ctx))
+		return task
+	}
+	merge := func(t *testing.T, source, target uuid.UUID) {
+		t.Helper()
+		_, err := h.contactSvc.MergeContacts(ctx, service.MergeContactsRequest{SourceContactID: source, TargetContactID: target})
+		require.NoError(t, err)
+	}
+	liveObligations := func(t *testing.T, contactID uuid.UUID) map[uuid.UUID]repository.ContactTask {
+		t.Helper()
+		rows, err := tasks.ListContactTasksByContact(ctx, contactID)
+		require.NoError(t, err)
+		live := map[uuid.UUID]repository.ContactTask{}
+		for _, row := range rows {
+			if row.Lifecycle == contacttask.LifecycleObligation && row.IsLive() {
+				live[row.ID] = row
+			}
+		}
+		return live
+	}
+
+	t.Run("an obligation and its task on the source only", func(t *testing.T) {
+		// spec: CON-067.obligations-move-to-target
+		source, target := contact(t, "obligation source 1"), contact(t, "obligation target 1")
+		th := thread(t)
+		theirs := open(t, source, th, repository.ObligationDebtorContact, repository.ObligationBasisReply, "2026-11-10")
+		mine := open(t, source, th, repository.ObligationDebtorUser, repository.ObligationBasisReply, "2026-11-01")
+
+		merge(t, source, target)
+
+		assert.Empty(t, liveObligations(t, source))
+		live := liveObligations(t, target)
+		require.Len(t, live, 2)
+		assert.Contains(t, live, theirs.ID)
+		assert.Contains(t, live, mine.ID)
+	})
+
+	t.Run("an obligation on the source and one on the target for the same thread and owing party", func(t *testing.T) {
+		// spec: CON-067.colliding-obligations-become-one
+		source, target := contact(t, "obligation source 2"), contact(t, "obligation target 2")
+		th := thread(t)
+		sourceTask := open(t, source, th, repository.ObligationDebtorContact, repository.ObligationBasisReply, "2026-11-15")
+		targetTask := open(t, target, th, repository.ObligationDebtorContact, repository.ObligationBasisCommitment, "2026-12-01")
+
+		merge(t, source, target)
+
+		assert.Empty(t, liveObligations(t, source))
+		live := liveObligations(t, target)
+		require.Len(t, live, 1, "one obligation with one live task")
+		kept, ok := live[sourceTask.ID]
+		require.True(t, ok, "the task due earlier stays open")
+		assert.Equal(t, "2026-11-15", kept.Metadata["due_date"])
+		assert.Equal(t, repository.ObligationBasisCommitment, kept.Obligation.Basis, "a commitment supersedes a reply")
+
+		closed, err := tasks.GetContactTask(ctx, targetTask.ID)
+		require.NoError(t, err)
+		assert.False(t, closed.IsLive())
+	})
+
+	t.Run("obligations on the source and the target for different threads", func(t *testing.T) {
+		// spec: CON-067.obligations-move-to-target
+		source, target := contact(t, "obligation source 3"), contact(t, "obligation target 3")
+		sourceTask := open(t, source, thread(t), repository.ObligationDebtorContact, repository.ObligationBasisReply, "2026-11-20")
+		targetTask := open(t, target, thread(t), repository.ObligationDebtorContact, repository.ObligationBasisReply, "2026-11-25")
+
+		merge(t, source, target)
+
+		assert.Empty(t, liveObligations(t, source))
+		live := liveObligations(t, target)
+		require.Len(t, live, 2)
+		assert.Equal(t, "2026-11-20", live[sourceTask.ID].Metadata["due_date"])
+		assert.Equal(t, "2026-11-25", live[targetTask.ID].Metadata["due_date"])
 	})
 }

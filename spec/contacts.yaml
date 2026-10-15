@@ -1011,7 +1011,7 @@ behaviors:
     provenance: [contacts page applyContext/handleSearchInput, buildContactListUrl page arg]
 
   - id: CON-067
-    title: Merge transfers automated tasks when no uniqueness rule blocks the move, and repoints manual ones
+    title: Merge transfers automated tasks when no uniqueness rule blocks the move, repoints manual ones, and moves obligation tasks
     type: business-logic
     status: current
     surface: none
@@ -1026,6 +1026,10 @@ behaviors:
         text: a transfer that loses a race to a concurrent insert falls back to closing rather than failing the merge
       - key: blocked-tasks-close-real-id-only
         text: automated tasks that cannot move are closed, with a durable remote close only for those carrying a real provider task id
+      - key: obligations-move-to-target
+        text: obligation tasks move to the target in every state, so the source keeps no live obligation or obligation task
+      - key: colliding-obligations-become-one
+        text: when the source and the target each hold an open obligation a participant owes on one thread, the two become one obligation with one live task, due at the earlier known date and a commitment when either was one; the other task closes, with a durable remote close only when it carries a real provider task id
     provenance: [TransferAutomatedContactTasksToContact, TransferAutomatedTasksForMergeTx, CompleteLiveTasksForContactTx, RepointManualContactTasksToContact]
     notes: Supersedes CON-031, retired. Merge deletes no contact_task row — orphan cleanup of merge-closed automated tasks is tracked separately (issue #811).
 

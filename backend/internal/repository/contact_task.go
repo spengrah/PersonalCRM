@@ -940,6 +940,66 @@ func (r *ContactTaskRepository) TransferAutomatedTasksForMergeTx(
 	return refs, nil
 }
 
+// TransferObligationTasksForMergeTx moves every obligation task of the source,
+// in every state, onto the target. Where the source and the target each hold
+// an open obligation a participant owes on one thread, the two become one
+// obligation with one task (G7a): the task due earlier stays open (the
+// target's on a tie), takes the commitment basis when either was a
+// commitment, and the other task closes. It returns refs for the tasks it
+// closed; pendingTempIDKey is as CompleteLiveTasksForContactTx takes it.
+func (r *ContactTaskRepository) TransferObligationTasksForMergeTx(
+	ctx context.Context, tx pgx.Tx, sourceID, targetID uuid.UUID, pendingTempIDKey string,
+) ([]CompletedTaskRef, error) {
+	if tx == nil {
+		return nil, fmt.Errorf("TransferObligationTasksForMergeTx: %w", errNilTx)
+	}
+	q := db.New(tx)
+	pairs, err := q.ListObligationMergeCollisions(ctx, db.ListObligationMergeCollisionsParams{
+		SourceContactID: sourceID,
+		TargetContactID: targetID,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list obligation merge collisions: %w", err)
+	}
+	var closed []CompletedTaskRef
+	for _, pair := range pairs {
+		source, target := convertDbContactTask(&pair.ContactTask), convertDbContactTask(&pair.ContactTask_2)
+		keep, drop := target, source
+		if dueBefore(source, target) {
+			keep, drop = source, target
+		}
+		if drop.Obligation.Basis == ObligationBasisCommitment && keep.Obligation.Basis != ObligationBasisCommitment {
+			if err := q.SetObligationBasis(ctx, db.SetObligationBasisParams{ID: keep.ID, Basis: &drop.Obligation.Basis}); err != nil {
+				return nil, fmt.Errorf("supersede obligation %s: %w", keep.ID, err)
+			}
+		}
+		if _, err := q.UpdateContactTaskState(ctx, db.UpdateContactTaskStateParams{ID: drop.ID, State: string(ContactTaskStateCompleted)}); err != nil {
+			return nil, fmt.Errorf("close merged obligation %s: %w", drop.ID, err)
+		}
+		pendingTempID, _ := drop.Metadata[pendingTempIDKey].(string)
+		closed = append(closed, CompletedTaskRef{
+			ID:             drop.ID,
+			ExternalTaskID: drop.ExternalTaskID,
+			Provider:       drop.Provider,
+			PendingTempID:  pendingTempID,
+		})
+	}
+	if err := q.RepointObligationContactTasksToContact(ctx, db.RepointObligationContactTasksToContactParams{
+		SourceContactID: sourceID,
+		TargetContactID: targetID,
+	}); err != nil {
+		return nil, fmt.Errorf("repoint obligation tasks: %w", err)
+	}
+	return closed, nil
+}
+
+// dueBefore reports whether a's due date is known and earlier than b's.
+func dueBefore(a, b ContactTask) bool {
+	aDue, _ := a.Metadata["due_date"].(string)
+	bDue, _ := b.Metadata["due_date"].(string)
+	return aDue != "" && (bDue == "" || aDue < bDue)
+}
+
 // SetContactTaskExternalIDOnlyTx persists external_task_id WITHOUT
 // touching state. Used only by the close-while-pending race path in the
 // cutover follow-up create worker — the row is already in state='completed'
