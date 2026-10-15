@@ -105,9 +105,12 @@ CREATE TABLE judgment_incomplete (
 
 -- judgment_outcome: the structural subtype of an outcome node, one per answered
 -- question of a judgment, naming its question, its participant contact (none
--- for big_moment) and a commitment's selected date. question_id is the
--- method's question ID; it is NULL for an omission, the outcome the store
--- raises for a party whose open obligation the judgment does not mention.
+-- for big_moment), a commitment's selected date and the method's confidence at
+-- the precision the method reported it (the answer assertion's whole-percent
+-- confidence serves the apply rule's threshold; ranking outcomes needs this).
+-- question_id is the method's question ID; it and confidence are NULL for an
+-- omission, the outcome the store raises for a party whose open obligation the
+-- judgment does not mention.
 -- contact_id cascades like contact_task's: contacts are soft-deleted in normal
 -- operation, so only a test teardown's hard delete reaches it.
 CREATE TABLE judgment_outcome (
@@ -117,6 +120,8 @@ CREATE TABLE judgment_outcome (
     question_id TEXT,
     contact_id UUID REFERENCES contact(id) ON DELETE CASCADE,
     due_date DATE,
+    confidence DOUBLE PRECISION CHECK (confidence BETWEEN 0 AND 1),
+    CONSTRAINT judgment_outcome_answered CHECK ((question_id IS NULL) = (confidence IS NULL)),
     CONSTRAINT judgment_outcome_contact CHECK ((question = 'big_moment') = (contact_id IS NULL)),
     CONSTRAINT judgment_outcome_due_date CHECK (due_date IS NULL OR question IN ('commitment_mine', 'commitment_theirs'))
 );

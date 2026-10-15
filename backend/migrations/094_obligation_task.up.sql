@@ -37,7 +37,9 @@ ALTER TABLE contact_task ADD CONSTRAINT contact_task_kind_lifecycle_check
     );
 
 -- The obligation columns are set exactly on an obligation task, and its kind
--- follows from who owes what.
+-- follows from who owes what. Every obligation column is tested with IS NOT
+-- NULL before any comparison: a CHECK that evaluates to NULL passes, so a
+-- comparison against a NULL column would admit the row it means to refuse.
 ALTER TABLE contact_task ADD CONSTRAINT contact_task_obligation_shape
     CHECK (
         (lifecycle <> 'obligation'
@@ -45,9 +47,10 @@ ALTER TABLE contact_task ADD CONSTRAINT contact_task_obligation_shape
             AND obligation_basis IS NULL AND obligation_cut_off IS NULL)
         OR (lifecycle = 'obligation'
             AND obligation_thread_id IS NOT NULL AND obligation_cut_off IS NOT NULL
+            AND obligation_debtor IS NOT NULL AND obligation_basis IS NOT NULL
             AND ((obligation_debtor = 'user' AND obligation_basis = 'reply' AND kind = 'reach_out')
               OR (obligation_debtor = 'user' AND obligation_basis = 'commitment' AND kind = 'reminder')
-              OR (obligation_debtor = 'contact' AND obligation_basis IS NOT NULL AND kind = 'reach_out')))
+              OR (obligation_debtor = 'contact' AND kind = 'reach_out')))
     );
 
 -- At most one open obligation per thread and owing party. A participant's

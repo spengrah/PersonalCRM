@@ -119,11 +119,11 @@ WITH outcome_node AS (
     VALUES (uuid_generate_v4(), 'judgment_outcome', '')
     RETURNING id
 )
-INSERT INTO judgment_outcome (node_id, judgment_id, question, question_id, contact_id, due_date)
+INSERT INTO judgment_outcome (node_id, judgment_id, question, question_id, contact_id, due_date, confidence)
 SELECT outcome_node.id, $1, $2, $3,
-       $4, $5
+       $4, $5, $6
 FROM outcome_node
-RETURNING node_id, judgment_id, question, question_id, contact_id, due_date
+RETURNING node_id, judgment_id, question, question_id, contact_id, due_date, confidence
 `
 
 type CreateJudgmentOutcomeParams struct {
@@ -132,6 +132,7 @@ type CreateJudgmentOutcomeParams struct {
 	QuestionID *string    `json:"question_id"`
 	ContactID  *uuid.UUID `json:"contact_id"`
 	DueDate    *time.Time `json:"due_date"`
+	Confidence *float64   `json:"confidence"`
 }
 
 // Creates an outcome's node and its judgment_outcome row together.
@@ -142,6 +143,7 @@ func (q *Queries) CreateJudgmentOutcome(ctx context.Context, arg CreateJudgmentO
 		arg.QuestionID,
 		arg.ContactID,
 		arg.DueDate,
+		arg.Confidence,
 	)
 	var i JudgmentOutcome
 	err := row.Scan(
@@ -151,6 +153,7 @@ func (q *Queries) CreateJudgmentOutcome(ctx context.Context, arg CreateJudgmentO
 		&i.QuestionID,
 		&i.ContactID,
 		&i.DueDate,
+		&i.Confidence,
 	)
 	return &i, err
 }
@@ -439,7 +442,7 @@ func (q *Queries) ListJudgmentIncomplete(ctx context.Context) ([]*JudgmentIncomp
 }
 
 const ListJudgmentOutcomes = `-- name: ListJudgmentOutcomes :many
-SELECT node_id, judgment_id, question, question_id, contact_id, due_date FROM judgment_outcome
+SELECT node_id, judgment_id, question, question_id, contact_id, due_date, confidence FROM judgment_outcome
 WHERE judgment_id = ANY($1::uuid[])
    OR node_id = ANY($2::uuid[])
 ORDER BY judgment_id, question, question_id NULLS LAST, contact_id, node_id
@@ -467,6 +470,7 @@ func (q *Queries) ListJudgmentOutcomes(ctx context.Context, arg ListJudgmentOutc
 			&i.QuestionID,
 			&i.ContactID,
 			&i.DueDate,
+			&i.Confidence,
 		); err != nil {
 			return nil, err
 		}

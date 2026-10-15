@@ -12,6 +12,7 @@ import (
 	"personal-crm/backend/internal/accelerated"
 	"personal-crm/backend/internal/config"
 	"personal-crm/backend/internal/consumer"
+	"personal-crm/backend/internal/consumer/consumerjobs"
 	"personal-crm/backend/internal/contacttask"
 	"personal-crm/backend/internal/events"
 	"personal-crm/backend/internal/judgment"
@@ -19,6 +20,7 @@ import (
 	"personal-crm/backend/internal/service"
 	"personal-crm/backend/internal/synthetic"
 	"personal-crm/backend/internal/synthetic/factory"
+	"personal-crm/backend/internal/testdb"
 	"personal-crm/backend/internal/threadctx"
 	"personal-crm/backend/internal/todoist"
 	"personal-crm/backend/tests/testsupport"
@@ -28,6 +30,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
+	"github.com/riverqueue/river/rivertype"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -94,22 +97,30 @@ func TestObligationTaskSync(t *testing.T) {
 			require.Len(t, open, 1)
 			require.Equal(t, tc.kind, open[0].Kind)
 			external := e.finalize(t, open[0].TaskID)
+			before, err := e.people.GetContact(e.ctx, c)
+			require.NoError(t, err)
 
 			item := todoist.SyncItem{ID: external, Labels: []string{obligationLabel}, Deadline: &todoist.SyncDate{Date: "2030-01-01"}}
 			tc.act(&item)
 			e.sync(t, item)
+			e.drainJobs(t)
 
 			task, err := e.tasks.GetContactTask(e.ctx, open[0].TaskID)
 			require.NoError(t, err)
 			assert.Equal(t, tc.state, task.State)
 			assert.Empty(t, e.openObligations(t, th), "the obligation closed")
+			recorded := e.taskCorrespondence(t, c)
+			after, err := e.people.GetContact(e.ctx, c)
+			require.NoError(t, err)
 			if tc.outreach {
-				published := e.bus.completions()
-				require.Len(t, published, 1)
-				assert.Equal(t, c, published[0].ContactID)
-				assert.Equal(t, repository.InteractionDirectionOutbound, published[0].Direction)
+				require.Len(t, recorded, 1, "completing the task records one interaction")
+				assert.Equal(t, repository.InteractionDirectionOutbound, recorded[0].Direction)
+				require.NotNil(t, after.LastOutreachAt, "the completion is the contact's outreach")
+				assert.True(t, recorded[0].OccurredAt.Equal(*after.LastOutreachAt))
 			} else {
-				assert.Empty(t, e.bus.completions(), "no correspondence is recorded")
+				assert.Empty(t, recorded, "no correspondence is recorded")
+				assert.Equal(t, before.LastOutreachAt, after.LastOutreachAt)
+				assert.Equal(t, before.LastContacted, after.LastContacted)
 			}
 		})
 	}
@@ -125,32 +136,54 @@ func commitmentMine(c uuid.UUID) judgment.Outcomes {
 }
 
 // obligationEnv opens obligations through the judgment store and syncs their
-// tasks through the Todoist provider, with the Todoist API faked.
+// tasks through the Todoist provider, with the Todoist API faked. The provider
+// publishes on the real event bus, and a started River client runs the real
+// interaction recorder on what it published. The database is a per-test clone
+// so this client works only this test's jobs.
 type obligationEnv struct {
-	ctx      context.Context
-	harness  *synthetic.Harness
-	store    *judgment.Store
-	tasks    *repository.ContactTaskRepository
-	comms    *repository.CommsMessageRepository
-	venues   *repository.VenueRepository
-	provider *todoist.CadenceSyncProvider
-	pool     *pgxpool.Pool
-	bus      *completionRecorder
-	feed     *fakeFeed
+	ctx          context.Context
+	harness      *synthetic.Harness
+	store        *judgment.Store
+	tasks        *repository.ContactTaskRepository
+	people       *repository.ContactRepository
+	interactions *repository.InteractionRepository
+	comms        *repository.CommsMessageRepository
+	venues       *repository.VenueRepository
+	provider     *todoist.CadenceSyncProvider
+	pool         *pgxpool.Pool
+	jobs         *river.Client[pgx.Tx]
+	feed         *fakeFeed
 }
 
 func newObligationEnv(t *testing.T) *obligationEnv {
 	t.Helper()
-	database := testsupport.OpenDatabase(t)
+	cloneURL, drop := testdb.NewEphemeralClone(t)
+	t.Cleanup(drop)
+	database := testsupport.OpenDatabaseAt(t, cloneURL)
 	ctx := t.Context()
-	jobs, err := river.NewClient(riverpgxv5.New(database.Pool), &river.Config{SkipUnknownJobCheck: true})
+
+	// The recorder needs the bus and the bus needs the client, so the
+	// recorder worker is filled in once both exist, before the client starts.
+	recorderWorker := &deferredRecorderWorker{}
+	workers := river.NewWorkers()
+	river.AddWorker(workers, recorderWorker)
+	river.AddWorker(workers, &noopWorker[consumerjobs.CadenceUpdaterJobArgs]{})
+	river.AddWorker(workers, &noopWorker[consumerjobs.FollowUpManagerJobArgs]{})
+	river.AddWorker(workers, &noopWorker[consumerjobs.KnowledgeCacheUpdaterJobArgs]{})
+	jobs, err := river.NewClient(riverpgxv5.New(database.Pool), &river.Config{
+		Queues:   map[string]river.QueueConfig{river.QueueDefault: {MaxWorkers: 2}},
+		Workers:  workers,
+		TestOnly: true,
+	})
 	require.NoError(t, err)
+	bus := events.NewBus(database.Pool, jobs, repository.NewEventRepository(database.Queries))
+
 	contactRepo := repository.NewContactRepository(database.Queries)
 	contactRepo.SetPool(database.Pool)
 	nodes := repository.NewNodeRepository(database.Queries)
+	assertions := repository.NewAssertionRepository(database.Queries)
 	asserts := service.NewAssertService(database.Pool, nodes, repository.NewEntityRepository(database.Queries),
-		repository.NewPredicateRepository(database.Queries), repository.NewAssertionRepository(database.Queries),
-		events.NewBus(database.Pool, jobs, repository.NewEventRepository(database.Queries)))
+		repository.NewPredicateRepository(database.Queries), assertions, bus)
 	cadence := consumer.NewCadenceUpdater(repository.NewEventConsumerClaimRepository(database.Queries), contactRepo,
 		database.Queries, consumer.CadenceModeCutover, false, config.TestConfig().Watchdog)
 	venues := repository.NewVenueRepository(database.Queries)
@@ -159,24 +192,93 @@ func newObligationEnv(t *testing.T) *obligationEnv {
 		Contexts: threadctx.NewBuilder(repository.NewThreadContentRepository(database.Queries), venues),
 		Cadence:  cadence, Jobs: jobs, Watchdog: config.TestConfig().Watchdog, ProductionMethod: "prod-method",
 	})
+	cadence.SetObligationCloser(store)
 	tasks := repository.NewContactTaskRepository(database.Queries)
-	bus := &completionRecorder{}
+	interactions := repository.NewInteractionRepository(database.Queries)
+	contacts := service.NewContactService(database, contactRepo, repository.NewContactMethodRepository(database.Queries),
+		interactions, tasks, nil, nil, cadence, asserts,
+		consumer.NewKnowledgeCacheUpdater(assertions, nodes, contactRepo), nil)
+	recorder := consumer.NewInteractionRecorder(contacts, repository.NewStagingProcessorRegistry(nil), bus, cadence, nil, nil)
+	recorderWorker.real = consumer.NewInteractionRecorderWorker(bus, database.Pool, recorder, nil)
+
+	// The client outlives t.Context(), which is cancelled before cleanups run,
+	// so the synthetic harness's teardown still sees jobs drain.
+	require.NoError(t, jobs.Start(context.WithoutCancel(ctx)))
+	t.Cleanup(func() {
+		stopCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+		defer cancel()
+		_ = jobs.Stop(stopCtx)
+	})
+
 	feed := &fakeFeed{}
 	provider := todoist.NewCadenceSyncProvider(fakeAuth{}, tasks, contactRepo, repository.NewSyncRepository(database.Queries),
 		config.TestConfig(), bus, cadence, database.Pool, func(string) todoist.Client { return feed }, jobs, false)
 	return &obligationEnv{
-		ctx:      ctx,
-		harness:  synthetic.NewHarnessForNamespace(t, ctx, database, "o"+uuid.NewString()[:8], factory.DefaultSeed),
-		store:    store,
-		tasks:    tasks,
-		comms:    repository.NewCommsMessageRepository(database.Queries),
-		venues:   venues,
-		provider: provider,
-		pool:     database.Pool,
-		bus:      bus,
-		feed:     feed,
+		ctx:          ctx,
+		harness:      synthetic.NewHarnessForNamespace(t, ctx, database, "o"+uuid.NewString()[:8], factory.DefaultSeed),
+		store:        store,
+		tasks:        tasks,
+		people:       contactRepo,
+		interactions: interactions,
+		comms:        repository.NewCommsMessageRepository(database.Queries),
+		venues:       venues,
+		provider:     provider,
+		pool:         database.Pool,
+		jobs:         jobs,
+		feed:         feed,
 	}
 }
+
+// drainJobs waits until River has finished every job the test enqueued, and
+// fails when one did not complete.
+func (e *obligationEnv) drainJobs(t *testing.T) {
+	t.Helper()
+	unfinished := []rivertype.JobState{
+		rivertype.JobStateAvailable, rivertype.JobStateRunning, rivertype.JobStateRetryable,
+		rivertype.JobStateScheduled, rivertype.JobStatePending,
+	}
+	require.Eventually(t, func() bool {
+		res, err := e.jobs.JobList(e.ctx, river.NewJobListParams().States(unfinished...).First(1000))
+		require.NoError(t, err)
+		return len(res.Jobs) == 0
+	}, 10*time.Second, 20*time.Millisecond, "every enqueued job finishes")
+	res, err := e.jobs.JobList(e.ctx, river.NewJobListParams().States(rivertype.JobStateDiscarded, rivertype.JobStateCancelled).First(1000))
+	require.NoError(t, err)
+	require.Empty(t, res.Jobs, "no job failed")
+}
+
+// taskCorrespondence returns the contact's interactions recorded from Todoist.
+func (e *obligationEnv) taskCorrespondence(t *testing.T, c uuid.UUID) []repository.Interaction {
+	t.Helper()
+	all, err := e.interactions.ListContactInteractions(e.ctx, c, 1000, 0)
+	require.NoError(t, err)
+	var fromTasks []repository.Interaction
+	for _, ix := range all {
+		if ix.Source == repository.InteractionSourceTodoist {
+			fromTasks = append(fromTasks, ix)
+		}
+	}
+	return fromTasks
+}
+
+// deferredRecorderWorker runs the real interaction recorder worker, set once
+// the bus it publishes on exists.
+type deferredRecorderWorker struct {
+	river.WorkerDefaults[consumerjobs.InteractionRecorderJobArgs]
+	real *consumer.InteractionRecorderWorker
+}
+
+func (w *deferredRecorderWorker) Work(ctx context.Context, j *river.Job[consumerjobs.InteractionRecorderJobArgs]) error {
+	return w.real.Work(ctx, j)
+}
+
+// noopWorker drains a job kind the recording publishes downstream of what the
+// test observes.
+type noopWorker[T river.JobArgs] struct {
+	river.WorkerDefaults[T]
+}
+
+func (*noopWorker[T]) Work(context.Context, *river.Job[T]) error { return nil }
 
 func (e *obligationEnv) contact(t *testing.T) uuid.UUID {
 	t.Helper()
@@ -286,30 +388,4 @@ func (f *fakeFeed) Sync(_ context.Context, _ string, _ []string, commands []todo
 		resp.Items, f.items = f.items, nil
 	}
 	return resp, nil
-}
-
-// completionRecorder records the task.completed events the provider publishes.
-type completionRecorder struct {
-	mu        sync.Mutex
-	completed []events.TaskCompletedPayload
-}
-
-func (r *completionRecorder) PublishTx(_ context.Context, _ pgx.Tx, env *events.Envelope) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	env.ID = uuid.New()
-	if env.Kind == events.KindTaskCompleted {
-		var p events.TaskCompletedPayload
-		if err := events.Unmarshal(env, &p); err != nil {
-			return err
-		}
-		r.completed = append(r.completed, p)
-	}
-	return nil
-}
-
-func (r *completionRecorder) completions() []events.TaskCompletedPayload {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return append([]events.TaskCompletedPayload(nil), r.completed...)
 }

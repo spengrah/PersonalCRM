@@ -310,6 +310,7 @@ func (s *Store) createJudgmentTx(ctx context.Context, tx pgx.Tx, j Judgment) (uu
 			QuestionID: &o.questionID,
 			ContactID:  o.contact,
 			DueDate:    o.due,
+			Confidence: &o.confidence,
 		})
 		if err != nil {
 			return uuid.Nil, fmt.Errorf("create outcome: %w", err)

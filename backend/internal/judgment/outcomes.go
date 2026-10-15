@@ -14,6 +14,8 @@ import (
 // outcomeRecord is one outcome node with its assertions: the method's answer
 // (absent for an omission), its latest landing under a class predicate
 // (absent while the outcome is evidence), and the user's live review.
+// Confidence is the method's, at the precision it reported (absent for an
+// omission).
 type outcomeRecord struct {
 	ID         uuid.UUID
 	JudgmentID uuid.UUID
@@ -21,6 +23,7 @@ type outcomeRecord struct {
 	QuestionID string
 	ContactID  *uuid.UUID
 	DueDate    *time.Time
+	Confidence *float64
 	answer     *db.Assertion
 	class      *db.Assertion
 	review     *db.Assertion
@@ -38,15 +41,13 @@ func (o *outcomeRecord) value() string {
 	}
 }
 
+// confidence is the method's confidence in the outcome; an omission, which no
+// method answered, has none.
 func (o *outcomeRecord) confidence() float64 {
-	switch {
-	case o.answer != nil:
-		return float64(o.answer.Confidence) / 100
-	case o.class != nil:
-		return float64(o.class.Confidence) / 100
-	default:
+	if o.Confidence == nil {
 		return 0
 	}
+	return *o.Confidence
 }
 
 // state is how the outcome landed: evidence when it never landed; a claim
@@ -127,6 +128,7 @@ func loadOutcomes(ctx context.Context, q db.Querier, judgmentIDs, outcomeIDs []u
 			Question:   Question(row.Question),
 			ContactID:  row.ContactID,
 			DueDate:    row.DueDate,
+			Confidence: row.Confidence,
 		}
 		if row.QuestionID != nil {
 			r.QuestionID = *row.QuestionID

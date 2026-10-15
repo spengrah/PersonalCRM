@@ -273,8 +273,10 @@ type action struct {
 	basis   string
 	contact uuid.UUID
 	due     string
-	later   bool
-	flag    string
+	// later marks a redate or upgrade that moves an open obligation's date
+	// later: a removal.
+	later bool
+	flag  string
 }
 
 // plan is the change one outcome makes to live state.
@@ -283,14 +285,15 @@ type plan struct{ actions []action }
 func (p *plan) add(a action) { p.actions = append(p.actions, a) }
 
 // class is the plan's landing class: a removal when it closes an obligation,
-// ends a wait, moves a date later or withdraws a flag; an addition when it
-// opens or upgrades an obligation, moves a date earlier or raises a flag;
+// ends a wait, moves an open obligation's date later (by a redate or by an
+// upgrade) or withdraws a flag; an addition when it opens an obligation,
+// upgrades one without delaying it, moves a date earlier or raises a flag;
 // otherwise no effect.
 func (p plan) class() string {
 	addition := false
 	for _, a := range p.actions {
 		switch {
-		case a.kind == actClose || a.kind == actEndWait || a.kind == actWithdrawFlag || (a.kind == actRedate && a.later):
+		case a.kind == actClose || a.kind == actEndWait || a.kind == actWithdrawFlag || a.later:
 			return predicateRemoval
 		default:
 			addition = true
@@ -420,11 +423,14 @@ func (p *planner) plan(ctx context.Context, question Question, contact *uuid.UUI
 			}
 			pl.add(action{kind: actOpen, debtor: debtor, basis: repository.ObligationBasisCommitment, contact: c, due: date})
 		case task.Obligation.Basis == repository.ObligationBasisReply:
+			// The upgraded obligation is the reply's, opened on the reply's day,
+			// so without a selected date it keeps the reply's date; with one it
+			// takes the selected date, and a later one delays the obligation.
 			current := dueOf(task)
-			if date == "" || current < date {
+			if date == "" {
 				date = current
 			}
-			pl.add(action{kind: actUpgrade, task: task, debtor: debtor, basis: repository.ObligationBasisCommitment, contact: c, due: date})
+			pl.add(action{kind: actUpgrade, task: task, debtor: debtor, basis: repository.ObligationBasisCommitment, contact: c, due: date, later: date > current})
 		case date != "" && date < dueOf(task):
 			pl.add(action{kind: actRedate, task: task, due: date})
 		case date != "" && date > dueOf(task) && !p.openedNow[task.ID]:

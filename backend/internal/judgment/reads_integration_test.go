@@ -20,7 +20,7 @@ import (
 // apart from the judgment behind it.
 func TestRecordedJudgmentReadsBack(t *testing.T) {
 	t.Run("two methods with the same outcome on one input stay two records", func(t *testing.T) {
-		// spec: KNW-043.record-reads-back, KNW-043.agreeing-methods-stay-two, KNW-043.answer-per-outcome-node
+		// spec: KNW-043.record-reads-back, KNW-043.agreeing-methods-stay-two
 		e := newEnv(t, production)
 		c, th := e.contact(t), e.thread(t)
 		e.message(t, th, c, false, e.day(1))

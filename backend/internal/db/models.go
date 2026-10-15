@@ -448,6 +448,7 @@ type JudgmentOutcome struct {
 	QuestionID *string    `json:"question_id"`
 	ContactID  *uuid.UUID `json:"contact_id"`
 	DueDate    *time.Time `json:"due_date"`
+	Confidence *float64   `json:"confidence"`
 }
 
 type JudgmentRun struct {

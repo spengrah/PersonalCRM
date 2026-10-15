@@ -119,9 +119,9 @@ WITH outcome_node AS (
     VALUES (uuid_generate_v4(), 'judgment_outcome', '')
     RETURNING id
 )
-INSERT INTO judgment_outcome (node_id, judgment_id, question, question_id, contact_id, due_date)
+INSERT INTO judgment_outcome (node_id, judgment_id, question, question_id, contact_id, due_date, confidence)
 SELECT outcome_node.id, sqlc.arg('judgment_id'), sqlc.arg('question'), sqlc.narg('question_id'),
-       sqlc.narg('contact_id'), sqlc.narg('due_date')
+       sqlc.narg('contact_id'), sqlc.narg('due_date'), sqlc.narg('confidence')
 FROM outcome_node
 RETURNING *;
 

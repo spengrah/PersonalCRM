@@ -745,8 +745,8 @@ behaviors:
         text: the reply and the commitment yield one obligation, a commitment, with one task
       - key: earliest-known-date
         text: several commitments of one party on one thread are one obligation dated at the earliest known date
-      - key: upgrade-keeps-earlier-date
-        text: a commitment that supersedes an open reply obligation keeps the earlier of the two due dates
+      - key: upgrade-takes-selected-date
+        text: a commitment that supersedes an open reply obligation is due on the commitment's selected date, else keeps the reply's date; a selected date later than the reply's delays the obligation, so it lands as a claim and the reply obligation stays open until the user confirms it
     provenance: [judgment.planner.plan, .agents/spec/2026-10-14-decision-model-extraction.md G3b G7a SC4]
 
   - id: CAD-056

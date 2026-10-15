@@ -18,7 +18,7 @@ import (
 // only.
 func TestReviewOutcome(t *testing.T) {
 	t.Run("confirming an addition claim opens its obligation and task", func(t *testing.T) {
-		// spec: KNW-046.review-is-user-assertion, KNW-046.verdict-derived, KNW-046.live-review-gives-right-effect
+		// spec: KNW-046.verdict-derived, KNW-046.live-review-gives-right-effect
 		e := newEnv(t, production)
 		c, th := e.contact(t), e.thread(t)
 		e.message(t, th, c, false, e.day(1))

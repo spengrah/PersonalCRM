@@ -71,6 +71,20 @@ func TestOneObligationPerThreadAndOwingParty(t *testing.T) {
 				func(cs []uuid.UUID) uuid.UUID { return cs[1] }, func(*env) time.Time { return todayDate() }},
 		},
 		{
+			name:     "i_owe_reply toward two participants whose confidences differ within one percent goes to the more confident",
+			contacts: 2,
+			outcomes: func(e *env, cs []uuid.UUID) judgment.Outcomes {
+				// Question IDs order the less confident outcome first, so only
+				// the confidence itself can pick the right contact.
+				return judgment.Outcomes{BallInCourt: []judgment.ParticipantOutcome[judgment.BallInCourt]{
+					{QuestionID: "ball_in_court:a", ContactID: cs[0], Outcome: judgment.BallInCourtIOweReply, Confidence: 0.901},
+					{QuestionID: "ball_in_court:b", ContactID: cs[1], Outcome: judgment.BallInCourtIOweReply, Confidence: 0.909},
+				}}
+			},
+			want: want{repository.ObligationDebtorUser, repository.ObligationBasisReply, contacttask.KindReachOut,
+				func(cs []uuid.UUID) uuid.UUID { return cs[1] }, func(*env) time.Time { return todayDate() }},
+		},
+		{
 			name:     "a participant owing a reply and a commitment is one obligation with one reach_out task",
 			contacts: 1,
 			outcomes: func(e *env, cs []uuid.UUID) judgment.Outcomes {
@@ -173,4 +187,64 @@ func TestObligationTaskTiming(t *testing.T) {
 			assert.Equal(t, tc.due(e), open[0].DueDate)
 		})
 	}
+}
+
+// A commitment that supersedes an open reply obligation is due on its
+// selected date. A selected date later than the reply's delays the
+// obligation, so it is a claim that keeps the reply obligation open until the
+// user confirms it.
+// spec: CAD-055.upgrade-takes-selected-date, KNW-044.removal-always-claim
+func TestCommitmentUpgradesAnOpenReplyObligation(t *testing.T) {
+	t.Run("a later selected date is a claim, and confirming it moves the obligation to that date", func(t *testing.T) {
+		e := newEnv(t, production)
+		c, th := e.contact(t), e.thread(t)
+		e.message(t, th, c, false, e.day(1))
+		e.run(t, judgment.RunKindScheduled, judgmentOf(prodMethod, th, e.day(1), "h1",
+			judgment.Outcomes{BallInCourt: []judgment.ParticipantOutcome[judgment.BallInCourt]{bic(c, judgment.BallInCourtIOweReply, 0.9)}}))
+		before := e.openObligations(t, th)
+		require.Len(t, before, 1)
+		require.Equal(t, todayDate(), before[0].DueDate)
+
+		e.message(t, th, c, false, e.day(2))
+		selected := date(e.day(120))
+		_, effects := e.run(t, judgment.RunKindScheduled, judgmentOf(prodMethod, th, e.day(2), "h2",
+			judgment.Outcomes{Commitments: []judgment.CommitmentOutcome{commitment(c, judgment.CommitmentDirectionMine, judgment.CommitmentStateOpen, 0.9, selected)}}))
+
+		assert.Equal(t, judgment.Effects{ClaimsRaised: 1}, effects)
+		assert.Equal(t, before, e.openObligations(t, th), "the reply obligation stays as it was")
+		claim := e.outcome(t, th, prodMethod, judgment.QuestionCommitmentMine, &c)
+		require.Equal(t, judgment.OutcomeStateClaim, claim.State)
+
+		_, err := e.store.ReviewOutcome(e.ctx, claim.ID, string(judgment.CommitmentStateOpen))
+		require.NoError(t, err)
+
+		open := e.openObligations(t, th)
+		require.Len(t, open, 1)
+		assert.Equal(t, repository.ObligationBasisCommitment, open[0].Basis)
+		assert.Equal(t, contacttask.KindReminder, open[0].Kind)
+		assert.Equal(t, *selected, open[0].DueDate)
+	})
+
+	t.Run("an earlier selected date applies at once on that date", func(t *testing.T) {
+		e := newEnv(t, production)
+		c, th := e.contact(t), e.thread(t)
+		e.message(t, th, c, false, e.day(1))
+		e.run(t, judgment.RunKindScheduled, judgmentOf(prodMethod, th, e.day(1), "h1",
+			judgment.Outcomes{BallInCourt: []judgment.ParticipantOutcome[judgment.BallInCourt]{bic(c, judgment.BallInCourtTheyOweReply, 0.9)}}))
+		before := e.openObligations(t, th)
+		require.Len(t, before, 1)
+		require.Equal(t, todayDate().AddDate(0, 0, 7), before[0].DueDate)
+
+		e.message(t, th, c, false, e.day(2))
+		selected := date(e.day(93))
+		_, effects := e.run(t, judgment.RunKindScheduled, judgmentOf(prodMethod, th, e.day(2), "h2",
+			judgment.Outcomes{Commitments: []judgment.CommitmentOutcome{commitment(c, judgment.CommitmentDirectionTheirs, judgment.CommitmentStateOpen, 0.9, selected)}}))
+
+		assert.Equal(t, judgment.Effects{ObligationsOpened: 1}, effects)
+		open := e.openObligations(t, th)
+		require.Len(t, open, 1)
+		assert.Equal(t, repository.ObligationBasisCommitment, open[0].Basis)
+		assert.Equal(t, *selected, open[0].DueDate)
+		assert.Equal(t, judgment.OutcomeStateApplied, e.outcome(t, th, prodMethod, judgment.QuestionCommitmentTheirs, &c).State)
+	})
 }
