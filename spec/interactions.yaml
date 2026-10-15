@@ -672,6 +672,7 @@ behaviors:
       - an interaction several contacts take part in, including a group chat's messages held once per member, is one row that names each of those contacts
       - each row renders with the contact history's row and drill-down, keeping its typed identity and the actions its kind offers
       - rows order newest first with a deterministic tie-breaker
+      - rows and their drill-downs span the view's full width
       - the view is paginated, and further pages extend it without gaps or duplicate rows
       - the main navigation leads to the view
     provenance: [.agents/spec/2026-10-14-decision-model-extraction.md G9, designs/bench.md]
@@ -715,77 +716,83 @@ behaviors:
     when: the all-interactions view lists the thread's rows
     then:
       - the judgment appears on exactly one row, the row holding the thread's latest content at or before the judgment's cut-off
-      - that row shows, collapsed, that its thread is judged, as of which cut-off, and how many of the judgment's claims await review
+      - that row shows, collapsed, that its thread is judged, as of which cut-off, a summary of the proposal's items in their states, and how many items await review
       - judgments of several methods on the same content appear together on that row, the production method's first
       - a view narrowed to a run shows only the judgments appearing in that run
     provenance: [.agents/spec/2026-10-14-decision-model-extraction.md G9 SC1, designs/bench.md]
 
   - id: IXN-045
-    title: The drill-down shows a judgment against the content as of its cut-off
+    title: A judgment's proposal sits beneath the content it read, as of its cut-off
     type: ux
     status: proposed
     surface: ui
     given: a judged row whose thread gained content after the judgment's cut-off
     when: the row is expanded
     then:
-      - the content the judgment read and the content after its cut-off are separated at the cut-off
-      - content after the cut-off is marked as later and as unread by the judgment
-      - the judgment sits at its cut-off and names its method, method version and cut-off
-      - a judgment whose outcomes are all evidence is marked as evidence only and set apart from the production method's judgment
+      - the content the judgment read, its cut-off and its proposal are shown together, the proposal directly beneath that content
+      - content after the cut-off is set apart from that content and marked as later
+      - the proposal names its method, its method version and whether that method is the production method
+      - a proposal of another method on the same content is set apart, collapsed, and marked as not acting
     provenance: [.agents/spec/2026-10-14-decision-model-extraction.md G9 SC1 HC7, designs/bench.md]
 
   - id: IXN-046
-    title: Each judged outcome states its answer, its confidence and its state
+    title: A proposal lists the judgment's answers, never its questions, each item with its state
     type: ux
     status: proposed
     surface: ui
-    given: a judgment with outcomes about several participant contacts and about the thread
-    when: the judgment is shown
+    given: a judgment of a thread with several participant contacts, as the bench read compiles it
+    when: its proposal is shown
     then:
-      - outcomes are grouped by the participant contact they concern, and thread-wide outcomes form a group of their own
-      - each outcome states its question, its answer and its confidence, and a commitment states its due date or that it has none
-      - each outcome shows its state of applied, claim or evidence, and the three states are told apart
-      - no outcome is hidden because of its confidence
-    provenance: [.agents/spec/2026-10-14-decision-model-extraction.md G4 G6 G9, designs/bench.md]
+      - the proposal lists the participant contacts the user owes a reply, the participant contacts who owe the user a reply, the open commitments in one list each naming its debtor and its creditor, and the thread's big-moment flag
+      - a reply list holds at most one contact for a one-to-one thread, and a meeting's proposal has no reply lists
+      - a commitment states its due date or that it has none, and a party's commitment stands in for that party's reply owed in the same direction
+      - the big-moment flag belongs to the thread, not to a contact, and tells a participant's own moment from another person's
+      - the questions put to the decision model are not shown
+      - each item shows its confidence and one state of live, suggested, not acting, or live with a suggested removal or later date, and the four are told apart
+      - no item is hidden because of its confidence
+    provenance: [.agents/spec/2026-10-14-decision-model-extraction.md G3 G3b G3c G6 G9 HC7 SC4, designs/bench.md]
 
   - id: IXN-047
-    title: The user reviews an outcome by confirming it or stating its right answer
+    title: The user corrects a proposal inline, each act recorded as one outcome's review
     type: ux
     status: proposed
     surface: ui
-    given: an outcome with no review, in any state
-    when: the user reviews it
+    given: a proposal with items the user has not reviewed
+    when: the user corrects it
     then:
-      - the outcome offers to confirm its answer and to state a different right answer
-      - confirming states the judged answer as the right one
-      - stating a different right answer offers only the question's other answers and cannot be submitted until one is chosen
-      - the review shows on the outcome without a reload
+      - the user confirms an item, or accepts a suggested change, by stating the judged outcome as the right one
+      - the user removes an item from a reply list or from the commitments, or removes the flag, by stating the outcome's no-effect value as the right one
+      - the user adds a participant contact to a reply list, which moves that contact out of the other reply list, adds a commitment in either direction, or adds the flag of either kind, by stating that outcome as the right one
+      - the user keeps a live item against a suggested removal by stating the live outcome as the right one
+      - an addition offers only participant contacts, and only outcomes not yet reviewed
+      - every correction happens on the proposal itself, with no modal or separate form, and the client never sends a verdict
+      - each correction shows on its item without a reload, and a failed correction leaves the item's controls in place with an error
     provenance: [.agents/spec/2026-10-14-decision-model-extraction.md G5 G8 SC7, designs/bench.md]
 
   - id: IXN-048
-    title: A reviewed outcome shows its review after a reload
+    title: Each reviewed item shows its review in place after a reload
     type: ux
     status: proposed
     surface: ui
-    given: an outcome the user reviewed
-    when: the view is reloaded and the outcome's judgment is shown again
+    given: items of a proposal the user reviewed
+    when: the view is reloaded and the proposal is shown again
     then:
-      - the outcome shows its verdict of confirmed, rejected or corrected as the store derived it
-      - a rejected or corrected outcome shows the right answer beside the judged answer
-      - the outcome shows when it was reviewed
-      - a reviewed outcome offers no review control
-      - the judged row's count of claims awaiting review leaves out the reviewed claims
+      - a confirmed or kept item shows as confirmed, in place, beside its state
+      - an item the user removed, or whose suggested removal the user accepted, stays in its list shown as removed by the user, never hidden
+      - an item the user added shows as added by the user
+      - a reviewed item offers no review control
+      - the proposal's and its row's counts of items awaiting review leave out the reviewed items
     provenance: [.agents/spec/2026-10-14-decision-model-extraction.md G5 G8 HC6, designs/bench.md]
 
   - id: IXN-049
-    title: An accepted big-moment flag shows beside the content it was judged on
+    title: An accepted big-moment flag shows on its thread, beneath the content it was judged on
     type: ux
     status: proposed
     surface: ui
     given: a thread judgment whose big-moment outcome is in effect, applied or confirmed
     when: the row holding the judgment is viewed and expanded
     then:
-      - the flag shows beside the content the judgment read, at its cut-off
+      - the flag shows in the proposal directly beneath the content the judgment read
       - the flag tells a participant's own moment from another person's moment mentioned in passing
       - the flag carries no summary of the moment
       - the row shows, collapsed, that its thread carries a big moment
