@@ -572,26 +572,30 @@ type PhoneCall struct {
 }
 
 type Predicate struct {
-	Key                 string          `json:"key"`
-	Kind                string          `json:"kind"`
-	SubjectType         string          `json:"subject_type"`
-	ObjectType          *string         `json:"object_type"`
-	ValueType           *string         `json:"value_type"`
-	Cardinality         string          `json:"cardinality"`
-	Symmetric           bool            `json:"symmetric"`
-	InversePredicate    *string         `json:"inverse_predicate"`
-	TemporalProfile     string          `json:"temporal_profile"`
-	BaseRateDays        *int32          `json:"base_rate_days"`
-	TypicalDurationDays *int32          `json:"typical_duration_days"`
-	DefaultSalience     int16           `json:"default_salience"`
-	DefaultReviewPolicy string          `json:"default_review_policy"`
-	PropositionBucket   string          `json:"proposition_bucket"`
-	Status              string          `json:"status"`
-	Description         string          `json:"description"`
-	Synonyms            []string        `json:"synonyms"`
-	Embedding           pgvector.Vector `json:"embedding"`
-	CreatedAt           time.Time       `json:"created_at"`
-	Correction          bool            `json:"correction"`
+	Key                         string          `json:"key"`
+	Kind                        string          `json:"kind"`
+	SubjectType                 string          `json:"subject_type"`
+	ObjectType                  *string         `json:"object_type"`
+	ValueType                   *string         `json:"value_type"`
+	Cardinality                 string          `json:"cardinality"`
+	Symmetric                   bool            `json:"symmetric"`
+	InversePredicate            *string         `json:"inverse_predicate"`
+	TemporalProfile             string          `json:"temporal_profile"`
+	BaseRateDays                *int32          `json:"base_rate_days"`
+	TypicalDurationDays         *int32          `json:"typical_duration_days"`
+	DefaultSalience             int16           `json:"default_salience"`
+	DefaultReviewPolicy         string          `json:"default_review_policy"`
+	PropositionBucket           string          `json:"proposition_bucket"`
+	Status                      string          `json:"status"`
+	Description                 string          `json:"description"`
+	Synonyms                    []string        `json:"synonyms"`
+	Embedding                   pgvector.Vector `json:"embedding"`
+	CreatedAt                   time.Time       `json:"created_at"`
+	Correction                  bool            `json:"correction"`
+	JudgmentConfidenceThreshold pgtype.Int2     `json:"judgment_confidence_threshold"`
+	JudgmentAdditionValues      []string        `json:"judgment_addition_values"`
+	JudgmentRemovalValues       []string        `json:"judgment_removal_values"`
+	JudgmentNoEffectValues      []string        `json:"judgment_no_effect_values"`
 }
 
 type RelationshipSignal struct {

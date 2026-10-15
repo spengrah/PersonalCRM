@@ -382,8 +382,13 @@ func (s *AssertService) AssertTx(ctx context.Context, tx pgx.Tx, req AssertReque
 	// Step 2: compute the proposition key + per-locator hashes.
 	propKey := computePropositionKey(predicate, canonKey, canonSubject, canonObject, &req)
 
-	// Determine the landing status (auto-apply vs always-confirm / force-confirm).
+	// Judgment predicates carry their complete landing policy in the catalog.
+	// In particular, no AssertRequest field can turn a claim into an accepted
+	// assertion or lower the confidence threshold.
 	landingAccepted := predicate.DefaultReviewPolicy == repository.PredicateReviewAutoIfConfident && !req.ForceConfirm
+	if predicate.JudgmentConfidenceThreshold != nil {
+		landingAccepted = judgmentLandingAccepted(predicate, &req)
+	}
 
 	// GLOBAL lock order — the correction locks, then, for a single-cardinality
 	// write that may land accepted, the slot advisory lock(s), all BEFORE any row
@@ -413,6 +418,31 @@ func (s *AssertService) AssertTx(ctx context.Context, tx pgx.Tx, req AssertReque
 
 	// No match → step 4/5: cardinality/supersession + write the new row.
 	return s.writeNew(ctx, tx, predicate, canonKey, canonSubject, canonObject, propKey, &req, landingAccepted, knowledgeFrom, now)
+}
+
+func judgmentLandingAccepted(predicate *repository.Predicate, req *AssertRequest) bool {
+	if req.ValueText == nil || predicate.JudgmentConfidenceThreshold == nil {
+		return false
+	}
+	value := strings.TrimSpace(*req.ValueText)
+	contains := func(values []string) bool {
+		for _, candidate := range values {
+			if candidate == value {
+				return true
+			}
+		}
+		return false
+	}
+	switch {
+	case contains(predicate.JudgmentRemovalValues):
+		return false
+	case contains(predicate.JudgmentNoEffectValues):
+		return true
+	case contains(predicate.JudgmentAdditionValues):
+		return req.Confidence >= *predicate.JudgmentConfidenceThreshold
+	default:
+		return false
+	}
 }
 
 // --------------------------------------------------------------------------

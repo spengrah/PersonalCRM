@@ -76,12 +76,34 @@ type contactCadenceReader interface {
 //     which also records the due date the user set directly.
 //   - ApplySkip / ApplyUndoSkip: direct-invoke CRM skip state setter and undo.
 type CadenceUpdater struct {
-	claims    eventClaimer
-	contacts  contactCadenceReader
-	queries   db.Querier
-	mode      string // config.EventBusCadenceMode*
-	unsafeOff bool   // mirrors config.EventBus.UnsafeAllowOffMode for self-reported diagnostics
-	watchdog  config.WatchdogConfig
+	claims      eventClaimer
+	contacts    contactCadenceReader
+	queries     db.Querier
+	mode        string // config.EventBusCadenceMode*
+	unsafeOff   bool   // mirrors config.EventBus.UnsafeAllowOffMode for self-reported diagnostics
+	watchdog    config.WatchdogConfig
+	obligations ObligationCloser
+}
+
+// ObligationCloser is the recording-path seam for reply obligations. The
+// judgment store owns closure and shares the interaction transaction.
+type ObligationCloser interface {
+	CloseReplyObligationsTx(ctx context.Context, tx pgx.Tx, contactID uuid.UUID, threadID uuid.UUID, fromUser bool, occurredAt time.Time) error
+}
+
+func (u *CadenceUpdater) SetObligationCloser(c ObligationCloser) {
+	u.obligations = c
+}
+
+func (u *CadenceUpdater) WatchdogConfig() config.WatchdogConfig {
+	return u.watchdog
+}
+
+func (u *CadenceUpdater) CloseRecordedReplyTx(ctx context.Context, tx pgx.Tx, contactID, threadID uuid.UUID, fromUser bool, occurredAt time.Time) error {
+	if u.obligations == nil {
+		return nil
+	}
+	return u.obligations.CloseReplyObligationsTx(ctx, tx, contactID, threadID, fromUser, occurredAt)
 }
 
 // NewCadenceUpdater constructs the consumer. `queries` must be a
