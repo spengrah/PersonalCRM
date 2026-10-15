@@ -355,14 +355,19 @@ func (s *masking) mask(text string, addressHeader bool) string {
 	}
 	// URLs, email addresses and handles are matched over the original text, so
 	// a date inside one never hides it. Phone numbers are matched with calendar
-	// dates blanked, so a date is never read as or into a phone number.
+	// dates and address spans blanked, so a date is never read as or into a
+	// phone number and no phone match reaches into an address.
 	for _, match := range addressPattern.FindAllStringIndex(text, -1) {
 		add(match)
 	}
-	for _, match := range phonePattern.FindAllStringIndex(withoutDates(text), -1) {
-		if !slices.ContainsFunc(spans, func(sp span) bool { return sp.start < match[1] && match[0] < sp.end }) {
-			add(match)
+	blanked := []byte(withoutDates(text))
+	for _, sp := range spans {
+		for i := sp.start; i < sp.end; i++ {
+			blanked[i] = 0
 		}
+	}
+	for _, match := range phonePattern.FindAllStringIndex(string(blanked), -1) {
+		add(match)
 	}
 	slices.SortFunc(spans, func(a, b span) int { return a.start - b.start })
 	for _, words := range runsBetween(text, spans) {
