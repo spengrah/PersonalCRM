@@ -1,0 +1,396 @@
+package threadctx
+
+import (
+	"context"
+	"fmt"
+	"maps"
+	"regexp"
+	"slices"
+	"strconv"
+	"strings"
+	"time"
+	"unicode"
+	"unicode/utf8"
+
+	"personal-crm/backend/internal/repository"
+)
+
+// Masker masks a thread context and its questions before they leave the Pi.
+//
+// It replaces, everywhere in the request (entry texts, every header, question
+// instructions, option labels and descriptions):
+//
+//   - formatted identifiers (email addresses, URLs, @handles, phone numbers of
+//     seven or more digits);
+//   - the CRM's contact names and the names and handles the sources give each
+//     participant, matched as whole words regardless of case: each full name and
+//     each of its words;
+//   - names the dictionary does not cover: a capitalized word that does not
+//     begin a sentence or line, and every remaining word of an address header
+//     (from, to, cc, bcc, reply-to, sender).
+//
+// A participant's names and handles become its role label (ME, THEM,
+// PERSON_n); anything else becomes a numbered placeholder (NAME_n, EMAIL_n,
+// PHONE_n, URL_n, HANDLE_n), one per distinct value within the request.
+// Weekday, month and relative-time words never match a name, and calendar
+// dates are not phone numbers, so they survive. A name outside the dictionary
+// that begins a sentence survives.
+//
+// Question IDs and option keys are identifiers and pass through unchanged.
+type Masker struct {
+	names []repository.ContactName
+}
+
+// NewMasker builds a Masker over the given contact names.
+func NewMasker(names []repository.ContactName) *Masker {
+	return &Masker{names: names}
+}
+
+// LoadMasker builds a Masker over every name the CRM holds for its live
+// contacts.
+func LoadMasker(ctx context.Context, content *repository.ThreadContentRepository) (*Masker, error) {
+	names, err := content.ListContactNamesForMasking(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list contact names for masking: %w", err)
+	}
+	return NewMasker(names), nil
+}
+
+// MaskedRequest is a thread context and its questions with every identifier
+// replaced by a placeholder. Only Mask constructs one, and it carries no
+// placeholder map.
+type MaskedRequest struct {
+	kind      ContextKind
+	cutOff    time.Time
+	entries   []Entry
+	questions []Question
+}
+
+// Kind returns the context kind.
+func (r MaskedRequest) Kind() ContextKind { return r.kind }
+
+// CutOff returns the cut-off the context was built at.
+func (r MaskedRequest) CutOff() time.Time { return r.cutOff }
+
+// Entries returns a copy of the masked entries.
+func (r MaskedRequest) Entries() []Entry {
+	out := slices.Clone(r.entries)
+	for i := range out {
+		out[i].Headers = maps.Clone(out[i].Headers)
+	}
+	return out
+}
+
+// Questions returns a copy of the masked questions.
+func (r MaskedRequest) Questions() []Question {
+	out := slices.Clone(r.questions)
+	for i := range out {
+		out[i].Options = slices.Clone(out[i].Options)
+	}
+	return out
+}
+
+// Mask returns the whole request masked. The placeholder map lives only for
+// this call.
+func (m *Masker) Mask(ctx context.Context, c Context, questions []Question) (MaskedRequest, error) {
+	if err := ctx.Err(); err != nil {
+		return MaskedRequest{}, err
+	}
+	s := newMasking(m.names, c.Participants)
+	out := MaskedRequest{kind: c.Kind, cutOff: c.CutOff, entries: make([]Entry, len(c.Entries)), questions: make([]Question, len(questions))}
+	for i, entry := range c.Entries {
+		masked := Entry{Role: entry.Role, SentAt: entry.SentAt, Text: s.mask(entry.Text, false)}
+		if entry.Headers != nil {
+			masked.Headers = make(map[string]string, len(entry.Headers))
+			for _, name := range slices.Sorted(maps.Keys(entry.Headers)) {
+				masked.Headers[name] = s.mask(entry.Headers[name], addressHeaders[strings.ToLower(name)])
+			}
+		}
+		out.entries[i] = masked
+	}
+	for i, q := range questions {
+		masked := Question{ID: q.ID, Kind: q.Kind, Instructions: s.mask(q.Instructions, false), Options: make([]Option, len(q.Options))}
+		for j, option := range q.Options {
+			masked.Options[j] = Option{Key: option.Key, Label: s.mask(option.Label, false), Description: s.mask(option.Description, false)}
+		}
+		out.questions[i] = masked
+	}
+	return out, nil
+}
+
+// addressHeaders hold only names and addresses, so every word in them is masked.
+var addressHeaders = map[string]bool{"from": true, "to": true, "cc": true, "bcc": true, "reply-to": true, "sender": true}
+
+// identifierPattern matches formatted identifiers, one category per group:
+// URL, email address, @handle, phone number.
+var identifierPattern = regexp.MustCompile(`(?i)(https?://\S+|www\.\S+)|([a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,})|(@[a-z0-9_]{2,})|(\+?\(?\d[\d\s().\-]{5,}\d)`)
+
+var identifierCategories = []string{"URL", "EMAIL", "HANDLE", "PHONE"}
+
+// calendarDate matches a numeric date such as 2026-10-17 or 17.10.2026, which
+// the phone pattern would otherwise take.
+var calendarDate = regexp.MustCompile(`^\d{1,4}[./-]\d{1,2}[./-]\d{1,4}$`)
+
+// protectedWords never match a name: weekdays, months and relative-time words.
+var protectedWords = map[string]bool{}
+
+func init() {
+	for _, word := range strings.Fields(`
+		monday tuesday wednesday thursday friday saturday sunday
+		mon tue tues wed thu thur thurs fri sat sun
+		january february march april may june july august september october november december
+		jan feb mar apr jun jul aug sep sept oct nov dec
+		today tomorrow tonight yesterday morning afternoon evening night noon midnight
+		week weekend weekday month year next last this soon later now ago earlier`) {
+		protectedWords[word] = true
+	}
+}
+
+// identifier returns the category and normalized value of a formatted
+// identifier, and false when the text is not one.
+func identifier(text string) (category, value string, ok bool) {
+	groups := identifierPattern.FindStringSubmatchIndex(text)
+	if groups == nil || groups[0] != 0 || groups[1] != len(text) {
+		return "", "", false
+	}
+	for i, category := range identifierCategories {
+		if groups[2*(i+1)] >= 0 {
+			return normalizeIdentifier(category, text)
+		}
+	}
+	return "", "", false
+}
+
+func normalizeIdentifier(category, text string) (string, string, bool) {
+	if category != "PHONE" {
+		return category, strings.ToLower(text), true
+	}
+	if calendarDate.MatchString(text) {
+		return "", "", false
+	}
+	digits := strings.Map(func(r rune) rune {
+		if unicode.IsDigit(r) {
+			return r
+		}
+		return -1
+	}, text)
+	if len(digits) < 7 {
+		return "", "", false
+	}
+	// A country code does not make a different number.
+	if len(digits) > 10 {
+		digits = digits[len(digits)-10:]
+	}
+	return category, digits, true
+}
+
+// token is one word of a text: a run of letters, digits or marks.
+type token struct {
+	start, end int
+	lower      string
+	word       string
+}
+
+func tokenize(text string) []token {
+	var out []token
+	start := -1
+	for i, r := range text {
+		inWord := unicode.IsLetter(r) || unicode.IsDigit(r) || unicode.IsMark(r)
+		if inWord && start < 0 {
+			start = i
+		}
+		if !inWord && start >= 0 {
+			out = append(out, token{start: start, end: i, word: text[start:i], lower: strings.ToLower(text[start:i])})
+			start = -1
+		}
+	}
+	if start >= 0 {
+		out = append(out, token{start: start, end: len(text), word: text[start:], lower: strings.ToLower(text[start:])})
+	}
+	return out
+}
+
+// masking holds one request's dictionary and placeholder map.
+type masking struct {
+	// participantTerms and contactTerms map a lowercased word sequence to the
+	// identity it names; a participant's own names win over a contact's.
+	participantTerms, contactTerms map[string]string
+	longestTerm                    int
+	// identifiers maps a normalized identifier a participant owns to its identity.
+	identifiers  map[string]string
+	placeholders map[string]string
+	counts       map[string]int
+}
+
+func newMasking(names []repository.ContactName, participants map[Role]Participant) *masking {
+	s := &masking{participantTerms: map[string]string{}, contactTerms: map[string]string{}, identifiers: map[string]string{}, placeholders: map[string]string{}, counts: map[string]int{}}
+	roleOfContact := map[string]Role{}
+	for _, role := range slices.Sorted(maps.Keys(participants)) {
+		p := participants[role]
+		identity := "role:" + string(role)
+		s.placeholders[identity] = string(role)
+		if p.ContactID != nil {
+			roleOfContact[p.ContactID.String()] = role
+		}
+		for _, alias := range p.Aliases {
+			alias = strings.TrimSpace(alias)
+			if category, value, ok := identifier(alias); ok {
+				s.identifiers[category+":"+value] = identity
+				continue
+			}
+			s.addName(s.participantTerms, alias, identity)
+		}
+	}
+	for _, n := range names {
+		identity := "contact:" + n.ContactID.String()
+		if role, ok := roleOfContact[n.ContactID.String()]; ok {
+			identity = "role:" + string(role)
+		}
+		s.addName(s.contactTerms, n.Name, identity)
+	}
+	return s
+}
+
+// addName adds a name's full word sequence and each of its words as terms. A
+// term two identities share names neither, so it gets an identity of its own.
+func (s *masking) addName(terms map[string]string, name, identity string) {
+	tokens := tokenize(name)
+	if len(tokens) == 0 {
+		return
+	}
+	add := func(term string) {
+		if existing, ok := terms[term]; ok && existing != identity {
+			identity = "term:" + term
+		}
+		terms[term] = identity
+	}
+	words := make([]string, len(tokens))
+	for i, t := range tokens {
+		words[i] = t.lower
+		if utf8.RuneCountInString(t.lower) >= 2 && !protectedWords[t.lower] && !isDigits(t.lower) {
+			add(t.lower)
+		}
+	}
+	add(strings.Join(words, " "))
+	s.longestTerm = max(s.longestTerm, len(tokens))
+}
+
+func isDigits(s string) bool {
+	return strings.IndexFunc(s, func(r rune) bool { return !unicode.IsDigit(r) }) < 0
+}
+
+// placeholder returns the label of an identity, numbering a new one within its
+// category.
+func (s *masking) placeholder(identity, category string) string {
+	if label, ok := s.placeholders[identity]; ok {
+		return label
+	}
+	s.counts[category]++
+	label := category + "_" + strconv.Itoa(s.counts[category])
+	s.placeholders[identity] = label
+	return label
+}
+
+type span struct {
+	start, end int
+	label      string
+}
+
+// mask replaces every identifier and name in text. In an address header every
+// word outside an identifier is a name.
+func (s *masking) mask(text string, addressHeader bool) string {
+	var spans []span
+	for _, match := range identifierPattern.FindAllStringIndex(text, -1) {
+		category, value, ok := identifier(text[match[0]:match[1]])
+		if !ok {
+			continue
+		}
+		identity, owned := s.identifiers[category+":"+value]
+		if !owned {
+			identity = category + ":" + value
+		}
+		spans = append(spans, span{match[0], match[1], s.placeholder(identity, category)})
+	}
+	inIdentifier := func(t token) bool {
+		return slices.ContainsFunc(spans, func(sp span) bool { return t.start < sp.end && sp.start < t.end })
+	}
+	var words []token
+	for _, t := range tokenize(text) {
+		if !inIdentifier(t) {
+			words = append(words, t)
+		}
+	}
+	for i := 0; i < len(words); {
+		if n, identity := s.lookup(text, words[i:]); n > 0 {
+			spans = append(spans, span{words[i].start, words[i+n-1].end, s.placeholder(identity, "NAME")})
+			i += n
+			continue
+		}
+		t := words[i]
+		if !protectedWords[t.lower] && !isDigits(t.lower) && (addressHeader || (capitalized(t.word) && !beginsSentence(text, t.start))) {
+			spans = append(spans, span{t.start, t.end, s.placeholder("word:"+t.lower, "NAME")})
+		}
+		i++
+	}
+	slices.SortFunc(spans, func(a, b span) int { return a.start - b.start })
+	var out strings.Builder
+	last := 0
+	for _, sp := range spans {
+		out.WriteString(text[last:sp.start])
+		out.WriteString(sp.label)
+		last = sp.end
+	}
+	out.WriteString(text[last:])
+	return out.String()
+}
+
+// lookup returns how many words, from the first, form the longest dictionary
+// term, and the identity it names; zero when none does. A term's words lie on
+// one line.
+func (s *masking) lookup(text string, words []token) (int, string) {
+	for n := min(s.longestTerm, len(words)); n >= 1; n-- {
+		if n > 1 && strings.Contains(text[words[0].start:words[n-1].end], "\n") {
+			continue
+		}
+		if n == 1 && protectedWords[words[0].lower] {
+			continue
+		}
+		parts := make([]string, n)
+		for i, w := range words[:n] {
+			parts[i] = w.lower
+		}
+		term := strings.Join(parts, " ")
+		if identity, ok := s.participantTerms[term]; ok {
+			return n, identity
+		}
+		if identity, ok := s.contactTerms[term]; ok {
+			return n, identity
+		}
+	}
+	return 0, ""
+}
+
+// capitalized reports a word of two or more letters whose first letter alone is
+// upper case.
+func capitalized(word string) bool {
+	first, size := utf8.DecodeRuneInString(word)
+	rest := word[size:]
+	return unicode.IsUpper(first) && rest != "" && strings.IndexFunc(rest, func(r rune) bool { return !unicode.IsLower(r) }) < 0
+}
+
+// beginsSentence reports whether the word at start opens the text, a line or a
+// sentence.
+func beginsSentence(text string, start int) bool {
+	for i := start; i > 0; {
+		r, size := utf8.DecodeLastRuneInString(text[:i])
+		switch {
+		case r == '\n' || r == '.' || r == '!' || r == '?':
+			return true
+		case unicode.IsSpace(r) || strings.ContainsRune(`"'“‘([-`, r):
+			i -= size
+		default:
+			return false
+		}
+	}
+	return true
+}

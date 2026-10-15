@@ -730,6 +730,19 @@ type TelegramUpdateState struct {
 	UpdatedAt *time.Time `json:"updated_at"`
 }
 
+type ThreadContent struct {
+	VenueID       uuid.UUID  `json:"venue_id"`
+	VenueKind     string     `json:"venue_kind"`
+	MessageKey    string     `json:"message_key"`
+	SentAt        time.Time  `json:"sent_at"`
+	FromUser      bool       `json:"from_user"`
+	SenderKey     string     `json:"sender_key"`
+	PeerContactID *uuid.UUID `json:"peer_contact_id"`
+	SenderAliases []string   `json:"sender_aliases"`
+	Body          string     `json:"body"`
+	Headers       []byte     `json:"headers"`
+}
+
 type Venue struct {
 	NodeID            uuid.UUID `json:"node_id"`
 	Kind              string    `json:"kind"`

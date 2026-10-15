@@ -935,6 +935,8 @@ type Querier interface {
 	// live CHECK set equals the repository.InteractionSource* constants.
 	// Read-only catalog access; production code never calls this.
 	GetInteractionSourceCheckDef(ctx context.Context) (string, error)
+	// The time of the thread's latest content at or before as_of; no row when none.
+	GetLatestThreadContentAt(ctx context.Context, arg GetLatestThreadContentAtParams) (time.Time, error)
 	// Legacy lookup for action-kind rows (no new creator path; preserved for
 	// pre-migration rows). Multiple action rows are possible per
 	// contact/provider; this returns the most recent.
@@ -1363,6 +1365,9 @@ type Querier interface {
 	// excluded so a deleted contact's messages fall back to the handle rather than
 	// resurrecting a name the rest of the app no longer shows.
 	ListContactNamesByIDs(ctx context.Context, ids []uuid.UUID) ([]*ListContactNamesByIDsRow, error)
+	// Every name the CRM holds for each live contact: its own full name and the
+	// names its linked address-book records carry.
+	ListContactNamesForMasking(ctx context.Context) ([]*ListContactNamesForMaskingRow, error)
 	ListContactNotes(ctx context.Context, arg ListContactNotesParams) ([]*Note, error)
 	// ListContactTagsWithLiveContact returns every contact_tag whose contact is NOT
 	// soft-deleted (the `crm-admin --migrate-tags` source set). Deleted contacts are
@@ -1605,6 +1610,14 @@ type Querier interface {
 	ListTelegramMessagesByChatUnprocessed(ctx context.Context, telegramChatID int64) ([]*TelegramMessage, error)
 	ListTelegramMessagesByChatWindow(ctx context.Context, arg ListTelegramMessagesByChatWindowParams) ([]*TelegramMessage, error)
 	ListTelegramMessagesByInteractionIDs(ctx context.Context, interactionIds []uuid.UUID) ([]*TelegramMessage, error)
+	// Thread content reads for the thread-context builder (internal/threadctx).
+	// Every content read goes through the thread_content view (migration 091), so
+	// a thread's context, its latest content time and the eligibility window agree.
+	// Every stored copy of every message of one thread at or before the cut-off.
+	// Copies of one message share message_key; the builder keeps each message once.
+	ListThreadContent(ctx context.Context, arg ListThreadContentParams) ([]*ThreadContent, error)
+	// The threads with content after @after, up to and including @up_to.
+	ListThreadsWithContentIn(ctx context.Context, arg ListThreadsWithContentInParams) ([]uuid.UUID, error)
 	// Discovery counts over unmatched rows for one source, grouped by peer.
 	// One query serves both the batch sweep and the single-peer live check
 	// (@peer_handle NULL = all peers) — a separate single-peer twin would trip
@@ -1680,6 +1693,9 @@ type Querier interface {
 	ListUpcomingEventsForContact(ctx context.Context, arg ListUpcomingEventsForContactParams) ([]*CalendarEvent, error)
 	// List upcoming events that have matched CRM contacts
 	ListUpcomingEventsWithContacts(ctx context.Context, arg ListUpcomingEventsWithContactsParams) ([]*CalendarEvent, error)
+	// The live contacts with a live interaction in a venue at or before as_of: a
+	// meeting's participants, which meeting notes do not name as contacts.
+	ListVenueContactsAsOf(ctx context.Context, arg ListVenueContactsAsOfParams) ([]uuid.UUID, error)
 	// The settings surface's chat list. Only groups are ever written here (the gate
 	// returns before touching the repository for a private chat), so this is the
 	// discovered-group list without needing a chat_type filter. Ordered by title
