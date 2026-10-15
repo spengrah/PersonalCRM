@@ -8,6 +8,7 @@ import (
 	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/google"
 	"personal-crm/backend/internal/health"
+	"personal-crm/backend/internal/judgment"
 	"personal-crm/backend/internal/logger"
 	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/scheduler"
@@ -43,6 +44,7 @@ type routeDeps struct {
 	InteractionHandler       *handlers.InteractionHandler
 	CorrectionHandler        *handlers.InteractionCorrectionHandler
 	TimelineAssertionHandler *handlers.TimelineAssertionHandler
+	Judgments                *judgment.Store
 	NoteHandler              *handlers.NoteHandler
 	ContactMethodHandler     *handlers.ContactMethodHandler
 	RematchHandler           *handlers.RematchHandler
@@ -155,6 +157,10 @@ func registerRoutes(deps routeDeps) {
 			Note:              deps.NoteHandler,
 			ContactMethod:     deps.ContactMethodHandler,
 		})
+
+		// Judgment routes (unconditional): the bench's read and review of
+		// decision-model judgments.
+		handlers.RegisterJudgmentRoutes(v1, handlers.NewJudgmentHandler(deps.Judgments))
 
 		// Meeting-note conflict-resolution — user-driven, called from
 		// the frontend with the global API key. Stays under the v1

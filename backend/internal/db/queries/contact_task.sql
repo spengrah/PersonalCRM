@@ -361,3 +361,39 @@ SELECT COUNT(*) FROM river_job
 WHERE kind = 'todoist_task_op'
   AND (args->>'contact_task_id') = sqlc.arg('contact_task_id')::text
   AND (args->>'op') = sqlc.arg('op')::text;
+
+-- name: CreateObligationTask :one
+-- Inserts an obligation's one task (lifecycle 'obligation'); the partial unique
+-- index idx_contact_task_obligation_open refuses a second open obligation for
+-- the same thread and owing party.
+INSERT INTO contact_task (
+    contact_id, provider, kind, lifecycle, external_task_id, state, metadata,
+    obligation_thread_id, obligation_debtor, obligation_basis, obligation_cut_off
+) VALUES (
+    sqlc.arg('contact_id'), sqlc.arg('provider'), sqlc.arg('kind'), 'obligation', '',
+    sqlc.arg('state'), sqlc.arg('metadata')::jsonb,
+    sqlc.arg('obligation_thread_id'), sqlc.arg('obligation_debtor'),
+    sqlc.arg('obligation_basis'), sqlc.arg('obligation_cut_off')
+) RETURNING *;
+
+-- name: ListObligationTasksByThread :many
+-- Every obligation task on a thread, open or closed, oldest first.
+SELECT * FROM contact_task
+WHERE lifecycle = 'obligation'
+  AND obligation_thread_id = sqlc.arg('thread_id')
+ORDER BY created_at, id;
+
+-- name: ListOpenReplyObligationsForContact :many
+-- The open reply obligations on the threads a contact takes part in: the
+-- contact's own interactions name the thread, or the contact holds the task.
+SELECT * FROM contact_task ct
+WHERE ct.lifecycle = 'obligation'
+  AND ct.obligation_basis = 'reply'
+  AND ct.state IN ('managed', 'pending_remote_create')
+  AND (ct.contact_id = sqlc.arg('contact_id')
+       OR ct.obligation_thread_id IN (
+           SELECT i.venue_id FROM interaction i
+           WHERE i.contact_id = sqlc.arg('contact_id')
+             AND i.venue_id IS NOT NULL
+             AND i.deleted_at IS NULL))
+ORDER BY ct.created_at, ct.id;

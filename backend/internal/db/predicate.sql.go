@@ -25,8 +25,8 @@ RETURNING
     key, kind, subject_type, object_type, value_type, cardinality, "symmetric",
     inverse_predicate, temporal_profile, base_rate_days, typical_duration_days,
     default_salience, default_review_policy, proposition_bucket, status,
-    description, synonyms, correction, judgment_confidence_threshold,
-    judgment_addition_values, judgment_removal_values, judgment_no_effect_values, created_at
+    description, synonyms, correction, judgment, judgment_confidence_threshold,
+    created_at
 `
 
 type CreatePredicateParams struct {
@@ -68,10 +68,8 @@ type CreatePredicateRow struct {
 	Description                 string      `json:"description"`
 	Synonyms                    []string    `json:"synonyms"`
 	Correction                  bool        `json:"correction"`
+	Judgment                    bool        `json:"judgment"`
 	JudgmentConfidenceThreshold pgtype.Int2 `json:"judgment_confidence_threshold"`
-	JudgmentAdditionValues      []string    `json:"judgment_addition_values"`
-	JudgmentRemovalValues       []string    `json:"judgment_removal_values"`
-	JudgmentNoEffectValues      []string    `json:"judgment_no_effect_values"`
 	CreatedAt                   time.Time   `json:"created_at"`
 }
 
@@ -119,10 +117,8 @@ func (q *Queries) CreatePredicate(ctx context.Context, arg CreatePredicateParams
 		&i.Description,
 		&i.Synonyms,
 		&i.Correction,
+		&i.Judgment,
 		&i.JudgmentConfidenceThreshold,
-		&i.JudgmentAdditionValues,
-		&i.JudgmentRemovalValues,
-		&i.JudgmentNoEffectValues,
 		&i.CreatedAt,
 	)
 	return &i, err
@@ -134,8 +130,8 @@ SELECT
     key, kind, subject_type, object_type, value_type, cardinality, "symmetric",
     inverse_predicate, temporal_profile, base_rate_days, typical_duration_days,
     default_salience, default_review_policy, proposition_bucket, status,
-    description, synonyms, correction, judgment_confidence_threshold,
-    judgment_addition_values, judgment_removal_values, judgment_no_effect_values, created_at
+    description, synonyms, correction, judgment, judgment_confidence_threshold,
+    created_at
 FROM predicate WHERE key = $1
 `
 
@@ -158,10 +154,8 @@ type GetPredicateRow struct {
 	Description                 string      `json:"description"`
 	Synonyms                    []string    `json:"synonyms"`
 	Correction                  bool        `json:"correction"`
+	Judgment                    bool        `json:"judgment"`
 	JudgmentConfidenceThreshold pgtype.Int2 `json:"judgment_confidence_threshold"`
-	JudgmentAdditionValues      []string    `json:"judgment_addition_values"`
-	JudgmentRemovalValues       []string    `json:"judgment_removal_values"`
-	JudgmentNoEffectValues      []string    `json:"judgment_no_effect_values"`
 	CreatedAt                   time.Time   `json:"created_at"`
 }
 
@@ -193,10 +187,8 @@ func (q *Queries) GetPredicate(ctx context.Context, key string) (*GetPredicateRo
 		&i.Description,
 		&i.Synonyms,
 		&i.Correction,
+		&i.Judgment,
 		&i.JudgmentConfidenceThreshold,
-		&i.JudgmentAdditionValues,
-		&i.JudgmentRemovalValues,
-		&i.JudgmentNoEffectValues,
 		&i.CreatedAt,
 	)
 	return &i, err
@@ -207,8 +199,8 @@ SELECT
     key, kind, subject_type, object_type, value_type, cardinality, "symmetric",
     inverse_predicate, temporal_profile, base_rate_days, typical_duration_days,
     default_salience, default_review_policy, proposition_bucket, status,
-    description, synonyms, correction, judgment_confidence_threshold,
-    judgment_addition_values, judgment_removal_values, judgment_no_effect_values, created_at
+    description, synonyms, correction, judgment, judgment_confidence_threshold,
+    created_at
 FROM predicate WHERE correction ORDER BY key
 `
 
@@ -231,10 +223,8 @@ type ListCorrectionPredicatesRow struct {
 	Description                 string      `json:"description"`
 	Synonyms                    []string    `json:"synonyms"`
 	Correction                  bool        `json:"correction"`
+	Judgment                    bool        `json:"judgment"`
 	JudgmentConfidenceThreshold pgtype.Int2 `json:"judgment_confidence_threshold"`
-	JudgmentAdditionValues      []string    `json:"judgment_addition_values"`
-	JudgmentRemovalValues       []string    `json:"judgment_removal_values"`
-	JudgmentNoEffectValues      []string    `json:"judgment_no_effect_values"`
 	CreatedAt                   time.Time   `json:"created_at"`
 }
 
@@ -268,10 +258,8 @@ func (q *Queries) ListCorrectionPredicates(ctx context.Context) ([]*ListCorrecti
 			&i.Description,
 			&i.Synonyms,
 			&i.Correction,
+			&i.Judgment,
 			&i.JudgmentConfidenceThreshold,
-			&i.JudgmentAdditionValues,
-			&i.JudgmentRemovalValues,
-			&i.JudgmentNoEffectValues,
 			&i.CreatedAt,
 		); err != nil {
 			return nil, err
@@ -289,8 +277,8 @@ SELECT
     key, kind, subject_type, object_type, value_type, cardinality, "symmetric",
     inverse_predicate, temporal_profile, base_rate_days, typical_duration_days,
     default_salience, default_review_policy, proposition_bucket, status,
-    description, synonyms, correction, judgment_confidence_threshold,
-    judgment_addition_values, judgment_removal_values, judgment_no_effect_values, created_at
+    description, synonyms, correction, judgment, judgment_confidence_threshold,
+    created_at
 FROM predicate WHERE status = 'curated' ORDER BY key
 `
 
@@ -313,10 +301,8 @@ type ListCuratedPredicatesRow struct {
 	Description                 string      `json:"description"`
 	Synonyms                    []string    `json:"synonyms"`
 	Correction                  bool        `json:"correction"`
+	Judgment                    bool        `json:"judgment"`
 	JudgmentConfidenceThreshold pgtype.Int2 `json:"judgment_confidence_threshold"`
-	JudgmentAdditionValues      []string    `json:"judgment_addition_values"`
-	JudgmentRemovalValues       []string    `json:"judgment_removal_values"`
-	JudgmentNoEffectValues      []string    `json:"judgment_no_effect_values"`
 	CreatedAt                   time.Time   `json:"created_at"`
 }
 
@@ -348,10 +334,8 @@ func (q *Queries) ListCuratedPredicates(ctx context.Context) ([]*ListCuratedPred
 			&i.Description,
 			&i.Synonyms,
 			&i.Correction,
+			&i.Judgment,
 			&i.JudgmentConfidenceThreshold,
-			&i.JudgmentAdditionValues,
-			&i.JudgmentRemovalValues,
-			&i.JudgmentNoEffectValues,
 			&i.CreatedAt,
 		); err != nil {
 			return nil, err
@@ -369,8 +353,8 @@ SELECT
     key, kind, subject_type, object_type, value_type, cardinality, "symmetric",
     inverse_predicate, temporal_profile, base_rate_days, typical_duration_days,
     default_salience, default_review_policy, proposition_bucket, status,
-    description, synonyms, correction, judgment_confidence_threshold,
-    judgment_addition_values, judgment_removal_values, judgment_no_effect_values, created_at
+    description, synonyms, correction, judgment, judgment_confidence_threshold,
+    created_at
 FROM predicate WHERE status = $1 ORDER BY key
 `
 
@@ -393,10 +377,8 @@ type ListPredicatesByStatusRow struct {
 	Description                 string      `json:"description"`
 	Synonyms                    []string    `json:"synonyms"`
 	Correction                  bool        `json:"correction"`
+	Judgment                    bool        `json:"judgment"`
 	JudgmentConfidenceThreshold pgtype.Int2 `json:"judgment_confidence_threshold"`
-	JudgmentAdditionValues      []string    `json:"judgment_addition_values"`
-	JudgmentRemovalValues       []string    `json:"judgment_removal_values"`
-	JudgmentNoEffectValues      []string    `json:"judgment_no_effect_values"`
 	CreatedAt                   time.Time   `json:"created_at"`
 }
 
@@ -428,10 +410,8 @@ func (q *Queries) ListPredicatesByStatus(ctx context.Context, status string) ([]
 			&i.Description,
 			&i.Synonyms,
 			&i.Correction,
+			&i.Judgment,
 			&i.JudgmentConfidenceThreshold,
-			&i.JudgmentAdditionValues,
-			&i.JudgmentRemovalValues,
-			&i.JudgmentNoEffectValues,
 			&i.CreatedAt,
 		); err != nil {
 			return nil, err

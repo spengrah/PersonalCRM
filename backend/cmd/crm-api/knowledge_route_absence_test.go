@@ -3,8 +3,9 @@
 // Assertion-store route ABSENCE pin against the PRODUCTION route tree.
 //
 // KNW-038 is an invariant over the ENTIRE application route set: no HTTP
-// endpoint other than the timeline item assertions read exposes assertions,
-// graph nodes, edges, predicates, or provenance.
+// endpoint other than the timeline item assertions read and the bench's
+// judgment routes exposes assertions, graph nodes, edges, predicates, or
+// provenance.
 // A handler-level test cannot prove an absence claim — only enumerating the
 // real router built by the real registerRoutes can. This file reuses the
 // oauth_routes_boundary_test.go wire-chain harness (buildRouterForOAuthWiring)
@@ -14,6 +15,7 @@ package main
 
 import (
 	"personal-crm/backend/tests/testsupport"
+	"slices"
 	"strings"
 	"testing"
 
@@ -38,10 +40,12 @@ import (
 //     route would itself be a second read of the assertion store.
 //   - "predicate":  predicates (internal/repository/predicate.go).
 //   - "provenance": assertion provenance, named directly by the spec text.
+//   - "judgment":   decision-model judgments, claims and reviews, which are
+//     assertions; only the bench's judgment routes may expose them.
 //
 // False-positive audit (why substring matching is safe here): the current
 // production route set was inspected route-by-route and NO legitimate path
-// other than assertionStoreRead contains any of these stems. The known-route
+// other than the allowed reads contains any of these stems. The known-route
 // sanity assertions below keep the scan honest — an empty or gutted route table
 // cannot silently pass, and assertionStoreRead must itself be registered.
 var assertionStoreStems = []string{
@@ -51,26 +55,39 @@ var assertionStoreStems = []string{
 	"edge",
 	"predicate",
 	"provenance",
+	"judgment",
 }
 
-// assertionStoreRead is the one route allowed to expose the assertion store:
-// the read-only assertions beside a timeline item's displayed content.
+// assertionStoreRead is the timeline route allowed to expose the assertion
+// store: the read-only assertions beside a timeline item's displayed content.
 const assertionStoreRead = "GET /api/v1/timeline-items/:kind/:id/assertions"
 
+// judgmentRoutes are the bench's routes over judgments: the runs and
+// judgments reads and the review of one outcome.
+var judgmentRoutes = []string{
+	"GET /api/v1/judgment-runs",
+	"GET /api/v1/judgments",
+	"POST /api/v1/judgment-outcomes/:id/review",
+}
+
+// allowedAssertionStoreRoutes are the only routes that may expose the
+// assertion store.
+var allowedAssertionStoreRoutes = append([]string{assertionStoreRead}, judgmentRoutes...)
+
 // requireNoAssertionStoreRoutes scans every registered route path other than
-// assertionStoreRead for the forbidden stems and fails naming the offending
+// the allowed ones for the forbidden stems and fails naming the offending
 // route.
 func requireNoAssertionStoreRoutes(t *testing.T, routes gin.RoutesInfo) {
 	t.Helper()
 	for _, route := range routes {
-		if route.Method+" "+route.Path == assertionStoreRead {
+		if slices.Contains(allowedAssertionStoreRoutes, route.Method+" "+route.Path) {
 			continue
 		}
 		lower := strings.ToLower(route.Path)
 		for _, stem := range assertionStoreStems {
 			assert.NotContains(t, lower, stem,
-				"route %s %s exposes an assertion-store surface (forbidden stem %q) — the only HTTP read of the assertion store is %s",
-				route.Method, route.Path, stem, assertionStoreRead)
+				"route %s %s exposes an assertion-store surface (forbidden stem %q) — only %v may",
+				route.Method, route.Path, stem, allowedAssertionStoreRoutes)
 		}
 	}
 }
@@ -105,8 +122,9 @@ func requireRouteAbsent(t *testing.T, routes gin.RoutesInfo, wantAbsent string) 
 }
 
 // TestKnowledgeRouteAbsence_AssertionStoreInvisible enumerates the FULL
-// production router per config shape and asserts no route path but
-// assertionStoreRead touches the assertion store. The enabled shape is the maximal route surface (external
+// production router per config shape and asserts it serves the judgment
+// routes and that no route path but the allowed ones touches the assertion
+// store. The enabled shape is the maximal route surface (external
 // sync on, both providers configured — the largest tree run() can serve); the
 // disabled shape pins the invariant on the minimal tree too.
 func TestKnowledgeRouteAbsence_AssertionStoreInvisible(t *testing.T) {
@@ -121,14 +139,13 @@ func TestKnowledgeRouteAbsence_AssertionStoreInvisible(t *testing.T) {
 		router := buildRouterForOAuthWiring(t, cfg)
 
 		routes := router.Routes()
-		requireKnownRoutes(t, routes, []string{
+		requireKnownRoutes(t, routes, append([]string{
 			"GET /health",
 			"GET /api/v1/contacts",
 			// Sync-only route: proves this shape really is the maximal
 			// (external-sync-enabled) surface, not the disabled tree.
 			"GET /api/v1/auth/google/callback",
-			assertionStoreRead,
-		})
+		}, allowedAssertionStoreRoutes...))
 		requireNoAssertionStoreRoutes(t, routes)
 	})
 
@@ -140,11 +157,10 @@ func TestKnowledgeRouteAbsence_AssertionStoreInvisible(t *testing.T) {
 		router := buildRouterForOAuthWiring(t, cfg)
 
 		routes := router.Routes()
-		requireKnownRoutes(t, routes, []string{
+		requireKnownRoutes(t, routes, append([]string{
 			"GET /health",
 			"GET /api/v1/contacts",
-			assertionStoreRead,
-		})
+		}, allowedAssertionStoreRoutes...))
 		// Distinguishability guard: the disabled tree must really be the
 		// minimal shape, not the enabled tree served twice.
 		requireRouteAbsent(t, routes, "GET /api/v1/auth/google/callback")

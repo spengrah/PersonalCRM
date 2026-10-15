@@ -202,17 +202,21 @@ type ContactTag struct {
 }
 
 type ContactTask struct {
-	ID             uuid.UUID  `json:"id"`
-	ContactID      uuid.UUID  `json:"contact_id"`
-	Provider       string     `json:"provider"`
-	Kind           string     `json:"kind"`
-	ExternalTaskID string     `json:"external_task_id"`
-	State          string     `json:"state"`
-	Metadata       []byte     `json:"metadata"`
-	CreatedAt      *time.Time `json:"created_at"`
-	UpdatedAt      *time.Time `json:"updated_at"`
-	IdempotencyKey *string    `json:"idempotency_key"`
-	Lifecycle      string     `json:"lifecycle"`
+	ID                 uuid.UUID  `json:"id"`
+	ContactID          uuid.UUID  `json:"contact_id"`
+	Provider           string     `json:"provider"`
+	Kind               string     `json:"kind"`
+	ExternalTaskID     string     `json:"external_task_id"`
+	State              string     `json:"state"`
+	Metadata           []byte     `json:"metadata"`
+	CreatedAt          *time.Time `json:"created_at"`
+	UpdatedAt          *time.Time `json:"updated_at"`
+	IdempotencyKey     *string    `json:"idempotency_key"`
+	Lifecycle          string     `json:"lifecycle"`
+	ObligationThreadID *uuid.UUID `json:"obligation_thread_id"`
+	ObligationDebtor   *string    `json:"obligation_debtor"`
+	ObligationBasis    *string    `json:"obligation_basis"`
+	ObligationCutOff   *time.Time `json:"obligation_cut_off"`
 }
 
 type EffectiveParticipation struct {
@@ -392,6 +396,70 @@ type JobExecSample struct {
 	State       string    `json:"state"`
 	QueueWaitMs int64     `json:"queue_wait_ms"`
 	CreatedAt   time.Time `json:"created_at"`
+}
+
+type Judgment struct {
+	ID             uuid.UUID `json:"id"`
+	MethodKey      string    `json:"method_key"`
+	MethodVersion  string    `json:"method_version"`
+	WordingVersion string    `json:"wording_version"`
+	ExampleID      string    `json:"example_id"`
+	ContextKind    string    `json:"context_kind"`
+	CutOff         time.Time `json:"cut_off"`
+	JudgedAt       time.Time `json:"judged_at"`
+	ContextTokens  int32     `json:"context_tokens"`
+	QuestionCount  int32     `json:"question_count"`
+	BilledTokens   *int32    `json:"billed_tokens"`
+	CostUsd        *float64  `json:"cost_usd"`
+	LatencyNs      int64     `json:"latency_ns"`
+	Questions      []byte    `json:"questions"`
+	CreatedAt      time.Time `json:"created_at"`
+}
+
+type JudgmentAppearance struct {
+	RunID             uuid.UUID `json:"run_id"`
+	JudgmentID        uuid.UUID `json:"judgment_id"`
+	CutOff            time.Time `json:"cut_off"`
+	Fresh             bool      `json:"fresh"`
+	ObligationsOpened int32     `json:"obligations_opened"`
+	FlagsRaised       int32     `json:"flags_raised"`
+	ClaimsRaised      int32     `json:"claims_raised"`
+	CreatedAt         time.Time `json:"created_at"`
+}
+
+type JudgmentExample struct {
+	ID        string    `json:"id"`
+	ThreadID  uuid.UUID `json:"thread_id"`
+	InputHash string    `json:"input_hash"`
+}
+
+type JudgmentIncomplete struct {
+	RunID     uuid.UUID `json:"run_id"`
+	ThreadID  uuid.UUID `json:"thread_id"`
+	CutOff    time.Time `json:"cut_off"`
+	Reason    string    `json:"reason"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+type JudgmentOutcome struct {
+	NodeID     uuid.UUID  `json:"node_id"`
+	JudgmentID uuid.UUID  `json:"judgment_id"`
+	Question   string     `json:"question"`
+	QuestionID *string    `json:"question_id"`
+	ContactID  *uuid.UUID `json:"contact_id"`
+	DueDate    *time.Time `json:"due_date"`
+}
+
+type JudgmentRun struct {
+	ID             uuid.UUID  `json:"id"`
+	Kind           string     `json:"kind"`
+	MethodKey      string     `json:"method_key"`
+	MethodVersion  string     `json:"method_version"`
+	WordingVersion string     `json:"wording_version"`
+	WindowFrom     *time.Time `json:"window_from"`
+	WindowTo       *time.Time `json:"window_to"`
+	StartedAt      time.Time  `json:"started_at"`
+	FinishedAt     *time.Time `json:"finished_at"`
 }
 
 type LiveContact struct {
@@ -592,10 +660,8 @@ type Predicate struct {
 	Embedding                   pgvector.Vector `json:"embedding"`
 	CreatedAt                   time.Time       `json:"created_at"`
 	Correction                  bool            `json:"correction"`
+	Judgment                    bool            `json:"judgment"`
 	JudgmentConfidenceThreshold pgtype.Int2     `json:"judgment_confidence_threshold"`
-	JudgmentAdditionValues      []string        `json:"judgment_addition_values"`
-	JudgmentRemovalValues       []string        `json:"judgment_removal_values"`
-	JudgmentNoEffectValues      []string        `json:"judgment_no_effect_values"`
 }
 
 type RelationshipSignal struct {

@@ -46,8 +46,44 @@ type ContactTask struct {
 	State          ContactTaskState `json:"state"`
 	Metadata       map[string]any   `json:"metadata,omitempty"`
 	IdempotencyKey *string          `json:"idempotency_key,omitempty"`
-	CreatedAt      time.Time        `json:"created_at"`
-	UpdatedAt      time.Time        `json:"updated_at"`
+	// Obligation is set exactly on a task of lifecycle obligation.
+	Obligation *TaskObligation `json:"obligation,omitempty"`
+	CreatedAt  time.Time       `json:"created_at"`
+	UpdatedAt  time.Time       `json:"updated_at"`
+}
+
+// Obligation debtor and basis values (migration 094).
+const (
+	ObligationDebtorUser      = "user"
+	ObligationDebtorContact   = "contact"
+	ObligationBasisReply      = "reply"
+	ObligationBasisCommitment = "commitment"
+)
+
+// TaskObligation is the obligation an obligation task keeps open: who owes
+// (the user, or the task's contact) what (a reply or a commitment) on which
+// thread, and the cut-off of the judgment that opened it.
+type TaskObligation struct {
+	ThreadID uuid.UUID `json:"thread_id"`
+	Debtor   string    `json:"debtor"`
+	Basis    string    `json:"basis"`
+	CutOff   time.Time `json:"cut_off"`
+}
+
+// IsLive reports whether the task is live: managed, or awaiting its remote
+// create. An obligation is open exactly while its task is live.
+func (t *ContactTask) IsLive() bool {
+	return t.State == ContactTaskStateManaged || t.State == ContactTaskStatePendingRemoteCreate
+}
+
+// CreateObligationTaskRequest is the input for opening an obligation's task.
+type CreateObligationTaskRequest struct {
+	ContactID  uuid.UUID
+	Provider   string
+	Kind       string
+	State      ContactTaskState
+	Metadata   map[string]any
+	Obligation TaskObligation
 }
 
 // ContactTaskWithContact extends ContactTask with contact information for reconciliation
@@ -112,6 +148,15 @@ func convertDbContactTask(dbTask *db.ContactTask) ContactTask {
 	}
 
 	task.IdempotencyKey = dbTask.IdempotencyKey
+	if dbTask.ObligationThreadID != nil && dbTask.ObligationDebtor != nil &&
+		dbTask.ObligationBasis != nil && dbTask.ObligationCutOff != nil {
+		task.Obligation = &TaskObligation{
+			ThreadID: *dbTask.ObligationThreadID,
+			Debtor:   *dbTask.ObligationDebtor,
+			Basis:    *dbTask.ObligationBasis,
+			CutOff:   *dbTask.ObligationCutOff,
+		}
+	}
 
 	return task
 }
@@ -909,4 +954,71 @@ func (r *ContactTaskRepository) SetContactTaskExternalIDOnlyTx(ctx context.Conte
 		ID:             id,
 		ExternalTaskID: externalTaskID,
 	})
+}
+
+// CreateObligationTaskTx inserts an obligation's one task. The partial unique
+// index idx_contact_task_obligation_open refuses a second open obligation for
+// the same thread and owing party.
+func (r *ContactTaskRepository) CreateObligationTaskTx(ctx context.Context, tx pgx.Tx, req CreateObligationTaskRequest) (*ContactTask, error) {
+	if tx == nil {
+		return nil, fmt.Errorf("CreateObligationTaskTx: %w", errNilTx)
+	}
+	metadata, err := json.Marshal(req.Metadata)
+	if err != nil {
+		return nil, fmt.Errorf("marshal obligation task metadata: %w", err)
+	}
+	dbTask, err := db.New(tx).CreateObligationTask(ctx, db.CreateObligationTaskParams{
+		ContactID:          req.ContactID,
+		Provider:           req.Provider,
+		Kind:               req.Kind,
+		State:              string(req.State),
+		Metadata:           metadata,
+		ObligationThreadID: &req.Obligation.ThreadID,
+		ObligationDebtor:   &req.Obligation.Debtor,
+		ObligationBasis:    &req.Obligation.Basis,
+		ObligationCutOff:   &req.Obligation.CutOff,
+	})
+	if err != nil {
+		return nil, err
+	}
+	task := convertDbContactTask(dbTask)
+	return &task, nil
+}
+
+// ListObligationTasksByThreadTx returns every obligation task on a thread, open
+// or closed, oldest first.
+func (r *ContactTaskRepository) ListObligationTasksByThreadTx(ctx context.Context, tx pgx.Tx, threadID uuid.UUID) ([]ContactTask, error) {
+	return listObligationTasksByThread(ctx, db.New(tx), threadID)
+}
+
+// ListObligationTasksByThread is the pool-bound variant of
+// ListObligationTasksByThreadTx.
+func (r *ContactTaskRepository) ListObligationTasksByThread(ctx context.Context, threadID uuid.UUID) ([]ContactTask, error) {
+	return listObligationTasksByThread(ctx, r.queries, threadID)
+}
+
+func listObligationTasksByThread(ctx context.Context, q db.Querier, threadID uuid.UUID) ([]ContactTask, error) {
+	rows, err := q.ListObligationTasksByThread(ctx, &threadID)
+	if err != nil {
+		return nil, err
+	}
+	tasks := make([]ContactTask, 0, len(rows))
+	for _, row := range rows {
+		tasks = append(tasks, convertDbContactTask(row))
+	}
+	return tasks, nil
+}
+
+// ListOpenReplyObligationsForContactTx returns the open reply obligations on
+// the threads the contact takes part in or whose task the contact holds.
+func (r *ContactTaskRepository) ListOpenReplyObligationsForContactTx(ctx context.Context, tx pgx.Tx, contactID uuid.UUID) ([]ContactTask, error) {
+	rows, err := db.New(tx).ListOpenReplyObligationsForContact(ctx, contactID)
+	if err != nil {
+		return nil, err
+	}
+	tasks := make([]ContactTask, 0, len(rows))
+	for _, row := range rows {
+		tasks = append(tasks, convertDbContactTask(row))
+	}
+	return tasks, nil
 }

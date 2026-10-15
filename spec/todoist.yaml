@@ -129,6 +129,7 @@ behaviors:
       - a follow-up-loop task is dismissed
       - a cadence-due task is skipped (its schedule advanced)
       - a manual task is dismissed, and a legacy action task is relinquished to unmanaged (action tasks unmanage only on deletion or CRM-label removal, never on deadline removal — they are dispatched by kind before the deadline-based skip check)
+      - an obligation task is dismissed, which closes its obligation (CAD-057)
     provenance: [CadenceSyncProvider.processItem, handleSkipTrigger, handleFollowUpDismissal, handleManualDismissal, handleActionTaskTriggers]
     notes: The CRM-side outcomes of each route are CAD-016 (follow-up dismissal), CAD-019 (cadence skip), and CAD-021 (manual/action dismissal); this pins the Todoist-side detection and routing.
 

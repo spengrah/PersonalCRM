@@ -19,7 +19,7 @@ SET state = 'completed',
 WHERE contact_id = $1
   AND lifecycle = 'followup_loop'
   AND state IN ('managed', 'pending_remote_create')
-RETURNING id, contact_id, provider, kind, external_task_id, state, metadata, created_at, updated_at, idempotency_key, lifecycle
+RETURNING id, contact_id, provider, kind, external_task_id, state, metadata, created_at, updated_at, idempotency_key, lifecycle, obligation_thread_id, obligation_debtor, obligation_basis, obligation_cut_off
 `
 
 // Mark all pending follow-up tasks as completed for a contact (when a
@@ -47,6 +47,10 @@ func (q *Queries) CompleteFollowUpForContact(ctx context.Context, contactID uuid
 			&i.UpdatedAt,
 			&i.IdempotencyKey,
 			&i.Lifecycle,
+			&i.ObligationThreadID,
+			&i.ObligationDebtor,
+			&i.ObligationBasis,
+			&i.ObligationCutOff,
 		); err != nil {
 			return nil, err
 		}
@@ -197,7 +201,7 @@ INSERT INTO contact_task (
     $5,
     COALESCE($6, 'managed'),
     COALESCE($7::jsonb, '{}'::jsonb)
-) RETURNING id, contact_id, provider, kind, external_task_id, state, metadata, created_at, updated_at, idempotency_key, lifecycle
+) RETURNING id, contact_id, provider, kind, external_task_id, state, metadata, created_at, updated_at, idempotency_key, lifecycle, obligation_thread_id, obligation_debtor, obligation_basis, obligation_cut_off
 `
 
 type CreateContactTaskParams struct {
@@ -233,6 +237,10 @@ func (q *Queries) CreateContactTask(ctx context.Context, arg CreateContactTaskPa
 		&i.UpdatedAt,
 		&i.IdempotencyKey,
 		&i.Lifecycle,
+		&i.ObligationThreadID,
+		&i.ObligationDebtor,
+		&i.ObligationBasis,
+		&i.ObligationCutOff,
 	)
 	return &i, err
 }
@@ -256,7 +264,7 @@ INSERT INTO contact_task (
     COALESCE($6, 'managed'),
     COALESCE($7::jsonb, '{}'::jsonb),
     $8
-) RETURNING id, contact_id, provider, kind, external_task_id, state, metadata, created_at, updated_at, idempotency_key, lifecycle
+) RETURNING id, contact_id, provider, kind, external_task_id, state, metadata, created_at, updated_at, idempotency_key, lifecycle, obligation_thread_id, obligation_debtor, obligation_basis, obligation_cut_off
 `
 
 type CreateContactTaskAtTimeParams struct {
@@ -298,6 +306,10 @@ func (q *Queries) CreateContactTaskAtTime(ctx context.Context, arg CreateContact
 		&i.UpdatedAt,
 		&i.IdempotencyKey,
 		&i.Lifecycle,
+		&i.ObligationThreadID,
+		&i.ObligationDebtor,
+		&i.ObligationBasis,
+		&i.ObligationCutOff,
 	)
 	return &i, err
 }
@@ -321,7 +333,7 @@ INSERT INTO contact_task (
     COALESCE($6, 'managed'),
     COALESCE($7::jsonb, '{}'::jsonb),
     $8
-) RETURNING id, contact_id, provider, kind, external_task_id, state, metadata, created_at, updated_at, idempotency_key, lifecycle
+) RETURNING id, contact_id, provider, kind, external_task_id, state, metadata, created_at, updated_at, idempotency_key, lifecycle, obligation_thread_id, obligation_debtor, obligation_basis, obligation_cut_off
 `
 
 type CreateContactTaskWithIdempotencyKeyParams struct {
@@ -364,6 +376,70 @@ func (q *Queries) CreateContactTaskWithIdempotencyKey(ctx context.Context, arg C
 		&i.UpdatedAt,
 		&i.IdempotencyKey,
 		&i.Lifecycle,
+		&i.ObligationThreadID,
+		&i.ObligationDebtor,
+		&i.ObligationBasis,
+		&i.ObligationCutOff,
+	)
+	return &i, err
+}
+
+const CreateObligationTask = `-- name: CreateObligationTask :one
+INSERT INTO contact_task (
+    contact_id, provider, kind, lifecycle, external_task_id, state, metadata,
+    obligation_thread_id, obligation_debtor, obligation_basis, obligation_cut_off
+) VALUES (
+    $1, $2, $3, 'obligation', '',
+    $4, $5::jsonb,
+    $6, $7,
+    $8, $9
+) RETURNING id, contact_id, provider, kind, external_task_id, state, metadata, created_at, updated_at, idempotency_key, lifecycle, obligation_thread_id, obligation_debtor, obligation_basis, obligation_cut_off
+`
+
+type CreateObligationTaskParams struct {
+	ContactID          uuid.UUID  `json:"contact_id"`
+	Provider           string     `json:"provider"`
+	Kind               string     `json:"kind"`
+	State              string     `json:"state"`
+	Metadata           []byte     `json:"metadata"`
+	ObligationThreadID *uuid.UUID `json:"obligation_thread_id"`
+	ObligationDebtor   *string    `json:"obligation_debtor"`
+	ObligationBasis    *string    `json:"obligation_basis"`
+	ObligationCutOff   *time.Time `json:"obligation_cut_off"`
+}
+
+// Inserts an obligation's one task (lifecycle 'obligation'); the partial unique
+// index idx_contact_task_obligation_open refuses a second open obligation for
+// the same thread and owing party.
+func (q *Queries) CreateObligationTask(ctx context.Context, arg CreateObligationTaskParams) (*ContactTask, error) {
+	row := q.db.QueryRow(ctx, CreateObligationTask,
+		arg.ContactID,
+		arg.Provider,
+		arg.Kind,
+		arg.State,
+		arg.Metadata,
+		arg.ObligationThreadID,
+		arg.ObligationDebtor,
+		arg.ObligationBasis,
+		arg.ObligationCutOff,
+	)
+	var i ContactTask
+	err := row.Scan(
+		&i.ID,
+		&i.ContactID,
+		&i.Provider,
+		&i.Kind,
+		&i.ExternalTaskID,
+		&i.State,
+		&i.Metadata,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.IdempotencyKey,
+		&i.Lifecycle,
+		&i.ObligationThreadID,
+		&i.ObligationDebtor,
+		&i.ObligationBasis,
+		&i.ObligationCutOff,
 	)
 	return &i, err
 }
@@ -410,7 +486,7 @@ func (q *Queries) DeleteContactTasksByProvider(ctx context.Context, provider str
 }
 
 const FindPendingFollowUp = `-- name: FindPendingFollowUp :one
-SELECT id, contact_id, provider, kind, external_task_id, state, metadata, created_at, updated_at, idempotency_key, lifecycle FROM contact_task
+SELECT id, contact_id, provider, kind, external_task_id, state, metadata, created_at, updated_at, idempotency_key, lifecycle, obligation_thread_id, obligation_debtor, obligation_basis, obligation_cut_off FROM contact_task
 WHERE contact_id = $1
   AND lifecycle = 'followup_loop'
   AND state IN ('managed', 'pending_remote_create')
@@ -435,12 +511,16 @@ func (q *Queries) FindPendingFollowUp(ctx context.Context, contactID uuid.UUID) 
 		&i.UpdatedAt,
 		&i.IdempotencyKey,
 		&i.Lifecycle,
+		&i.ObligationThreadID,
+		&i.ObligationDebtor,
+		&i.ObligationBasis,
+		&i.ObligationCutOff,
 	)
 	return &i, err
 }
 
 const FindPendingFollowUpTx = `-- name: FindPendingFollowUpTx :one
-SELECT id, contact_id, provider, kind, external_task_id, state, metadata, created_at, updated_at, idempotency_key, lifecycle FROM contact_task
+SELECT id, contact_id, provider, kind, external_task_id, state, metadata, created_at, updated_at, idempotency_key, lifecycle, obligation_thread_id, obligation_debtor, obligation_basis, obligation_cut_off FROM contact_task
 WHERE contact_id = $1
   AND lifecycle = 'followup_loop'
   AND state IN ('managed', 'pending_remote_create')
@@ -466,13 +546,17 @@ func (q *Queries) FindPendingFollowUpTx(ctx context.Context, contactID uuid.UUID
 		&i.UpdatedAt,
 		&i.IdempotencyKey,
 		&i.Lifecycle,
+		&i.ObligationThreadID,
+		&i.ObligationDebtor,
+		&i.ObligationBasis,
+		&i.ObligationCutOff,
 	)
 	return &i, err
 }
 
 const GetContactTask = `-- name: GetContactTask :one
 
-SELECT id, contact_id, provider, kind, external_task_id, state, metadata, created_at, updated_at, idempotency_key, lifecycle FROM contact_task
+SELECT id, contact_id, provider, kind, external_task_id, state, metadata, created_at, updated_at, idempotency_key, lifecycle, obligation_thread_id, obligation_debtor, obligation_basis, obligation_cut_off FROM contact_task
 WHERE id = $1
 `
 
@@ -492,12 +576,16 @@ func (q *Queries) GetContactTask(ctx context.Context, id uuid.UUID) (*ContactTas
 		&i.UpdatedAt,
 		&i.IdempotencyKey,
 		&i.Lifecycle,
+		&i.ObligationThreadID,
+		&i.ObligationDebtor,
+		&i.ObligationBasis,
+		&i.ObligationCutOff,
 	)
 	return &i, err
 }
 
 const GetContactTaskByContactCadenceDue = `-- name: GetContactTaskByContactCadenceDue :one
-SELECT id, contact_id, provider, kind, external_task_id, state, metadata, created_at, updated_at, idempotency_key, lifecycle FROM contact_task
+SELECT id, contact_id, provider, kind, external_task_id, state, metadata, created_at, updated_at, idempotency_key, lifecycle, obligation_thread_id, obligation_debtor, obligation_basis, obligation_cut_off FROM contact_task
 WHERE contact_id = $1
   AND provider = $2
   AND lifecycle = 'cadence_due'
@@ -526,12 +614,16 @@ func (q *Queries) GetContactTaskByContactCadenceDue(ctx context.Context, arg Get
 		&i.UpdatedAt,
 		&i.IdempotencyKey,
 		&i.Lifecycle,
+		&i.ObligationThreadID,
+		&i.ObligationDebtor,
+		&i.ObligationBasis,
+		&i.ObligationCutOff,
 	)
 	return &i, err
 }
 
 const GetContactTaskByContactFollowUpLive = `-- name: GetContactTaskByContactFollowUpLive :one
-SELECT id, contact_id, provider, kind, external_task_id, state, metadata, created_at, updated_at, idempotency_key, lifecycle FROM contact_task
+SELECT id, contact_id, provider, kind, external_task_id, state, metadata, created_at, updated_at, idempotency_key, lifecycle, obligation_thread_id, obligation_debtor, obligation_basis, obligation_cut_off FROM contact_task
 WHERE contact_id = $1
   AND provider = $2
   AND lifecycle = 'followup_loop'
@@ -561,12 +653,16 @@ func (q *Queries) GetContactTaskByContactFollowUpLive(ctx context.Context, arg G
 		&i.UpdatedAt,
 		&i.IdempotencyKey,
 		&i.Lifecycle,
+		&i.ObligationThreadID,
+		&i.ObligationDebtor,
+		&i.ObligationBasis,
+		&i.ObligationCutOff,
 	)
 	return &i, err
 }
 
 const GetContactTaskByExternalID = `-- name: GetContactTaskByExternalID :one
-SELECT id, contact_id, provider, kind, external_task_id, state, metadata, created_at, updated_at, idempotency_key, lifecycle FROM contact_task
+SELECT id, contact_id, provider, kind, external_task_id, state, metadata, created_at, updated_at, idempotency_key, lifecycle, obligation_thread_id, obligation_debtor, obligation_basis, obligation_cut_off FROM contact_task
 WHERE provider = $1 AND external_task_id = $2
 `
 
@@ -591,12 +687,16 @@ func (q *Queries) GetContactTaskByExternalID(ctx context.Context, arg GetContact
 		&i.UpdatedAt,
 		&i.IdempotencyKey,
 		&i.Lifecycle,
+		&i.ObligationThreadID,
+		&i.ObligationDebtor,
+		&i.ObligationBasis,
+		&i.ObligationCutOff,
 	)
 	return &i, err
 }
 
 const GetContactTaskByIdempotencyKey = `-- name: GetContactTaskByIdempotencyKey :one
-SELECT id, contact_id, provider, kind, external_task_id, state, metadata, created_at, updated_at, idempotency_key, lifecycle FROM contact_task
+SELECT id, contact_id, provider, kind, external_task_id, state, metadata, created_at, updated_at, idempotency_key, lifecycle, obligation_thread_id, obligation_debtor, obligation_basis, obligation_cut_off FROM contact_task
 WHERE contact_id = $1
   AND lifecycle = 'followup_loop'
   AND idempotency_key = $2
@@ -626,12 +726,16 @@ func (q *Queries) GetContactTaskByIdempotencyKey(ctx context.Context, arg GetCon
 		&i.UpdatedAt,
 		&i.IdempotencyKey,
 		&i.Lifecycle,
+		&i.ObligationThreadID,
+		&i.ObligationDebtor,
+		&i.ObligationBasis,
+		&i.ObligationCutOff,
 	)
 	return &i, err
 }
 
 const GetContactTaskByPendingTempID = `-- name: GetContactTaskByPendingTempID :one
-SELECT id, contact_id, provider, kind, external_task_id, state, metadata, created_at, updated_at, idempotency_key, lifecycle FROM contact_task
+SELECT id, contact_id, provider, kind, external_task_id, state, metadata, created_at, updated_at, idempotency_key, lifecycle, obligation_thread_id, obligation_debtor, obligation_basis, obligation_cut_off FROM contact_task
 WHERE provider = $1 AND metadata->>'pending_temp_id' = $2::text
 `
 
@@ -656,12 +760,16 @@ func (q *Queries) GetContactTaskByPendingTempID(ctx context.Context, arg GetCont
 		&i.UpdatedAt,
 		&i.IdempotencyKey,
 		&i.Lifecycle,
+		&i.ObligationThreadID,
+		&i.ObligationDebtor,
+		&i.ObligationBasis,
+		&i.ObligationCutOff,
 	)
 	return &i, err
 }
 
 const GetLegacyActionTaskByContact = `-- name: GetLegacyActionTaskByContact :one
-SELECT id, contact_id, provider, kind, external_task_id, state, metadata, created_at, updated_at, idempotency_key, lifecycle FROM contact_task
+SELECT id, contact_id, provider, kind, external_task_id, state, metadata, created_at, updated_at, idempotency_key, lifecycle, obligation_thread_id, obligation_debtor, obligation_basis, obligation_cut_off FROM contact_task
 WHERE contact_id = $1
   AND provider = $2
   AND kind = 'action'
@@ -692,12 +800,16 @@ func (q *Queries) GetLegacyActionTaskByContact(ctx context.Context, arg GetLegac
 		&i.UpdatedAt,
 		&i.IdempotencyKey,
 		&i.Lifecycle,
+		&i.ObligationThreadID,
+		&i.ObligationDebtor,
+		&i.ObligationBasis,
+		&i.ObligationCutOff,
 	)
 	return &i, err
 }
 
 const ListContactTasksByContact = `-- name: ListContactTasksByContact :many
-SELECT id, contact_id, provider, kind, external_task_id, state, metadata, created_at, updated_at, idempotency_key, lifecycle FROM contact_task
+SELECT id, contact_id, provider, kind, external_task_id, state, metadata, created_at, updated_at, idempotency_key, lifecycle, obligation_thread_id, obligation_debtor, obligation_basis, obligation_cut_off FROM contact_task
 WHERE contact_id = $1
 ORDER BY provider, kind
 `
@@ -724,6 +836,10 @@ func (q *Queries) ListContactTasksByContact(ctx context.Context, contactID uuid.
 			&i.UpdatedAt,
 			&i.IdempotencyKey,
 			&i.Lifecycle,
+			&i.ObligationThreadID,
+			&i.ObligationDebtor,
+			&i.ObligationBasis,
+			&i.ObligationCutOff,
 		); err != nil {
 			return nil, err
 		}
@@ -736,7 +852,7 @@ func (q *Queries) ListContactTasksByContact(ctx context.Context, contactID uuid.
 }
 
 const ListContactTasksByContactFiltered = `-- name: ListContactTasksByContactFiltered :many
-SELECT id, contact_id, provider, kind, external_task_id, state, metadata, created_at, updated_at, idempotency_key, lifecycle FROM contact_task
+SELECT id, contact_id, provider, kind, external_task_id, state, metadata, created_at, updated_at, idempotency_key, lifecycle, obligation_thread_id, obligation_debtor, obligation_basis, obligation_cut_off FROM contact_task
 WHERE contact_id = $1
   AND ($2::text IS NULL OR state = $2::text)
   AND ($3::text IS NULL OR kind = $3::text)
@@ -778,6 +894,10 @@ func (q *Queries) ListContactTasksByContactFiltered(ctx context.Context, arg Lis
 			&i.UpdatedAt,
 			&i.IdempotencyKey,
 			&i.Lifecycle,
+			&i.ObligationThreadID,
+			&i.ObligationDebtor,
+			&i.ObligationBasis,
+			&i.ObligationCutOff,
 		); err != nil {
 			return nil, err
 		}
@@ -790,7 +910,7 @@ func (q *Queries) ListContactTasksByContactFiltered(ctx context.Context, arg Lis
 }
 
 const ListContactTasksByProvider = `-- name: ListContactTasksByProvider :many
-SELECT id, contact_id, provider, kind, external_task_id, state, metadata, created_at, updated_at, idempotency_key, lifecycle FROM contact_task
+SELECT id, contact_id, provider, kind, external_task_id, state, metadata, created_at, updated_at, idempotency_key, lifecycle, obligation_thread_id, obligation_debtor, obligation_basis, obligation_cut_off FROM contact_task
 WHERE provider = $1
   AND ($2::text IS NULL OR state = $2::text)
 ORDER BY created_at DESC
@@ -823,6 +943,10 @@ func (q *Queries) ListContactTasksByProvider(ctx context.Context, arg ListContac
 			&i.UpdatedAt,
 			&i.IdempotencyKey,
 			&i.Lifecycle,
+			&i.ObligationThreadID,
+			&i.ObligationDebtor,
+			&i.ObligationBasis,
+			&i.ObligationCutOff,
 		); err != nil {
 			return nil, err
 		}
@@ -835,7 +959,7 @@ func (q *Queries) ListContactTasksByProvider(ctx context.Context, arg ListContac
 }
 
 const ListManagedContactTasks = `-- name: ListManagedContactTasks :many
-SELECT ct.id, ct.contact_id, ct.provider, ct.kind, ct.external_task_id, ct.state, ct.metadata, ct.created_at, ct.updated_at, ct.idempotency_key, ct.lifecycle, c.full_name, c.cadence, c.contact_by, c.last_contacted
+SELECT ct.id, ct.contact_id, ct.provider, ct.kind, ct.external_task_id, ct.state, ct.metadata, ct.created_at, ct.updated_at, ct.idempotency_key, ct.lifecycle, ct.obligation_thread_id, ct.obligation_debtor, ct.obligation_basis, ct.obligation_cut_off, c.full_name, c.cadence, c.contact_by, c.last_contacted
 FROM contact_task ct
 JOIN live_contact c ON c.id = ct.contact_id
 WHERE ct.provider = $1 AND ct.state = 'managed'
@@ -843,21 +967,25 @@ ORDER BY ct.created_at
 `
 
 type ListManagedContactTasksRow struct {
-	ID             uuid.UUID  `json:"id"`
-	ContactID      uuid.UUID  `json:"contact_id"`
-	Provider       string     `json:"provider"`
-	Kind           string     `json:"kind"`
-	ExternalTaskID string     `json:"external_task_id"`
-	State          string     `json:"state"`
-	Metadata       []byte     `json:"metadata"`
-	CreatedAt      *time.Time `json:"created_at"`
-	UpdatedAt      *time.Time `json:"updated_at"`
-	IdempotencyKey *string    `json:"idempotency_key"`
-	Lifecycle      string     `json:"lifecycle"`
-	FullName       string     `json:"full_name"`
-	Cadence        *string    `json:"cadence"`
-	ContactBy      *time.Time `json:"contact_by"`
-	LastContacted  *time.Time `json:"last_contacted"`
+	ID                 uuid.UUID  `json:"id"`
+	ContactID          uuid.UUID  `json:"contact_id"`
+	Provider           string     `json:"provider"`
+	Kind               string     `json:"kind"`
+	ExternalTaskID     string     `json:"external_task_id"`
+	State              string     `json:"state"`
+	Metadata           []byte     `json:"metadata"`
+	CreatedAt          *time.Time `json:"created_at"`
+	UpdatedAt          *time.Time `json:"updated_at"`
+	IdempotencyKey     *string    `json:"idempotency_key"`
+	Lifecycle          string     `json:"lifecycle"`
+	ObligationThreadID *uuid.UUID `json:"obligation_thread_id"`
+	ObligationDebtor   *string    `json:"obligation_debtor"`
+	ObligationBasis    *string    `json:"obligation_basis"`
+	ObligationCutOff   *time.Time `json:"obligation_cut_off"`
+	FullName           string     `json:"full_name"`
+	Cadence            *string    `json:"cadence"`
+	ContactBy          *time.Time `json:"contact_by"`
+	LastContacted      *time.Time `json:"last_contacted"`
 }
 
 // List all managed tasks for a provider (for reconciliation)
@@ -882,10 +1010,110 @@ func (q *Queries) ListManagedContactTasks(ctx context.Context, provider string) 
 			&i.UpdatedAt,
 			&i.IdempotencyKey,
 			&i.Lifecycle,
+			&i.ObligationThreadID,
+			&i.ObligationDebtor,
+			&i.ObligationBasis,
+			&i.ObligationCutOff,
 			&i.FullName,
 			&i.Cadence,
 			&i.ContactBy,
 			&i.LastContacted,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const ListObligationTasksByThread = `-- name: ListObligationTasksByThread :many
+SELECT id, contact_id, provider, kind, external_task_id, state, metadata, created_at, updated_at, idempotency_key, lifecycle, obligation_thread_id, obligation_debtor, obligation_basis, obligation_cut_off FROM contact_task
+WHERE lifecycle = 'obligation'
+  AND obligation_thread_id = $1
+ORDER BY created_at, id
+`
+
+// Every obligation task on a thread, open or closed, oldest first.
+func (q *Queries) ListObligationTasksByThread(ctx context.Context, threadID *uuid.UUID) ([]*ContactTask, error) {
+	rows, err := q.db.Query(ctx, ListObligationTasksByThread, threadID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []*ContactTask{}
+	for rows.Next() {
+		var i ContactTask
+		if err := rows.Scan(
+			&i.ID,
+			&i.ContactID,
+			&i.Provider,
+			&i.Kind,
+			&i.ExternalTaskID,
+			&i.State,
+			&i.Metadata,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.IdempotencyKey,
+			&i.Lifecycle,
+			&i.ObligationThreadID,
+			&i.ObligationDebtor,
+			&i.ObligationBasis,
+			&i.ObligationCutOff,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const ListOpenReplyObligationsForContact = `-- name: ListOpenReplyObligationsForContact :many
+SELECT id, contact_id, provider, kind, external_task_id, state, metadata, created_at, updated_at, idempotency_key, lifecycle, obligation_thread_id, obligation_debtor, obligation_basis, obligation_cut_off FROM contact_task ct
+WHERE ct.lifecycle = 'obligation'
+  AND ct.obligation_basis = 'reply'
+  AND ct.state IN ('managed', 'pending_remote_create')
+  AND (ct.contact_id = $1
+       OR ct.obligation_thread_id IN (
+           SELECT i.venue_id FROM interaction i
+           WHERE i.contact_id = $1
+             AND i.venue_id IS NOT NULL
+             AND i.deleted_at IS NULL))
+ORDER BY ct.created_at, ct.id
+`
+
+// The open reply obligations on the threads a contact takes part in: the
+// contact's own interactions name the thread, or the contact holds the task.
+func (q *Queries) ListOpenReplyObligationsForContact(ctx context.Context, contactID uuid.UUID) ([]*ContactTask, error) {
+	rows, err := q.db.Query(ctx, ListOpenReplyObligationsForContact, contactID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []*ContactTask{}
+	for rows.Next() {
+		var i ContactTask
+		if err := rows.Scan(
+			&i.ID,
+			&i.ContactID,
+			&i.Provider,
+			&i.Kind,
+			&i.ExternalTaskID,
+			&i.State,
+			&i.Metadata,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.IdempotencyKey,
+			&i.Lifecycle,
+			&i.ObligationThreadID,
+			&i.ObligationDebtor,
+			&i.ObligationBasis,
+			&i.ObligationCutOff,
 		); err != nil {
 			return nil, err
 		}
@@ -1018,7 +1246,7 @@ SET external_task_id = $2,
     state = 'managed',
     updated_at = NOW()
 WHERE id = $1
-RETURNING id, contact_id, provider, kind, external_task_id, state, metadata, created_at, updated_at, idempotency_key, lifecycle
+RETURNING id, contact_id, provider, kind, external_task_id, state, metadata, created_at, updated_at, idempotency_key, lifecycle, obligation_thread_id, obligation_debtor, obligation_basis, obligation_cut_off
 `
 
 type UpdateContactTaskExternalIDParams struct {
@@ -1046,6 +1274,10 @@ func (q *Queries) UpdateContactTaskExternalID(ctx context.Context, arg UpdateCon
 		&i.UpdatedAt,
 		&i.IdempotencyKey,
 		&i.Lifecycle,
+		&i.ObligationThreadID,
+		&i.ObligationDebtor,
+		&i.ObligationBasis,
+		&i.ObligationCutOff,
 	)
 	return &i, err
 }
@@ -1055,7 +1287,7 @@ UPDATE contact_task
 SET metadata = $2,
     updated_at = NOW()
 WHERE id = $1
-RETURNING id, contact_id, provider, kind, external_task_id, state, metadata, created_at, updated_at, idempotency_key, lifecycle
+RETURNING id, contact_id, provider, kind, external_task_id, state, metadata, created_at, updated_at, idempotency_key, lifecycle, obligation_thread_id, obligation_debtor, obligation_basis, obligation_cut_off
 `
 
 type UpdateContactTaskMetadataParams struct {
@@ -1078,6 +1310,10 @@ func (q *Queries) UpdateContactTaskMetadata(ctx context.Context, arg UpdateConta
 		&i.UpdatedAt,
 		&i.IdempotencyKey,
 		&i.Lifecycle,
+		&i.ObligationThreadID,
+		&i.ObligationDebtor,
+		&i.ObligationBasis,
+		&i.ObligationCutOff,
 	)
 	return &i, err
 }
@@ -1087,7 +1323,7 @@ UPDATE contact_task
 SET state = $2,
     updated_at = NOW()
 WHERE id = $1
-RETURNING id, contact_id, provider, kind, external_task_id, state, metadata, created_at, updated_at, idempotency_key, lifecycle
+RETURNING id, contact_id, provider, kind, external_task_id, state, metadata, created_at, updated_at, idempotency_key, lifecycle, obligation_thread_id, obligation_debtor, obligation_basis, obligation_cut_off
 `
 
 type UpdateContactTaskStateParams struct {
@@ -1110,6 +1346,10 @@ func (q *Queries) UpdateContactTaskState(ctx context.Context, arg UpdateContactT
 		&i.UpdatedAt,
 		&i.IdempotencyKey,
 		&i.Lifecycle,
+		&i.ObligationThreadID,
+		&i.ObligationDebtor,
+		&i.ObligationBasis,
+		&i.ObligationCutOff,
 	)
 	return &i, err
 }
@@ -1135,7 +1375,7 @@ INSERT INTO contact_task (
     state = EXCLUDED.state,
     metadata = EXCLUDED.metadata,
     updated_at = NOW()
-RETURNING id, contact_id, provider, kind, external_task_id, state, metadata, created_at, updated_at, idempotency_key, lifecycle
+RETURNING id, contact_id, provider, kind, external_task_id, state, metadata, created_at, updated_at, idempotency_key, lifecycle, obligation_thread_id, obligation_debtor, obligation_basis, obligation_cut_off
 `
 
 type UpsertContactTaskParams struct {
@@ -1172,6 +1412,10 @@ func (q *Queries) UpsertContactTask(ctx context.Context, arg UpsertContactTaskPa
 		&i.UpdatedAt,
 		&i.IdempotencyKey,
 		&i.Lifecycle,
+		&i.ObligationThreadID,
+		&i.ObligationDebtor,
+		&i.ObligationBasis,
+		&i.ObligationCutOff,
 	)
 	return &i, err
 }

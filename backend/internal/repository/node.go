@@ -12,12 +12,17 @@ import (
 )
 
 // Node type constants. The node registry is the uniform anchor every graph
-// entity (person, entity subtype, venue, interaction) is addressable through.
+// entity (person, entity subtype, venue, interaction, judgment outcome) is
+// addressable through.
 const (
 	NodeTypePerson      = "person"
 	NodeTypeVenue       = "venue"
 	NodeTypeEntity      = "entity"
 	NodeTypeInteraction = "interaction"
+	// NodeTypeJudgmentOutcome is one outcome of a decision-model judgment
+	// (migration 092); its assertions are the method's answer, how the answer
+	// landed and the user's review.
+	NodeTypeJudgmentOutcome = "judgment_outcome"
 )
 
 // Node is the thin, uniform registry row every graph entity attaches to. For a

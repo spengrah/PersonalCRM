@@ -56,8 +56,9 @@ behaviors:
     then:
       - an auto-if-confident predicate lands the assertion as accepted
       - an always-confirm predicate lands it as proposed, awaiting review
-      - a caller may force an otherwise auto-applied write to land proposed
-    provenance: [AssertService.AssertTx landingAccepted, predicate.default_review_policy, 066_seed_predicate_catalog.up.sql]
+      - a caller may force an otherwise auto-applied write of a predicate that is not a judgment predicate to land proposed
+      - a judgment predicate lands by its catalog row alone — an auto-if-confident one with a confidence threshold lands accepted only at or above it — and no request field changes that (KNW-044)
+    provenance: [AssertService.AssertTx landingAccepted, predicate.default_review_policy, 066_seed_predicate_catalog.up.sql, 093_judgment_predicates.up.sql]
 
   - id: KNW-005
     title: Relationship edges are stored in one canonical form
@@ -537,6 +538,158 @@ behaviors:
     type: invariant
     status: current
     surface: api
-    statement: the only HTTP endpoint that exposes assertions, graph nodes, edges, predicates, or provenance is the read-only timeline item assertions read, which returns the non-correction assertions whose provenance cites content a timeline item's drill-down displays; the contact payload's derived location, birthday, and how-met fields remain a client-visible projection of the store.
-    provenance: [TimelineAssertionService, RegisterContactRoutes, contact_dto.go]
+    statement: the only HTTP endpoints that expose assertions, graph nodes, edges, predicates, or provenance are the read-only timeline item assertions read, which returns the non-correction assertions whose provenance cites content a timeline item's drill-down displays, and the bench's judgment routes (KNW-049, KNW-050), which read decision-model judgments and record the user's reviews; the contact payload's derived location, birthday, and how-met fields remain a client-visible projection of the store.
+    provenance: [TimelineAssertionService, RegisterContactRoutes, contact_dto.go, RegisterJudgmentRoutes]
     notes: Supersedes KNW-033. What the read returns is IXN-039; its rendering beside the content is IXN-023.
+
+  # --- Decision-model judgments ---
+
+  - id: KNW-043
+    title: A judgment is recorded as SP1 assertions with extractor provenance, once per method version and input
+    type: data
+    status: current
+    surface: none
+    given: a decision-model method's judgment of one thread at one cut-off
+    when: a run records it
+    then:
+      - key: answer-per-outcome-node
+        text: each outcome the method chose is an assertion about its own outcome node, with extractor provenance naming the method version and the input hash
+      - key: record-reads-back
+        text: the judgment reads back with its method key, version and wording version, run, cut-off, execution time, usage, input hash, every option's probability, the model's original answer and the question ID each outcome answers
+      - key: unreported-usage-absent
+        text: billed tokens and cost the source did not report read back absent, not zero
+      - key: agreeing-methods-stay-two
+        text: two methods agreeing on one input stay two judgments, and the accepted fact (an obligation's task, a flag) is a record apart from the judgments behind it
+      - key: one-per-method-version-and-input
+        text: a method version holds at most one judgment per thread and input hash; a run that meets it again records it at its own cut-off and lists it among its threads, sending nothing
+    provenance: [judgment.Store.RecordJudgment, judgment.Store.ReuseJudgment, 092_judgment_store.up.sql, .agents/spec/2026-10-14-decision-model-extraction.md G4 HC4 HC10]
+
+  - id: KNW-044
+    title: The apply rule is catalog data the shared assertion write path enforces
+    type: business-logic
+    status: current
+    surface: none
+    given: a judgment that can change live state (KNW-045)
+    when: each of its outcomes lands
+    then:
+      - key: addition-at-threshold-applies
+        text: an addition (it opens an obligation, raises a big-moment flag or moves a date earlier) at or above the catalog's confidence threshold, 0.5, takes effect at once
+      - key: addition-below-threshold-claim
+        text: an addition below the threshold lands as a claim, with no task and no flag
+      - key: removal-always-claim
+        text: a removal (it would close an obligation, end an awaiting-reply wait or move a date later) always lands as a claim and leaves the obligation, the wait and the date as they were
+      - key: omission-is-claim
+        text: a judgment that omits a party's open obligation raises a claim for it and leaves it open
+      - key: no-effect-applied
+        text: an outcome that changes nothing reads applied at any confidence
+      - key: big-moment-flags-distinguishable
+        text: an applied big-moment outcome raises a flag on the thread, a participant's moment and another person's moment read apart
+      - key: catalog-alone-decides
+        text: the landing comes from the judgment predicates' catalog rows alone; no request field, forced confirmation included, changes it, so loosening the rule is a catalog edit
+    provenance: [AssertService landsAccepted, 093_judgment_predicates.up.sql, judgment.Store.landTx, .agents/spec/2026-10-14-decision-model-extraction.md G6 HC5 NG9 SC6 SC8 SC10]
+
+  - id: KNW-045
+    title: Only the production method's current judgments in scheduled and historical runs change live state
+    type: business-logic
+    status: current
+    surface: none
+    given: a judgment appearing in a run
+    when: the appearance is recorded
+    then:
+      - key: designation-from-setting
+        text: the production method is the key DECISION_PRODUCTION_METHOD names; unset or empty designates none
+      - key: others-are-evidence
+        text: another method's judgments, rerun runs and every judgment recorded while no method is designated are evidence, opening, raising and closing nothing
+      - key: not-current-is-evidence
+        text: a judgment whose cut-off precedes the thread's latest content is evidence
+      - key: effect-decided-by-appearing-run
+        text: whether an appearance changes live state is decided by the run it appears in, and an effect applied once is never applied again
+    provenance: [judgment.Store.changesLiveState, config.DecisionConfig, .agents/spec/2026-10-14-decision-model-extraction.md HC7 "only a current judgment opens an obligation"]
+
+  - id: KNW-046
+    title: A review states the right outcome and the verdict is derived from it
+    type: business-logic
+    status: current
+    surface: none
+    given: a judgment outcome in any state
+    when: the user reviews it with a right outcome
+    then:
+      - key: review-is-user-assertion
+        text: the review is an assertion with user provenance holding the right outcome
+      - key: verdict-derived
+        text: the verdict is confirmed when the right outcome equals the judged one, rejected when it differs and has no effect, corrected when it differs and has an effect
+      - key: live-review-gives-right-effect
+        text: reviewing an applied or claim outcome gives the thread the right outcome's live effect, so confirming a claim applies it and rejecting an applied addition withdraws it
+      - key: evidence-review-labels-only
+        text: reviewing an evidence outcome records the label and changes no live state
+      - key: invalid-right-outcome-refused
+        text: an empty right outcome, or one not among the question's outcome values, is refused and nothing is recorded
+    provenance: [judgment.Store.ReviewOutcome, .agents/spec/2026-10-14-decision-model-extraction.md G5 G8]
+
+  - id: KNW-047
+    title: The user's verdict wins over a later judgment of the same input
+    type: business-logic
+    status: current
+    surface: none
+    given: an input the user reviewed
+    when: a later judgment of the same thread and input hash lands
+    then:
+      - key: rejected-answer-not-reproposed
+        text: an answer the user rejected is never proposed again
+      - key: correction-not-overwritten
+        text: another method's or version's outcome on the reviewed question is evidence and never overwrites the user's correction
+      - key: changed-content-reopens
+        text: changed content, a new input hash, reopens the question
+    provenance: [judgment.Store.landTx, .agents/spec/2026-10-14-decision-model-extraction.md HC6 SC9]
+
+  - id: KNW-048
+    title: Example IDs are opaque and the export reads carry no content or identities
+    type: data
+    status: current
+    surface: none
+    given: judgments, runs and reviews in the store
+    when: the scorecard and export reads run
+    then:
+      - key: one-opaque-example-id
+        text: the store issues one example ID per thread and input hash, random, so it carries no thread or contact ID and only the store maps it back
+      - key: reviewed-examples-label-every-method
+        text: each reviewed example lists the user's latest right outcome per question and contact, labelling that input for every method; a method's outcomes are read by example, and an example the method did not judge is absent
+      - key: export-records-content-free
+        text: finished runs, the judgments appearing in a run (reused ones included) and the reviews are keyed by example ID and question ID, with no thread content, thread ID or contact ID
+    provenance: [judgment.Store.ReviewedExamples, judgment.Store.OutcomesFor, judgment.Store.FinishedRuns, judgment.Store.JudgmentRecords, judgment.Store.ReviewRecords, .agents/spec/2026-10-14-decision-model-extraction.md G12 G15]
+
+  - id: KNW-049
+    title: The review route records a right outcome and returns the derived verdict
+    type: api
+    status: current
+    surface: api
+    given: a judgment outcome
+    when: POST /api/v1/judgment-outcomes/:id/review is called with a right_outcome
+    then:
+      - key: review-returns-derived-verdict
+        text: the response is the updated outcome with the verdict the server derived from the right outcome
+      - key: invalid-right-outcome-refused
+        text: a missing or empty right_outcome, or one not among the question's outcome values, is refused with 400 and nothing is recorded
+      - key: unknown-outcome-not-found
+        text: an unknown outcome is 404
+      - key: client-verdict-ignored
+        text: a verdict the client sends is never stored; the server derives it
+    provenance: [JudgmentHandler.ReviewJudgmentOutcome, judgment_routes.go]
+
+  - id: KNW-050
+    title: The bench reads list runs and the judgments of a thread or run
+    type: api
+    status: current
+    surface: api
+    given: judgments recorded in runs
+    when: GET /api/v1/judgment-runs or GET /api/v1/judgments is called
+    then:
+      - key: runs-listed
+        text: the runs read returns every run with its kind, method, window, start and finish, judged count (reused judgments included) and incomplete threads with cut-off and reason
+      - key: judgments-by-thread-or-run
+        text: the judgments read returns the judgments for thread_id, run_id or both, each with its first appearance's cut-off, every run it appears in at that run's cut-off, its method and context kind
+      - key: outcome-state-and-review
+        text: each outcome carries its question, contact (none for a big moment), outcome, confidence, due date, state (applied, claim or evidence) and review
+      - key: unbounded-or-malformed-refused
+        text: a judgments request with neither parameter, or a malformed ID, is refused with 400
+    provenance: [JudgmentHandler.ListJudgmentRuns, JudgmentHandler.ListJudgments, judgment_dto.go]

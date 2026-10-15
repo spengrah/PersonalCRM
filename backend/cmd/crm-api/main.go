@@ -207,6 +207,10 @@ func run() int {
 	// NewContactService as constructor args (INV-5 reorder).
 	consumers := buildDomainConsumers(cfg, database, core, graph, eventBus, riverClient)
 
+	// Judgment store: decision-model judgments, claims and obligations. It is
+	// the CadenceUpdater's obligation closer, set before any recording.
+	judgments := buildJudgmentStore(cfg, database, graph, consumers, messaging, riverClient)
+
 	// ContactService — constructed with the consumers + AssertService as
 	// constructor args (the setters are gone). The merge-time task-close
 	// enqueuer (a cross-block dep) is wired inside buildContactService.
@@ -415,6 +419,7 @@ func run() int {
 		InteractionHandler:       interactionHandler,
 		CorrectionHandler:        handlersCore.Correction,
 		TimelineAssertionHandler: handlersCore.TimelineAssertion,
+		Judgments:                judgments,
 		NoteHandler:              noteHandler,
 		ContactMethodHandler:     handlersCore.ContactMethod,
 		RematchHandler:           rematchHandler,

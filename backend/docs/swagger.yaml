@@ -573,6 +573,15 @@ definitions:
           $ref: '#/definitions/handlers.SelectedMethodInput'
         type: array
     type: object
+  handlers.IncompleteThreadResponse:
+    properties:
+      cut_off:
+        type: string
+      reason:
+        type: string
+      thread_id:
+        type: string
+    type: object
   handlers.InteractionListItemResponse:
     properties:
       cadence_inert:
@@ -673,6 +682,103 @@ definitions:
         type: string
       source_ref:
         type: string
+    type: object
+  handlers.JudgmentOutcomeResponse:
+    properties:
+      confidence:
+        type: number
+      contact_id:
+        type: string
+      due_date:
+        type: string
+      id:
+        type: string
+      outcome:
+        type: string
+      question:
+        type: string
+      review:
+        $ref: '#/definitions/handlers.JudgmentOutcomeReviewResponse'
+      state:
+        type: string
+    type: object
+  handlers.JudgmentOutcomeReviewResponse:
+    properties:
+      reviewed_at:
+        type: string
+      right_outcome:
+        type: string
+      verdict:
+        type: string
+    type: object
+  handlers.JudgmentResponse:
+    properties:
+      context_kind:
+        type: string
+      cut_off:
+        type: string
+      id:
+        type: string
+      method_key:
+        type: string
+      method_version:
+        type: string
+      outcomes:
+        items:
+          $ref: '#/definitions/handlers.JudgmentOutcomeResponse'
+        type: array
+      runs:
+        items:
+          $ref: '#/definitions/handlers.JudgmentRunAppearanceResponse'
+        type: array
+      thread_id:
+        type: string
+    type: object
+  handlers.JudgmentRunAppearanceResponse:
+    properties:
+      cut_off:
+        type: string
+      run_id:
+        type: string
+    type: object
+  handlers.JudgmentRunResponse:
+    properties:
+      finished_at:
+        type: string
+      from:
+        type: string
+      id:
+        type: string
+      incomplete:
+        items:
+          $ref: '#/definitions/handlers.IncompleteThreadResponse'
+        type: array
+      judged_count:
+        type: integer
+      kind:
+        type: string
+      method_key:
+        type: string
+      method_version:
+        type: string
+      started_at:
+        type: string
+      to:
+        type: string
+    type: object
+  handlers.JudgmentRunsResponse:
+    properties:
+      runs:
+        items:
+          $ref: '#/definitions/handlers.JudgmentRunResponse'
+        type: array
+    type: object
+  handlers.JudgmentsResponse:
+    properties:
+      judgments:
+        items:
+          $ref: '#/definitions/handlers.JudgmentResponse'
+        type: array
     type: object
   handlers.LinkContactResponse:
     properties:
@@ -1008,6 +1114,13 @@ definitions:
         type: string
       resolved_count:
         type: integer
+    type: object
+  handlers.ReviewJudgmentOutcomeRequest:
+    properties:
+      right_outcome:
+        type: string
+    required:
+    - right_outcome
     type: object
   handlers.SaveNoteRequest:
     properties:
@@ -4043,6 +4156,105 @@ paths:
       summary: Preview an interaction merge
       tags:
       - interactions
+  /judgment-outcomes/{id}/review:
+    post:
+      consumes:
+      - application/json
+      description: 'Records the right outcome the user states for an outcome of any
+        state and returns the outcome with the verdict the server derives: confirmed
+        when it equals the judged outcome, rejected when it differs and has no effect,
+        corrected otherwise. Reviewing an applied or claim outcome gives the thread
+        the right outcome''s effect.'
+      parameters:
+      - description: Outcome ID
+        format: uuid
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: The right outcome
+        in: body
+        name: review
+        required: true
+        schema:
+          $ref: '#/definitions/handlers.ReviewJudgmentOutcomeRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                data:
+                  $ref: '#/definitions/handlers.JudgmentOutcomeResponse'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.APIResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.APIResponse'
+      summary: Review a judgment outcome
+      tags:
+      - judgments
+  /judgment-runs:
+    get:
+      description: Every run with its kind, method, window, judged count (reused judgments
+        included) and the threads it reported incomplete.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                data:
+                  $ref: '#/definitions/handlers.JudgmentRunsResponse'
+              type: object
+      summary: List judgment runs
+      tags:
+      - judgments
+  /judgments:
+    get:
+      description: Judgments of a thread, a run or both, each with every run it appears
+        in and each outcome's state and review. At least one of thread_id and run_id
+        is required.
+      parameters:
+      - description: Thread (venue) ID
+        format: uuid
+        in: query
+        name: thread_id
+        type: string
+      - description: Run ID
+        format: uuid
+        in: query
+        name: run_id
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                data:
+                  $ref: '#/definitions/handlers.JudgmentsResponse'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.APIResponse'
+      summary: List judgments
+      tags:
+      - judgments
   /rematch/contacts/{id}/rescan:
     post:
       description: Re-runs rematch handlers for every method currently on the contact.

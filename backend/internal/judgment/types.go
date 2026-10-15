@@ -1,152 +1,51 @@
-// Package judgment defines the decision-model record vocabulary.
+// Package judgment stores decision-model judgments of thread contexts as SP1
+// assertions and turns the production method's current judgments into live
+// state: obligations with their tasks, big-moment flags, and claims the user
+// reviews.
 package judgment
 
 import (
+	"context"
 	"errors"
-	"fmt"
 	"time"
 
-	"personal-crm/backend/internal/config"
-	"personal-crm/backend/internal/db"
-	"personal-crm/backend/internal/repository"
-	"personal-crm/backend/internal/service"
 	"personal-crm/backend/internal/threadctx"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/jackc/pgx/v5"
 )
 
-// Cadence exposes the deterministic correspondence state read by judgments.
+// Cadence is the awaiting-reply writer a confirmed "nobody owes" claim ends a
+// wait through. *consumer.CadenceUpdater satisfies it.
 type Cadence interface {
-	WatchdogConfig() config.WatchdogConfig
-}
-
-type StoreDeps struct {
-	Pool             *pgxpool.Pool
-	Queries          *db.Queries
-	Assert           *service.AssertService
-	Contexts         *threadctx.Builder
-	Cadence          Cadence
-	Jobs             repository.JobEnqueuer
-	Watchdog         config.WatchdogConfig
-	ProductionMethod string
-}
-
-type Store struct {
-	deps StoreDeps
-}
-
-// NewStore requires every dependency used by the persistence and apply paths.
-func NewStore(d StoreDeps) *Store {
-	for _, missing := range []struct {
-		name string
-		ok   bool
-	}{
-		{"Pool", d.Pool != nil},
-		{"Queries", d.Queries != nil},
-		{"Assert", d.Assert != nil},
-		{"Contexts", d.Contexts != nil},
-		{"Cadence", d.Cadence != nil},
-		{"Jobs", d.Jobs != nil},
-	} {
-		if !missing.ok {
-			panic(fmt.Sprintf("judgment.NewStore: missing %s", missing.name))
-		}
-	}
-	return &Store{deps: d}
-}
-
-func (s *Store) ProductionMethod() (string, bool) {
-	return s.deps.ProductionMethod, s.deps.ProductionMethod != ""
+	EndAwaitingReplyTx(ctx context.Context, tx pgx.Tx, contactID uuid.UUID) error
 }
 
 var (
-	ErrNotFound            = errors.New("judgment outcome not found")
+	// ErrNotFound is returned for an unknown outcome.
+	ErrNotFound = errors.New("judgment outcome not found")
+	// ErrInvalidRightOutcome is returned for an empty right outcome, or one not
+	// among the reviewed question's outcome values.
 	ErrInvalidRightOutcome = errors.New("invalid judgment right outcome")
-	ErrUnboundedQuery      = errors.New("judgment query must name a thread or run")
+	// ErrUnboundedQuery is returned by ListJudgments with neither thread nor run.
+	ErrUnboundedQuery = errors.New("judgment query must name a thread or run")
 )
 
-// Question identifiers and their allowed outcome values form the judgment catalog.
-const (
-	QuestionBallInCourt      = "ball_in_court"
-	QuestionCommitmentMine   = "commitment_mine"
-	QuestionCommitmentTheirs = "commitment_theirs"
-	QuestionBigMoment        = "big_moment"
-)
-
-type BallInCourt string
-
-const (
-	IOweReply     BallInCourt = "i_owe_reply"
-	TheyOweReply  BallInCourt = "they_owe_reply"
-	NobodyOwes    BallInCourt = "nobody_owes"
-	NotApplicable BallInCourt = "not_applicable"
-)
-
-type CommitmentState string
-
-const (
-	CommitmentOpen CommitmentState = "open"
-	CommitmentNone CommitmentState = "none"
-)
-
-type CommitmentDirection string
-
-const (
-	CommitmentMine   CommitmentDirection = "mine"
-	CommitmentTheirs CommitmentDirection = "theirs"
-)
-
-type BigMoment string
-
-const (
-	NoBigMoment       BigMoment = "none"
-	ParticipantMoment BigMoment = "participant_moment"
-	OtherPersonMoment BigMoment = "other_person_moment"
-)
-
-type RunKind string
-
-const (
-	RunScheduled  RunKind = "scheduled"
-	RunHistorical RunKind = "historical"
-	RunRerun      RunKind = "rerun"
-)
-
-type IncompleteReason string
-
-const (
-	IncompleteOverLimit    IncompleteReason = "over_limit"
-	IncompleteCallFailed   IncompleteReason = "call_failed"
-	IncompleteInputChanged IncompleteReason = "input_changed"
-)
-
-type OutcomeState string
-
-const (
-	OutcomeApplied  OutcomeState = "applied"
-	OutcomeClaim    OutcomeState = "claim"
-	OutcomeEvidence OutcomeState = "evidence"
-)
-
-type Verdict string
-
-const (
-	VerdictConfirmed Verdict = "confirmed"
-	VerdictRejected  Verdict = "rejected"
-	VerdictCorrected Verdict = "corrected"
-)
-
+// RunID identifies a run.
 type RunID = uuid.UUID
 
+// ExampleID is the opaque ID the store issues for one thread and input hash.
 type ExampleID string
 
+// MethodRef names a method version and its question wording.
 type MethodRef struct {
 	Key            string
 	Version        string
 	WordingVersion string
 }
 
+// Usage is what one call cost. BilledTokens and CostUSD are nil where the
+// source reported none.
 type Usage struct {
 	ContextTokens int
 	Questions     int
@@ -155,12 +54,15 @@ type Usage struct {
 	Latency       time.Duration
 }
 
+// AnsweredQuestion is one question as the method answered it: every option's
+// probability (option key to probability) and the model's original answer.
 type AnsweredQuestion struct {
 	ID             string
 	Probabilities  map[string]float64
 	OriginalAnswer string
 }
 
+// ParticipantOutcome is a per-participant outcome.
 type ParticipantOutcome[T comparable] struct {
 	QuestionID string
 	ContactID  uuid.UUID
@@ -168,6 +70,8 @@ type ParticipantOutcome[T comparable] struct {
 	Confidence float64
 }
 
+// CommitmentOutcome is a commitment question's outcome for one participant.
+// DueDate is the commitment's selected calendar date, when known.
 type CommitmentOutcome struct {
 	QuestionID string
 	ContactID  uuid.UUID
@@ -177,18 +81,22 @@ type CommitmentOutcome struct {
 	DueDate    *time.Time
 }
 
+// Scored is a thread-level outcome.
 type Scored[T comparable] struct {
 	QuestionID string
 	Outcome    T
 	Confidence float64
 }
 
+// Outcomes are a judgment's typed answers.
 type Outcomes struct {
 	BallInCourt []ParticipantOutcome[BallInCourt]
 	Commitments []CommitmentOutcome
 	BigMoment   Scored[BigMoment]
 }
 
+// Judgment is one method's answers to one question tree for one thread at one
+// cut-off. JudgedAt is the execution time of the call that produced it.
 type Judgment struct {
 	Method    MethodRef
 	Thread    threadctx.VenueID
@@ -201,6 +109,7 @@ type Judgment struct {
 	Usage     Usage
 }
 
+// RunSpec describes a run to start.
 type RunSpec struct {
 	Kind   RunKind
 	Method MethodRef
@@ -208,17 +117,22 @@ type RunSpec struct {
 	To     *time.Time
 }
 
+// Effects counts what one call changed.
 type Effects struct {
 	ObligationsOpened int
 	FlagsRaised       int
 	ClaimsRaised      int
 }
 
+// ThreadCutOff is a thread a run judged, at the run's cut-off.
 type ThreadCutOff struct {
 	Thread threadctx.VenueID
 	CutOff time.Time
 }
 
+// Example is one reviewed input: a thread at an input hash, with the user's
+// reviews of it. A review labels the input for every method. Question is the
+// reviewed outcome's question; ContactID is nil for big_moment.
 type Example struct {
 	ID        ExampleID
 	Thread    threadctx.VenueID
@@ -227,12 +141,14 @@ type Example struct {
 	Reviews   []Review
 }
 
+// Review is the user's right outcome for one question and contact.
 type Review struct {
 	Question     string
 	ContactID    *uuid.UUID
 	RightOutcome string
 }
 
+// RunRecord is a finished run's content-free record.
 type RunRecord struct {
 	Run        RunID
 	Kind       RunKind
@@ -244,15 +160,19 @@ type RunRecord struct {
 	Judged     int
 	Incomplete map[IncompleteReason]int
 	Effects    Effects
-	CostUSD    *float64
+	// CostUSD is summed over the calls the run made; nil when none reported a
+	// cost.
+	CostUSD *float64
 }
 
+// QuestionOutcome is one outcome keyed by the method's question ID.
 type QuestionOutcome struct {
 	QuestionID string
 	Outcome    string
 	Confidence float64
 }
 
+// JudgmentRecord is one judgment appearing in a run, content-free.
 type JudgmentRecord struct {
 	Example   ExampleID
 	Method    MethodRef
@@ -263,6 +183,7 @@ type JudgmentRecord struct {
 	Usage     Usage
 }
 
+// ReviewRecord is one review, content-free.
 type ReviewRecord struct {
 	Example      ExampleID
 	Method       MethodRef
@@ -272,6 +193,7 @@ type ReviewRecord struct {
 	ReviewedAt   time.Time
 }
 
+// RunSummary is a run as the bench lists it.
 type RunSummary struct {
 	ID          RunID
 	Kind        RunKind
@@ -284,35 +206,46 @@ type RunSummary struct {
 	Incomplete  []IncompleteThread
 }
 
+// IncompleteThread is a thread a run reported incomplete.
 type IncompleteThread struct {
 	Thread threadctx.VenueID
 	CutOff time.Time
 	Reason IncompleteReason
 }
 
+// JudgmentQuery selects judgments by thread, run or both.
 type JudgmentQuery struct {
 	Thread *threadctx.VenueID
 	Run    *RunID
 }
 
+// JudgmentView is a judgment as the bench reads it. CutOff is its first
+// appearance's, as of which its content is shown.
 type JudgmentView struct {
-	ID       uuid.UUID
-	Thread   threadctx.VenueID
-	CutOff   time.Time
-	Runs     []RunAppearance
-	Method   MethodRef
-	Kind     threadctx.ContextKind
-	Outcomes []OutcomeView
+	ID        uuid.UUID
+	Thread    threadctx.VenueID
+	CutOff    time.Time
+	Runs      []RunAppearance
+	Method    MethodRef
+	Kind      threadctx.ContextKind
+	InputHash string
+	JudgedAt  time.Time
+	Outcomes  []OutcomeView
 }
 
+// RunAppearance is a run a judgment appears in, at that run's cut-off.
 type RunAppearance struct {
 	Run    RunID
 	CutOff time.Time
 }
 
+// OutcomeView is one outcome with its state and review. QuestionID is the
+// method's question ID, empty for an omission the store raised; Question is
+// the question it answers.
 type OutcomeView struct {
 	ID         uuid.UUID
 	QuestionID string
+	Question   Question
 	ContactID  *uuid.UUID
 	Outcome    string
 	Confidence float64
@@ -321,8 +254,21 @@ type OutcomeView struct {
 	Review     *OutcomeReview
 }
 
+// OutcomeReview is the user's review of an outcome.
 type OutcomeReview struct {
 	Verdict      Verdict
 	RightOutcome string
 	ReviewedAt   time.Time
+}
+
+// Obligation is one obligation on a thread, open or closed: who owes (the user
+// or the task's contact) what, and its one task.
+type Obligation struct {
+	TaskID    uuid.UUID
+	ContactID uuid.UUID
+	Debtor    string
+	Basis     string
+	Kind      string
+	DueDate   time.Time
+	Open      bool
 }

@@ -90,6 +90,7 @@ func buildRouterForOAuthWiring(t *testing.T, cfg *config.Config) *gin.Engine {
 	graph := buildGraphCore(database, eventBus)
 	messaging := buildMessagingFoundation(database.Queries, ingest.MessagesMessage, ingest.CalendarEvent)
 	consumers := buildDomainConsumers(cfg, database, core, graph, eventBus, riverClient)
+	judgments := buildJudgmentStore(cfg, database, graph, consumers, messaging, riverClient)
 	contactService := buildContactService(cfg, database, core, graph, consumers, eventBus, riverClient)
 	interactionRecorder := buildInteractionRecorder(contactService, messaging, ingest, consumers, eventBus)
 	domain := buildDomainServices(database, core, graph, ingest, consumers, eventBus)
@@ -145,6 +146,7 @@ func buildRouterForOAuthWiring(t *testing.T, cfg *config.Config) *gin.Engine {
 		InteractionHandler:       handlersCore.Interaction,
 		CorrectionHandler:        handlersCore.Correction,
 		TimelineAssertionHandler: handlersCore.TimelineAssertion,
+		Judgments:                judgments,
 		NoteHandler:              handlersCore.Note,
 		ContactMethodHandler:     handlersCore.ContactMethod,
 		RematchHandler:           handlersCore.Rematch,

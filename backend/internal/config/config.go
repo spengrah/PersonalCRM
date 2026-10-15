@@ -30,6 +30,15 @@ type Config struct {
 	EventBus  EventBusConfig
 	Health    HealthConfig
 	Sync      SyncConfig
+	Decision  DecisionConfig
+}
+
+// DecisionConfig holds the decision-model settings.
+type DecisionConfig struct {
+	// ProductionMethod is the key of the one decision-model method whose
+	// judgments may change live state (DECISION_PRODUCTION_METHOD). Empty
+	// designates none, so no judgment changes live state.
+	ProductionMethod string
 }
 
 // SyncConfig holds external-sync housekeeping settings.
@@ -576,6 +585,9 @@ func Load() (*Config, error) {
 		},
 		Sync: SyncConfig{
 			LogRetentionDays: getEnvAsInt("SYNC_LOG_RETENTION_DAYS", DefaultSyncLogRetentionDays),
+		},
+		Decision: DecisionConfig{
+			ProductionMethod: getEnv("DECISION_PRODUCTION_METHOD", ""),
 		},
 		EventBus: EventBusConfig{
 			InteractionMode:        getEnv("EVENT_BUS_INTERACTION_MODE", EventBusInteractionModeCutover),

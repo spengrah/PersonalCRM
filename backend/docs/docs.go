@@ -4006,6 +4006,158 @@ const docTemplate = `{
                 }
             }
         },
+        "/judgment-outcomes/{id}/review": {
+            "post": {
+                "description": "Records the right outcome the user states for an outcome of any state and returns the outcome with the verdict the server derives: confirmed when it equals the judged outcome, rejected when it differs and has no effect, corrected otherwise. Reviewing an applied or claim outcome gives the thread the right outcome's effect.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "judgments"
+                ],
+                "summary": "Review a judgment outcome",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "format": "uuid",
+                        "description": "Outcome ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "The right outcome",
+                        "name": "review",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ReviewJudgmentOutcomeRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/api.APIResponse"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/handlers.JudgmentOutcomeResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/api.APIResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/api.APIResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/judgment-runs": {
+            "get": {
+                "description": "Every run with its kind, method, window, judged count (reused judgments included) and the threads it reported incomplete.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "judgments"
+                ],
+                "summary": "List judgment runs",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/api.APIResponse"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/handlers.JudgmentRunsResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    }
+                }
+            }
+        },
+        "/judgments": {
+            "get": {
+                "description": "Judgments of a thread, a run or both, each with every run it appears in and each outcome's state and review. At least one of thread_id and run_id is required.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "judgments"
+                ],
+                "summary": "List judgments",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "format": "uuid",
+                        "description": "Thread (venue) ID",
+                        "name": "thread_id",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "format": "uuid",
+                        "description": "Run ID",
+                        "name": "run_id",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/api.APIResponse"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/handlers.JudgmentsResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/api.APIResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/rematch/contacts/{id}/rescan": {
             "post": {
                 "description": "Re-runs rematch handlers for every method currently on the contact.",
@@ -6701,6 +6853,20 @@ const docTemplate = `{
                 }
             }
         },
+        "handlers.IncompleteThreadResponse": {
+            "type": "object",
+            "properties": {
+                "cut_off": {
+                    "type": "string"
+                },
+                "reason": {
+                    "type": "string"
+                },
+                "thread_id": {
+                    "type": "string"
+                }
+            }
+        },
         "handlers.InteractionListItemResponse": {
             "type": "object",
             "properties": {
@@ -6854,6 +7020,155 @@ const docTemplate = `{
                 },
                 "source_ref": {
                     "type": "string"
+                }
+            }
+        },
+        "handlers.JudgmentOutcomeResponse": {
+            "type": "object",
+            "properties": {
+                "confidence": {
+                    "type": "number"
+                },
+                "contact_id": {
+                    "type": "string"
+                },
+                "due_date": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "outcome": {
+                    "type": "string"
+                },
+                "question": {
+                    "type": "string"
+                },
+                "review": {
+                    "$ref": "#/definitions/handlers.JudgmentOutcomeReviewResponse"
+                },
+                "state": {
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.JudgmentOutcomeReviewResponse": {
+            "type": "object",
+            "properties": {
+                "reviewed_at": {
+                    "type": "string"
+                },
+                "right_outcome": {
+                    "type": "string"
+                },
+                "verdict": {
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.JudgmentResponse": {
+            "type": "object",
+            "properties": {
+                "context_kind": {
+                    "type": "string"
+                },
+                "cut_off": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "method_key": {
+                    "type": "string"
+                },
+                "method_version": {
+                    "type": "string"
+                },
+                "outcomes": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/handlers.JudgmentOutcomeResponse"
+                    }
+                },
+                "runs": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/handlers.JudgmentRunAppearanceResponse"
+                    }
+                },
+                "thread_id": {
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.JudgmentRunAppearanceResponse": {
+            "type": "object",
+            "properties": {
+                "cut_off": {
+                    "type": "string"
+                },
+                "run_id": {
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.JudgmentRunResponse": {
+            "type": "object",
+            "properties": {
+                "finished_at": {
+                    "type": "string"
+                },
+                "from": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "incomplete": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/handlers.IncompleteThreadResponse"
+                    }
+                },
+                "judged_count": {
+                    "type": "integer"
+                },
+                "kind": {
+                    "type": "string"
+                },
+                "method_key": {
+                    "type": "string"
+                },
+                "method_version": {
+                    "type": "string"
+                },
+                "started_at": {
+                    "type": "string"
+                },
+                "to": {
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.JudgmentRunsResponse": {
+            "type": "object",
+            "properties": {
+                "runs": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/handlers.JudgmentRunResponse"
+                    }
+                }
+            }
+        },
+        "handlers.JudgmentsResponse": {
+            "type": "object",
+            "properties": {
+                "judgments": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/handlers.JudgmentResponse"
+                    }
                 }
             }
         },
@@ -7301,6 +7616,17 @@ const docTemplate = `{
                 },
                 "resolved_count": {
                     "type": "integer"
+                }
+            }
+        },
+        "handlers.ReviewJudgmentOutcomeRequest": {
+            "type": "object",
+            "required": [
+                "right_outcome"
+            ],
+            "properties": {
+                "right_outcome": {
+                    "type": "string"
                 }
             }
         },

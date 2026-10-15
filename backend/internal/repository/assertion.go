@@ -21,8 +21,9 @@ const (
 
 // Provenance source-kind constants (the closed enum the CHECK enforces). The
 // content kinds back fact/edge extraction; calendar_event/phone_call are
-// metadata sources; user/agent_session/anarlog_transcript carry no backing-row
-// existence check.
+// metadata sources; user/agent_session/anarlog_transcript/judgment carry no
+// backing-row existence check. judgment names the judgment record a model
+// answer came from.
 const (
 	SourceKindCommsMessage      = "comms_message"
 	SourceKindTelegramMessage   = "telegram_message"
@@ -33,6 +34,7 @@ const (
 	SourceKindPhoneCall         = "phone_call"
 	SourceKindUser              = "user"
 	SourceKindAgentSession      = "agent_session"
+	SourceKindJudgment          = "judgment"
 )
 
 // Provenance producer-kind constants (per-locator; the strongest across an

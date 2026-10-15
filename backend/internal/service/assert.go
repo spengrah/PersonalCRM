@@ -382,13 +382,7 @@ func (s *AssertService) AssertTx(ctx context.Context, tx pgx.Tx, req AssertReque
 	// Step 2: compute the proposition key + per-locator hashes.
 	propKey := computePropositionKey(predicate, canonKey, canonSubject, canonObject, &req)
 
-	// Judgment predicates carry their complete landing policy in the catalog.
-	// In particular, no AssertRequest field can turn a claim into an accepted
-	// assertion or lower the confidence threshold.
-	landingAccepted := predicate.DefaultReviewPolicy == repository.PredicateReviewAutoIfConfident && !req.ForceConfirm
-	if predicate.JudgmentConfidenceThreshold != nil {
-		landingAccepted = judgmentLandingAccepted(predicate, &req)
-	}
+	landingAccepted := landsAccepted(predicate, &req)
 
 	// GLOBAL lock order — the correction locks, then, for a single-cardinality
 	// write that may land accepted, the slot advisory lock(s), all BEFORE any row
@@ -420,29 +414,20 @@ func (s *AssertService) AssertTx(ctx context.Context, tx pgx.Tx, req AssertReque
 	return s.writeNew(ctx, tx, predicate, canonKey, canonSubject, canonObject, propKey, &req, landingAccepted, knowledgeFrom, now)
 }
 
-func judgmentLandingAccepted(predicate *repository.Predicate, req *AssertRequest) bool {
-	if req.ValueText == nil || predicate.JudgmentConfidenceThreshold == nil {
-		return false
+// landsAccepted decides whether a write lands accepted or proposed. A
+// judgment predicate's landing is the catalog's alone (migration 093): its
+// default_review_policy, and for an auto-if-confident one with a confidence
+// threshold, whether the write's confidence reaches it. No request field
+// changes it, ForceConfirm included, so loosening the apply rule is a catalog
+// edit. Any other predicate lands accepted under auto-if-confident unless the
+// caller forces confirmation.
+func landsAccepted(predicate *repository.Predicate, req *AssertRequest) bool {
+	auto := predicate.DefaultReviewPolicy == repository.PredicateReviewAutoIfConfident
+	if !predicate.Judgment {
+		return auto && !req.ForceConfirm
 	}
-	value := strings.TrimSpace(*req.ValueText)
-	contains := func(values []string) bool {
-		for _, candidate := range values {
-			if candidate == value {
-				return true
-			}
-		}
-		return false
-	}
-	switch {
-	case contains(predicate.JudgmentRemovalValues):
-		return false
-	case contains(predicate.JudgmentNoEffectValues):
-		return true
-	case contains(predicate.JudgmentAdditionValues):
-		return req.Confidence >= *predicate.JudgmentConfidenceThreshold
-	default:
-		return false
-	}
+	threshold := predicate.JudgmentConfidenceThreshold
+	return auto && (threshold == nil || req.Confidence >= *threshold)
 }
 
 // --------------------------------------------------------------------------
@@ -564,7 +549,7 @@ func (s *AssertService) validateObjectType(ctx context.Context, tx pgx.Tx, objec
 // tombstoned, so it validates like any live node.
 func (s *AssertService) matchNodeType(ctx context.Context, tx pgx.Tx, node *repository.Node, expected, role string) error {
 	switch node.Type {
-	case repository.NodeTypePerson, repository.NodeTypeVenue, repository.NodeTypeInteraction:
+	case repository.NodeTypePerson, repository.NodeTypeVenue, repository.NodeTypeInteraction, repository.NodeTypeJudgmentOutcome:
 		if node.Type != expected {
 			return validationError("%s node type %q does not match predicate %s_type %q", role, node.Type, role, expected)
 		}
@@ -729,7 +714,8 @@ func isValidSourceKind(k string) bool {
 	case repository.SourceKindCommsMessage, repository.SourceKindTelegramMessage,
 		repository.SourceKindMessagesMessage, repository.SourceKindMeetingNote,
 		repository.SourceKindAnarlogTranscript, repository.SourceKindCalendarEvent,
-		repository.SourceKindPhoneCall, repository.SourceKindUser, repository.SourceKindAgentSession:
+		repository.SourceKindPhoneCall, repository.SourceKindUser, repository.SourceKindAgentSession,
+		repository.SourceKindJudgment:
 		return true
 	default:
 		return false
@@ -1661,7 +1647,12 @@ func (s *AssertService) AcceptTx(ctx context.Context, tx pgx.Tx, assertionID uui
 // Reject transitions a proposed assertion to rejected (a review item declined). It
 // never enters "current". Emits assertion.rejected.
 func (s *AssertService) Reject(ctx context.Context, assertionID uuid.UUID, _ RejectRequest) (a *repository.Assertion, err error) {
-	return s.terminalTransition(ctx, assertionID, repository.AssertionStatusProposed,
+	return s.inTx(ctx, func(tx pgx.Tx) (*repository.Assertion, error) { return s.RejectTx(ctx, tx, assertionID) })
+}
+
+// RejectTx is the tx-bound variant of Reject.
+func (s *AssertService) RejectTx(ctx context.Context, tx pgx.Tx, assertionID uuid.UUID) (*repository.Assertion, error) {
+	return s.terminalTransitionTx(ctx, tx, assertionID, repository.AssertionStatusProposed,
 		repository.AssertionStatusRejected, repository.ClosureReasonRejected, events.KindAssertionRejected)
 }
 
@@ -1671,13 +1662,17 @@ func (s *AssertService) Reject(ctx context.Context, assertionID uuid.UUID, _ Rej
 // new kind); the row carries closure_reason='retracted' for any consumer that
 // needs to distinguish.
 func (s *AssertService) Retract(ctx context.Context, assertionID uuid.UUID, _ RetractRequest) (a *repository.Assertion, err error) {
-	return s.terminalTransition(ctx, assertionID, repository.AssertionStatusAccepted,
+	return s.inTx(ctx, func(tx pgx.Tx) (*repository.Assertion, error) { return s.RetractTx(ctx, tx, assertionID) })
+}
+
+// RetractTx is the tx-bound variant of Retract.
+func (s *AssertService) RetractTx(ctx context.Context, tx pgx.Tx, assertionID uuid.UUID) (*repository.Assertion, error) {
+	return s.terminalTransitionTx(ctx, tx, assertionID, repository.AssertionStatusAccepted,
 		repository.AssertionStatusRetracted, repository.ClosureReasonRetracted, events.KindAssertionSuperseded)
 }
 
-// terminalTransition is the shared Reject/Retract path: require the from-status,
-// set the terminal status + knowledge_to + closure_reason, and emit the event.
-func (s *AssertService) terminalTransition(ctx context.Context, assertionID uuid.UUID, fromStatus, toStatus, closureReason string, kind events.Kind) (a *repository.Assertion, err error) {
+// inTx runs fn in its own transaction and commits it.
+func (s *AssertService) inTx(ctx context.Context, fn func(tx pgx.Tx) (*repository.Assertion, error)) (a *repository.Assertion, err error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return nil, err
@@ -1687,6 +1682,19 @@ func (s *AssertService) terminalTransition(ctx context.Context, assertionID uuid
 			err = rb
 		}
 	}()
+	if a, err = fn(tx); err != nil {
+		return nil, err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+	return a, nil
+}
+
+// terminalTransitionTx is the shared Reject/Retract path: require the
+// from-status, set the terminal status + knowledge_to + closure_reason, and
+// emit the event, within the caller's tx.
+func (s *AssertService) terminalTransitionTx(ctx context.Context, tx pgx.Tx, assertionID uuid.UUID, fromStatus, toStatus, closureReason string, kind events.Kind) (*repository.Assertion, error) {
 	now := accelerated.GetCurrentTime().UTC()
 	// The correction lock before the row lock (the global order): a plain read
 	// names the nodes, which never change on a row.
@@ -1725,9 +1733,6 @@ func (s *AssertService) terminalTransition(ctx context.Context, assertionID uuid
 	assertion.KnowledgeTo = &knowledgeTo
 	assertion.ClosureReason = &closure
 	if err := s.emitAssertionEvent(ctx, tx, kind, assertion, now); err != nil {
-		return nil, err
-	}
-	if err := tx.Commit(ctx); err != nil {
 		return nil, err
 	}
 	return assertion, nil

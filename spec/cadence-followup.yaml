@@ -284,8 +284,8 @@ behaviors:
     type: invariant
     status: current
     surface: none
-    statement: task kinds are reach_out, send, and reminder (plus legacy meet and action); lifecycles are manual, cadence_due, and followup_loop; only reach_out may take all three lifecycles (every other kind is manual-only, enforced by a composite CHECK); kind determines the interaction recorded on completion, while lifecycle determines origin, scheduling, and dismissal routing — with one legacy exception, action tasks, which are routed by kind (CAD-021).
-    provenance: [contact_task_kind_lifecycle_check migration 046, internal/contacttask/kinds.go, task-direction-taxonomy.md]
+    statement: task kinds are reach_out, send, and reminder (plus legacy meet and action); lifecycles are manual, cadence_due, followup_loop, and obligation; only reach_out may take all four lifecycles, reminder may take manual or obligation, and every other kind is manual-only (enforced by a composite CHECK); kind determines the interaction recorded on completion, while lifecycle determines origin, scheduling, and dismissal routing — with one legacy exception, action tasks, which are routed by kind (CAD-021).
+    provenance: [contact_task_kind_lifecycle_check migration 046, internal/contacttask/kinds.go, task-direction-taxonomy.md, 094_obligation_task.up.sql]
 
   # --- Overdue surface ---
 
@@ -712,3 +712,127 @@ behaviors:
     provenance: [.agents/spec/2026-10-13-interaction-review-readiness.md]
     notes: Local correction and remote task effect are distinct states. A removal that makes a contact due raises the cadence-due task at reconciliation; a follow-up tracks an awaited reply and is never created merely because a contact is due.
 
+
+  # --- Judgment obligations ---
+
+  - id: CAD-054
+    title: An obligation is keyed by thread and owing party and kept open by exactly one task
+    type: business-logic
+    status: current
+    surface: none
+    given: a production judgment that applies an owed reply or a commitment on a thread
+    when: the obligation opens
+    then:
+      - key: one-open-per-thread-and-party
+        text: at most one obligation is open for one thread and one owing party, the user or one participant contact
+      - key: open-while-task-live
+        text: the obligation is open exactly while its one task, of lifecycle obligation, is managed or awaiting its remote create
+      - key: kind-by-what-completion-records
+        text: the task is a reach_out for the user's owed reply and for anything a participant owes, and a reminder for a commitment the user owes
+      - key: user-obligation-on-most-confident-contact
+        text: when the user owes several participants on one thread, the one obligation's task belongs to the owed contact judged most confidently
+    provenance: [judgment.Store landTx, 094_obligation_task.up.sql, .agents/spec/2026-10-14-decision-model-extraction.md G7a]
+
+  - id: CAD-055
+    title: A commitment supersedes a reply, and one party's commitments share the earliest date
+    type: business-logic
+    status: current
+    surface: none
+    given: a party who owes a reply and has committed to something on one thread
+    when: the judgment's outcomes are applied
+    then:
+      - key: commitment-supersedes-reply
+        text: the reply and the commitment yield one obligation, a commitment, with one task
+      - key: earliest-known-date
+        text: several commitments of one party on one thread are one obligation dated at the earliest known date
+      - key: upgrade-keeps-earlier-date
+        text: a commitment that supersedes an open reply obligation keeps the earlier of the two due dates
+    provenance: [judgment.planner.plan, .agents/spec/2026-10-14-decision-model-extraction.md G3b G7a SC4]
+
+  - id: CAD-056
+    title: An obligation task is due on the commitment's date, else by who owes it
+    type: business-logic
+    status: current
+    surface: none
+    given: an obligation opening
+    when: its task's due date is set
+    then:
+      - key: participant-selected-date
+        text: an obligation a participant owes is due on the commitment's selected date when the judgment selected one
+      - key: participant-watchdog-days
+        text: otherwise it is due the contact's cadence watchdog days after the day it opens
+      - key: participant-seven-days-without-cadence
+        text: for a contact without a cadence it is due seven days after the day it opens
+      - key: user-selected-date-else-day-opened
+        text: an obligation the user owes is due on the commitment's selected date, else on the day it opens
+    provenance: [judgment.Store nudgeDueTx, judgment.planner.defaultDueTx, .agents/spec/2026-10-14-decision-model-extraction.md G7c G7d SC5]
+
+  - id: CAD-057
+    title: The user's act on an obligation task closes the obligation
+    type: business-logic
+    status: current
+    surface: none
+    given: an open obligation's task in Todoist
+    when: the user completes or dismisses the task
+    then:
+      - key: reach-out-completion-records-outreach
+        text: completing a reach_out obligation task records outreach as completing any reach_out task does, and closes the obligation
+      - key: reminder-completion-records-nothing
+        text: completing the reminder for a commitment the user owes closes the obligation and records no correspondence
+      - key: dismissal-closes-and-records-nothing
+        text: dismissing the task (deleting it, removing its CRM label or removing its deadline) closes the obligation and records nothing
+      - key: open-commitment-reappears
+        text: a commitment still open reappears at the next current judgment of changed content as a new obligation with a new task, and the closed one stays closed
+    provenance: [CadenceSyncProvider.handleTaskCompletion, CadenceSyncProvider.handleManualDismissal, .agents/spec/2026-10-14-decision-model-extraction.md G7a G7b G7c]
+
+  - id: CAD-058
+    title: A new message closes the reply obligation it answers
+    type: business-logic
+    status: current
+    surface: none
+    given: an open reply obligation on a thread
+    when: a message on the thread is recorded, as a new interaction or by extending one, from any message source
+    then:
+      - key: user-message-closes-i-owe-reply
+        text: the user's own message after the obligation's cut-off closes the thread's "I owe a reply" obligation and its task
+      - key: participant-message-closes-they-owe-reply
+        text: the owing participant's own message after the cut-off closes that participant's "they owe a reply" obligation and its task
+      - key: commitments-stay-open
+        text: no message closes a commitment
+      - key: other-threads-untouched
+        text: a message on one thread closes no obligation on another
+    provenance: [judgment.Store.CloseAnsweredObligationsTx, CadenceUpdater.SetObligationCloser, .agents/spec/2026-10-14-decision-model-extraction.md "obligations are durable"]
+
+  - id: CAD-059
+    title: A "they owe a reply" judgment composes with the awaiting-reply wait
+    type: business-logic
+    status: current
+    surface: none
+    given: a production judgment that a participant owes the user a reply
+    when: it is applied
+    then:
+      - key: no-obligation-while-awaiting
+        text: while the timestamp rule shows the contact awaiting a reply (CAD-040), no thread obligation opens
+      - key: obligation-when-not-awaiting
+        text: when it shows none, one obligation with a reach_out task opens for the participant
+      - key: nobody-owes-on-wait-thread-is-claim
+        text: a "nobody owes" judgment on the thread whose outreach started the contact's wait is a claim that leaves the wait in place
+    provenance: [judgment.planner.plan, judgment.Store.waitStartedHereTx, .agents/spec/2026-10-14-decision-model-extraction.md G7e SC7]
+
+  - id: CAD-060
+    title: Confirming a "nobody owes" claim ends the wait without a skip
+    type: business-logic
+    status: current
+    surface: none
+    given: a "nobody owes" claim on the thread whose outreach started the contact's awaiting-reply wait
+    when: the user confirms the claim
+    then:
+      - key: wait-ends
+        text: the contact is no longer awaiting a reply by CAD-040's evaluation
+      - key: no-skip-and-timestamps-kept
+        text: no skip is recorded, and the next-contact date and the interaction timestamps keep their values
+      - key: follow-up-closed
+        text: the live follow-up reminder that tracked the wait is closed
+      - key: cadence-task-proceeds
+        text: the next task reconciliation creates the due cadence task (CAD-042)
+    provenance: [CadenceUpdater.EndAwaitingReplyTx, judgment.Store.endWaitTx, .agents/spec/2026-10-14-decision-model-extraction.md SC7]

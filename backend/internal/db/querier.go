@@ -442,6 +442,14 @@ type Querier interface {
 	// been merged/soft-deleted drops from these reads.
 	CreateEntity(ctx context.Context, arg CreateEntityParams) (*Entity, error)
 	CreateInteraction(ctx context.Context, arg CreateInteractionParams) (*Interaction, error)
+	CreateJudgment(ctx context.Context, arg CreateJudgmentParams) (uuid.UUID, error)
+	CreateJudgmentAppearance(ctx context.Context, arg CreateJudgmentAppearanceParams) (int64, error)
+	CreateJudgmentIncomplete(ctx context.Context, arg CreateJudgmentIncompleteParams) error
+	// Creates an outcome's node and its judgment_outcome row together.
+	CreateJudgmentOutcome(ctx context.Context, arg CreateJudgmentOutcomeParams) (*JudgmentOutcome, error)
+	// Judgment store queries (migrations 092-094). Predicate keys are arguments, so
+	// the judgment package's constants stay their one definition.
+	CreateJudgmentRun(ctx context.Context, arg CreateJudgmentRunParams) (*JudgmentRun, error)
 	// mac_host queries.
 	CreateMacHost(ctx context.Context, arg CreateMacHostParams) (*MacHost, error)
 	// Node registry queries (graph foundation).
@@ -450,6 +458,10 @@ type Querier interface {
 	CreateNote(ctx context.Context, arg CreateNoteParams) (*Note, error)
 	// Create a note with a specific created_at timestamp (for migrations)
 	CreateNoteWithTimestamp(ctx context.Context, arg CreateNoteWithTimestampParams) (*Note, error)
+	// Inserts an obligation's one task (lifecycle 'obligation'); the partial unique
+	// index idx_contact_task_obligation_open refuses a second open obligation for
+	// the same thread and owing party.
+	CreateObligationTask(ctx context.Context, arg CreateObligationTaskParams) (*ContactTask, error)
 	// mac_host_pairing_token queries.
 	CreatePairingToken(ctx context.Context, arg CreatePairingTokenParams) (*MacHostPairingToken, error)
 	// Mints a (typically provisional) predicate at runtime. The embedding column is
@@ -613,6 +625,9 @@ type Querier interface {
 	// must be demoted regardless of method type before TransferContactMethods, or a
 	// cross-type dual-primary pair violates the index and fails the merge.
 	DemoteSourcePrimaryMethods(ctx context.Context, arg DemoteSourcePrimaryMethodsParams) error
+	// The one issuer of example IDs: returns the example of (thread, input hash),
+	// creating it with a random ID the first time.
+	EnsureJudgmentExample(ctx context.Context, arg EnsureJudgmentExampleParams) (*JudgmentExample, error)
 	ExistsCalendarEvent(ctx context.Context, id uuid.UUID) (bool, error)
 	// Write-time existence validation: confirm a content source row exists before
 	// accepting a provenance locator that references it. One tiny query per content
@@ -745,9 +760,11 @@ type Querier interface {
 	// key so a user logging outbound then inbound for the same contact
 	// within the window correctly produces two separate rows.
 	FindInteractionInWindow(ctx context.Context, arg FindInteractionInWindowParams) (*Interaction, error)
+	FindJudgment(ctx context.Context, arg FindJudgmentParams) (uuid.UUID, error)
 	// The dedup lookup: the single LIVE assertion (proposed or accepted, not yet
 	// knowledge-closed) for a proposition_key. Backed by idx_assertion_live_proposition.
 	FindLiveProposition(ctx context.Context, propositionKey string) (*Assertion, error)
+	FindLiveVenueFlag(ctx context.Context, arg FindLiveVenueFlagParams) (uuid.UUID, error)
 	FindMethodsByNormalizedValue(ctx context.Context, arg FindMethodsByNormalizedValueParams) ([]*FindMethodsByNormalizedValueRow, error)
 	// Find a pending follow-up task for a contact. Matches both 'managed'
 	// and 'pending_remote_create' live states so the two-step create flow
@@ -802,6 +819,7 @@ type Querier interface {
 	// Looks up the single live venue for a real container via the
 	// (source, kind, source_container_id) unique.
 	FindVenueByContainer(ctx context.Context, arg FindVenueByContainerParams) (*Venue, error)
+	FinishJudgmentRun(ctx context.Context, arg FinishJudgmentRunParams) (int64, error)
 	// Used by MacHostAuthMiddleware. Filters revoked hosts so a revoked
 	// daemon's bearer key cannot authenticate.
 	GetActiveMacHostByID(ctx context.Context, id uuid.UUID) (*MacHost, error)
@@ -935,6 +953,7 @@ type Querier interface {
 	// live CHECK set equals the repository.InteractionSource* constants.
 	// Read-only catalog access; production code never calls this.
 	GetInteractionSourceCheckDef(ctx context.Context) (string, error)
+	GetJudgmentRun(ctx context.Context, id uuid.UUID) (*JudgmentRun, error)
 	// The time of the thread's latest content at or before as_of; no row when none.
 	GetLatestThreadContentAt(ctx context.Context, arg GetLatestThreadContentAtParams) (time.Time, error)
 	// Legacy lookup for action-kind rows (no new creator path; preserved for
@@ -1063,6 +1082,9 @@ type Querier interface {
 	GetTelegramMessageContainer(ctx context.Context, id uuid.UUID) (*GetTelegramMessageContainerRow, error)
 	GetTelegramSession(ctx context.Context) (*TelegramSession, error)
 	GetTelegramUpdateState(ctx context.Context, userID int64) (*TelegramUpdateState, error)
+	// The Todoist settings a new task's metadata snapshots, from the most recently
+	// updated Todoist sync state.
+	GetTodoistTaskSettings(ctx context.Context) ([]byte, error)
 	// Probe used by the dispatch loop's revive-bypass: when a duplicate
 	// meeting_note.recorded event arrives (same source_id, content unchanged)
 	// and a tombstoned row exists, the inline handler still runs so it can
@@ -1243,6 +1265,9 @@ type Querier interface {
 	// recording published, which is keyed by the observation's id under its
 	// source. An observation recorded without that event suppressed nothing.
 	InteractionRecordingSuppressedFollowUp(ctx context.Context, id uuid.UUID) (bool, error)
+	// Whether the contact's outreach that started its awaiting-reply wait (the
+	// outbound at last_outreach_at) happened on the venue.
+	InteractionStartedAwaitingWait(ctx context.Context, arg InteractionStartedAwaitingWaitParams) (bool, error)
 	// Metric 1: peak concurrency over [@window_start,@window_end]. Intervals are selected by
 	// OVERLAP with the window and clamped to it (so a job spanning the whole window
 	// still contributes); deltas are netted per timestamp before the running sum
@@ -1485,6 +1510,18 @@ type Querier interface {
 	// Test-only read of sample rows by river_job_id (raw SQL is banned in Go tests,
 	// so the real-Subscribe integration test reads rows back through this query).
 	ListJobExecSamplesByRiverJobIDForTest(ctx context.Context, riverJobIds []int64) ([]*ListJobExecSamplesByRiverJobIDForTestRow, error)
+	// The appearances of the given judgments, or of every judgment in a run.
+	ListJudgmentAppearances(ctx context.Context, arg ListJudgmentAppearancesParams) ([]*ListJudgmentAppearancesRow, error)
+	ListJudgmentIncomplete(ctx context.Context) ([]*JudgmentIncomplete, error)
+	// The outcomes of the given judgments, or the given outcomes.
+	ListJudgmentOutcomes(ctx context.Context, arg ListJudgmentOutcomesParams) ([]*JudgmentOutcome, error)
+	// Judgments with their example, by ID, or for a thread, a run or both (a run
+	// matches every judgment appearing in it).
+	ListJudgmentRows(ctx context.Context, arg ListJudgmentRowsParams) ([]*ListJudgmentRowsRow, error)
+	// Every run with its judged count (reused appearances included), the effects
+	// its appearances changed, and the cost summed over the calls it made (its
+	// fresh appearances); cost_reported is false when none of them reported one.
+	ListJudgmentRunSummaries(ctx context.Context, finishedOnly bool) ([]*ListJudgmentRunSummariesRow, error)
 	// Returns (source_id, last_content_hash) for every live
 	// external_contact row owned by the given (host_id, source). Powers
 	// GET /api/v1/host/:id/sync/:source/known-ids. Tombstoned rows are
@@ -1505,6 +1542,11 @@ type Querier interface {
 	// excluded — the daemon's set-diff reconciliation requires that rows
 	// the Pi has soft-deleted are NOT reported as known.
 	ListKnownMeetingNoteIDsByHost(ctx context.Context, macHostID *uuid.UUID) ([]*ListKnownMeetingNoteIDsByHostRow, error)
+	// The user's latest review of each question and contact on each example,
+	// whichever method's outcome it reviewed, ordered by example, question and
+	// contact. cut_off is the example's earliest judgment cut-off. Restricted to
+	// the given examples when any are named.
+	ListLatestExampleReviews(ctx context.Context, arg ListLatestExampleReviewsParams) ([]*ListLatestExampleReviewsRow, error)
 	// Driver query for the address-book method reconcile (forward hooks +
 	// one-time catchup). Returns every live address-book row that is itself
 	// linked OR is a duplicate of a (live) canonical row, joining to the
@@ -1563,14 +1605,22 @@ type Querier interface {
 	ListOAuthCredentialStatuses(ctx context.Context, provider string) ([]*ListOAuthCredentialStatusesRow, error)
 	// List all OAuth credentials for a provider
 	ListOAuthCredentials(ctx context.Context, provider string) ([]*OauthCredential, error)
+	// Every obligation task on a thread, open or closed, oldest first.
+	ListObligationTasksByThread(ctx context.Context, threadID *uuid.UUID) ([]*ContactTask, error)
 	// The given live observations whose content sits in the venue: the base venue
 	// filter of a contact's interaction list. A source that has no content
 	// container matches nothing.
 	ListObservationsInVenue(ctx context.Context, arg ListObservationsInVenueParams) ([]uuid.UUID, error)
+	// The open reply obligations on the threads a contact takes part in: the
+	// contact's own interactions name the thread, or the contact holds the task.
+	ListOpenReplyObligationsForContact(ctx context.Context, contactID uuid.UUID) ([]*ContactTask, error)
 	// All currently-open breaches, deterministically ordered for stable log
 	// output and the reconcile diff. Used both by the watchdog (to compute the
 	// resolve set) and by the read endpoint (active breaches only).
 	ListOpenStalenessBreaches(ctx context.Context) ([]*SyncStalenessBreach, error)
+	// The assertions about the given outcome nodes under the given predicates,
+	// oldest first.
+	ListOutcomeAssertions(ctx context.Context, arg ListOutcomeAssertionsParams) ([]*Assertion, error)
 	// Lists contacts whose contact_by date is before today (overdue).
 	// Returns contacts ordered by how overdue they are (most overdue first).
 	ListOverdueContacts(ctx context.Context, arg ListOverdueContactsParams) ([]*Contact, error)
@@ -1587,6 +1637,8 @@ type Querier interface {
 	// locators that referenced it).
 	ListProvenanceBySource(ctx context.Context, arg ListProvenanceBySourceParams) ([]*AssertionProvenance, error)
 	ListRecentSyncLogs(ctx context.Context, limit int32) ([]*ExternalSyncLog, error)
+	// Every live review with the reviewed outcome's judgment, for the export.
+	ListReviewRecords(ctx context.Context, arg ListReviewRecordsParams) ([]*ListReviewRecordsRow, error)
 	// Returns all live interactions attributed to a specific anarlog session
 	// (both impromptu / orphan-with-tags entries and walk-in supplementals).
 	// Used by the re-sync diff path in the meeting_note.recorded inline
@@ -2107,6 +2159,7 @@ type Querier interface {
 	// re-read (never trusting a stale client row); an empty slice marshals to
 	// nil bytes → SQL NULL.
 	SetExternalContactPendingAndDismissed(ctx context.Context, arg SetExternalContactPendingAndDismissedParams) (*ExternalContact, error)
+	SetJudgmentAppearanceEffects(ctx context.Context, arg SetJudgmentAppearanceEffectsParams) error
 	// Test-only: stamps last_heartbeat_at to a caller-supplied (typically past)
 	// value so staleness-watchdog tests can simulate a host that has not
 	// heartbeated recently. SeedHostForTest bumps last_heartbeat_at to NOW() via

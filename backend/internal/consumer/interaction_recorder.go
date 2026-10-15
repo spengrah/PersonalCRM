@@ -98,10 +98,6 @@ type cadenceDispatcher interface {
 	HandleEvent(ctx context.Context, tx pgx.Tx, env *events.Envelope) error
 }
 
-type replyObligationRecorder interface {
-	CloseRecordedReplyTx(ctx context.Context, tx pgx.Tx, contactID, threadID uuid.UUID, fromUser bool, occurredAt time.Time) error
-}
-
 // calendarEventLocker is the narrow dependency that serializes a
 // calendar.attended insert against a concurrent decline DELETE on the
 // backing calendar_event row. LockExistsByIDTx takes a FOR SHARE lock on
@@ -294,13 +290,6 @@ func (r *InteractionRecorder) HandleEvent(ctx context.Context, tx pgx.Tx, env *e
 	res, err := r.writer.RecordInteractionTx(ctx, tx, true, req)
 	if err != nil {
 		return nil, fmt.Errorf("record interaction tx: %w", err)
-	}
-	if (env.Kind == events.KindMessageReceived || env.Kind == events.KindMessageSent) && r.cadence != nil {
-		if closer, ok := r.cadence.(replyObligationRecorder); ok && res.Interaction != nil && res.Interaction.VenueID != nil {
-			if err := closer.CloseRecordedReplyTx(ctx, tx, res.Interaction.ContactID, *res.Interaction.VenueID, req.Direction == repository.InteractionDirectionOutbound, req.OccurredAt); err != nil {
-				return nil, fmt.Errorf("close reply obligation: %w", err)
-			}
-		}
 	}
 
 	// Mark staging rows processed inside the SAME tx as the

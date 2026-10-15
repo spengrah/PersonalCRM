@@ -86,11 +86,12 @@ type Predicate struct {
 	Synonyms            []string `json:"synonyms"`
 	// Correction marks a correction predicate (migration 089): its assertions
 	// are the user's corrections of interactions.
-	Correction                  bool             `json:"correction"`
+	Correction bool `json:"correction"`
+	// Judgment marks a judgment predicate (migration 093): the catalog alone
+	// decides its landing status. An auto-if-confident judgment predicate with
+	// a JudgmentConfidenceThreshold lands accepted only at or above it.
+	Judgment                    bool             `json:"judgment"`
 	JudgmentConfidenceThreshold *int16           `json:"judgment_confidence_threshold,omitempty"`
-	JudgmentAdditionValues      []string         `json:"judgment_addition_values,omitempty"`
-	JudgmentRemovalValues       []string         `json:"judgment_removal_values,omitempty"`
-	JudgmentNoEffectValues      []string         `json:"judgment_no_effect_values,omitempty"`
 	Embedding                   *pgvector.Vector `json:"embedding,omitempty"`
 }
 
@@ -151,10 +152,8 @@ type predicateRow struct {
 	Description                 string
 	Synonyms                    []string
 	Correction                  bool
+	Judgment                    bool
 	JudgmentConfidenceThreshold pgtype.Int2
-	JudgmentAdditionValues      []string
-	JudgmentRemovalValues       []string
-	JudgmentNoEffectValues      []string
 	CreatedAt                   time.Time
 }
 
@@ -182,10 +181,10 @@ func predicateRowFromCorrection(r *db.ListCorrectionPredicatesRow) predicateRow 
 // always nil here — this layer never selects the column (it is populated and
 // read in a later layer).
 func convertPredicateRow(row predicateRow) Predicate {
-	var judgmentThreshold *int16
+	var threshold *int16
 	if row.JudgmentConfidenceThreshold.Valid {
 		value := row.JudgmentConfidenceThreshold.Int16
-		judgmentThreshold = &value
+		threshold = &value
 	}
 	predicate := Predicate{
 		Key:                         row.Key,
@@ -206,10 +205,8 @@ func convertPredicateRow(row predicateRow) Predicate {
 		Description:                 row.Description,
 		Synonyms:                    row.Synonyms,
 		Correction:                  row.Correction,
-		JudgmentConfidenceThreshold: judgmentThreshold,
-		JudgmentAdditionValues:      row.JudgmentAdditionValues,
-		JudgmentRemovalValues:       row.JudgmentRemovalValues,
-		JudgmentNoEffectValues:      row.JudgmentNoEffectValues,
+		Judgment:                    row.Judgment,
+		JudgmentConfidenceThreshold: threshold,
 	}
 	return predicate
 }
