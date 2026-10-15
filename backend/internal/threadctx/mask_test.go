@@ -130,6 +130,10 @@ func TestMask_NoContactIdentifierSurvives(t *testing.T) {
 		assertGone(t, mask(t, dm("call 555-01-04 tonight")), "555", "01-04")
 	})
 
+	t.Run("an email address containing a date", func(t *testing.T) {
+		assertGone(t, mask(t, dm("write to peer@2026-10-17.example.test")), "peer@", "2026-10-17.example")
+	})
+
 	t.Run("an identifier in metadata", func(t *testing.T) {
 		c := dm("dinner?")
 		c.Entries[0].Headers = map[string]string{"subject": "Juni + Tobias: call 555 010 4477 or write to supper-club@example.test"}

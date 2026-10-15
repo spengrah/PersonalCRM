@@ -121,9 +121,20 @@ func (m *Masker) Mask(ctx context.Context, c Context, questions []Question) (Mas
 // addressHeaders hold only names and addresses, so every word in them is masked.
 var addressHeaders = map[string]bool{"from": true, "to": true, "cc": true, "bcc": true, "reply-to": true, "sender": true}
 
-// identifierPattern matches formatted identifiers, one category per group:
-// URL, email address, @handle, phone number.
-var identifierPattern = regexp.MustCompile(`(?i)(https?://\S+|www\.\S+)|([a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,})|(@[a-z0-9_]{2,})|(\+?\(?\d[\d\s().\-]{5,}\d)`)
+// addressSource matches the identifiers a calendar date can sit inside, one
+// category per group: URL, email address, @handle. phoneSource matches a phone
+// number. identifierPattern joins them, one category per group in
+// identifierCategories order.
+const (
+	addressSource = `(https?://\S+|www\.\S+)|([a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,})|(@[a-z0-9_]{2,})`
+	phoneSource   = `(\+?\(?\d[\d\s().\-]{5,}\d)`
+)
+
+var (
+	identifierPattern = regexp.MustCompile(`(?i)` + addressSource + `|` + phoneSource)
+	addressPattern    = regexp.MustCompile(`(?i)` + addressSource)
+	phonePattern      = regexp.MustCompile(phoneSource)
+)
 
 var identifierCategories = []string{"URL", "EMAIL", "HANDLE", "PHONE"}
 
@@ -144,7 +155,7 @@ var namedDate = func() *regexp.Regexp {
 }()
 
 // withoutDates returns text with every calendar date blanked out, byte for
-// byte, so no identifier match takes a date or any part of one.
+// byte, so no phone match takes a date or any part of one.
 func withoutDates(text string) string {
 	out := []byte(text)
 	blank := func(m []int) {
@@ -331,10 +342,10 @@ type span struct {
 // word outside an identifier is a name.
 func (s *masking) mask(text string, addressHeader bool) string {
 	var spans []span
-	for _, match := range identifierPattern.FindAllStringIndex(withoutDates(text), -1) {
+	add := func(match []int) {
 		category, value, ok := identifier(text[match[0]:match[1]])
 		if !ok {
-			continue
+			return
 		}
 		identity, owned := s.identifiers[category+":"+value]
 		if !owned {
@@ -342,6 +353,18 @@ func (s *masking) mask(text string, addressHeader bool) string {
 		}
 		spans = append(spans, span{match[0], match[1], s.placeholder(identity, category)})
 	}
+	// URLs, email addresses and handles are matched over the original text, so
+	// a date inside one never hides it. Phone numbers are matched with calendar
+	// dates blanked, so a date is never read as or into a phone number.
+	for _, match := range addressPattern.FindAllStringIndex(text, -1) {
+		add(match)
+	}
+	for _, match := range phonePattern.FindAllStringIndex(withoutDates(text), -1) {
+		if !slices.ContainsFunc(spans, func(sp span) bool { return sp.start < match[1] && match[0] < sp.end }) {
+			add(match)
+		}
+	}
+	slices.SortFunc(spans, func(a, b span) int { return a.start - b.start })
 	for _, words := range runsBetween(text, spans) {
 		for i := 0; i < len(words); {
 			if n, identity := s.lookup(text, words[i:]); n > 0 {
