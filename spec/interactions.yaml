@@ -659,3 +659,147 @@ behaviors:
         text: an item with no cited content answers an empty list
     provenance: [.agents/spec/2026-10-13-interaction-review-readiness.md, TimelineAssertionService.ListTimelineAssertions]
     notes: The displayed content is IXN-034's content read for the same identity and contact. This read is the one HTTP read of the assertion store (KNW-038).
+
+  - id: IXN-041
+    title: The all-interactions view lists every interaction across contacts, one row per interaction
+    type: ux
+    status: proposed
+    surface: ui
+    given: interactions are recorded for several contacts, some of them shared between contacts
+    when: the all-interactions view is opened and further pages are requested
+    then:
+      - every interaction of every contact is represented, whatever its source
+      - an interaction several contacts take part in, including a group chat's messages held once per member, is one row that names each of those contacts
+      - each row renders with the contact history's row and drill-down, keeping its typed identity and the actions its kind offers
+      - rows order newest first with a deterministic tie-breaker
+      - the view is paginated, and further pages extend it without gaps or duplicate rows
+      - the main navigation leads to the view
+    provenance: [.agents/spec/2026-10-14-decision-model-extraction.md G9, designs/bench.md]
+    notes: The bench of the decision-model extraction spec. The row and drill-down are IXN-002, IXN-004 and IXN-022's.
+
+  - id: IXN-042
+    title: The all-interactions view filters by contact, interaction type and run, and by nothing else
+    type: ux
+    status: proposed
+    surface: ui
+    given: the all-interactions view lists interactions of several contacts and types, from threads judged in several runs
+    when: filters are applied
+    then:
+      - a contact filter keeps the rows that contact takes part in
+      - a type filter keeps the rows of that interaction type
+      - a run filter keeps the rows of threads with a judgment appearing in that run, including a judgment the run reused
+      - filters combine, and pagination totals count the filtered rows
+      - the filters are part of the view's address, so a link opens the view filtered
+      - the view offers no other filter
+    provenance: [.agents/spec/2026-10-14-decision-model-extraction.md G9 NG4, designs/bench.md]
+
+  - id: IXN-043
+    title: A view narrowed to a run states the run and lists its incomplete threads
+    type: ux
+    status: proposed
+    surface: ui
+    given: a judgment run, some of whose threads are incomplete
+    when: the all-interactions view is narrowed to the run
+    then:
+      - the run is chosen from a list that names each run's kind, method, method version and content window
+      - the view states the run's kind, method, method version, content window, whether it finished, and how many threads it judged
+      - every incomplete thread of the run is listed with its cut-off and the reason it is incomplete
+    provenance: [.agents/spec/2026-10-14-decision-model-extraction.md G9 G11 SC1, designs/bench.md]
+
+  - id: IXN-044
+    title: A thread judgment appears for review once, on the row holding the latest content it read
+    type: ux
+    status: proposed
+    surface: ui
+    given: a thread judgment whose thread spans several rows and several participant contacts
+    when: the all-interactions view lists the thread's rows
+    then:
+      - the judgment appears on exactly one row, the row holding the thread's latest content at or before the judgment's cut-off
+      - that row shows, collapsed, that its thread is judged, as of which cut-off, and how many of the judgment's claims await review
+      - judgments of several methods on the same content appear together on that row, the production method's first
+      - a view narrowed to a run shows only the judgments appearing in that run
+    provenance: [.agents/spec/2026-10-14-decision-model-extraction.md G9 SC1, designs/bench.md]
+
+  - id: IXN-045
+    title: The drill-down shows a judgment against the content as of its cut-off
+    type: ux
+    status: proposed
+    surface: ui
+    given: a judged row whose thread gained content after the judgment's cut-off
+    when: the row is expanded
+    then:
+      - the content the judgment read and the content after its cut-off are separated at the cut-off
+      - content after the cut-off is marked as later and as unread by the judgment
+      - the judgment sits at its cut-off and names its method, method version and cut-off
+      - a judgment whose outcomes are all evidence is marked as evidence only and set apart from the production method's judgment
+    provenance: [.agents/spec/2026-10-14-decision-model-extraction.md G9 SC1 HC7, designs/bench.md]
+
+  - id: IXN-046
+    title: Each judged outcome states its answer, its confidence and its state
+    type: ux
+    status: proposed
+    surface: ui
+    given: a judgment with outcomes about several participant contacts and about the thread
+    when: the judgment is shown
+    then:
+      - outcomes are grouped by the participant contact they concern, and thread-wide outcomes form a group of their own
+      - each outcome states its question, its answer and its confidence, and a commitment states its due date or that it has none
+      - each outcome shows its state of applied, claim or evidence, and the three states are told apart
+      - no outcome is hidden because of its confidence
+    provenance: [.agents/spec/2026-10-14-decision-model-extraction.md G4 G6 G9, designs/bench.md]
+
+  - id: IXN-047
+    title: The user reviews an outcome by confirming it or stating its right answer
+    type: ux
+    status: proposed
+    surface: ui
+    given: an outcome with no review, in any state
+    when: the user reviews it
+    then:
+      - the outcome offers to confirm its answer and to state a different right answer
+      - confirming states the judged answer as the right one
+      - stating a different right answer offers only the question's other answers and cannot be submitted until one is chosen
+      - the review shows on the outcome without a reload
+    provenance: [.agents/spec/2026-10-14-decision-model-extraction.md G5 G8 SC7, designs/bench.md]
+
+  - id: IXN-048
+    title: A reviewed outcome shows its review after a reload
+    type: ux
+    status: proposed
+    surface: ui
+    given: an outcome the user reviewed
+    when: the view is reloaded and the outcome's judgment is shown again
+    then:
+      - the outcome shows its verdict of confirmed, rejected or corrected as the store derived it
+      - a rejected or corrected outcome shows the right answer beside the judged answer
+      - the outcome shows when it was reviewed
+      - a reviewed outcome offers no review control
+      - the judged row's count of claims awaiting review leaves out the reviewed claims
+    provenance: [.agents/spec/2026-10-14-decision-model-extraction.md G5 G8 HC6, designs/bench.md]
+
+  - id: IXN-049
+    title: An accepted big-moment flag shows beside the content it was judged on
+    type: ux
+    status: proposed
+    surface: ui
+    given: a thread judgment whose big-moment outcome is in effect, applied or confirmed
+    when: the row holding the judgment is viewed and expanded
+    then:
+      - the flag shows beside the content the judgment read, at its cut-off
+      - the flag tells a participant's own moment from another person's moment mentioned in passing
+      - the flag carries no summary of the moment
+      - the row shows, collapsed, that its thread carries a big moment
+    provenance: [.agents/spec/2026-10-14-decision-model-extraction.md G3c G7f SC10 NG3, designs/bench.md]
+
+  - id: IXN-050
+    title: A contact's interaction history links out to the all-interactions view filtered to that contact
+    type: ux
+    status: proposed
+    surface: ui
+    given: a contact with recorded interactions
+    when: the contact's interaction history is viewed
+    then:
+      - the history offers a link to the all-interactions view filtered to that contact
+      - following the link opens the view listing only the rows that contact takes part in
+      - the contact's history offers no judgment review of its own
+    provenance: [.agents/spec/2026-10-14-decision-model-extraction.md G9, designs/bench.md]
