@@ -659,3 +659,161 @@ behaviors:
         text: an item with no cited content answers an empty list
     provenance: [.agents/spec/2026-10-13-interaction-review-readiness.md, TimelineAssertionService.ListTimelineAssertions]
     notes: The displayed content is IXN-034's content read for the same identity and contact. This read is the one HTTP read of the assertion store (KNW-038).
+
+  - id: IXN-041
+    title: The all-interactions view lists every interaction across contacts, one row per interaction
+    type: ux
+    status: proposed
+    surface: ui
+    given: interactions are recorded for several contacts, some of them shared between contacts
+    when: the all-interactions view is opened and further pages are requested
+    then:
+      - every interaction of every contact is represented, whatever its source
+      - an interaction several contacts take part in, including a group chat's messages held once per member, is one row that names each of those contacts
+      - each row renders with the contact history's row and drill-down, keeping its typed identity and the actions its kind offers
+      - each row sets out, across the view's full width, the interaction's direction and source, its participant contacts, a preview of its content that takes the width the others leave, its date, and its review indicator
+      - rows order newest first with a deterministic tie-breaker
+      - a row's drill-down spans the view's full width
+      - the view is paginated, and further pages extend it without gaps or duplicate rows
+      - the main navigation leads to the view
+    provenance: [.agents/spec/2026-10-14-decision-model-extraction.md G9, designs/bench.md]
+    notes: The bench of the decision-model extraction spec. The row and drill-down are IXN-002, IXN-004 and IXN-022's.
+
+  - id: IXN-042
+    title: The all-interactions view filters by contact, interaction type and run, and by nothing else
+    type: ux
+    status: proposed
+    surface: ui
+    given: the all-interactions view lists interactions of several contacts and types, from threads judged in several runs
+    when: filters are applied
+    then:
+      - a contact filter keeps the rows that contact takes part in
+      - a type filter keeps the rows of that interaction type
+      - a run filter keeps the rows of threads with a judgment appearing in that run, including a judgment the run reused
+      - filters combine, and pagination totals count the filtered rows
+      - the filters are part of the view's address, so a link opens the view filtered
+      - the view offers no other filter
+    provenance: [.agents/spec/2026-10-14-decision-model-extraction.md G9 NG4, designs/bench.md]
+
+  - id: IXN-043
+    title: A view narrowed to a run states the run and lists its incomplete threads
+    type: ux
+    status: proposed
+    surface: ui
+    given: a judgment run, some of whose threads are incomplete
+    when: the all-interactions view is narrowed to the run
+    then:
+      - the run is chosen from a list that names each run's kind, method, method version and content window
+      - the view states the run's kind, method, method version, content window, whether it finished, and how many threads it judged
+      - every incomplete thread of the run is listed with its cut-off and the reason it is incomplete
+    provenance: [.agents/spec/2026-10-14-decision-model-extraction.md G9 G11 SC1, designs/bench.md]
+
+  - id: IXN-044
+    title: A thread judgment appears for review once, on the row holding the latest content it read
+    type: ux
+    status: proposed
+    surface: ui
+    given: a thread judgment whose thread spans several rows and several participant contacts
+    when: the all-interactions view lists the thread's rows
+    then:
+      - the judgment appears on exactly one row, the row holding the thread's latest content at or before the judgment's cut-off
+      - that row shows, collapsed, one review indicator, either how many items of its proposals await review or that all are reviewed
+      - the row names none of the judgment's outcomes; the proposal appears only when the row is expanded
+      - judgments of several methods on the same content appear together on that row, the production method's first
+      - a view narrowed to a run shows only the judgments appearing in that run
+    provenance: [.agents/spec/2026-10-14-decision-model-extraction.md G9 SC1, designs/bench.md]
+
+  - id: IXN-045
+    title: A judgment's proposal sits beneath the content it read, as of its cut-off
+    type: ux
+    status: proposed
+    surface: ui
+    given: a judged row whose thread gained content after the judgment's cut-off
+    when: the row is expanded
+    then:
+      - the content the judgment read, its cut-off and its proposal are shown together, the proposal directly beneath that content
+      - the cut-off is marked across the thread, pointing at the content the judgment read, and states the cut-off's date and time
+      - content after the cut-off is set apart from that content, subdued, and marked as after the judgment
+      - the proposal names its method, its method version and whether that method is the production method
+      - a proposal of another method on the same content is set apart, collapsed, and marked as not acting
+    provenance: [.agents/spec/2026-10-14-decision-model-extraction.md G9 SC1 HC7, designs/bench.md]
+
+  - id: IXN-046
+    title: A proposal lists the judgment's answers, never its questions, each item with its state
+    type: ux
+    status: proposed
+    surface: ui
+    given: a judgment of a thread with several participant contacts, as the bench read compiles it
+    when: its proposal is shown
+    then:
+      - the proposal lists the participant contacts the user owes a reply, the participant contacts who owe the user a reply, the open commitments in one list each naming its debtor and its creditor, and the thread's big-moment flag
+      - a reply list holds at most one contact for a one-to-one thread, and a meeting's proposal has no reply lists
+      - a commitment shows the due date its judgment selected, or that it has no stated date, and a party's commitment stands in for that party's reply owed in the same direction
+      - a commitment whose judgment names the message that states it quotes that message and leads to it in the thread; a commitment whose judgment names none shows no quote
+      - the big-moment flag belongs to the thread, not to a contact, and shows the same whether the moment is a participant's own or another person's
+      - the questions put to the decision model are not shown
+      - each item the judgment produced shows its confidence, a live item with a suggested change shows the suggestion's confidence, and a live item the judgment did not produce, such as the timestamp rule's wait, shows none of its own
+      - each item not yet reviewed shows one state of live, suggested, not acting, or live with a suggested removal or later date, and the four are told apart; an item the user removed shows its removal mark in place of a state
+      - no item is hidden because of its confidence
+    provenance: [.agents/spec/2026-10-14-decision-model-extraction.md G3 G3b G3c G6 G9 HC7 NG3 SC4, designs/bench.md]
+
+  - id: IXN-047
+    title: The user corrects a proposal inline, each act recorded as one outcome's review
+    type: ux
+    status: proposed
+    surface: ui
+    given: a proposal with items the user has not reviewed
+    when: the user corrects it
+    then:
+      - the user confirms an item, or accepts a suggested change, by stating the judged outcome as the right one
+      - the user removes an item from a reply list or from the commitments, or removes the flag, by stating the outcome's no-effect value as the right one
+      - the user adds a participant contact to a reply list, which moves that contact out of the other reply list, adds a commitment in either direction, or adds the flag, by stating that outcome as the right one
+      - the user keeps a live item against a suggested removal by stating the live outcome as the right one
+      - the user keeps a commitment's date against a suggested later date, and the obligation keeps its current date
+      - a commitment the user adds has no stated date and takes the timing of a commitment without one
+      - a flag the user adds is recorded as a participant's own moment
+      - an addition offers only participant contacts, and only outcomes not yet reviewed
+      - every correction happens on the proposal itself, with no modal or separate form, and the client never sends a verdict
+      - each correction shows on its item without a reload, and a failed correction leaves the item's controls in place with an error
+    provenance: [.agents/spec/2026-10-14-decision-model-extraction.md G3c G5 G7d G8 SC5 SC7, designs/bench.md]
+
+  - id: IXN-048
+    title: Each reviewed item shows its review in place after a reload
+    type: ux
+    status: proposed
+    surface: ui
+    given: items of a proposal the user reviewed
+    when: the view is reloaded and the proposal is shown again
+    then:
+      - a confirmed item, a live item kept against a suggested removal, and a commitment whose date the user kept show as confirmed, in place, beside their state
+      - an item the user removed, or whose suggested removal the user accepted, stays in its list shown as removed by the user, never hidden
+      - an item the user added shows as added by the user
+      - a reviewed item offers no review control
+      - the proposal's and its row's counts of items awaiting review leave out the reviewed items
+    provenance: [.agents/spec/2026-10-14-decision-model-extraction.md G5 G8 HC6, designs/bench.md]
+
+  - id: IXN-049
+    title: An accepted big-moment flag shows on its thread, beneath the content it was judged on
+    type: ux
+    status: proposed
+    surface: ui
+    given: a thread judgment whose big-moment outcome is in effect, applied or confirmed
+    when: the row holding the judgment is viewed and expanded
+    then:
+      - the flag shows in the proposal directly beneath the content the judgment read
+      - a participant's own moment and another person's moment mentioned in passing show as the same flag
+      - the flag carries no summary of the moment
+    provenance: [.agents/spec/2026-10-14-decision-model-extraction.md G3c G7f SC10 NG3, designs/bench.md]
+
+  - id: IXN-050
+    title: A contact's interaction history links out to the all-interactions view filtered to that contact
+    type: ux
+    status: proposed
+    surface: ui
+    given: a contact with recorded interactions
+    when: the contact's interaction history is viewed
+    then:
+      - the history offers a link to the all-interactions view filtered to that contact
+      - following the link opens the view listing only the rows that contact takes part in
+      - the contact's history offers no judgment review of its own
+    provenance: [.agents/spec/2026-10-14-decision-model-extraction.md G9, designs/bench.md]
