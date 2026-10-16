@@ -194,6 +194,28 @@
 //	                              SAFE with crm-api running (it runs the Todoist
 //	                              jobs a run's live effects enqueue).
 //
+//	--scorecard                   Score decision-model methods against the
+//	      [--method KEY           user's reviews: rerun each method as an
+//	      [--compare-method KEY]] evidence-only rerun over every thread
+//	                              context the user reviewed (reusing judgments
+//	                              the method version already holds) and print,
+//	                              per method, per-outcome recall, precision and
+//	                              confusion, the user's "I owe" outcomes missed,
+//	                              the corrections caused and the method's terms
+//	                              status; the timestamp rule as a reference for
+//	                              they_owe_reply; and a proposed first
+//	                              production method among the scored methods
+//	                              whose terms pass HC3. With no --method, every
+//	                              method in the registry is scored, and those
+//	                              whose route is not configured are listed.
+//	                              --compare-method adds the per-outcome
+//	                              difference (comparing kev-masked with
+//	                              kev-unmasked, the masking cost) and the
+//	                              examples that flipped, by example ID. Changes
+//	                              no designation and no live state. Prints a
+//	                              content-free report (IDs, keys, outcome
+//	                              values, counts, rates).
+//
 // The seed/reset subcommands inherit the process env (CRM_ENV / TIME_BASE /
 // TIME_ACCELERATION / DATABASE_URL / MIGRATIONS_PATH) — on the Pi via
 // `set -a; . /srv/personalcrm/.env; set +a` — so the seeded world's cadence /
@@ -238,6 +260,7 @@ import (
 	"personal-crm/backend/internal/google"
 	"personal-crm/backend/internal/messages"
 	"personal-crm/backend/internal/repository"
+	"personal-crm/backend/internal/scorecard"
 	"personal-crm/backend/internal/service"
 	"personal-crm/backend/internal/sync"
 	"personal-crm/backend/internal/synthetic"
@@ -390,10 +413,12 @@ type adminDeps struct {
 	// whatsappHistory serves --whatsapp-list-history / --whatsapp-requeue-history
 	// (the operator recovery path for a history chunk that failed to drain).
 	whatsappHistory whatsappHistoryAdmin
-	// judgeMonth serves --judge-month. Built LAZILY (only when --judge-month
-	// is set) because loading the masker reads every contact name. Nil for
-	// all other subcommands.
+	// judgeMonth serves --judge-month and scorecard serves --scorecard. Both
+	// are built LAZILY (only when --judge-month or --scorecard is set)
+	// because loading the masker reads every contact name. Nil for all other
+	// subcommands.
 	judgeMonth judgeMonthRunner
+	scorecard  scorecardReporter
 	stdout     io.Writer
 	stderr     io.Writer
 }
@@ -465,10 +490,14 @@ type runOptions struct {
 	requeueWhatsAppHistoryID string
 	// Historical decision-model runs. judgeMonth <- --judge-month (YYYY-MM;
 	// empty = unset; non-empty selects the subcommand); judgeMethod <-
-	// --method; judgeMeasure <- --measure.
+	// --method (also read by --scorecard); judgeMeasure <- --measure.
 	judgeMonth   string
 	judgeMethod  string
 	judgeMeasure bool
+	// Decision-model scorecard. scorecard <- --scorecard (the bool subcommand
+	// selector); compareMethod <- --compare-method.
+	scorecard     bool
+	compareMethod string
 }
 
 // exitErr carries an explicit process exit code so a subcommand can drive a
@@ -651,6 +680,9 @@ func validateSubcommand(opts runOptions) error {
 	if opts.judgeMonth != "" {
 		active++
 	}
+	if opts.scorecard {
+		active++
+	}
 	if active == 0 {
 		return errors.New("no subcommand specified; pass exactly one of " +
 			subcommandList)
@@ -659,7 +691,10 @@ func validateSubcommand(opts runOptions) error {
 		return errors.New("subcommand flags are mutually exclusive; pass exactly one of " +
 			subcommandList)
 	}
-	return validateJudgeMonth(opts)
+	if err := validateJudgeMonth(opts); err != nil {
+		return err
+	}
+	return validateScorecard(opts)
 }
 
 // subcommandList is the canonical subcommand enumeration shared by the
@@ -670,7 +705,8 @@ const subcommandList = "--messages-rematch-stranded, --reconcile-address-book-me
 	"--list-hosts, --revoke-host <uuid>, --rotate-host-key <uuid>, --seed, --reset-and-seed, " +
 	"--migrate, --migrate-check, --list-jobs, --retry-job <id>, --migrate-tags, " +
 	"--migrate-contact-knowledge-columns, --river-tier0, --whatsapp-list-history, " +
-	"--whatsapp-requeue-history <uuid>, --judge-month YYYY-MM --method <key> [--measure]"
+	"--whatsapp-requeue-history <uuid>, --judge-month YYYY-MM --method <key> [--measure], " +
+	"--scorecard [--method <key> [--compare-method <key>]]"
 
 // parseArgs uses a private FlagSet so tests can drive the parser
 // without polluting flag's global state.
@@ -784,10 +820,18 @@ func parseArgs(args []string) (runOptions, error) {
 			"or incomplete report. Only the designated production method changes live state. Prints a "+
 			"content-free summary.")
 	fs.StringVar(&opts.judgeMethod, "method", "",
-		"Decision-model method key for --judge-month.")
+		"Decision-model method key for --judge-month, or the one method --scorecard scores.")
 	fs.BoolVar(&opts.judgeMeasure, "measure", false,
 		"With --judge-month: build every eligible context and size it against the method's limits, "+
 			"sending and writing nothing.")
+	fs.BoolVar(&opts.scorecard, "scorecard", false,
+		"Score decision-model methods against the user's reviews: rerun --method (or, without it, every "+
+			"method) over every reviewed thread context, report per-outcome recall, precision and confusion, "+
+			"\"I owe\" outcomes missed and corrections caused, and propose a first production method. Prints a "+
+			"content-free report and changes no designation.")
+	fs.StringVar(&opts.compareMethod, "compare-method", "",
+		"With --scorecard --method: a second method to compare, reporting the per-outcome difference and "+
+			"the examples that flipped.")
 	if err := fs.Parse(args); err != nil {
 		return runOptions{}, err
 	}
@@ -914,6 +958,8 @@ func run(ctx context.Context, opts runOptions, deps adminDeps) error {
 		return runRequeueWhatsAppHistory(ctx, opts, deps)
 	case opts.judgeMonth != "":
 		return runJudgeMonth(ctx, opts, deps)
+	case opts.scorecard:
+		return runScorecard(ctx, opts, deps)
 	case opts.migrate, opts.migrateCheck:
 		// Migration subcommands are dispatched PRE-DB in runMain (they need
 		// only the database URL + migrations path, not deps), so they never
@@ -1812,13 +1858,15 @@ func buildProductionDeps(ctx context.Context, cfg *config.Config, database *db.D
 		deps.rederive = google.NewCorrespondenceNameRederiveService(commsRepo, gmailProvider)
 	}
 
-	// LAZY: build the historical-run stack ONLY for --judge-month.
-	if opts.judgeMonth != "" {
-		runner, err := buildJudgeMonthRunner(ctx, cfg, database, assertService, contactRepo, riverClient)
+	// LAZY: build the decision-model stack ONLY for --judge-month and
+	// --scorecard.
+	if opts.judgeMonth != "" || opts.scorecard {
+		stack, err := buildJudgmentStack(ctx, cfg, database, assertService, contactRepo, riverClient)
 		if err != nil {
 			return adminDeps{}, nil, err
 		}
-		deps.judgeMonth = runner
+		deps.judgeMonth = stack.runner
+		deps.scorecard = scorecard.New(stack.store, stack.runner, stack.methods, stack.contexts, contactRepo, cfg.Watchdog)
 	}
 
 	cleanup := func() {}

@@ -28,24 +28,33 @@ type judgeMonthRunner interface {
 	Measure(ctx context.Context, methodKey string, month judgerun.Month) (judgerun.Measurement, error)
 }
 
-// buildJudgeMonthRunner wires the historical-run stack: the thread-context
-// builder, the masker loaded from the contact dictionary, the method registry
-// and the one judgment store, with the production method
-// DECISION_PRODUCTION_METHOD names. It fails when that setting names a key the
+// judgmentStack is the decision-model stack --judge-month and --scorecard
+// share.
+type judgmentStack struct {
+	contexts *threadctx.Builder
+	store    *judgment.Store
+	methods  *decision.Registry
+	runner   *judgerun.Runner
+}
+
+// buildJudgmentStack wires the decision-model stack: the thread-context
+// builder, the masker loaded from the contact dictionary, the method registry,
+// the one judgment store with the production method DECISION_PRODUCTION_METHOD
+// names, and the runner over them. It fails when that setting names a key the
 // registry lacks, before any call.
-func buildJudgeMonthRunner(
+func buildJudgmentStack(
 	ctx context.Context,
 	cfg *config.Config,
 	database *db.Database,
 	assert *service.AssertService,
 	contacts *repository.ContactRepository,
 	jobs repository.JobEnqueuer,
-) (*judgerun.Runner, error) {
+) (judgmentStack, error) {
 	content := repository.NewThreadContentRepository(database.Queries)
 	contexts := threadctx.NewBuilder(content, repository.NewVenueRepository(database.Queries))
 	masker, err := threadctx.LoadMasker(ctx, content)
 	if err != nil {
-		return nil, fmt.Errorf("load masker: %w", err)
+		return judgmentStack{}, fmt.Errorf("load masker: %w", err)
 	}
 	cadence := consumer.NewCadenceUpdater(
 		repository.NewEventConsumerClaimRepository(database.Queries),
@@ -65,14 +74,22 @@ func buildJudgeMonthRunner(
 		Watchdog:         cfg.Watchdog,
 		ProductionMethod: cfg.Decision.ProductionMethod,
 	})
-	return judgerun.New(contexts, store, decision.NewRegistry(cfg.Decision, masker))
+	methods := decision.NewRegistry(cfg.Decision, masker)
+	runner, err := judgerun.New(contexts, store, methods)
+	if err != nil {
+		return judgmentStack{}, err
+	}
+	return judgmentStack{contexts: contexts, store: store, methods: methods, runner: runner}, nil
 }
 
 // validateJudgeMonth checks the flags --judge-month reads.
 func validateJudgeMonth(opts runOptions) error {
 	if opts.judgeMonth == "" {
-		if opts.judgeMethod != "" || opts.judgeMeasure {
-			return errors.New("--method and --measure apply only to --judge-month")
+		if opts.judgeMeasure {
+			return errors.New("--measure applies only to --judge-month")
+		}
+		if opts.judgeMethod != "" && !opts.scorecard {
+			return errors.New("--method applies only to --judge-month and --scorecard")
 		}
 		return nil
 	}
