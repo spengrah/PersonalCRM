@@ -116,7 +116,7 @@ func (s *Store) applyReviewTx(ctx context.Context, tx pgx.Tx, o *outcomeRecord, 
 		return fmt.Errorf("load judgment %s: %w", o.JudgmentID, err)
 	}
 	j := rows[0]
-	live, err := loadLiveState(ctx, q, j.ThreadID)
+	live, err := loadLiveState(ctx, q, j.ThreadID, []uuid.UUID{o.JudgmentID})
 	if err != nil {
 		return err
 	}

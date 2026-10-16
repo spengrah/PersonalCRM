@@ -401,6 +401,59 @@ func TestBenchReadCompilesProposals(t *testing.T) {
 		assert.Equal(t, ptr("not_acting"), reviewed.State)
 		assert.Equal(t, ptr("confirmed"), reviewed.Mark)
 	})
+
+	for _, tc := range []struct {
+		name      string
+		direction judgment.CommitmentDirection
+		reply     judgment.BallInCourt
+		debtor    string
+	}{
+		{"mine", judgment.CommitmentDirectionMine, judgment.BallInCourtIOweReply, repository.ObligationDebtorUser},
+		{"theirs", judgment.CommitmentDirectionTheirs, judgment.BallInCourtTheyOweReply, repository.ObligationDebtorContact},
+	} {
+		t.Run("a completed "+tc.name+" commitment stays not acting beside a later reply obligation, and confirming it keeps that reply", func(t *testing.T) {
+			// spec: IXN-052.state-is-live-effect
+			b := newBenchEnv(t)
+			x, th := b.contact(t), b.thread(t)
+			b.message(t, th, x, false, b.day(1))
+			b.record(t, th, x, repository.InteractionDirectionInbound, b.day(1))
+			b.run(t, judgment.RunKindScheduled, judgmentOf(prodMethod, th, b.day(1), "h1", judgment.Outcomes{
+				Commitments: []judgment.CommitmentOutcome{commitment(x, tc.direction, judgment.CommitmentStateOpen, 0.9, nil)},
+			}))
+			open := b.openObligations(t, th)
+			require.Len(t, open, 1)
+			_, err := b.tasks.UpdateContactTaskState(b.ctx, open[0].TaskID, repository.ContactTaskStateCompleted)
+			require.NoError(t, err)
+			b.message(t, th, x, false, b.day(2))
+			b.run(t, judgment.RunKindScheduled, judgmentOf(prodMethod, th, b.day(2), "h2", judgment.Outcomes{
+				BallInCourt: []judgment.ParticipantOutcome[judgment.BallInCourt]{bic(x, tc.reply, 0.9)},
+			}))
+			reply := b.openObligations(t, th)
+			require.Len(t, reply, 1)
+			require.Equal(t, tc.debtor, reply[0].Debtor)
+			require.Equal(t, repository.ObligationBasisReply, reply[0].Basis)
+
+			page, _ := b.list(t, "contact_id="+x.String())
+
+			var first *handlers.BenchProposalResponse
+			for i, p := range page.Items[0].Proposals {
+				if b.day(1).Equal(p.CutOff) {
+					first = &page.Items[0].Proposals[i]
+				}
+			}
+			require.NotNil(t, first)
+			done := item(t, *first, "commitments", x)
+			assert.Equal(t, ptr("not_acting"), done.State, "a later judgment's reply obligation is not the completed commitment's effect")
+			confirm := acts(done)["confirm"]
+			require.Equal(t, "open", confirm.RightOutcome)
+			_, err = b.store.ReviewOutcome(b.ctx, uuid.MustParse(done.OutcomeID), judgment.ReviewRequest{RightOutcome: confirm.RightOutcome})
+			require.NoError(t, err)
+			after := b.openObligations(t, th)
+			require.Len(t, after, 1)
+			assert.Equal(t, reply[0].TaskID, after[0].TaskID, "confirming the completed commitment leaves the later reply task open")
+			assert.Equal(t, repository.ObligationBasisReply, after[0].Basis)
+		})
+	}
 }
 
 // messageKey is the key of the thread's one message.

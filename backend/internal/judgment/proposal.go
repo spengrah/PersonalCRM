@@ -141,7 +141,7 @@ func (s *Store) ThreadProposals(ctx context.Context, thread threadctx.VenueID, r
 	if err != nil {
 		return nil, fmt.Errorf("list thread obligations: %w", err)
 	}
-	live, err := loadLiveState(ctx, s.queries, thread)
+	live, err := loadLiveState(ctx, s.queries, thread, ids)
 	if err != nil {
 		return nil, err
 	}
@@ -198,8 +198,10 @@ type proposalContext struct {
 }
 
 // commitmentDue is the due date of the debtor's latest commitment obligation
-// to or from the contact, open ones first; nil when the thread holds none.
-func (pc *proposalContext) commitmentDue(debtor Debtor, contact uuid.UUID) *time.Time {
+// to or from the contact that opened at or before through, open ones first;
+// nil when the thread holds none. An obligation a later judgment opened is not
+// the item's.
+func (pc *proposalContext) commitmentDue(debtor Debtor, contact uuid.UUID, through time.Time) *time.Time {
 	want := repository.ObligationDebtorContact
 	if debtor == DebtorMe {
 		want = repository.ObligationDebtorUser
@@ -207,7 +209,8 @@ func (pc *proposalContext) commitmentDue(debtor Debtor, contact uuid.UUID) *time
 	var found *repository.ContactTask
 	for i := range pc.obligations {
 		t := &pc.obligations[i]
-		if t.Obligation.Debtor != want || t.Obligation.Basis != repository.ObligationBasisCommitment || t.ContactID != contact {
+		if t.Obligation.Debtor != want || t.Obligation.Basis != repository.ObligationBasisCommitment || t.ContactID != contact ||
+			t.Obligation.CutOff.After(through) {
 			continue
 		}
 		if found == nil || t.IsLive() || !found.IsLive() {
@@ -346,7 +349,7 @@ func (pc *proposalContext) itemOf(ctx context.Context, o *outcomeRecord) (Propos
 		case change == ChangeKindLaterDate && o.review != nil && !o.keepsCurrentDate():
 			item.DueDate = o.DueDate
 		case change != "":
-			item.DueDate = pc.commitmentDue(item.Debtor, contactOf(o.ContactID))
+			item.DueDate = pc.commitmentDue(item.Debtor, contactOf(o.ContactID), pc.live.through[o.JudgmentID])
 		default:
 			item.DueDate = o.DueDate
 		}
