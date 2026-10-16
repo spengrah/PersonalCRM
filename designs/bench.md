@@ -4,7 +4,7 @@ The bench is one new page, the all-interactions view at `/interactions`, where t
 
 The canvas is "Judgment Bench" (https://claude.ai/artifact/1d1TcFH9iXtdtRABK6n4iX), a Design canvas of ten artboards. Every artboard after the two lists shows one thread. Where an artboard shows several states of one proposal, each state is labeled as a step of that proposal ("Step 1 of 3 · The proposal as judged"). Every person, message and date on it is synthetic.
 
-The user's approval of this design is open. The user has ruled on the four options from the reference artifacts (see "Options from the reference artifacts"). PR5 builds against this note only once the user approves it.
+The user approved this design on 2026-10-16, with the rulings on the four options from the reference artifacts recorded below (see "Options from the reference artifacts"). PR5 builds against this note.
 
 Sources: `.agents/spec/2026-10-14-decision-model-extraction.md` (G3, G5, G7f, G8, G9, G11, SC1, SC4, SC5, SC7, SC10, NG3, NG4, rabbit hole 4), the bench routes of the decision-model foundation plan (S4): `GET /api/v1/judgment-runs`, `GET /api/v1/judgments` and `POST /api/v1/judgment-outcomes/:id/review`, PR5's `GET /api/v1/interactions`, and the bench read PR5 adds, which returns each judged thread's proposal already compiled, each commitment with its source message when the judgment holds one. Wire fields are snake_case (`right_outcome`, `cut_off`, `run_id`, `contact_id`).
 
