@@ -752,7 +752,8 @@ behaviors:
       - a commitment whose judgment names the message that states it quotes that message and leads to it in the thread; a commitment whose judgment names none shows no quote
       - the big-moment flag belongs to the thread, not to a contact, and shows the same whether the moment is a participant's own or another person's
       - the questions put to the decision model are not shown
-      - each item shows its confidence and one state of live, suggested, not acting, or live with a suggested removal or later date, and the four are told apart
+      - each item the judgment produced shows its confidence, a live item with a suggested change shows the suggestion's confidence, and a live item the judgment did not produce, such as the timestamp rule's wait, shows none of its own
+      - each item not yet reviewed shows one state of live, suggested, not acting, or live with a suggested removal or later date, and the four are told apart; an item the user removed shows its removal mark in place of a state
       - no item is hidden because of its confidence
     provenance: [.agents/spec/2026-10-14-decision-model-extraction.md G3 G3b G3c G6 G9 HC7 NG3 SC4, designs/bench.md]
 
