@@ -3985,6 +3985,54 @@ const docTemplate = `{
                 }
             }
         },
+        "/interactions/threads/{thread_id}/content": {
+            "get": {
+                "description": "The thread's messages, oldest first, each once however many per-contact copies hold it: the content its judgments read up to their cut-offs, and the content after them. A meeting's notes are its row's content and are not listed.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "interactions"
+                ],
+                "summary": "Get a judged thread's content",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "format": "uuid",
+                        "description": "Thread (venue) ID",
+                        "name": "thread_id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/api.APIResponse"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/handlers.BenchThreadContentResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/api.APIResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/interactions/{id}/participants": {
             "get": {
                 "description": "Lists the contacts with an effective participation in the interaction that holds the id (its merged interaction when the id was merged away), ordered by name: the contacts a removal can name.",
@@ -6509,6 +6557,9 @@ const docTemplate = `{
                 "reused_at": {
                     "type": "string"
                 },
+                "thread_id": {
+                    "type": "string"
+                },
                 "to_review": {
                     "type": "integer"
                 }
@@ -6528,6 +6579,17 @@ const docTemplate = `{
                 },
                 "text": {
                     "type": "string"
+                }
+            }
+        },
+        "handlers.BenchThreadContentResponse": {
+            "type": "object",
+            "properties": {
+                "messages": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/handlers.ContentMessageResponse"
+                    }
                 }
             }
         },

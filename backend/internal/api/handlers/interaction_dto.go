@@ -213,7 +213,7 @@ type AllInteractionsResponse struct {
 
 // InteractionTypeOptionResponse is one interaction type the view filters by.
 type InteractionTypeOptionResponse struct {
-	Key   string `json:"key" tstype:"'message' | 'email' | 'calendar' | 'call' | 'other'"`
+	Key   string `json:"key" tstype:"InteractionType"`
 	Label string `json:"label"`
 }
 
@@ -240,21 +240,30 @@ type InteractionPreviewResponse struct {
 }
 
 // BenchProposalResponse is one thread judgment compiled into the answers the
-// user reviews. cut_off is its first appearance, as of which its content is
-// shown; reused_at is its appearance in the run the view is narrowed to, when
-// that run reused it. reply_lists is false for a meeting.
+// user reviews. thread_id is the judged thread, whose content
+// /interactions/threads/{thread_id}/content returns; cut_off is its first
+// appearance, as of which its content is shown; reused_at is its appearance in
+// the run the view is narrowed to, when that run reused it. reply_lists is
+// false for a meeting.
 type BenchProposalResponse struct {
 	JudgmentID    string                  `json:"judgment_id"`
+	ThreadID      string                  `json:"thread_id"`
 	MethodKey     string                  `json:"method_key"`
 	MethodVersion string                  `json:"method_version"`
 	Production    bool                    `json:"production"`
-	ContextKind   string                  `json:"context_kind" tstype:"'conversation' | 'meeting'"`
+	ContextKind   string                  `json:"context_kind"`
 	CutOff        time.Time               `json:"cut_off"`
 	ReusedAt      *time.Time              `json:"reused_at,omitempty"`
 	ReplyLists    bool                    `json:"reply_lists"`
 	Items         []BenchItemResponse     `json:"items"`
 	Additions     []BenchAdditionResponse `json:"additions"`
 	ToReview      int                     `json:"to_review"`
+}
+
+// BenchThreadContentResponse is a judged thread's whole conversation, oldest
+// first, each message once.
+type BenchThreadContentResponse struct {
+	Messages []ContentMessageResponse `json:"messages"`
 }
 
 // BenchPartyResponse is a contact a proposal names.
@@ -271,15 +280,15 @@ type BenchPartyResponse struct {
 // date. acts are the item's review controls, empty once reviewed.
 type BenchItemResponse struct {
 	OutcomeID  string                      `json:"outcome_id"`
-	List       string                      `json:"list" tstype:"'i_owe_reply' | 'owes_me_reply' | 'commitments' | 'big_moment'"`
+	List       string                      `json:"list" tstype:"ProposalList"`
 	Contact    *BenchPartyResponse         `json:"contact,omitempty"`
-	Debtor     *string                     `json:"debtor,omitempty" tstype:"'me' | 'contact'"`
-	State      *string                     `json:"state,omitempty" tstype:"'live' | 'suggested' | 'not_acting' | 'live_with_change'"`
+	Debtor     *string                     `json:"debtor,omitempty" tstype:"Debtor"`
+	State      *string                     `json:"state,omitempty" tstype:"ItemState"`
 	Confidence *float64                    `json:"confidence,omitempty"`
 	DueDate    *string                     `json:"due_date,omitempty"`
 	Change     *BenchItemChangeResponse    `json:"change,omitempty"`
 	Source     *BenchSourceMessageResponse `json:"source,omitempty"`
-	Mark       *string                     `json:"mark,omitempty" tstype:"'confirmed' | 'removed' | 'added'"`
+	Mark       *string                     `json:"mark,omitempty" tstype:"ItemMark"`
 	Acts       []BenchActResponse          `json:"acts"`
 }
 
@@ -287,7 +296,7 @@ type BenchItemResponse struct {
 // or a later due_date (YYYY-MM-DD). confidence is absent for a removal no
 // method answered.
 type BenchItemChangeResponse struct {
-	Kind       string   `json:"kind" tstype:"'remove' | 'later_date'"`
+	Kind       string   `json:"kind" tstype:"ChangeKind"`
 	DueDate    *string  `json:"due_date,omitempty"`
 	Confidence *float64 `json:"confidence,omitempty"`
 }
@@ -305,7 +314,7 @@ type BenchSourceMessageResponse struct {
 // BenchActResponse is one review control: the review body it posts to
 // /judgment-outcomes/{outcome_id}/review.
 type BenchActResponse struct {
-	Act             string `json:"act" tstype:"'confirm' | 'remove' | 'accept' | 'keep' | 'keep_original'"`
+	Act             string `json:"act" tstype:"ActKind"`
 	RightOutcome    string `json:"right_outcome"`
 	KeepCurrentDate bool   `json:"keep_current_date"`
 }
@@ -315,9 +324,9 @@ type BenchActResponse struct {
 // says who owes it), or adding the flag, by posting right_outcome to the
 // outcome's review route.
 type BenchAdditionResponse struct {
-	List         string              `json:"list" tstype:"'i_owe_reply' | 'owes_me_reply' | 'commitments' | 'big_moment'"`
+	List         string              `json:"list" tstype:"ProposalList"`
 	Contact      *BenchPartyResponse `json:"contact,omitempty"`
-	Debtor       *string             `json:"debtor,omitempty" tstype:"'me' | 'contact'"`
+	Debtor       *string             `json:"debtor,omitempty" tstype:"Debtor"`
 	OutcomeID    string              `json:"outcome_id"`
 	RightOutcome string              `json:"right_outcome"`
 }

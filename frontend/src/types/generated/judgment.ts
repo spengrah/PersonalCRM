@@ -74,3 +74,52 @@ export const VerdictConfirmed = "confirmed";
 export const VerdictRejected = "rejected";
 export const VerdictCorrected = "corrected";
 export type Verdict = typeof VerdictConfirmed | typeof VerdictRejected | typeof VerdictCorrected;
+/**
+ * ProposalList is a list of a proposal.
+ */
+export const ProposalListIOweReply = "i_owe_reply";
+export const ProposalListOwesMeReply = "owes_me_reply";
+export const ProposalListCommitments = "commitments";
+export const ProposalListBigMoment = "big_moment";
+export type ProposalList = typeof ProposalListIOweReply | typeof ProposalListOwesMeReply | typeof ProposalListCommitments | typeof ProposalListBigMoment;
+/**
+ * ItemState is where an item's decision sits: live (acting: its obligation
+ * open and its task created, or its flag raised), suggested (awaiting the
+ * user's OK), not acting (changing nothing live: evidence, or an item whose
+ * effect no longer holds), or live with a suggested change (a live item the
+ * judgment would remove or move later).
+ */
+export const ItemStateLive = "live";
+export const ItemStateSuggested = "suggested";
+export const ItemStateNotActing = "not_acting";
+export const ItemStateLiveWithChange = "live_with_change";
+export type ItemState = typeof ItemStateLive | typeof ItemStateSuggested | typeof ItemStateNotActing | typeof ItemStateLiveWithChange;
+/**
+ * ChangeKind is a suggested change to a live item.
+ */
+export const ChangeKindRemove = "remove";
+export const ChangeKindLaterDate = "later_date";
+export type ChangeKind = typeof ChangeKindRemove | typeof ChangeKindLaterDate;
+/**
+ * ItemMark is how the user's review left an item: confirmed (confirmed, or a
+ * live item kept against a suggested change), removed, or added.
+ */
+export const ItemMarkConfirmed = "confirmed";
+export const ItemMarkRemoved = "removed";
+export const ItemMarkAdded = "added";
+export type ItemMark = typeof ItemMarkConfirmed | typeof ItemMarkRemoved | typeof ItemMarkAdded;
+/**
+ * ActKind names a review control of an unreviewed item.
+ */
+export const ActKindConfirm = "confirm";
+export const ActKindRemove = "remove";
+export const ActKindAccept = "accept";
+export const ActKindKeep = "keep";
+export const ActKindKeepOriginal = "keep_original";
+export type ActKind = typeof ActKindConfirm | typeof ActKindRemove | typeof ActKindAccept | typeof ActKindKeep | typeof ActKindKeepOriginal;
+/**
+ * Debtor is who owes a commitment: the user or the participant.
+ */
+export const DebtorMe = "me";
+export const DebtorContact = "contact";
+export type Debtor = typeof DebtorMe | typeof DebtorContact;

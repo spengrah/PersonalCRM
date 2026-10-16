@@ -39,7 +39,7 @@ func NewBench(store *Store, content *service.InteractionContentService) *Bench {
 // the judgments appearing in it.
 type BenchQuery struct {
 	ContactID *uuid.UUID
-	Type      *string
+	Type      *service.InteractionType
 	Run       *RunID
 	Limit     int32
 	Offset    int32
@@ -116,6 +116,53 @@ func (b *Bench) List(ctx context.Context, q BenchQuery) (*BenchPage, error) {
 	}
 	return &BenchPage{Rows: rows, Total: page.Total}, nil
 }
+
+// ThreadContent is a judged thread's messages and the names of the contacts
+// they are from.
+type ThreadContent struct {
+	Messages []ThreadMessage
+	Names    map[uuid.UUID]string
+}
+
+// allContent is a cut-off after every message.
+var allContent = time.Date(9999, time.December, 31, 0, 0, 0, 0, time.UTC)
+
+// ThreadContent returns the thread's whole conversation, oldest first, read
+// from the one definition of a thread's content that its judgments read: each
+// message once however many per-contact copies hold it, attributed to the
+// contact any copy names. The content before a judgment's cut-off is what the
+// judgment read; the rest came after it. A meeting's notes are its row's
+// content, not messages.
+func (b *Bench) ThreadContent(ctx context.Context, thread uuid.UUID) (*ThreadContent, error) {
+	rows, err := b.threads.ListThreadContent(ctx, thread, allContent)
+	if err != nil {
+		return nil, fmt.Errorf("list thread content: %w", err)
+	}
+	content := &ThreadContent{Messages: []ThreadMessage{}}
+	seen := map[string]bool{}
+	var named []uuid.UUID
+	for _, row := range rows {
+		// Copies sort with an attributed one first, so the first copy names the
+		// message's contact when any copy does.
+		if seen[row.MessageKey] || !slices.Contains(conversationVenues, row.VenueKind) {
+			continue
+		}
+		seen[row.MessageKey] = true
+		m := ThreadMessage{Key: row.MessageKey, SentAt: row.SentAt, FromUser: row.FromUser, Text: row.Body}
+		if !row.FromUser {
+			m.Sender = row.PeerContactID
+			named = appendContact(named, nil, &m)
+		}
+		content.Messages = append(content.Messages, m)
+	}
+	if content.Names, err = b.store.contacts.ListContactNamesByIDs(ctx, named); err != nil {
+		return nil, fmt.Errorf("list contact names: %w", err)
+	}
+	return content, nil
+}
+
+// conversationVenues are the venue kinds whose content is messages.
+var conversationVenues = []string{repository.VenueKindDM, repository.VenueKindGroupChat, repository.VenueKindEmailThread}
 
 // anchorRow is the row a judgment of the thread at cutOff appears on: the row
 // holding the thread's latest content at or before the cut-off; for a thread

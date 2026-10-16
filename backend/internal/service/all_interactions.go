@@ -13,19 +13,9 @@ import (
 	"github.com/google/uuid"
 )
 
-// Interaction types of the all-interactions view: what a row is, by the source
-// of its members.
-const (
-	InteractionTypeMessage  = "message"
-	InteractionTypeEmail    = "email"
-	InteractionTypeCalendar = "calendar"
-	InteractionTypeCall     = "call"
-	InteractionTypeOther    = "other"
-)
-
 // InteractionTypeOption is an interaction type and the name the view gives it.
 type InteractionTypeOption struct {
-	Key   string
+	Key   InteractionType
 	Label string
 }
 
@@ -39,7 +29,7 @@ var InteractionTypes = []InteractionTypeOption{
 }
 
 // interactionType is the type of an observation of the source.
-func interactionType(source string) string {
+func interactionType(source string) InteractionType {
 	switch source {
 	case repository.InteractionSourceTelegram, repository.InteractionSourceMessages,
 		repository.InteractionSourceGChat, repository.InteractionSourceWhatsApp:
@@ -80,7 +70,7 @@ type InteractionRow struct {
 	// Participants are the row's participant contacts, ordered by name.
 	Participants []RowParticipant
 	// Types are the interaction types of the row's members.
-	Types []string
+	Types []InteractionType
 	// Threads are the venues the row's observations were recorded in.
 	Threads []uuid.UUID
 	// Observations are the row's observations, of every participant.
@@ -94,7 +84,7 @@ type InteractionRow struct {
 // threads, so an empty non-nil slice keeps none.
 type InteractionsFilter struct {
 	ContactID *uuid.UUID
-	Type      *string
+	Type      *InteractionType
 	Threads   []uuid.UUID
 	Limit     int32
 	Offset    int32
@@ -218,7 +208,8 @@ func (s *InteractionContentService) candidateRows(ctx context.Context) ([]candid
 			}
 		}
 		slices.SortFunc(row.Participants, compareParticipants)
-		row.Types = uniqueStrings(row.Types)
+		slices.Sort(row.Types)
+		row.Types = slices.Compact(row.Types)
 		row.Threads = uniqueUUIDs(row.Threads)
 		lead := group[slices.IndexFunc(group, func(ep repository.EffectiveParticipation) bool {
 			return ep.ContactID == row.Participants[0].ContactID
@@ -247,7 +238,7 @@ func (s *InteractionContentService) candidateRows(ctx context.Context) ([]candid
 					Direction: call.Direction, OccurredAt: call.StartedAt,
 				},
 				Participants: []RowParticipant{{ContactID: *call.MatchedContactID, Name: name}},
-				Types:        []string{InteractionTypeCall},
+				Types:        []InteractionType{InteractionTypeCall},
 			},
 			call: &call,
 		})
@@ -427,9 +418,4 @@ func (s *InteractionContentService) preview(ctx context.Context, members []obser
 	default:
 		return nil, nil
 	}
-}
-
-func uniqueStrings(values []string) []string {
-	slices.Sort(values)
-	return slices.Compact(values)
 }

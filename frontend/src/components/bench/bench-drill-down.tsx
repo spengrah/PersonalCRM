@@ -9,6 +9,7 @@ import {
   formatDateTime,
   type ParticipationContext,
 } from '@/components/timeline'
+import { useThreadContents } from '@/hooks/use-bench'
 import { useTimelineContent } from '@/hooks/use-interactions'
 import type {
   AllInteractionItemResponse,
@@ -22,8 +23,9 @@ interface BenchDrillDownProps {
   context: ParticipationContext
 }
 
-/** Proposals judged up to one cut-off, and the content they read. */
+/** Proposals of one thread judged up to one cut-off, and the content they read. */
 type Frame = {
+  thread: string
   cutOff: string
   proposals: BenchProposalResponse[]
   messages: ContentMessageResponse[]
@@ -46,11 +48,15 @@ function CutOffRule({ cutOff }: { cutOff: string }) {
 /**
  * A row's drill-down. With no judgment it is the contact history's. With
  * judgments, each cut-off's proposals sit in a frame directly beneath the
- * content they read, the cut-off marked across the thread; content after the
- * last cut-off follows, subdued and marked as after the judgment.
+ * content of their thread they read, the whole thread up to the cut-off, the
+ * cut-off marked across the thread; the thread's content after its last
+ * cut-off follows, subdued and marked as after the judgment. A meeting's
+ * content is its notes, which the row's content holds.
  */
 export function BenchDrillDown({ row, context }: BenchDrillDownProps) {
   const content = useTimelineContent(row.item.identity, context.contactId)
+  const threadIds = [...new Set(row.proposals.map(proposal => proposal.thread_id))]
+  const threads = useThreadContents(threadIds)
   const region = useRef<HTMLDivElement>(null)
   const [highlighted, setHighlighted] = useState<string | null>(null)
 
@@ -67,22 +73,30 @@ export function BenchDrillDown({ row, context }: BenchDrillDownProps) {
 
   const frames: Frame[] = []
   for (const proposal of row.proposals) {
-    const frame = frames.find(f => f.cutOff === proposal.cut_off)
+    const frame = frames.find(f => f.thread === proposal.thread_id && f.cutOff === proposal.cut_off)
     if (frame) frame.proposals.push(proposal)
-    else frames.push({ cutOff: proposal.cut_off, proposals: [proposal], messages: [] })
+    else
+      frames.push({
+        thread: proposal.thread_id,
+        cutOff: proposal.cut_off,
+        proposals: [proposal],
+        messages: [],
+      })
   }
   frames.sort((a, b) => new Date(a.cutOff).getTime() - new Date(b.cutOff).getTime())
-  const messages = (content.data?.members ?? [])
-    .flatMap(member => member.messages)
-    .sort((a, b) => new Date(a.sent_at).getTime() - new Date(b.sent_at).getTime())
   const notes = (content.data?.members ?? []).flatMap(member => member.meeting_notes)
   const after: ContentMessageResponse[] = []
-  for (const message of messages) {
-    const sent = new Date(message.sent_at).getTime()
-    const frame = frames.find(f => sent <= new Date(f.cutOff).getTime())
-    if (frame) frame.messages.push(message)
-    else after.push(message)
-  }
+  threadIds.forEach((thread, i) => {
+    for (const message of threads[i].data?.messages ?? []) {
+      const sent = new Date(message.sent_at).getTime()
+      const frame = frames.find(f => f.thread === thread && sent <= new Date(f.cutOff).getTime())
+      if (frame) frame.messages.push(message)
+      else after.push(message)
+    }
+  })
+  after.sort((a, b) => new Date(a.sent_at).getTime() - new Date(b.sent_at).getTime())
+  const pending = content.isPending || threads.some(thread => thread.isPending)
+  const failed = content.isError || threads.some(thread => thread.isError)
   const shown = (message: ContentMessageResponse) => (
     <div
       key={message.id}
@@ -103,11 +117,11 @@ export function BenchDrillDown({ row, context }: BenchDrillDownProps) {
       data-content-region
       className="mt-4 space-y-4 rounded bg-gray-50 p-4 text-sm text-gray-700"
     >
-      {content.isPending && <p>Loading content…</p>}
-      {content.isError && <p>Failed to load content.</p>}
+      {pending && <p>Loading content…</p>}
+      {failed && <p>Failed to load content.</p>}
       {frames.map((frame, index) => (
         <div
-          key={frame.cutOff}
+          key={`${frame.thread} ${frame.cutOff}`}
           data-judged-frame
           className="space-y-4 rounded border border-blue-200 bg-white p-4"
         >

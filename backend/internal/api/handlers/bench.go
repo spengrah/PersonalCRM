@@ -4,6 +4,7 @@ import (
 	"math"
 	"net/http"
 	"slices"
+	"strings"
 	"time"
 
 	"personal-crm/backend/internal/api"
@@ -29,8 +30,10 @@ func NewBenchHandler(bench *judgment.Bench) *BenchHandler {
 // middleware already enforces the global API key:
 //
 //   - GET /api/v1/interactions
+//   - GET /api/v1/interactions/threads/:thread_id/content
 func RegisterBenchRoutes(v1 *gin.RouterGroup, handler *BenchHandler) {
 	v1.GET("/interactions", handler.ListInteractions)
+	v1.GET("/interactions/threads/:thread_id/content", handler.GetThreadContent)
 }
 
 // ListInteractions returns one page of every interaction across contacts.
@@ -74,11 +77,16 @@ func (h *BenchHandler) ListInteractions(c *gin.Context) {
 		*p.dst = &id
 	}
 	if raw, ok := c.GetQuery("type"); ok {
-		if !slices.ContainsFunc(service.InteractionTypes, func(t service.InteractionTypeOption) bool { return t.Key == raw }) {
-			api.SendValidationError(c, "Invalid type", "type must be one of message, email, calendar, call, other")
+		keys := make([]string, len(service.InteractionTypes))
+		for i, t := range service.InteractionTypes {
+			keys[i] = string(t.Key)
+		}
+		if !slices.Contains(keys, raw) {
+			api.SendValidationError(c, "Invalid type", "type must be one of "+strings.Join(keys, ", "))
 			return
 		}
-		query.Type = &raw
+		typ := service.InteractionType(raw)
+		query.Type = &typ
 	}
 
 	page, err := h.bench.List(c.Request.Context(), query)
@@ -92,10 +100,52 @@ func (h *BenchHandler) ListInteractions(c *gin.Context) {
 	}
 	options := make([]InteractionTypeOptionResponse, len(service.InteractionTypes))
 	for i, t := range service.InteractionTypes {
-		options[i] = InteractionTypeOptionResponse{Key: t.Key, Label: t.Label}
+		options[i] = InteractionTypeOptionResponse{Key: string(t.Key), Label: t.Label}
 	}
 	api.SendSuccess(c, http.StatusOK, AllInteractionsResponse{Items: items, TypeOptions: options},
 		&api.Meta{Pagination: api.BuildPaginationMeta(int(page64), int(limit64), int64(page.Total))})
+}
+
+// GetThreadContent returns a judged thread's whole conversation.
+// @Summary Get a judged thread's content
+// @Description The thread's messages, oldest first, each once however many per-contact copies hold it: the content its judgments read up to their cut-offs, and the content after them. A meeting's notes are its row's content and are not listed.
+// @Tags interactions
+// @Produce json
+// @Param thread_id path string true "Thread (venue) ID" format(uuid)
+// @Success 200 {object} api.APIResponse{data=BenchThreadContentResponse}
+// @Failure 400 {object} api.APIResponse
+// @Router /interactions/threads/{thread_id}/content [get]
+func (h *BenchHandler) GetThreadContent(c *gin.Context) {
+	thread, ok := api.ParseUUIDParam(c, "thread_id", "thread")
+	if !ok {
+		return
+	}
+	content, err := h.bench.ThreadContent(c.Request.Context(), thread)
+	if err != nil {
+		api.RespondInternal(c, err)
+		return
+	}
+	messages := make([]ContentMessageResponse, len(content.Messages))
+	for i, m := range content.Messages {
+		messages[i] = ContentMessageResponse{
+			ID: m.Key, Sender: messageSender(m, content.Names), IsOutgoing: m.FromUser, SentAt: m.SentAt,
+			Body: m.Text, Source: strings.SplitN(m.Key, ":", 2)[0], ContentRef: m.Key,
+		}
+	}
+	api.SendSuccess(c, http.StatusOK, BenchThreadContentResponse{Messages: messages}, nil)
+}
+
+// messageSender is the name the bench gives a thread message's sender: "Me"
+// for the user's own, else the contact's name, else "Unknown".
+func messageSender(m judgment.ThreadMessage, names map[uuid.UUID]string) string {
+	switch {
+	case m.FromUser:
+		return "Me"
+	case m.Sender != nil && names[*m.Sender] != "":
+		return names[*m.Sender]
+	default:
+		return "Unknown"
+	}
 }
 
 func allInteractionItemResponse(row judgment.BenchRow) AllInteractionItemResponse {
@@ -136,7 +186,7 @@ func benchProposalResponse(p judgment.Proposal) BenchProposalResponse {
 		return &s
 	}
 	out := BenchProposalResponse{
-		JudgmentID: p.JudgmentID.String(), MethodKey: p.Method.Key, MethodVersion: p.Method.Version,
+		JudgmentID: p.JudgmentID.String(), ThreadID: p.Thread.String(), MethodKey: p.Method.Key, MethodVersion: p.Method.Version,
 		Production: p.Production, ContextKind: string(p.Kind), CutOff: p.CutOff, ReusedAt: p.ReusedAt,
 		ReplyLists: p.ReplyLists, Items: make([]BenchItemResponse, len(p.Items)),
 		Additions: make([]BenchAdditionResponse, len(p.Additions)), ToReview: p.ToReview,
@@ -155,14 +205,7 @@ func benchProposalResponse(p judgment.Proposal) BenchProposalResponse {
 			r.Change = &BenchItemChangeResponse{Kind: string(item.Change.Kind), DueDate: dateString(item.Change.DueDate), Confidence: item.Change.Confidence}
 		}
 		if s := item.Source; s != nil {
-			sender := "Me"
-			if !s.FromUser {
-				sender = "Unknown"
-				if s.Sender != nil && p.Names[*s.Sender] != "" {
-					sender = p.Names[*s.Sender]
-				}
-			}
-			r.Source = &BenchSourceMessageResponse{ContentRef: s.Key, Sender: sender, SentAt: s.SentAt, Text: s.Text}
+			r.Source = &BenchSourceMessageResponse{ContentRef: s.Key, Sender: messageSender(*s, p.Names), SentAt: s.SentAt, Text: s.Text}
 		}
 		out.Items[i] = r
 	}

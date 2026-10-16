@@ -13,7 +13,8 @@ import (
 
 // outcomeRecord is one outcome node with its assertions: the method's answer
 // (absent for an omission), its latest landing under a class predicate
-// (absent while the outcome is evidence), and the user's live review.
+// (absent while the outcome is evidence), the live value a removal landing
+// targets, and the user's live review.
 // Confidence is the method's, at the precision it reported (absent for an
 // omission).
 type outcomeRecord struct {
@@ -26,6 +27,7 @@ type outcomeRecord struct {
 	Confidence *float64
 	answer     *db.Assertion
 	class      *db.Assertion
+	target     *db.Assertion
 	review     *db.Assertion
 	keepsDate  *db.Assertion
 }
@@ -77,6 +79,37 @@ func (o *outcomeRecord) reviewView() *OutcomeReview {
 		KeepsDate:    keeps,
 		ReviewedAt:   o.review.KnowledgeFrom,
 	}
+}
+
+// kept is the live value the change an outcome suggests would take away,
+// which keeps the live item: the value its removal landing targets. It is
+// empty for an outcome that suggests no change.
+func (o *outcomeRecord) kept() string {
+	if changeOf(o) == "" || o.target == nil || o.target.ValueText == nil {
+		return ""
+	}
+	return *o.target.ValueText
+}
+
+// actingValue is the value whose live effect the outcome stands for: the
+// user's right outcome once reviewed, else the live value its suggested
+// change would take away, else the judged outcome.
+func (o *outcomeRecord) actingValue() string {
+	switch {
+	case o.review != nil && o.review.ValueText != nil:
+		return *o.review.ValueText
+	case changeOf(o) != "":
+		return o.kept()
+	default:
+		return o.value()
+	}
+}
+
+// adds reports whether a review stating right adds what the judgment did not
+// hold: an effect that is neither the judged outcome nor the live value its
+// suggested change would take away.
+func (o *outcomeRecord) adds(right string) bool {
+	return !isNoEffectValue(right) && right != o.value() && right != o.kept()
 }
 
 // keepsCurrentDate reports whether the user's review kept an open
@@ -148,7 +181,7 @@ func loadOutcomes(ctx context.Context, q db.Querier, judgmentIDs, outcomeIDs []u
 	}
 	assertions, err := q.ListOutcomeAssertions(ctx, db.ListOutcomeAssertionsParams{
 		OutcomeIds: ids,
-		Predicates: append([]string{predicateAnswer, predicateReview, predicateReviewKeepsDate}, classPredicates...),
+		Predicates: append([]string{predicateAnswer, predicateReview, predicateReviewKeepsDate, predicateRemovalTarget}, classPredicates...),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("list outcome assertions: %w", err)
@@ -168,6 +201,10 @@ func loadOutcomes(ctx context.Context, q db.Querier, judgmentIDs, outcomeIDs []u
 		case predicateReviewKeepsDate:
 			if a.Status == repository.AssertionStatusAccepted {
 				r.keepsDate = a
+			}
+		case predicateRemovalTarget:
+			if a.Status == repository.AssertionStatusAccepted {
+				r.target = a
 			}
 		default:
 			r.class = a

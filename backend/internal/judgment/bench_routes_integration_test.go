@@ -325,6 +325,82 @@ func TestBenchReadCompilesProposals(t *testing.T) {
 		assert.Equal(t, handlers.BenchActResponse{Act: "keep", RightOutcome: "they_owe_reply"}, acts(wait)["keep"])
 		assert.True(t, b.awaiting(t, x), "the claim leaves the wait in place")
 	})
+
+	t.Run("a suggested removal sits under the live obligation it targets, after the user's own reply obligation closed", func(t *testing.T) {
+		// spec: IXN-052.removal-keeps-its-target
+		b := newBenchEnv(t)
+		x, th := b.contact(t), b.thread(t)
+		b.message(t, th, x, false, b.day(1))
+		b.record(t, th, x, repository.InteractionDirectionInbound, b.day(1))
+		b.run(t, judgment.RunKindScheduled, judgmentOf(prodMethod, th, b.day(1), "h1", judgment.Outcomes{
+			BallInCourt: []judgment.ParticipantOutcome[judgment.BallInCourt]{bic(x, judgment.BallInCourtIOweReply, 0.9)},
+		}))
+		mine := b.openObligations(t, th)
+		require.Len(t, mine, 1)
+		_, err := b.tasks.UpdateContactTaskState(b.ctx, mine[0].TaskID, repository.ContactTaskStateCompleted)
+		require.NoError(t, err)
+		b.message(t, th, x, false, b.day(2))
+		b.run(t, judgment.RunKindScheduled, judgmentOf(prodMethod, th, b.day(2), "h2", judgment.Outcomes{
+			BallInCourt: []judgment.ParticipantOutcome[judgment.BallInCourt]{bic(x, judgment.BallInCourtTheyOweReply, 0.9)},
+		}))
+		theirs := b.openObligations(t, th)
+		require.Len(t, theirs, 1)
+		require.Equal(t, repository.ObligationDebtorContact, theirs[0].Debtor)
+		b.message(t, th, x, false, b.day(3))
+		b.run(t, judgment.RunKindScheduled, judgmentOf(prodMethod, th, b.day(3), "h3", judgment.Outcomes{
+			BallInCourt: []judgment.ParticipantOutcome[judgment.BallInCourt]{bic(x, judgment.BallInCourtNobodyOwes, 0.85)},
+		}))
+
+		page, _ := b.list(t, "contact_id="+x.String())
+
+		require.Len(t, page.Items, 1)
+		var latest *handlers.BenchProposalResponse
+		for i, p := range page.Items[0].Proposals {
+			if b.day(3).Equal(p.CutOff) {
+				latest = &page.Items[0].Proposals[i]
+			}
+		}
+		require.NotNil(t, latest)
+		assert.Empty(t, listContacts(*latest, "i_owe_reply"))
+		removal := item(t, *latest, "owes_me_reply", x)
+		assert.Equal(t, ptr("live_with_change"), removal.State)
+		keep := acts(removal)["keep"]
+		assert.Equal(t, handlers.BenchActResponse{Act: "keep", RightOutcome: "they_owe_reply"}, keep)
+		_, err = b.store.ReviewOutcome(b.ctx, uuid.MustParse(removal.OutcomeID), judgment.ReviewRequest{RightOutcome: keep.RightOutcome})
+		require.NoError(t, err)
+		after := b.openObligations(t, th)
+		require.Len(t, after, 1)
+		assert.Equal(t, theirs[0].TaskID, after[0].TaskID, "Keep leaves the participant's obligation open and opens none of the user's")
+	})
+
+	t.Run("an item whose obligation closed is not acting, and confirming it reopens nothing", func(t *testing.T) {
+		// spec: IXN-052.state-is-live-effect
+		b := newBenchEnv(t)
+		x, th := b.contact(t), b.thread(t)
+		b.message(t, th, x, false, b.day(1))
+		b.record(t, th, x, repository.InteractionDirectionInbound, b.day(1))
+		b.run(t, judgment.RunKindScheduled, judgmentOf(prodMethod, th, b.day(1), "h1", judgment.Outcomes{
+			Commitments: []judgment.CommitmentOutcome{commitment(x, judgment.CommitmentDirectionMine, judgment.CommitmentStateOpen, 0.9, nil)},
+		}))
+		open := b.openObligations(t, th)
+		require.Len(t, open, 1)
+		_, err := b.tasks.UpdateContactTaskState(b.ctx, open[0].TaskID, repository.ContactTaskStateCompleted)
+		require.NoError(t, err)
+
+		page, _ := b.list(t, "contact_id="+x.String())
+
+		done := item(t, page.Items[0].Proposals[0], "commitments", x)
+		assert.Equal(t, ptr("not_acting"), done.State)
+		confirm := acts(done)["confirm"]
+		require.Equal(t, "open", confirm.RightOutcome)
+		_, err = b.store.ReviewOutcome(b.ctx, uuid.MustParse(done.OutcomeID), judgment.ReviewRequest{RightOutcome: confirm.RightOutcome})
+		require.NoError(t, err)
+		assert.Empty(t, b.openObligations(t, th), "confirming a completed commitment records the label only")
+		page, _ = b.list(t, "contact_id="+x.String())
+		reviewed := item(t, page.Items[0].Proposals[0], "commitments", x)
+		assert.Equal(t, ptr("not_acting"), reviewed.State)
+		assert.Equal(t, ptr("confirmed"), reviewed.Mark)
+	})
 }
 
 // messageKey is the key of the thread's one message.

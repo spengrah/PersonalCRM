@@ -21,67 +21,6 @@ import (
 // compiled into the answers the user reviews. The bench applies no judgment
 // rule of its own; every list, state, mark and act below is decided here.
 
-// ProposalList is a list of a proposal.
-type ProposalList string
-
-const (
-	ListIOweReply   ProposalList = "i_owe_reply"
-	ListOwesMeReply ProposalList = "owes_me_reply"
-	ListCommitments ProposalList = "commitments"
-	ListBigMoment   ProposalList = "big_moment"
-)
-
-// ItemState is where an unreviewed item's decision sits: live (acting: its
-// obligation open and its task created, or its flag raised), suggested
-// (awaiting the user's OK), not acting (evidence, changing nothing live), or
-// live with a suggested change (a live item the judgment would remove or move
-// later).
-type ItemState string
-
-const (
-	ItemStateLive           ItemState = "live"
-	ItemStateSuggested      ItemState = "suggested"
-	ItemStateNotActing      ItemState = "not_acting"
-	ItemStateLiveWithChange ItemState = "live_with_change"
-)
-
-// ChangeKind is a suggested change to a live item.
-type ChangeKind string
-
-const (
-	ChangeRemove    ChangeKind = "remove"
-	ChangeLaterDate ChangeKind = "later_date"
-)
-
-// ItemMark is how the user's review left an item: confirmed (confirmed, or a
-// live item kept against a suggested change), removed, or added.
-type ItemMark string
-
-const (
-	MarkConfirmed ItemMark = "confirmed"
-	MarkRemoved   ItemMark = "removed"
-	MarkAdded     ItemMark = "added"
-)
-
-// ActKind names a review control of an unreviewed item.
-type ActKind string
-
-const (
-	ActConfirm      ActKind = "confirm"
-	ActRemove       ActKind = "remove"
-	ActAccept       ActKind = "accept"
-	ActKeep         ActKind = "keep"
-	ActKeepOriginal ActKind = "keep_original"
-)
-
-// Debtor is who owes a commitment: the user or the participant.
-type Debtor string
-
-const (
-	DebtorMe      Debtor = "me"
-	DebtorContact Debtor = "contact"
-)
-
 // ItemAct is one review control: the review it sends.
 type ItemAct struct {
 	Act    ActKind
@@ -96,9 +35,11 @@ type ItemChange struct {
 	Confidence *float64
 }
 
-// SourceMessage is the message a commitment's judgment names as stating it.
-// Key is the message's key in the thread's content (S1).
-type SourceMessage struct {
+// ThreadMessage is one message of a thread's content, each message once
+// however many per-contact copies hold it: a message the bench shows, among
+// them the one a commitment's judgment names as stating it. Key is the
+// message's key in the thread's content (S1).
+type ThreadMessage struct {
 	Key      string
 	SentAt   time.Time
 	FromUser bool
@@ -121,7 +62,7 @@ type ProposalItem struct {
 	Confidence *float64
 	DueDate    *time.Time
 	Change     *ItemChange
-	Source     *SourceMessage
+	Source     *ThreadMessage
 	Mark       ItemMark
 	Acts       []ItemAct
 }
@@ -137,13 +78,15 @@ type ProposalAddition struct {
 	Review    ReviewRequest
 }
 
-// Proposal is one judgment of a thread as the bench shows it. CutOff is the
+// Proposal is one judgment of a thread as the bench shows it. Thread is the
+// judged thread, whose content the bench reads as ThreadContent. CutOff is the
 // judgment's first appearance, as of which its content is shown; ReusedAt is
 // the cut-off of its appearance in the run a view is narrowed to, when that
 // run reused it. ReplyLists is false for a meeting, which ball-in-court is not
 // asked of. ToReview counts the items without a review.
 type Proposal struct {
 	JudgmentID uuid.UUID
+	Thread     threadctx.VenueID
 	Method     MethodRef
 	Production bool
 	Kind       threadctx.ContextKind
@@ -198,7 +141,11 @@ func (s *Store) ThreadProposals(ctx context.Context, thread threadctx.VenueID, r
 	if err != nil {
 		return nil, fmt.Errorf("list thread obligations: %w", err)
 	}
-	pc := &proposalContext{thread: thread, obligations: tasks, messages: repository.NewThreadContentRepository(s.queries)}
+	live, err := loadLiveState(ctx, s.queries, thread)
+	if err != nil {
+		return nil, err
+	}
+	pc := &proposalContext{thread: thread, obligations: tasks, live: live, messages: repository.NewThreadContentRepository(s.queries)}
 	proposals := make([]Proposal, len(rows))
 	for i, j := range rows {
 		p, err := s.compile(ctx, pc, j, outcomes[j.ID])
@@ -230,7 +177,7 @@ func (s *Store) ThreadProposals(ctx context.Context, thread threadctx.VenueID, r
 	return proposals, nil
 }
 
-func appendContact(ids []uuid.UUID, contact *uuid.UUID, source *SourceMessage) []uuid.UUID {
+func appendContact(ids []uuid.UUID, contact *uuid.UUID, source *ThreadMessage) []uuid.UUID {
 	if contact != nil {
 		ids = append(ids, *contact)
 	}
@@ -241,21 +188,13 @@ func appendContact(ids []uuid.UUID, contact *uuid.UUID, source *SourceMessage) [
 }
 
 // proposalContext is what compiling a thread's proposals reads besides its
-// judgments: the thread's obligations, open and closed, oldest first.
+// judgments: the thread's obligations, open and closed, oldest first, and its
+// live state.
 type proposalContext struct {
 	thread      uuid.UUID
 	obligations []repository.ContactTask
+	live        *liveState
 	messages    *repository.ThreadContentRepository
-}
-
-// owesUserReply reports whether the thread has held the user's reply
-// obligation to the contact: a removal of the contact's reply item then sits
-// in "I owe a reply", and otherwise in "Owes me a reply" (the contact's reply
-// obligation or the timestamp rule's wait).
-func (pc *proposalContext) owesUserReply(contact uuid.UUID) bool {
-	return slices.ContainsFunc(pc.obligations, func(t repository.ContactTask) bool {
-		return t.Obligation.Debtor == repository.ObligationDebtorUser && t.Obligation.Basis == repository.ObligationBasisReply && t.ContactID == contact
-	})
 }
 
 // commitmentDue is the due date of the debtor's latest commitment obligation
@@ -297,6 +236,7 @@ func (s *Store) compile(ctx context.Context, pc *proposalContext, j *db.ListJudg
 	production, designated := s.ProductionMethod()
 	p := Proposal{
 		JudgmentID: j.ID,
+		Thread:     j.ThreadID,
 		Method:     method,
 		Production: designated && method.Key == production,
 		Kind:       kind,
@@ -306,11 +246,14 @@ func (s *Store) compile(ctx context.Context, pc *proposalContext, j *db.ListJudg
 		Additions:  []ProposalAddition{},
 	}
 	for _, o := range outcomes {
-		item, ok := pc.itemOf(o)
+		item, ok, err := pc.itemOf(ctx, o)
+		if err != nil {
+			return Proposal{}, err
+		}
 		if !ok {
 			continue
 		}
-		if item.List == ListCommitments && item.Mark != MarkAdded && item.Change.kind() != ChangeRemove {
+		if item.List == ProposalListCommitments && item.Mark != ItemMarkAdded && item.Change.kind() != ChangeKindRemove {
 			if item.Source, err = s.sourceMessage(ctx, pc, questions, o.QuestionID); err != nil {
 				return Proposal{}, err
 			}
@@ -336,42 +279,46 @@ func (c *ItemChange) kind() ChangeKind {
 
 // itemOf is the item an outcome stands for, and false when it stands for
 // none: an outcome whose value has no effect, unless it would remove a live
-// item, and unless the user's review gave it one.
-func (pc *proposalContext) itemOf(o *outcomeRecord) (ProposalItem, bool) {
-	judged := o.value()
+// item, and unless the user's review gave it one. An item whose live effect
+// no longer holds acts no more, so it is not acting.
+func (pc *proposalContext) itemOf(ctx context.Context, o *outcomeRecord) (ProposalItem, bool, error) {
 	change := changeOf(o)
-	// before is the list the item sits in before any review.
-	before := listOf(o.Question, judged)
-	if change == ChangeRemove {
-		before = pc.liveList(o)
+	// before is the list the item sits in before any review: the judged
+	// value's, or for a suggested change the list of the live value it would
+	// take away.
+	before := listOf(o.Question, o.value())
+	if change != "" {
+		before = listOf(o.Question, o.kept())
 	}
 
 	item := ProposalItem{OutcomeID: o.ID, Contact: o.ContactID, Debtor: debtorOf(o.Question)}
 	if o.review == nil {
 		if before == "" {
-			return ProposalItem{}, false
+			return ProposalItem{}, false, nil
 		}
 		item.List = before
-		item.Acts = actsOf(o, change, before)
+		item.Acts = actsOf(o, change)
 	} else {
 		right := *o.review.ValueText
 		switch {
 		case isNoEffectValue(right) && before == "":
-			return ProposalItem{}, false
+			return ProposalItem{}, false, nil
 		case isNoEffectValue(right):
-			item.List, item.Mark = before, MarkRemoved
-		case change == ChangeRemove && right == liveValue(before),
-			change == ChangeLaterDate && right == string(CommitmentStateOpen),
-			change == "" && right == judged:
-			item.List, item.Mark = listOf(o.Question, right), MarkConfirmed
+			item.List, item.Mark = before, ItemMarkRemoved
+		case o.adds(right):
+			item.List, item.Mark = listOf(o.Question, right), ItemMarkAdded
 		default:
-			item.List, item.Mark = listOf(o.Question, right), MarkAdded
+			item.List, item.Mark = listOf(o.Question, right), ItemMarkConfirmed
 		}
 	}
 
+	gone, err := pc.live.effectGone(ctx, o)
+	if err != nil {
+		return ProposalItem{}, false, err
+	}
 	switch {
-	case item.Mark == MarkRemoved:
-	case o.state() == OutcomeStateEvidence:
+	case item.Mark == ItemMarkRemoved:
+	case o.state() == OutcomeStateEvidence, gone:
 		item.State = ItemStateNotActing
 	case o.review != nil:
 		item.State = ItemStateLive
@@ -386,17 +333,17 @@ func (pc *proposalContext) itemOf(o *outcomeRecord) (ProposalItem, bool) {
 	switch {
 	case change != "" && o.review == nil:
 		item.Change = &ItemChange{Kind: change, Confidence: o.Confidence}
-		if change == ChangeLaterDate {
+		if change == ChangeKindLaterDate {
 			item.Change.DueDate = o.DueDate
 		}
-	case change == "" && item.Mark != MarkAdded:
+	case change == "" && item.Mark != ItemMarkAdded:
 		item.Confidence = o.Confidence
 	}
 
-	if item.List == ListCommitments {
+	if item.List == ProposalListCommitments {
 		switch {
-		case item.Mark == MarkAdded:
-		case change == ChangeLaterDate && o.review != nil && !o.keepsCurrentDate():
+		case item.Mark == ItemMarkAdded:
+		case change == ChangeKindLaterDate && o.review != nil && !o.keepsCurrentDate():
 			item.DueDate = o.DueDate
 		case change != "":
 			item.DueDate = pc.commitmentDue(item.Debtor, contactOf(o.ContactID))
@@ -404,10 +351,10 @@ func (pc *proposalContext) itemOf(o *outcomeRecord) (ProposalItem, bool) {
 			item.DueDate = o.DueDate
 		}
 	}
-	if item.List == ListBigMoment {
+	if item.List == ProposalListBigMoment {
 		item.Contact = nil
 	}
-	return item, true
+	return item, true, nil
 }
 
 // changeOf is the change an outcome landed as a removal suggests to a live
@@ -419,9 +366,9 @@ func changeOf(o *outcomeRecord) ChangeKind {
 	}
 	switch {
 	case isNoEffectValue(o.value()):
-		return ChangeRemove
+		return ChangeKindRemove
 	case o.value() == string(CommitmentStateOpen):
-		return ChangeLaterDate
+		return ChangeKindLaterDate
 	default:
 		return ""
 	}
@@ -432,45 +379,24 @@ func changeOf(o *outcomeRecord) ChangeKind {
 func listOf(question Question, value string) ProposalList {
 	switch {
 	case value == string(BallInCourtIOweReply):
-		return ListIOweReply
+		return ProposalListIOweReply
 	case value == string(BallInCourtTheyOweReply):
-		return ListOwesMeReply
+		return ProposalListOwesMeReply
 	case question == QuestionBigMoment && !isNoEffectValue(value):
-		return ListBigMoment
+		return ProposalListBigMoment
 	case (question == QuestionCommitmentMine || question == QuestionCommitmentTheirs) && value == string(CommitmentStateOpen):
-		return ListCommitments
+		return ProposalListCommitments
 	default:
 		return ""
 	}
 }
 
-// liveList is the list of the live item a removal would remove.
-func (pc *proposalContext) liveList(o *outcomeRecord) ProposalList {
-	switch o.Question {
-	case QuestionBallInCourt:
-		if pc.owesUserReply(contactOf(o.ContactID)) {
-			return ListIOweReply
-		}
-		return ListOwesMeReply
-	case QuestionBigMoment:
-		return ListBigMoment
-	default:
-		return ListCommitments
-	}
-}
-
-// liveValue is the outcome value that keeps a list's live item.
-func liveValue(list ProposalList) string {
-	switch list {
-	case ListIOweReply:
+// replyValue is the ball-in-court value that puts a contact in a reply list.
+func replyValue(list ProposalList) string {
+	if list == ProposalListIOweReply {
 		return string(BallInCourtIOweReply)
-	case ListOwesMeReply:
-		return string(BallInCourtTheyOweReply)
-	case ListBigMoment:
-		return string(BigMomentParticipant)
-	default:
-		return string(CommitmentStateOpen)
 	}
+	return string(BallInCourtTheyOweReply)
 }
 
 // noEffectValue is the value that removes a question's item.
@@ -492,24 +418,25 @@ func debtorOf(question Question) Debtor {
 	}
 }
 
-// actsOf are an unreviewed item's review controls.
-func actsOf(o *outcomeRecord, change ChangeKind, list ProposalList) []ItemAct {
+// actsOf are an unreviewed item's review controls. Keep states the live
+// value the suggested removal would take away.
+func actsOf(o *outcomeRecord, change ChangeKind) []ItemAct {
 	judged := o.value()
 	switch change {
-	case ChangeRemove:
+	case ChangeKindRemove:
 		return []ItemAct{
-			{Act: ActAccept, Review: ReviewRequest{RightOutcome: judged}},
-			{Act: ActKeep, Review: ReviewRequest{RightOutcome: liveValue(list)}},
+			{Act: ActKindAccept, Review: ReviewRequest{RightOutcome: judged}},
+			{Act: ActKindKeep, Review: ReviewRequest{RightOutcome: o.kept()}},
 		}
-	case ChangeLaterDate:
+	case ChangeKindLaterDate:
 		return []ItemAct{
-			{Act: ActAccept, Review: ReviewRequest{RightOutcome: judged}},
-			{Act: ActKeepOriginal, Review: ReviewRequest{RightOutcome: judged, KeepCurrentDate: true}},
+			{Act: ActKindAccept, Review: ReviewRequest{RightOutcome: judged}},
+			{Act: ActKindKeepOriginal, Review: ReviewRequest{RightOutcome: judged, KeepCurrentDate: true}},
 		}
 	default:
 		return []ItemAct{
-			{Act: ActConfirm, Review: ReviewRequest{RightOutcome: judged}},
-			{Act: ActRemove, Review: ReviewRequest{RightOutcome: noEffectValue(o.Question)}},
+			{Act: ActKindConfirm, Review: ReviewRequest{RightOutcome: judged}},
+			{Act: ActKindRemove, Review: ReviewRequest{RightOutcome: noEffectValue(o.Question)}},
 		}
 	}
 }
@@ -520,7 +447,7 @@ func actsOf(o *outcomeRecord, change ChangeKind, list ProposalList) []ItemAct {
 func absorbReplies(items []ProposalItem) []ProposalItem {
 	committed := map[Debtor]map[uuid.UUID]bool{DebtorMe: {}, DebtorContact: {}}
 	for _, item := range items {
-		if item.List == ListCommitments && item.Mark != MarkRemoved && item.Contact != nil {
+		if item.List == ProposalListCommitments && item.Mark != ItemMarkRemoved && item.Contact != nil {
 			committed[item.Debtor][*item.Contact] = true
 		}
 	}
@@ -528,8 +455,8 @@ func absorbReplies(items []ProposalItem) []ProposalItem {
 		if item.Mark != "" || item.Contact == nil {
 			return false
 		}
-		return (item.List == ListIOweReply && committed[DebtorMe][*item.Contact]) ||
-			(item.List == ListOwesMeReply && committed[DebtorContact][*item.Contact])
+		return (item.List == ProposalListIOweReply && committed[DebtorMe][*item.Contact]) ||
+			(item.List == ProposalListOwesMeReply && committed[DebtorContact][*item.Contact])
 	})
 }
 
@@ -551,19 +478,19 @@ func additions(outcomes []*outcomeRecord, items []ProposalItem) []ProposalAdditi
 		}
 		switch o.Question {
 		case QuestionBallInCourt:
-			for _, list := range []ProposalList{ListIOweReply, ListOwesMeReply} {
+			for _, list := range []ProposalList{ProposalListIOweReply, ProposalListOwesMeReply} {
 				if !has(list, "", o.ContactID) {
-					out = append(out, ProposalAddition{List: list, Contact: o.ContactID, OutcomeID: o.ID, Review: ReviewRequest{RightOutcome: liveValue(list)}})
+					out = append(out, ProposalAddition{List: list, Contact: o.ContactID, OutcomeID: o.ID, Review: ReviewRequest{RightOutcome: replyValue(list)}})
 				}
 			}
 		case QuestionCommitmentMine, QuestionCommitmentTheirs:
 			debtor := debtorOf(o.Question)
-			if !has(ListCommitments, debtor, o.ContactID) {
-				out = append(out, ProposalAddition{List: ListCommitments, Contact: o.ContactID, Debtor: debtor, OutcomeID: o.ID, Review: ReviewRequest{RightOutcome: string(CommitmentStateOpen)}})
+			if !has(ProposalListCommitments, debtor, o.ContactID) {
+				out = append(out, ProposalAddition{List: ProposalListCommitments, Contact: o.ContactID, Debtor: debtor, OutcomeID: o.ID, Review: ReviewRequest{RightOutcome: string(CommitmentStateOpen)}})
 			}
 		case QuestionBigMoment:
-			if !has(ListBigMoment, "", nil) {
-				out = append(out, ProposalAddition{List: ListBigMoment, OutcomeID: o.ID, Review: ReviewRequest{RightOutcome: string(BigMomentParticipant)}})
+			if !has(ProposalListBigMoment, "", nil) {
+				out = append(out, ProposalAddition{List: ProposalListBigMoment, OutcomeID: o.ID, Review: ReviewRequest{RightOutcome: string(BigMomentParticipant)}})
 			}
 		}
 	}
@@ -572,7 +499,7 @@ func additions(outcomes []*outcomeRecord, items []ProposalItem) []ProposalAdditi
 
 // sourceMessage is the message the judgment names as stating the commitment
 // its question asks about; nil when the judgment names none.
-func (s *Store) sourceMessage(ctx context.Context, pc *proposalContext, questions []AnsweredQuestion, commitmentQuestionID string) (*SourceMessage, error) {
+func (s *Store) sourceMessage(ctx context.Context, pc *proposalContext, questions []AnsweredQuestion, commitmentQuestionID string) (*ThreadMessage, error) {
 	if commitmentQuestionID == "" {
 		return nil, nil
 	}
@@ -591,7 +518,7 @@ func (s *Store) sourceMessage(ctx context.Context, pc *proposalContext, question
 	if err != nil {
 		return nil, err
 	}
-	source := &SourceMessage{Key: key, SentAt: m.SentAt, FromUser: m.FromUser, Text: m.Body}
+	source := &ThreadMessage{Key: key, SentAt: m.SentAt, FromUser: m.FromUser, Text: m.Body}
 	if !m.FromUser {
 		source.Sender = m.ContactID
 	}
@@ -633,7 +560,7 @@ func sortProposal(p *Proposal, names map[uuid.UUID]string) {
 		}
 		return c[:]
 	}
-	listRank := map[ProposalList]int{ListIOweReply: 0, ListOwesMeReply: 1, ListCommitments: 2, ListBigMoment: 3}
+	listRank := map[ProposalList]int{ProposalListIOweReply: 0, ProposalListOwesMeReply: 1, ProposalListCommitments: 2, ProposalListBigMoment: 3}
 	debtorRank := map[Debtor]int{"": 0, DebtorMe: 0, DebtorContact: 1}
 	slices.SortStableFunc(p.Items, func(a, b ProposalItem) int {
 		return cmp.Or(

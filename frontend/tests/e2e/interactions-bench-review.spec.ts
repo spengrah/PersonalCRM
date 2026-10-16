@@ -438,6 +438,172 @@ test.describe('Interactions bench review @area:interactions', () => {
     await expect(reloaded.locator('[data-item]').getByRole('button')).toHaveCount(0)
   })
 
+  test('the user removes a reply item and the flag, moves a person between reply lists, and adds their own commitment', async ({
+    page,
+    request,
+  }) => {
+    const seeded = await testApi.seedBehavior('IXN-048')
+    const [sam, kim, lee, waiting] = ['sam', 'kim', 'lee', 'waiting'].map(h => entity(seeded, h))
+    const { shared, latest } = await groupThread(request, seeded)
+    await seedJudgmentRun(request, {
+      judgments: [
+        {
+          thread_interaction_id: entity(seeded, 'group').id,
+          cut_off: latest.sent_at,
+          ball_in_court: [
+            {
+              question_id: 'ball_in_court:PERSON_2',
+              contact_id: sam.id,
+              outcome: 'they_owe_reply',
+              confidence: 0.9,
+            },
+            {
+              question_id: 'ball_in_court:PERSON_3',
+              contact_id: kim.id,
+              outcome: 'i_owe_reply',
+              confidence: 0.9,
+            },
+            {
+              question_id: 'ball_in_court:PERSON_4',
+              contact_id: lee.id,
+              outcome: 'nobody_owes',
+              confidence: 0.9,
+            },
+          ],
+          commitments: [
+            none('mine', sam.id, 2),
+            none('mine', kim.id, 3),
+            none('mine', lee.id, 4),
+            none('theirs', sam.id, 2),
+            none('theirs', kim.id, 3),
+            none('theirs', lee.id, 4),
+          ],
+          big_moment: {
+            question_id: 'big_moment',
+            outcome: 'participant_moment',
+            confidence: 0.9,
+          },
+        },
+      ],
+    })
+    const reviews = recordReviews(page)
+    await page.goto(`/interactions?contact=${sam.id}`)
+    const row = benchRow(page, shared.item.identity.id)
+    const proposal = proposalOf(await expandRow(row), 'bench-production')
+    const iOwe = proposalList(proposal, 'I owe a reply')
+    const owesMe = proposalList(proposal, 'Owes me a reply')
+    const commitments = proposalList(proposal, 'Commitments')
+    const flag = proposalList(proposal, 'Big moment')
+
+    // spec: IXN-047.remove-by-no-effect
+    await expect(listItem(iOwe, kim.name)).toHaveAttribute('data-state', 'live', {
+      timeout: SLOW_TIMEOUT_MS,
+    })
+    await iOwe.getByRole('button', { name: `Remove ${kim.name}` }).click()
+    await expect(listItem(iOwe, kim.name)).toHaveAttribute('data-mark', 'removed', {
+      timeout: SLOW_TIMEOUT_MS,
+    })
+    await expect(flag.locator('[data-item]')).toHaveAttribute('data-state', 'live')
+    await flag.getByRole('button', { name: 'Remove big moment' }).click()
+    await expect(flag.locator('[data-item]')).toHaveAttribute('data-mark', 'removed', {
+      timeout: SLOW_TIMEOUT_MS,
+    })
+
+    // spec: IXN-047.add-by-outcome
+    await expect(listItem(owesMe, sam.name)).toHaveAttribute('data-state', 'live')
+    await iOwe.getByRole('button', { name: 'Add', exact: true }).click()
+    await iOwe
+      .getByRole('group', { name: 'Add to I owe a reply' })
+      .getByRole('button', { name: sam.name })
+      .click()
+    await expect(listItem(iOwe, sam.name)).toHaveAttribute('data-mark', 'added', {
+      timeout: SLOW_TIMEOUT_MS,
+    })
+    await expect(listItem(owesMe, sam.name)).toHaveCount(0)
+
+    // spec: IXN-047.added-commitment-fallback
+    const sevenBefore = localDateFromNow(7)
+    await commitments.getByRole('button', { name: 'Add commitment' }).click()
+    await commitments
+      .getByRole('group', { name: 'Add to Commitments' })
+      .getByRole('button', { name: `Me → ${lee.name}` })
+      .click()
+    const mine = listItem(commitments, `Me → ${lee.name}`)
+    await expect(mine).toHaveAttribute('data-mark', 'added', { timeout: SLOW_TIMEOUT_MS })
+    await expect(mine.locator('[data-item-text]')).toHaveText(`Me → ${lee.name} · no stated date`)
+    const owed = (await fetchObligations(request, entity(seeded, 'group').id)).find(
+      o => o.open && o.debtor === 'user' && o.basis === 'commitment' && o.contact_id === lee.id
+    )
+    expect(owed?.kind).toBe('reminder')
+    expect(
+      [sevenBefore, localDateFromNow(7)],
+      'the user’s own commitment to a contact without a cadence is due seven days on'
+    ).toContain(owed?.due_date)
+
+    // spec: IXN-047.inline-no-verdict
+    expect(reviews).toEqual([
+      { right_outcome: 'nobody_owes' },
+      { right_outcome: 'none' },
+      { right_outcome: 'i_owe_reply' },
+      { right_outcome: 'open' },
+    ])
+
+    // spec: IXN-048.removed-stays-struck, IXN-048.added-shown
+    await page.reload()
+    const reloaded = proposalOf(await expandRow(row), 'bench-production')
+    const removedReply = listItem(proposalList(reloaded, 'I owe a reply'), kim.name)
+    await expect(removedReply.locator('[data-review-mark]')).toHaveText('Removed by you', {
+      timeout: SLOW_TIMEOUT_MS,
+    })
+    await expect(removedReply.locator('[data-item-text]')).toHaveClass(/line-through/)
+    const removedFlag = proposalList(reloaded, 'Big moment').locator('[data-item]')
+    await expect(removedFlag.locator('[data-review-mark]')).toHaveText('Removed by you')
+    await expect(removedFlag.locator('[data-item-text]')).toHaveClass(/line-through/)
+    await expect(
+      listItem(proposalList(reloaded, 'I owe a reply'), sam.name).locator('[data-review-mark]')
+    ).toHaveText('Added by you')
+    await expect(listItem(proposalList(reloaded, 'Owes me a reply'), sam.name)).toHaveCount(0)
+    await expect(
+      listItem(proposalList(reloaded, 'Commitments'), `Me → ${lee.name}`).locator(
+        '[data-review-mark]'
+      )
+    ).toHaveText('Added by you')
+
+    // spec: IXN-047.added-commitment-fallback
+    const [thanksRow] = await contactRows(request, waiting.id)
+    const thanksLatest = (await rowMessages(request, thanksRow)).at(-1)!
+    await seedJudgmentRun(request, {
+      judgments: [
+        {
+          thread_interaction_id: entity(seeded, 'thanks').id,
+          cut_off: thanksLatest.sent_at,
+          commitments: [none('mine', waiting.id, 1)],
+        },
+      ],
+    })
+    await page.goto(`/interactions?contact=${waiting.id}`)
+    const thanks = proposalList(
+      proposalOf(await expandRow(benchRow(page, thanksRow.item.identity.id)), 'bench-production'),
+      'Commitments'
+    )
+    const threeBefore = localDateFromNow(3)
+    await thanks.getByRole('button', { name: 'Add commitment' }).click()
+    await thanks
+      .getByRole('group', { name: 'Add to Commitments' })
+      .getByRole('button', { name: `Me → ${waiting.name}` })
+      .click()
+    await expect(listItem(thanks, `Me → ${waiting.name}`)).toHaveAttribute('data-mark', 'added', {
+      timeout: SLOW_TIMEOUT_MS,
+    })
+    const weekly = (await fetchObligations(request, entity(seeded, 'thanks').id)).find(
+      o => o.open && o.debtor === 'user' && o.basis === 'commitment'
+    )
+    expect(
+      [threeBefore, localDateFromNow(3)],
+      'the user’s own commitment to a weekly contact is due the cadence’s watchdog days on'
+    ).toContain(weekly?.due_date)
+  })
+
   test('a suggested removal of a live wait is accepted, or kept', async ({ page, request }) => {
     const judgeWait = async (seeded: SeedBehaviorResult) => {
       const waiting = entity(seeded, 'waiting')
@@ -643,7 +809,7 @@ test.describe('Interactions bench review @area:interactions', () => {
 
       // spec: IXN-049.flag-beneath-content, IXN-046.flag-belongs-to-thread
       const frame = region.locator('[data-judged-frame]')
-      await expect(frame.locator(`[data-message-id="${latest.id}"]`)).toBeVisible({
+      await expect(frame.locator(`[data-content-ref="${latest.content_ref}"]`)).toBeVisible({
         timeout: SLOW_TIMEOUT_MS,
       })
       const flag = proposalList(proposalOf(frame, 'bench-production'), 'Big moment').locator(

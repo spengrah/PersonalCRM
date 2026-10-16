@@ -203,6 +203,73 @@ test.describe('Interactions bench runs @area:interactions', () => {
     await expect(reviewed.locator('[data-review-indicator]')).toHaveText('Reviewed')
   })
 
+  test('a judged thread shows its whole content across rows, earlier context above the cut-off and later messages after it', async ({
+    page,
+    request,
+  }) => {
+    const seeded = await testApi.seedBehavior('IXN-044')
+    const [first, second, third] = ['first', 'second', 'third'].map(handle =>
+      entity(seeded, handle)
+    )
+    const [firstRow] = await contactRows(request, first.id)
+    const [secondRow] = await contactRows(request, second.id)
+    const [thirdRow] = await contactRows(request, third.id)
+    const [earlier] = await rowMessages(request, firstRow)
+    const [judged] = await rowMessages(request, secondRow)
+    const [later] = await rowMessages(request, thirdRow)
+    await seedJudgmentRun(request, {
+      judgments: [
+        {
+          thread_interaction_id: entity(seeded, 'group').id,
+          cut_off: judged.sent_at,
+          questions: [
+            {
+              id: 'commitment_theirs:PERSON_2/source_message',
+              probabilities: { [earlier.content_ref]: 0.9 },
+              original_answer: earlier.content_ref,
+            },
+          ],
+          commitments: [
+            {
+              question_id: 'commitment_theirs:PERSON_2',
+              contact_id: first.id,
+              direction: 'theirs',
+              outcome: 'open',
+              confidence: 0.9,
+            },
+          ],
+        },
+      ],
+    })
+    await page.goto(`/interactions?contact=${second.id}`)
+    const region = await expandRow(benchRow(page, secondRow.item.identity.id))
+
+    // spec: IXN-045.content-cutoff-proposal-together
+    const frame = region.locator('[data-judged-frame]')
+    await expect(frame.locator('[data-judged-content] [data-content-ref]')).toHaveCount(2, {
+      timeout: SLOW_TIMEOUT_MS,
+    })
+    expect(
+      await frame
+        .locator('[data-judged-content] [data-content-ref]')
+        .evaluateAll(nodes => nodes.map(node => node.getAttribute('data-content-ref')))
+    ).toEqual([earlier.content_ref, judged.content_ref])
+
+    // spec: IXN-045.after-content-marked
+    const after = region.locator('[data-after-judgment]')
+    await expect(after.locator(`[data-content-ref="${later.content_ref}"]`)).toBeVisible()
+    await expect(after.getByText('After the judgment')).toHaveCount(1)
+
+    // spec: IXN-046.source-quote-leads
+    await frame
+      .locator('[data-source-message]')
+      .getByRole('button', { name: 'Show in thread' })
+      .click()
+    await expect(
+      frame.locator('[data-highlighted]').locator(`[data-content-ref="${earlier.content_ref}"]`)
+    ).toBeVisible()
+  })
+
   test('a proposal sits beneath the content it read, later content marked after the judgment', async ({
     page,
     request,
@@ -236,7 +303,7 @@ test.describe('Interactions bench runs @area:interactions', () => {
     await expect(frame.locator('[data-judged-content] [data-message-id]')).toHaveCount(1, {
       timeout: SLOW_TIMEOUT_MS,
     })
-    await expect(frame.locator(`[data-message-id="${messages[0].id}"]`)).toBeVisible()
+    await expect(frame.locator(`[data-content-ref="${messages[0].content_ref}"]`)).toBeVisible()
     const order = await frame.evaluate(node =>
       Array.from(node.children).map(child =>
         child.hasAttribute('data-judged-content')
@@ -256,7 +323,7 @@ test.describe('Interactions bench runs @area:interactions', () => {
     // spec: IXN-045.after-content-marked
     const after = region.locator('[data-after-judgment]')
     for (const message of messages.slice(1)) {
-      await expect(after.locator(`[data-message-id="${message.id}"]`)).toBeVisible()
+      await expect(after.locator(`[data-content-ref="${message.content_ref}"]`)).toBeVisible()
     }
     await expect(after.getByText('After the judgment')).toHaveCount(2)
     expect(Number(await after.evaluate(node => getComputedStyle(node).opacity))).toBeLessThan(1)

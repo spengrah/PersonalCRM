@@ -21,6 +21,9 @@ const (
 	// commitment's current date against the judged later date; it is written
 	// beside every review.
 	predicateReviewKeepsDate = "judgment_review_keeps_date"
+	// predicateRemovalTarget holds the outcome value whose live effect a
+	// removal would take away; it is written beside every removal landing.
+	predicateRemovalTarget = "judgment_removal_target"
 	// predicateFlag is a big-moment flag on a thread.
 	predicateFlag = "big_moment_flag"
 )

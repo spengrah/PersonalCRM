@@ -18,13 +18,18 @@ import (
 // the outcome with the verdict derived from it. Reviewing an applied or claim
 // outcome gives the thread the right outcome's live effect: confirming a claim
 // applies it, and rejecting an applied addition withdraws it. Reviewing an
-// evidence outcome records the label only. The review labels the outcome's
-// input for every method: a later judgment of that input leaves its question
-// to the user's verdict.
+// evidence outcome records the label only, and so does a review that states
+// the value whose live effect the outcome stood for once that effect no longer
+// holds, so confirming never reopens a closed obligation. The review labels
+// the outcome's input for every method: a later judgment of that input leaves
+// its question to the user's verdict.
 //
 // A review stating an open commitment may keep the obligation's current date:
 // the commitment is kept, its judged date is not taken, and the verdict
-// records that the judged outcome was wrong.
+// records that the judged outcome was wrong. A commitment the review adds,
+// which the judgment did not hold, takes the timing of a commitment with no
+// stated date in either direction: the contact's cadence watchdog days, else
+// seven days.
 func (s *Store) ReviewOutcome(ctx context.Context, outcomeID uuid.UUID, review ReviewRequest) (OutcomeView, error) {
 	var view OutcomeView
 	err := s.inTx(ctx, func(tx pgx.Tx) error {
@@ -67,11 +72,7 @@ func (s *Store) ReviewOutcome(ctx context.Context, outcomeID uuid.UUID, review R
 			if err := s.settleLandingTx(ctx, tx, o, o.value() == right && !keep); err != nil {
 				return err
 			}
-			due := o.DueDate
-			if keep {
-				due = nil
-			}
-			if err := s.applyReviewTx(ctx, tx, o, right, due); err != nil {
+			if err := s.applyReviewTx(ctx, tx, o, right, keep); err != nil {
 				return err
 			}
 		}
@@ -104,17 +105,29 @@ func (s *Store) settleLandingTx(ctx context.Context, tx pgx.Tx, o *outcomeRecord
 	return nil
 }
 
-// applyReviewTx gives the thread the right outcome's live effect, at due for a
-// commitment (nil keeps an open obligation's date). The judgment's other
-// outcomes keep what they hold: a reviewed one its right outcome, an applied
-// one its judged outcome.
-func (s *Store) applyReviewTx(ctx context.Context, tx pgx.Tx, o *outcomeRecord, right string, due *time.Time) error {
+// applyReviewTx gives the thread the right outcome's live effect, unless the
+// right outcome is the value whose effect the outcome stood for and that
+// effect no longer holds. The judgment's other outcomes keep what they hold: a
+// reviewed one its right outcome, an applied one its judged outcome.
+func (s *Store) applyReviewTx(ctx context.Context, tx pgx.Tx, o *outcomeRecord, right string, keep bool) error {
 	q := db.New(tx)
 	rows, err := q.ListJudgmentRows(ctx, db.ListJudgmentRowsParams{Ids: []uuid.UUID{o.JudgmentID}, ExampleIds: []string{}})
 	if err != nil || len(rows) != 1 {
 		return fmt.Errorf("load judgment %s: %w", o.JudgmentID, err)
 	}
 	j := rows[0]
+	live, err := loadLiveState(ctx, q, j.ThreadID)
+	if err != nil {
+		return err
+	}
+	gone, err := live.effectGone(ctx, o)
+	if err != nil || (gone && right == o.actingValue()) {
+		return err
+	}
+	due, err := s.reviewDueTx(ctx, tx, o, right, keep)
+	if err != nil {
+		return err
+	}
 	outcomes, err := loadOutcomes(ctx, q, []uuid.UUID{o.JudgmentID}, nil)
 	if err != nil {
 		return err
@@ -148,4 +161,22 @@ func (s *Store) applyReviewTx(ctx context.Context, tx pgx.Tx, o *outcomeRecord, 
 	}
 	_, _, err = p.apply(ctx, pl, userLocator(), 100)
 	return err
+}
+
+// reviewDueTx is the date a review gives a commitment: none when the review
+// keeps the obligation's current date; the timing of a commitment with no
+// stated date (the contact's cadence watchdog days, else seven days) when the
+// review adds a commitment the judgment did not hold, in either direction;
+// otherwise the judged date.
+func (s *Store) reviewDueTx(ctx context.Context, tx pgx.Tx, o *outcomeRecord, right string, keep bool) (*time.Time, error) {
+	commitment := o.Question == QuestionCommitmentMine || o.Question == QuestionCommitmentTheirs
+	switch {
+	case keep:
+		return nil, nil
+	case commitment && o.adds(right):
+		due, err := s.nudgeDateTx(ctx, tx, *o.ContactID)
+		return &due, err
+	default:
+		return o.DueDate, nil
+	}
 }

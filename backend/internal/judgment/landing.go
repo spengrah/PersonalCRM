@@ -71,6 +71,11 @@ func (s *Store) landTx(ctx context.Context, tx pgx.Tx, judgmentID uuid.UUID, thr
 		if err != nil {
 			return err
 		}
+		if pl.class() == predicateRemoval {
+			if err := s.assertRemovalTargetTx(ctx, tx, outcomeID, pl.target(), locator); err != nil {
+				return err
+			}
+		}
 		if !accepted {
 			effects.ClaimsRaised++
 			return nil
@@ -217,6 +222,20 @@ func (s *Store) assertClassTx(ctx context.Context, tx pgx.Tx, outcomeID uuid.UUI
 	return a.Status == repository.AssertionStatusAccepted, nil
 }
 
+// assertRemovalTargetTx records the live value a removal landing targets.
+func (s *Store) assertRemovalTargetTx(ctx context.Context, tx pgx.Tx, outcomeID uuid.UUID, target string, locator service.ProvenanceLocator) error {
+	if _, err := s.assert.AssertTx(ctx, tx, service.AssertRequest{
+		SubjectNodeID: outcomeID,
+		PredicateKey:  predicateRemovalTarget,
+		ValueText:     &target,
+		Confidence:    100,
+		Locators:      []service.ProvenanceLocator{locator},
+	}); err != nil {
+		return fmt.Errorf("assert removal target: %w", err)
+	}
+	return nil
+}
+
 // sibling is one outcome's question, contact and effective value.
 type sibling struct {
 	question Question
@@ -305,6 +324,48 @@ func (p plan) class() string {
 	return predicateNoEffect
 }
 
+// target is the outcome value whose live effect a removal plan takes away:
+// the obligation it closes, the wait it ends, the flag it withdraws, or the
+// open commitment it moves later.
+func (p plan) target() string {
+	for _, a := range p.actions {
+		switch {
+		case a.kind == actClose:
+			return obligationValue(a.task)
+		case a.kind == actEndWait:
+			return string(BallInCourtTheyOweReply)
+		case a.kind == actWithdrawFlag:
+			return a.flag
+		case a.later:
+			return string(CommitmentStateOpen)
+		}
+	}
+	return ""
+}
+
+// obligationValue is the outcome value whose effect an obligation is.
+func obligationValue(task *repository.ContactTask) string {
+	switch {
+	case task.Obligation.Basis == repository.ObligationBasisCommitment:
+		return string(CommitmentStateOpen)
+	case task.Obligation.Debtor == repository.ObligationDebtorUser:
+		return string(BallInCourtIOweReply)
+	default:
+		return string(BallInCourtTheyOweReply)
+	}
+}
+
+// liveObligation is the open obligation of debtor on a thread: the user's one
+// obligation whatever contact it is owed to, or the contact's.
+func liveObligation(open []repository.ContactTask, debtor string, contact uuid.UUID) *repository.ContactTask {
+	for i := range open {
+		if open[i].Obligation.Debtor == debtor && (debtor == repository.ObligationDebtorUser || open[i].ContactID == contact) {
+			return &open[i]
+		}
+	}
+	return nil
+}
+
 // planner plans and applies outcomes' effects on one thread within one
 // transaction.
 type planner struct {
@@ -336,15 +397,7 @@ func (p *planner) plan(ctx context.Context, question Question, contact *uuid.UUI
 	if err != nil {
 		return plan{}, err
 	}
-	find := func(debtor string, c uuid.UUID) *repository.ContactTask {
-		for i := range open {
-			o := open[i].Obligation
-			if o.Debtor == debtor && (debtor == repository.ObligationDebtorUser || open[i].ContactID == c) {
-				return &open[i]
-			}
-		}
-		return nil
-	}
+	find := func(debtor string, c uuid.UUID) *repository.ContactTask { return liveObligation(open, debtor, c) }
 	replyOpen := func(t *repository.ContactTask) bool {
 		return t != nil && t.Obligation.Basis == repository.ObligationBasisReply
 	}
@@ -368,11 +421,11 @@ func (p *planner) plan(ctx context.Context, question Question, contact *uuid.UUI
 				pl.add(action{kind: actClose, task: user})
 			}
 			if their == nil {
-				awaiting, err := p.s.awaitingTx(ctx, p.tx, c)
+				waiting, err := awaiting(ctx, db.New(p.tx), c)
 				if err != nil {
 					return plan{}, err
 				}
-				if !awaiting {
+				if !waiting {
 					nudge, err := p.s.nudgeDueTx(ctx, p.tx, c)
 					if err != nil {
 						return plan{}, err
@@ -441,7 +494,7 @@ func (p *planner) plan(ctx context.Context, question Question, contact *uuid.UUI
 			pl.add(action{kind: actWithdrawFlag, flag: withdraw})
 		}
 		if value != string(BigMomentNone) {
-			raised, err := p.s.flagRaisedTx(ctx, p.tx, p.thread, value)
+			raised, err := flagRaised(ctx, db.New(p.tx), p.thread, value)
 			if err != nil {
 				return plan{}, err
 			}
@@ -636,10 +689,10 @@ func (s *Store) enqueueTaskOp(ctx context.Context, tx pgx.Tx, taskID uuid.UUID, 
 	return nil
 }
 
-// awaitingTx reports whether the timestamp rule shows the contact awaiting a
+// awaiting reports whether the timestamp rule shows the contact awaiting a
 // reply (CAD-040).
-func (s *Store) awaitingTx(ctx context.Context, tx pgx.Tx, contactID uuid.UUID) (bool, error) {
-	contact, err := s.contacts.GetContactTx(ctx, tx, contactID)
+func awaiting(ctx context.Context, q db.Querier, contactID uuid.UUID) (bool, error) {
+	contact, err := repository.NewContactRepository(q).GetContact(ctx, contactID)
 	if errors.Is(err, db.ErrNotFound) {
 		return false, nil
 	}
@@ -652,8 +705,8 @@ func (s *Store) awaitingTx(ctx context.Context, tx pgx.Tx, contactID uuid.UUID) 
 // waitStartedHereTx reports whether the contact is awaiting a reply and the
 // outreach that started the wait happened on the thread.
 func (s *Store) waitStartedHereTx(ctx context.Context, tx pgx.Tx, contactID, thread uuid.UUID) (bool, error) {
-	awaiting, err := s.awaitingTx(ctx, tx, contactID)
-	if err != nil || !awaiting {
+	waiting, err := awaiting(ctx, db.New(tx), contactID)
+	if err != nil || !waiting {
 		return false, err
 	}
 	started, err := db.New(tx).InteractionStartedAwaitingWait(ctx, db.InteractionStartedAwaitingWaitParams{
@@ -668,9 +721,18 @@ func (s *Store) waitStartedHereTx(ctx context.Context, tx pgx.Tx, contactID, thr
 // nudgeDueTx is when a participant's obligation without a selected date is
 // due: the contact's cadence watchdog days after today, else seven days.
 func (s *Store) nudgeDueTx(ctx context.Context, tx pgx.Tx, contactID uuid.UUID) (string, error) {
+	due, err := s.nudgeDateTx(ctx, tx, contactID)
+	if err != nil {
+		return "", err
+	}
+	return due.Format(dateFormat), nil
+}
+
+// nudgeDateTx is the date nudgeDueTx formats.
+func (s *Store) nudgeDateTx(ctx context.Context, tx pgx.Tx, contactID uuid.UUID) (time.Time, error) {
 	contact, err := s.contacts.GetContactTx(ctx, tx, contactID)
 	if err != nil && !errors.Is(err, db.ErrNotFound) {
-		return "", fmt.Errorf("get contact: %w", err)
+		return time.Time{}, fmt.Errorf("get contact: %w", err)
 	}
 	days := 0
 	if contact != nil && contact.Cadence != nil {
@@ -679,11 +741,12 @@ func (s *Store) nudgeDueTx(ctx context.Context, tx pgx.Tx, contactID uuid.UUID) 
 	if days == 0 {
 		days = defaultNudgeDays
 	}
-	return cadence.Today(now()).AddDate(0, 0, days).Format(dateFormat), nil
+	return cadence.Today(now()).AddDate(0, 0, days), nil
 }
 
-func (s *Store) flagRaisedTx(ctx context.Context, tx pgx.Tx, thread uuid.UUID, flag string) (bool, error) {
-	_, err := db.New(tx).FindLiveVenueFlag(ctx, db.FindLiveVenueFlagParams{VenueID: thread, PredicateKey: predicateFlag, Value: flag})
+// flagRaised reports whether the thread carries the live flag.
+func flagRaised(ctx context.Context, q db.Querier, thread uuid.UUID, flag string) (bool, error) {
+	_, err := q.FindLiveVenueFlag(ctx, db.FindLiveVenueFlagParams{VenueID: thread, PredicateKey: predicateFlag, Value: flag})
 	if errors.Is(err, pgx.ErrNoRows) {
 		return false, nil
 	}

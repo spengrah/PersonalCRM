@@ -2,6 +2,7 @@ import { apiClient } from './api-client'
 import type { ApiResponseWithMeta } from './api-client'
 import type {
   AllInteractionsResponse,
+  BenchThreadContentResponse,
   InteractionTypeOptionResponse,
   JudgmentOutcomeResponse,
   JudgmentRunsResponse,
@@ -30,6 +31,13 @@ export const benchApi = {
       ...filters,
       limit: ALL_INTERACTIONS_PAGE_SIZE,
     } as Record<string, unknown>)
+  },
+
+  // A judged thread's whole content, each message once, oldest first.
+  async threadContent(threadId: string): Promise<BenchThreadContentResponse> {
+    return apiClient.get<BenchThreadContentResponse>(
+      `/api/v1/interactions/threads/${threadId}/content`
+    )
   },
 
   async runs(): Promise<JudgmentRunsResponse> {

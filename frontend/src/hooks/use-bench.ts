@@ -1,4 +1,4 @@
-import { keepPreviousData, useMutation, useQuery } from '@tanstack/react-query'
+import { keepPreviousData, useMutation, useQueries, useQuery } from '@tanstack/react-query'
 import { benchApi, type AllInteractionsFilters } from '@/lib/bench-api'
 import { invalidateFor } from '@/lib/query-invalidation'
 import { interactionKeys, judgmentKeys } from '@/lib/query-keys'
@@ -9,6 +9,16 @@ export function useAllInteractions(filters: AllInteractionsFilters) {
     queryKey: interactionKeys.allList(filters),
     queryFn: () => benchApi.list(filters),
     placeholderData: keepPreviousData,
+  })
+}
+
+// The whole content of each judged thread.
+export function useThreadContents(threadIds: string[]) {
+  return useQueries({
+    queries: threadIds.map(threadId => ({
+      queryKey: interactionKeys.threadContent(threadId),
+      queryFn: () => benchApi.threadContent(threadId),
+    })),
   })
 }
 

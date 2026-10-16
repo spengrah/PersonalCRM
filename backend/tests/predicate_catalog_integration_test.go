@@ -86,6 +86,7 @@ var expectedCuratedCatalog = map[string]expectedCuratedPredicate{
 	"judgment_no_effect":         {"fact", "judgment_outcome", "", "text", "multi", false, "", "permanent", nil, nil, 50, "auto-if-confident", "none"},
 	"judgment_review":            {"fact", "judgment_outcome", "", "text", "single", false, "", "permanent", nil, nil, 50, "auto-if-confident", "none"},
 	"judgment_review_keeps_date": {"fact", "judgment_outcome", "", "bool", "single", false, "", "permanent", nil, nil, 50, "auto-if-confident", "none"},
+	"judgment_removal_target":    {"fact", "judgment_outcome", "", "text", "single", false, "", "permanent", nil, nil, 50, "auto-if-confident", "none"},
 	"big_moment_flag":            {"fact", "venue", "", "text", "multi", false, "", "permanent", nil, nil, 50, "auto-if-confident", "none"},
 }
 

@@ -88,3 +88,64 @@ const (
 	VerdictRejected  Verdict = "rejected"
 	VerdictCorrected Verdict = "corrected"
 )
+
+// ProposalList is a list of a proposal.
+type ProposalList string
+
+const (
+	ProposalListIOweReply   ProposalList = "i_owe_reply"
+	ProposalListOwesMeReply ProposalList = "owes_me_reply"
+	ProposalListCommitments ProposalList = "commitments"
+	ProposalListBigMoment   ProposalList = "big_moment"
+)
+
+// ItemState is where an item's decision sits: live (acting: its obligation
+// open and its task created, or its flag raised), suggested (awaiting the
+// user's OK), not acting (changing nothing live: evidence, or an item whose
+// effect no longer holds), or live with a suggested change (a live item the
+// judgment would remove or move later).
+type ItemState string
+
+const (
+	ItemStateLive           ItemState = "live"
+	ItemStateSuggested      ItemState = "suggested"
+	ItemStateNotActing      ItemState = "not_acting"
+	ItemStateLiveWithChange ItemState = "live_with_change"
+)
+
+// ChangeKind is a suggested change to a live item.
+type ChangeKind string
+
+const (
+	ChangeKindRemove    ChangeKind = "remove"
+	ChangeKindLaterDate ChangeKind = "later_date"
+)
+
+// ItemMark is how the user's review left an item: confirmed (confirmed, or a
+// live item kept against a suggested change), removed, or added.
+type ItemMark string
+
+const (
+	ItemMarkConfirmed ItemMark = "confirmed"
+	ItemMarkRemoved   ItemMark = "removed"
+	ItemMarkAdded     ItemMark = "added"
+)
+
+// ActKind names a review control of an unreviewed item.
+type ActKind string
+
+const (
+	ActKindConfirm      ActKind = "confirm"
+	ActKindRemove       ActKind = "remove"
+	ActKindAccept       ActKind = "accept"
+	ActKindKeep         ActKind = "keep"
+	ActKindKeepOriginal ActKind = "keep_original"
+)
+
+// Debtor is who owes a commitment: the user or the participant.
+type Debtor string
+
+const (
+	DebtorMe      Debtor = "me"
+	DebtorContact Debtor = "contact"
+)

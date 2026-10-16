@@ -114,6 +114,9 @@ export const interactionKeys = {
   // The all-interactions view: every interaction across contacts.
   allLists: () => [...interactionKeys.all, 'all-list'] as const,
   allList: (filters: AllInteractionsFilters) => [...interactionKeys.allLists(), filters] as const,
+  // A judged thread's whole content, which the view's drill-down shows.
+  threadContent: (threadId: string) =>
+    [...interactionKeys.all, 'thread-content', threadId] as const,
 }
 
 // Decision-model judgment query keys
