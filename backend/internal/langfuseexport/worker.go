@@ -41,7 +41,7 @@ func (w *Worker) Work(ctx context.Context, _ *river.Job[NightlyArgs]) error {
 			Msg("langfuse_export: extraction project not configured; nothing sent")
 		return nil
 	}
-	logger.Info().Int("runs", r.Runs).Int("runs_already_sent", r.Skipped).Int("judgments", r.Judgments).
+	logger.Info().Int("runs", r.Runs).Int("judgments", r.Judgments).Int("already_sent", r.Held).
 		Int("scorecards", r.Scorecards).Int("reviews", r.Reviews).
 		Msg("langfuse_export: sent decision-model records")
 	return nil

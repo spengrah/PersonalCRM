@@ -15,15 +15,17 @@ import (
 	"personal-crm/backend/internal/scorecard"
 )
 
-// Trace names, one per kind of record.
+// Trace and score names, one per kind of record.
 const (
 	traceJudgment  = "judgment"
 	traceRun       = "judgment_run"
-	traceScorecard = "scorecard_run"
 	scoreVerdict   = "verdict"
+	scoreScorecard = "scorecard"
 )
 
 // span is one trace's single root span: the unit the export sends over OTLP.
+// Langfuse never replaces an observation it holds, so a span carries only
+// what is fixed once its record exists, and is sent once.
 type span struct {
 	traceID, spanID string
 	name            string
@@ -38,12 +40,15 @@ type span struct {
 	output     any
 }
 
-// score is one review, sent as a score on its judgment's trace.
+// score is a value on a trace that can change after it is first sent: a
+// review, or a rerun's scorecard metrics. Langfuse upserts a score by its ID,
+// so every export sends each one.
 type score struct {
-	id, traceID string
-	at          time.Time
-	value       string
-	metadata    map[string]any
+	id, traceID    string
+	name, dataType string
+	at             time.Time
+	value          any
+	metadata       map[string]any
 }
 
 // judgmentKey is one judgment: a method version's answer for one example.
@@ -62,8 +67,9 @@ func (k judgmentKey) ids() (trace, span string) {
 }
 
 // ids derives a trace ID (32 hex digits) and a span ID (16 hex digits) from
-// the parts naming one record, so every export sends a record under the same
-// IDs and Langfuse keeps one copy.
+// the parts naming one record, so every export names a record by the same
+// IDs: it finds the spans Langfuse holds by their trace, and a score sent
+// again replaces the one Langfuse holds.
 func ids(parts ...string) (trace, span string) {
 	h := sha256.New()
 	for _, p := range parts {
@@ -188,9 +194,15 @@ func messageCandidates(j judgment.JudgmentRecord) map[string]string {
 	return candidates
 }
 
+// runIDs are a finished run's trace and span; its scorecard score names the
+// trace.
+func runIDs(run judgment.RunID) (trace, span string) {
+	return ids(traceRun, run.String())
+}
+
 // runSpan is a finished run's summary, spanning the run.
 func runSpan(r judgment.RunRecord) span {
-	trace, spanID := ids(traceRun, r.Run.String())
+	trace, spanID := runIDs(r.Run)
 	incomplete := map[string]int{}
 	for reason, n := range r.Incomplete {
 		incomplete[string(reason)] = n
@@ -226,23 +238,28 @@ type outcomeMetrics struct {
 	Confusion map[string]map[string]int `json:"confusion"`
 }
 
-// scorecardSpan is a finished rerun run's scorecard metrics, spanning the run.
-func scorecardSpan(r judgment.RunRecord, m scorecard.RunMetrics) span {
-	trace, spanID := ids(traceScorecard, r.Run.String())
+// scorecardScore is a finished rerun run's scorecard metrics, one score on
+// the run's trace. The metrics follow the latest reviews, so they travel as a
+// score whose ID names the run, and each export replaces the one Langfuse
+// holds. Its value is the user's "I owe" outcomes the method missed, the
+// number the scorecard ranks methods by first; its metadata holds every
+// metric.
+func scorecardScore(r judgment.RunRecord, m scorecard.RunMetrics) score {
+	id, _ := ids(scoreScorecard, r.Run.String())
+	trace, _ := runIDs(r.Run)
 	perOutcome := make(map[string]outcomeMetrics, len(m.PerOutcome))
 	for key, o := range m.PerOutcome {
 		perOutcome[key] = outcomeMetrics{Recall: o.Recall, Precision: o.Precision, Confusion: o.Confusion}
 	}
-	s := span{
-		traceID: trace, spanID: spanID, name: traceScorecard,
-		start: r.StartedAt, end: r.FinishedAt,
-		metadata: methodMetadata(m.Method),
-		output:   perOutcome,
+	metadata := methodMetadata(m.Method)
+	metadata["run_id"] = m.Run.String()
+	metadata["i_owe_missed"] = m.IOweMissed
+	metadata["corrections_caused"] = m.CorrectionsCaused
+	metadata["per_outcome"] = perOutcome
+	return score{
+		id: id, traceID: trace, name: scoreScorecard, dataType: "NUMERIC",
+		at: r.FinishedAt, value: m.IOweMissed, metadata: metadata,
 	}
-	s.metadata["run_id"] = m.Run.String()
-	s.metadata["i_owe_missed"] = m.IOweMissed
-	s.metadata["corrections_caused"] = m.CorrectionsCaused
-	return s
 }
 
 // reviewScore is the user's verdict on one outcome of a judgment, a score on
@@ -256,7 +273,7 @@ func reviewScore(r judgment.ReviewRecord) score {
 	metadata["right_outcome"] = r.RightOutcome
 	trace, _ := keyOf(r.Example, r.Method).ids()
 	return score{
-		id: id, traceID: trace,
+		id: id, traceID: trace, name: scoreVerdict, dataType: "CATEGORICAL",
 		at: r.ReviewedAt, value: string(r.Verdict), metadata: metadata,
 	}
 }

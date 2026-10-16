@@ -7,17 +7,20 @@
 // ID or a contact ID.
 //
 // Each judgment is one trace, timestamped at its execution time and carrying
-// its cut-off as metadata; each review is a score on its judgment's trace;
-// each finished run is one trace with its summary; each finished rerun run's
-// scorecard metrics are one trace. Every trace, span and score ID derives from
-// the record it carries, so a record sent twice is one record in Langfuse, and
-// a record sent again with changed values replaces the earlier ones.
+// its cut-off as metadata; each finished run is one trace with its summary;
+// each review is a score on its judgment's trace; each finished rerun run's
+// scorecard metrics are a score on its run's trace. Every trace, span and
+// score ID derives from the record it carries. Langfuse never replaces an
+// observation it holds, so each trace's span carries what is fixed once its
+// record exists and is sent once; what changes after that, a review and the
+// metrics computed from reviews, is a score, which Langfuse replaces by ID.
 package langfuseexport
 
 import (
 	"context"
 	"fmt"
 	"net/http"
+	"slices"
 	"time"
 
 	"personal-crm/backend/internal/config"
@@ -77,87 +80,99 @@ type Report struct {
 	// Missing names the extraction project's unset settings; when any is
 	// unset, the export sent nothing.
 	Missing []string
-	// Runs counts the finished runs sent; Skipped the runs whose judgments and
-	// summary an earlier export already sent.
-	Runs, Skipped int
-	// Judgments, Scorecards and Reviews count the records sent.
-	Judgments, Scorecards, Reviews int
+	// Runs and Judgments count the finished runs and judgments sent; Held the
+	// runs and judgments Langfuse already held, which were not sent again.
+	Runs, Judgments, Held int
+	// Scorecards and Reviews count the scores sent.
+	Scorecards, Reviews int
 }
 
 // Sent reports whether the export reached Langfuse.
 func (r Report) Sent() bool { return len(r.Missing) == 0 }
 
-// Export sends every record made since the previous export, and every record
-// derived from reviews, which can change after it was sent. Each run's
-// judgments and summary go as one batch: the judgments its calls produced, in
-// the order it recorded them, then, once it finished, its own trace. A batch
-// is sent in order, so Langfuse holding its last record means an earlier
-// export sent all of it, and the batch is skipped; a judgment a run records
-// later, or the run finishing, changes that last record, so the next export
-// sends the batch again. Judgments therefore reach Langfuse whether or not
-// their run finishes. A finished rerun's scorecard metrics are computed from
-// the latest reviews, and every live review is sent, on each export, so a
+// Export sends each judgment and finished run Langfuse does not yet hold, and
+// every score. A run's judgments are sent whether or not it finished, and its
+// summary once it finished. Langfuse is asked once which traces it holds, and
+// each span is sent only when its trace is not among them, so no span is sent
+// twice. A finished rerun's scorecard metrics, computed from the latest
+// reviews, and every live review are sent as scores on each export, so a
 // changed verdict replaces the earlier verdict and the metrics it changed.
 func (e *Exporter) Export(ctx context.Context) (Report, error) {
 	if e.client == nil {
 		return Report{Missing: e.missing}, nil
 	}
 	var report Report
-	var scorecards []span
 	runs, err := e.store.RunExports(ctx)
 	if err != nil {
 		return report, fmt.Errorf("read runs: %w", err)
 	}
+	var spans []span
+	var scores []score
 	for _, run := range runs {
-		var spans []span
 		for _, j := range run.Judgments {
 			spans = append(spans, judgmentSpan(j))
 		}
 		finished := run.Finished
-		if finished != nil && finished.Kind == judgment.RunKindRerun {
+		if finished == nil {
+			continue
+		}
+		spans = append(spans, runSpan(*finished))
+		if finished.Kind == judgment.RunKindRerun {
 			m, err := e.metrics.Metrics(ctx, run.Run)
 			if err != nil {
 				return report, fmt.Errorf("read scorecard metrics of run %s: %w", run.Run, err)
 			}
-			scorecards = append(scorecards, scorecardSpan(*finished, m))
+			scores = append(scores, scorecardScore(*finished, m))
 		}
-		if finished != nil {
-			spans = append(spans, runSpan(*finished))
-		}
-		if len(spans) == 0 {
-			continue
-		}
-		sent, err := e.client.traceExists(ctx, spans[len(spans)-1].traceID)
-		if err != nil {
-			return report, fmt.Errorf("look up run %s: %w", run.Run, err)
-		}
-		if sent {
-			report.Skipped++
-			continue
-		}
-		if err := e.client.sendSpans(ctx, spans); err != nil {
-			return report, fmt.Errorf("send records of run %s: %w", run.Run, err)
-		}
-		report.Judgments += len(run.Judgments)
-		if finished != nil {
+	}
+	report.Scorecards = len(scores)
+	unsent, err := e.unsent(ctx, spans)
+	if err != nil {
+		return report, err
+	}
+	report.Held = len(spans) - len(unsent)
+	if err := e.client.sendSpans(ctx, unsent); err != nil {
+		return report, fmt.Errorf("send judgments and runs: %w", err)
+	}
+	for _, s := range unsent {
+		if s.name == traceRun {
 			report.Runs++
+		} else {
+			report.Judgments++
 		}
 	}
-	if err := e.client.sendSpans(ctx, scorecards); err != nil {
-		return report, fmt.Errorf("send scorecard metrics: %w", err)
-	}
-	report.Scorecards = len(scorecards)
 	reviews, err := e.store.ReviewRecords(ctx)
 	if err != nil {
 		return report, fmt.Errorf("read reviews: %w", err)
 	}
-	scores := make([]score, len(reviews))
-	for i, r := range reviews {
-		scores[i] = reviewScore(r)
-	}
-	if err := e.client.sendScores(ctx, scores); err != nil {
-		return report, fmt.Errorf("send reviews: %w", err)
+	for _, r := range reviews {
+		scores = append(scores, reviewScore(r))
 	}
 	report.Reviews = len(reviews)
+	if err := e.client.sendScores(ctx, scores); err != nil {
+		return report, fmt.Errorf("send scores: %w", err)
+	}
 	return report, nil
+}
+
+// unsent returns the spans whose trace Langfuse does not hold. A span Langfuse
+// holds starts where the span does, at the millisecond precision Langfuse
+// keeps, so the lookup reads from the earliest span's start floored to the
+// second.
+func (e *Exporter) unsent(ctx context.Context, spans []span) ([]span, error) {
+	if len(spans) == 0 {
+		return nil, nil
+	}
+	from := slices.MinFunc(spans, func(a, b span) int { return a.start.Compare(b.start) }).start.Truncate(time.Second)
+	held, err := e.client.heldTraces(ctx, from)
+	if err != nil {
+		return nil, fmt.Errorf("look up records Langfuse holds: %w", err)
+	}
+	var unsent []span
+	for _, s := range spans {
+		if !held[s.traceID] {
+			unsent = append(unsent, s)
+		}
+	}
+	return unsent, nil
 }

@@ -47,7 +47,8 @@ func (c *client) sendSpans(ctx context.Context, spans []span) error {
 	return nil
 }
 
-// sendScores sends each score as an ingestion score event.
+// sendScores sends each score as an ingestion score event. Langfuse upserts a
+// score by its ID, so a score sent again replaces the one it held.
 func (c *client) sendScores(ctx context.Context, scores []score) error {
 	for start := 0; start < len(scores); start += batchSize {
 		batch := scores[start:min(start+batchSize, len(scores))]
@@ -55,7 +56,7 @@ func (c *client) sendScores(ctx context.Context, scores []score) error {
 		for i, s := range batch {
 			events[i] = ingestionEvent{
 				ID: s.id, Type: "score-create", Timestamp: s.at.UTC().Format(time.RFC3339Nano),
-				Body: scoreBody{ID: s.id, TraceID: s.traceID, Name: scoreVerdict, Value: s.value, DataType: "CATEGORICAL", Metadata: s.metadata},
+				Body: scoreBody{ID: s.id, TraceID: s.traceID, Name: s.name, Value: s.value, DataType: s.dataType, Metadata: s.metadata},
 			}
 		}
 		raw, err := c.post(ctx, "/api/public/ingestion", ingestionRequest{Batch: events})
@@ -80,24 +81,45 @@ func (c *client) sendScores(ctx context.Context, scores []score) error {
 	return nil
 }
 
-// traceExists reports whether the project holds any observation of a trace.
-func (c *client) traceExists(ctx context.Context, traceID string) (bool, error) {
-	q := url.Values{"traceId": {traceID}, "fields": {"core"}, "limit": {"1"}}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.url("/api/public/v2/observations?"+q.Encode()), nil)
-	if err != nil {
-		return false, fmt.Errorf("build observations request: %w", err)
+// heldTraces returns the trace IDs of every observation the project holds
+// that starts at or after from, reading the v2 observations list page by page
+// along its cursor.
+func (c *client) heldTraces(ctx context.Context, from time.Time) (map[string]bool, error) {
+	held := map[string]bool{}
+	q := url.Values{"fromStartTime": {from.UTC().Format(time.RFC3339)}, "fields": {"core"}, "limit": {"1000"}}
+	followed := map[string]bool{}
+	for {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.url("/api/public/v2/observations?"+q.Encode()), nil)
+		if err != nil {
+			return nil, fmt.Errorf("build observations request: %w", err)
+		}
+		raw, err := c.do(req)
+		if err != nil {
+			return nil, err
+		}
+		var page struct {
+			Data []struct {
+				TraceID string `json:"traceId"`
+			} `json:"data"`
+			Meta struct {
+				Cursor string `json:"cursor"`
+			} `json:"meta"`
+		}
+		if err := json.Unmarshal(raw, &page); err != nil {
+			return nil, fmt.Errorf("decode observations response: %w", err)
+		}
+		for _, o := range page.Data {
+			held[o.TraceID] = true
+		}
+		if page.Meta.Cursor == "" {
+			return held, nil
+		}
+		if followed[page.Meta.Cursor] {
+			return nil, fmt.Errorf("observations list repeats cursor %q", page.Meta.Cursor)
+		}
+		followed[page.Meta.Cursor] = true
+		q.Set("cursor", page.Meta.Cursor)
 	}
-	raw, err := c.do(req)
-	if err != nil {
-		return false, err
-	}
-	var result struct {
-		Data []json.RawMessage `json:"data"`
-	}
-	if err := json.Unmarshal(raw, &result); err != nil {
-		return false, fmt.Errorf("decode observations response: %w", err)
-	}
-	return len(result.Data) > 0, nil
 }
 
 func (c *client) post(ctx context.Context, path string, body any) ([]byte, error) {
@@ -237,7 +259,7 @@ type scoreBody struct {
 	ID       string         `json:"id"`
 	TraceID  string         `json:"traceId"`
 	Name     string         `json:"name"`
-	Value    string         `json:"value"`
+	Value    any            `json:"value"`
 	DataType string         `json:"dataType"`
 	Metadata map[string]any `json:"metadata"`
 }

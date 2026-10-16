@@ -32,8 +32,8 @@ func writeLangfuseExport(w io.Writer, r langfuseexport.Report) error {
 		_, err = fmt.Fprintf(w, "langfuse-export: extraction project not configured (unset: %s); nothing sent\n",
 			strings.Join(r.Missing, ", "))
 	} else {
-		_, err = fmt.Fprintf(w, "langfuse-export: runs=%d runs_already_sent=%d judgments=%d scorecards=%d reviews=%d\n",
-			r.Runs, r.Skipped, r.Judgments, r.Scorecards, r.Reviews)
+		_, err = fmt.Fprintf(w, "langfuse-export: runs=%d judgments=%d already_sent=%d scorecards=%d reviews=%d\n",
+			r.Runs, r.Judgments, r.Held, r.Scorecards, r.Reviews)
 	}
 	if err != nil {
 		return fmt.Errorf("write langfuse export report: %w", err)
