@@ -671,8 +671,9 @@ behaviors:
       - every interaction of every contact is represented, whatever its source
       - an interaction several contacts take part in, including a group chat's messages held once per member, is one row that names each of those contacts
       - each row renders with the contact history's row and drill-down, keeping its typed identity and the actions its kind offers
+      - each row sets out, across the view's full width, the interaction's direction and source, its participant contacts, a preview of its content that takes the width the others leave, its date, and its review indicator
       - rows order newest first with a deterministic tie-breaker
-      - rows and their drill-downs span the view's full width
+      - a row's drill-down spans the view's full width
       - the view is paginated, and further pages extend it without gaps or duplicate rows
       - the main navigation leads to the view
     provenance: [.agents/spec/2026-10-14-decision-model-extraction.md G9, designs/bench.md]
@@ -716,7 +717,8 @@ behaviors:
     when: the all-interactions view lists the thread's rows
     then:
       - the judgment appears on exactly one row, the row holding the thread's latest content at or before the judgment's cut-off
-      - that row shows, collapsed, that its thread is judged, as of which cut-off, a summary of the proposal's items in their states, and how many items await review
+      - that row shows, collapsed, one review indicator, either how many items of its proposals await review or that all are reviewed
+      - the row names none of the judgment's outcomes; the proposal appears only when the row is expanded
       - judgments of several methods on the same content appear together on that row, the production method's first
       - a view narrowed to a run shows only the judgments appearing in that run
     provenance: [.agents/spec/2026-10-14-decision-model-extraction.md G9 SC1, designs/bench.md]
@@ -730,7 +732,8 @@ behaviors:
     when: the row is expanded
     then:
       - the content the judgment read, its cut-off and its proposal are shown together, the proposal directly beneath that content
-      - content after the cut-off is set apart from that content and marked as later
+      - the cut-off is marked across the thread, pointing at the content the judgment read, and states the cut-off's date and time
+      - content after the cut-off is set apart from that content, subdued, and marked as after the judgment
       - the proposal names its method, its method version and whether that method is the production method
       - a proposal of another method on the same content is set apart, collapsed, and marked as not acting
     provenance: [.agents/spec/2026-10-14-decision-model-extraction.md G9 SC1 HC7, designs/bench.md]
@@ -745,12 +748,13 @@ behaviors:
     then:
       - the proposal lists the participant contacts the user owes a reply, the participant contacts who owe the user a reply, the open commitments in one list each naming its debtor and its creditor, and the thread's big-moment flag
       - a reply list holds at most one contact for a one-to-one thread, and a meeting's proposal has no reply lists
-      - a commitment states its due date or that it has none, and a party's commitment stands in for that party's reply owed in the same direction
+      - a commitment shows the due date its judgment selected, or that it has no stated date, and a party's commitment stands in for that party's reply owed in the same direction
+      - a commitment whose judgment names the message that states it quotes that message and leads to it in the thread; a commitment whose judgment names none shows no quote
       - the big-moment flag belongs to the thread, not to a contact, and tells a participant's own moment from another person's
       - the questions put to the decision model are not shown
       - each item shows its confidence and one state of live, suggested, not acting, or live with a suggested removal or later date, and the four are told apart
       - no item is hidden because of its confidence
-    provenance: [.agents/spec/2026-10-14-decision-model-extraction.md G3 G3b G3c G6 G9 HC7 SC4, designs/bench.md]
+    provenance: [.agents/spec/2026-10-14-decision-model-extraction.md G3 G3b G3c G6 G9 HC7 NG3 SC4, designs/bench.md]
 
   - id: IXN-047
     title: The user corrects a proposal inline, each act recorded as one outcome's review
@@ -764,10 +768,12 @@ behaviors:
       - the user removes an item from a reply list or from the commitments, or removes the flag, by stating the outcome's no-effect value as the right one
       - the user adds a participant contact to a reply list, which moves that contact out of the other reply list, adds a commitment in either direction, or adds the flag of either kind, by stating that outcome as the right one
       - the user keeps a live item against a suggested removal by stating the live outcome as the right one
+      - the user keeps a commitment's date against a suggested later date, and the obligation keeps its current date
+      - a commitment the user adds has no stated date and takes the timing of a commitment without one
       - an addition offers only participant contacts, and only outcomes not yet reviewed
       - every correction happens on the proposal itself, with no modal or separate form, and the client never sends a verdict
       - each correction shows on its item without a reload, and a failed correction leaves the item's controls in place with an error
-    provenance: [.agents/spec/2026-10-14-decision-model-extraction.md G5 G8 SC7, designs/bench.md]
+    provenance: [.agents/spec/2026-10-14-decision-model-extraction.md G5 G7d G8 SC5 SC7, designs/bench.md]
 
   - id: IXN-048
     title: Each reviewed item shows its review in place after a reload
@@ -777,7 +783,7 @@ behaviors:
     given: items of a proposal the user reviewed
     when: the view is reloaded and the proposal is shown again
     then:
-      - a confirmed or kept item shows as confirmed, in place, beside its state
+      - a confirmed item, a live item kept against a suggested removal, and a commitment whose date the user kept show as confirmed, in place, beside their state
       - an item the user removed, or whose suggested removal the user accepted, stays in its list shown as removed by the user, never hidden
       - an item the user added shows as added by the user
       - a reviewed item offers no review control
@@ -795,7 +801,6 @@ behaviors:
       - the flag shows in the proposal directly beneath the content the judgment read
       - the flag tells a participant's own moment from another person's moment mentioned in passing
       - the flag carries no summary of the moment
-      - the row shows, collapsed, that its thread carries a big moment
     provenance: [.agents/spec/2026-10-14-decision-model-extraction.md G3c G7f SC10 NG3, designs/bench.md]
 
   - id: IXN-050
