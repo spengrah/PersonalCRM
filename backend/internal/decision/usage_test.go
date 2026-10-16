@@ -47,9 +47,9 @@ func TestJudge_JudgmentCarriesItsUsage(t *testing.T) {
 		assert.InDelta(t, 0.0042, *j.Usage.CostUSD, 1e-12)
 	})
 
-	t.Run("a Kev answer reporting none", func(t *testing.T) {
+	t.Run("an answer reporting no cost", func(t *testing.T) {
 		srv := systemOneServer(t, map[string]any{"input_tokens": 900, "output_tokens": 12})
-		j, _ := judge(t, decision.NewSystemOneAdapter(srv.URL, "", "kev-latest"), dm("see you friday?"))
+		j, _ := judge(t, decision.NewSystemOneAdapter(srv.URL, "", "jev-1.14.0"), dm("see you friday?"))
 		assert.Nil(t, j.Usage.CostUSD)
 		require.NotNil(t, j.Usage.BilledTokens)
 		assert.Equal(t, 900, *j.Usage.BilledTokens)

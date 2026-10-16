@@ -41,8 +41,7 @@ type MethodScore struct {
 type Comparison struct {
 	Method, Compare judgment.MethodRef
 	// Difference is, per outcome, the compare method's rates minus the
-	// method's. For kev-masked compared with kev-unmasked it is the masking
-	// cost.
+	// method's.
 	Difference map[string]Rates
 	// Flips are the reviewed outcomes one method judged as the user did and
 	// the other did not.
@@ -68,13 +67,13 @@ type Flip struct {
 type ProposalReason string
 
 const (
-	// ProposalFewestIOweMissed: the method that passes HC3 and misses the
-	// fewest "I owe" outcomes, ties broken by fewer corrections caused.
+	// ProposalFewestIOweMissed: the method that misses the fewest "I owe"
+	// outcomes, ties broken by fewer corrections caused.
 	ProposalFewestIOweMissed ProposalReason = "fewest_i_owe_missed"
-	// ProposalTied: several methods that pass HC3 tie on both counts.
+	// ProposalTied: several methods tie on both counts.
 	ProposalTied ProposalReason = "tied"
-	// ProposalNonePasses: no scored method's terms status passes HC3.
-	ProposalNonePasses ProposalReason = "none_passes_hc3"
+	// ProposalNoMethods: no method was scored.
+	ProposalNoMethods ProposalReason = "no_methods_scored"
 	// ProposalNoReviews: the user has reviewed no example.
 	ProposalNoReviews ProposalReason = "no_reviewed_examples"
 )
@@ -239,29 +238,25 @@ func compare(method, other scoredRun) *Comparison {
 	return c
 }
 
-// propose proposes, among the scored methods whose terms status passes HC3,
-// the one that misses the fewest "I owe" outcomes, ties broken by fewer
-// corrections caused.
+// propose proposes, among the scored methods, the one that misses the
+// fewest "I owe" outcomes, ties broken by fewer corrections caused. Terms
+// findings are reported beside each method and do not filter the proposal;
+// judging them is the user's.
 func propose(methods []MethodScore) Proposal {
-	var passing []MethodScore
-	for _, m := range methods {
-		if m.Terms.Passes() {
-			passing = append(passing, m)
-		}
+	if len(methods) == 0 {
+		return Proposal{Reason: ProposalNoMethods}
 	}
-	if len(passing) == 0 {
-		return Proposal{Reason: ProposalNonePasses}
-	}
+	ranked := slices.Clone(methods)
 	rank := func(a, b MethodScore) int {
 		return cmp.Or(
 			cmp.Compare(a.Metrics.IOweMissed, b.Metrics.IOweMissed),
 			cmp.Compare(a.Metrics.CorrectionsCaused, b.Metrics.CorrectionsCaused),
 		)
 	}
-	slices.SortStableFunc(passing, rank)
+	slices.SortStableFunc(ranked, rank)
 	var tied []string
-	for _, m := range passing {
-		if rank(m, passing[0]) == 0 {
+	for _, m := range ranked {
+		if rank(m, ranked[0]) == 0 {
 			tied = append(tied, m.Metrics.Method.Key)
 		}
 	}

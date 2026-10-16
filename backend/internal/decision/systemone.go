@@ -24,7 +24,7 @@ type openRouterRouting struct {
 }
 
 // systemOne speaks the System One wire shape, which TypeSafe's native API,
-// OpenRouter's decisions endpoint and a Kev server share: a state, and
+// and OpenRouter's decisions endpoint share: a state, and
 // questions keyed by ID with their criteria; answers keyed by the same IDs.
 type systemOne struct {
 	url, apiKey, model string
@@ -33,7 +33,7 @@ type systemOne struct {
 }
 
 // NewSystemOneAdapter is an adapter for a System One endpoint at url, such as
-// TypeSafe's native API or a Kev server.
+// TypeSafe's native API.
 func NewSystemOneAdapter(url, apiKey, model string) Adapter {
 	return newSystemOne(url, apiKey, model, nil)
 }

@@ -47,8 +47,6 @@ type DecisionConfig struct {
 	OpenRouterAPIKey string // OPENROUTER_API_KEY
 	TypeSafeAPIKey   string // TYPESAFE_API_KEY
 	SageAPIKey       string // SAGE_API_KEY (Levanto)
-	KevBaseURL       string // KEV_BASE_URL
-	KevAPIKey        string // KEV_API_KEY
 }
 
 // LangfuseExtractionConfig names the Langfuse extraction project, distinct
@@ -610,8 +608,6 @@ func Load() (*Config, error) {
 			OpenRouterAPIKey: getEnv("OPENROUTER_API_KEY", ""),
 			TypeSafeAPIKey:   getEnv("TYPESAFE_API_KEY", ""),
 			SageAPIKey:       getEnv("SAGE_API_KEY", ""),
-			KevBaseURL:       getEnv("KEV_BASE_URL", ""),
-			KevAPIKey:        getEnv("KEV_API_KEY", ""),
 		},
 		LangfuseExtraction: LangfuseExtractionConfig{
 			Host:      getEnv("LANGFUSE_EXTRACTION_HOST", ""),

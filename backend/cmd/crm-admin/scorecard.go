@@ -50,8 +50,8 @@ func writeScorecard(w io.Writer, r scorecard.Report) error {
 	for _, m := range r.Methods {
 		mm := m.Metrics
 		p.printf("method key=%s version=%s wording=%s run=%s\n", mm.Method.Key, mm.Method.Version, mm.Method.WordingVersion, mm.Run)
-		p.printf("  terms hosted=%t training=%s retention=%s passes_hc3=%t\n",
-			m.Terms.Hosted, findingOrNone(string(m.Terms.Training)), findingOrNone(string(m.Terms.Retention)), m.Terms.Passes())
+		p.printf("  terms training=%s retention=%s\n",
+			findingOrNone(string(m.Terms.Training)), findingOrNone(string(m.Terms.Retention)))
 		p.printf("  i_owe_missed=%d corrections_caused=%d\n", mm.IOweMissed, mm.CorrectionsCaused)
 		for _, reason := range slices.Sorted(maps.Keys(m.Incomplete)) {
 			p.printf("  incomplete reason=%s n=%d\n", reason, m.Incomplete[reason])
@@ -66,7 +66,7 @@ func writeScorecard(w io.Writer, r scorecard.Report) error {
 	p.printf("reference timestamp_rule (they_owe_reply only; the rule never produces \"I owe\")\n")
 	p.outcome("  ", "ball_in_court.they_owe_reply", r.Reference)
 	if c := r.Comparison; c != nil {
-		p.printf("comparison method=%s compare=%s (difference is compare minus method; comparing kev-masked with kev-unmasked, it is the masking cost)\n",
+		p.printf("comparison method=%s compare=%s (difference is compare minus method)\n",
 			c.Method.Key, c.Compare.Key)
 		for _, key := range slices.Sorted(maps.Keys(c.Difference)) {
 			d := c.Difference[key]

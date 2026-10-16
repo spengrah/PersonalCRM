@@ -204,13 +204,12 @@
 //	                              the corrections caused and the method's terms
 //	                              status; the timestamp rule as a reference for
 //	                              they_owe_reply; and a proposed first
-//	                              production method among the scored methods
-//	                              whose terms pass HC3. With no --method, every
+//	                              production method among the scored
+//	                              methods. With no --method, every
 //	                              method in the registry is scored, and those
 //	                              whose route is not configured are listed.
 //	                              --compare-method adds the per-outcome
-//	                              difference (comparing kev-masked with
-//	                              kev-unmasked, the masking cost) and the
+//	                              difference and the
 //	                              examples that flipped, by example ID. Changes
 //	                              no designation and no live state. Prints a
 //	                              content-free report (IDs, keys, outcome

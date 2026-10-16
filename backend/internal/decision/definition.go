@@ -39,17 +39,16 @@ type Limits struct {
 }
 
 // ref names the method built from the definition on a route. Its version is
-// derived from everything that produces a judgment, the route, the masking
-// variant and the question wording, so changing any part changes it. Limits
+// derived from everything that produces a judgment, the route and the
+// question wording, so changing any part changes it. Limits
 // and terms decide whether and where a method may run, not what it answers.
-func (d Definition) ref(r Route, masked bool) judgment.MethodRef {
+func (d Definition) ref(r Route) judgment.MethodRef {
 	return judgment.MethodRef{
 		Key: d.Key,
 		Version: digest(struct {
 			Route   Route
-			Masked  bool
 			Wording Wording
-		}{r, masked, d.Wording}),
+		}{r, d.Wording}),
 		WordingVersion: d.Wording.Version(),
 	}
 }
@@ -81,18 +80,10 @@ type TermsSource struct {
 	ReadOn time.Time
 }
 
-// TermsStatus is a method's terms status for production (HC3): whether its
-// vendors' terms show no training on request content, and no retention
-// beyond masked content held temporarily. A local method is not hosted and
-// has no vendor findings.
+// TermsStatus is what a method's vendors' terms, read at the primary source,
+// show about training on and retaining request content (HC3). It informs the
+// user's choice of production method and gates nothing.
 type TermsStatus struct {
-	Hosted              bool
 	Training, Retention TermsFinding
 	Sources             []TermsSource
-}
-
-// Passes reports whether the method may serve production under HC3: it is
-// not hosted, or its terms show both promises.
-func (t TermsStatus) Passes() bool {
-	return !t.Hosted || (t.Training == TermsShown && t.Retention == TermsShown)
 }
