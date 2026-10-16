@@ -2,13 +2,14 @@
 // it reruns methods over the thread contexts the user reviewed and reports how
 // each method's outcomes compare with the user's right outcomes. Its report
 // and per-run metrics hold only opaque example IDs, run IDs, method keys and
-// versions, outcome values, counts, rates and the methods' terms status; it
+// versions, outcome values, counts, rates and the methods' terms status, and
+// its failures only a reason, a method key, a run ID and an example ID; it
 // sends nothing itself.
 package scorecard
 
 import (
 	"context"
-	"fmt"
+	"maps"
 	"slices"
 
 	"personal-crm/backend/internal/judgment"
@@ -40,9 +41,9 @@ type RunMetrics struct {
 // the confusion shows the counts behind it.
 type OutcomeMetrics struct {
 	Recall, Precision float64
-	// Confusion counts the reviewed outcomes of the outcome's question by the
-	// user's right outcome, then the method's judged outcome, over the cells
-	// where either is this outcome.
+	// Confusion counts every reviewed outcome of the outcome's question by
+	// the user's right outcome, then the method's judged outcome; the rates
+	// read the cells where either is this outcome.
 	Confusion map[string]map[string]int
 }
 
@@ -63,10 +64,10 @@ func NewReader(store *judgment.Store) *Reader {
 
 // Metrics scores a finished rerun run against the user's reviews of the
 // examples it covered: those it judged and those it reported incomplete. It
-// reads the store only and sends nothing.
+// reads the store only and sends nothing. Its error is always a *Failure.
 func (r *Reader) Metrics(ctx context.Context, run judgment.RunID) (RunMetrics, error) {
 	scored, err := r.scored(ctx, run)
-	return scored.metrics, err
+	return scored.metrics, failureOf(err)
 }
 
 // scoredRun is a finished rerun run's metrics, the labels they count and the
@@ -84,7 +85,7 @@ func (r *Reader) scored(ctx context.Context, run judgment.RunID) (scoredRun, err
 	}
 	records, err := r.store.JudgmentRecords(ctx, run)
 	if err != nil {
-		return scoredRun{}, err
+		return scoredRun{}, failed(Failure{Reason: FailureReadRun, Run: run}, err)
 	}
 	var judged []judgment.ExampleID
 	for _, rec := range records {
@@ -94,7 +95,7 @@ func (r *Reader) scored(ctx context.Context, run judgment.RunID) (scoredRun, err
 	}
 	reviewed, err := r.store.ReviewedExamples(ctx)
 	if err != nil {
-		return scoredRun{}, err
+		return scoredRun{}, failed(Failure{Reason: FailureReadReviews, Run: run}, err)
 	}
 	var covered []judgment.Example
 	for _, ex := range reviewed {
@@ -104,7 +105,7 @@ func (r *Reader) scored(ctx context.Context, run judgment.RunID) (scoredRun, err
 	}
 	outcomes, err := r.store.OutcomesFor(ctx, summary.Method, judged)
 	if err != nil {
-		return scoredRun{}, err
+		return scoredRun{}, failed(Failure{Reason: FailureReadRun, Run: run}, err)
 	}
 	labels := labelsOf(covered, outcomes)
 	return scoredRun{metrics: score(run, summary.Method, labels), labels: labels, summary: summary}, nil
@@ -113,16 +114,16 @@ func (r *Reader) scored(ctx context.Context, run judgment.RunID) (scoredRun, err
 func (r *Reader) finishedRerun(ctx context.Context, run judgment.RunID) (judgment.RunSummary, error) {
 	runs, err := r.store.ListRuns(ctx)
 	if err != nil {
-		return judgment.RunSummary{}, err
+		return judgment.RunSummary{}, failed(Failure{Reason: FailureReadRun, Run: run}, err)
 	}
 	i := slices.IndexFunc(runs, func(s judgment.RunSummary) bool { return s.ID == run })
 	switch {
 	case i < 0:
-		return judgment.RunSummary{}, fmt.Errorf("run %s not found", run)
+		return judgment.RunSummary{}, &Failure{Reason: FailureRunNotFound, Run: run}
 	case runs[i].Kind != judgment.RunKindRerun:
-		return judgment.RunSummary{}, fmt.Errorf("run %s is a %s run, not a rerun", run, runs[i].Kind)
+		return judgment.RunSummary{}, &Failure{Reason: FailureRunNotRerun, Run: run}
 	case runs[i].FinishedAt == nil:
-		return judgment.RunSummary{}, fmt.Errorf("run %s has not finished", run)
+		return judgment.RunSummary{}, &Failure{Reason: FailureRunNotFinished, Run: run}
 	}
 	return runs[i], nil
 }
@@ -243,19 +244,14 @@ func outcomeValues(cells map[string]map[string]int) []string {
 	return values
 }
 
-// outcomeMetrics scores one outcome value from its question's confusion.
+// outcomeMetrics scores one outcome value from its question's confusion,
+// which it carries whole.
 func outcomeMetrics(cells map[string]map[string]int, value string) OutcomeMetrics {
 	out := OutcomeMetrics{Confusion: map[string]map[string]int{}}
 	var hit, reviewed, judged int
 	for right, row := range cells {
+		out.Confusion[right] = maps.Clone(row)
 		for j, n := range row {
-			if right != value && j != value {
-				continue
-			}
-			if out.Confusion[right] == nil {
-				out.Confusion[right] = map[string]int{}
-			}
-			out.Confusion[right][j] = n
 			if right == value {
 				reviewed += n
 			}

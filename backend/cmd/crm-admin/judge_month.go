@@ -31,14 +31,13 @@ type judgeMonthRunner interface {
 // judgmentStack is the decision-model stack --judge-month and --scorecard
 // share.
 type judgmentStack struct {
-	contexts *threadctx.Builder
-	store    *judgment.Store
-	methods  *decision.Registry
-	runner   *judgerun.Runner
+	store   *judgment.Store
+	methods *decision.Registry
+	runner  *judgerun.Runner
 }
 
-// buildJudgmentStack wires the decision-model stack: the thread-context
-// builder, the masker loaded from the contact dictionary, the method registry,
+// buildJudgmentStack wires the decision-model stack over a thread-context
+// builder: the masker loaded from the contact dictionary, the method registry,
 // the one judgment store with the production method DECISION_PRODUCTION_METHOD
 // names, and the runner over them. It fails when that setting names a key the
 // registry lacks, before any call.
@@ -79,7 +78,7 @@ func buildJudgmentStack(
 	if err != nil {
 		return judgmentStack{}, err
 	}
-	return judgmentStack{contexts: contexts, store: store, methods: methods, runner: runner}, nil
+	return judgmentStack{store: store, methods: methods, runner: runner}, nil
 }
 
 // validateJudgeMonth checks the flags --judge-month reads.

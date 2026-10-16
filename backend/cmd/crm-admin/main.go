@@ -1866,7 +1866,7 @@ func buildProductionDeps(ctx context.Context, cfg *config.Config, database *db.D
 			return adminDeps{}, nil, err
 		}
 		deps.judgeMonth = stack.runner
-		deps.scorecard = scorecard.New(stack.store, stack.runner, stack.methods, stack.contexts, contactRepo, cfg.Watchdog)
+		deps.scorecard = scorecard.New(stack.store, stack.runner, stack.methods, contactRepo, cfg.Watchdog)
 	}
 
 	cleanup := func() {}

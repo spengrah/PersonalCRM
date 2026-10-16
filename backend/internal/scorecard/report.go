@@ -3,8 +3,6 @@ package scorecard
 import (
 	"cmp"
 	"context"
-	"errors"
-	"fmt"
 	"maps"
 	"slices"
 
@@ -13,7 +11,6 @@ import (
 	"personal-crm/backend/internal/judgerun"
 	"personal-crm/backend/internal/judgment"
 	"personal-crm/backend/internal/repository"
-	"personal-crm/backend/internal/threadctx"
 )
 
 // Report scores methods over every thread context the user reviewed.
@@ -106,7 +103,6 @@ func New(
 	store *judgment.Store,
 	runner *judgerun.Runner,
 	methods judgerun.Methods,
-	contexts *threadctx.Builder,
 	contacts *repository.ContactRepository,
 	watchdog config.WatchdogConfig,
 ) *Scorecard {
@@ -114,31 +110,36 @@ func New(
 		reader:  NewReader(store),
 		runner:  runner,
 		methods: methods,
-		rule:    &timestampRule{contexts: contexts, contacts: contacts, watchdog: watchdog},
+		rule:    &timestampRule{contacts: contacts, watchdog: watchdog},
 	}
 }
 
 // Report reruns methods over every example the user reviewed and scores
 // them: the method methodKey names, and compareKey's compared with it when
 // set; with no method named, every method in the registry. A named method
-// must be available; with none named, a method whose route is not configured
-// is listed as unavailable. The report proposes a first production method
-// among the scored methods and changes no designation.
+// must be known and available, whether or not the user has reviewed any
+// example; with none named, a method whose route is not configured is listed
+// as unavailable. The report proposes a first production method among the
+// scored methods and changes no designation. Its error is always a *Failure.
 func (s *Scorecard) Report(ctx context.Context, methodKey, compareKey string) (Report, error) {
-	examples, err := s.reader.store.ReviewedExamples(ctx)
-	if err != nil {
-		return Report{}, err
-	}
-	report := Report{Examples: len(examples)}
-	if len(examples) == 0 {
-		report.Proposal = Proposal{Reason: ProposalNoReviews}
-		return report, nil
-	}
+	report, err := s.report(ctx, methodKey, compareKey)
+	return report, failureOf(err)
+}
+
+func (s *Scorecard) report(ctx context.Context, methodKey, compareKey string) (Report, error) {
 	methods, unavailable, err := s.selectMethods(methodKey, compareKey)
 	if err != nil {
 		return Report{}, err
 	}
-	report.Unavailable = unavailable
+	examples, err := s.reader.store.ReviewedExamples(ctx)
+	if err != nil {
+		return Report{}, failed(Failure{Reason: FailureReadReviews}, err)
+	}
+	report := Report{Examples: len(examples), Unavailable: unavailable}
+	if len(examples) == 0 {
+		report.Proposal = Proposal{Reason: ProposalNoReviews}
+		return report, nil
+	}
 	ids := make([]judgment.ExampleID, len(examples))
 	for i, ex := range examples {
 		ids[i] = ex.ID
@@ -147,7 +148,7 @@ func (s *Scorecard) Report(ctx context.Context, methodKey, compareKey string) (R
 	for _, m := range methods {
 		run, err := s.runner.Rerun(ctx, m.Ref().Key, ids)
 		if err != nil {
-			return Report{}, fmt.Errorf("rerun %s: %w", m.Ref().Key, err)
+			return Report{}, failed(Failure{Reason: FailureRerun, Method: m.Ref().Key, Run: run}, err)
 		}
 		scored, err := s.reader.scored(ctx, run)
 		if err != nil {
@@ -175,7 +176,7 @@ func (s *Scorecard) Report(ctx context.Context, methodKey, compareKey string) (R
 // registry's methods it cannot build.
 func (s *Scorecard) selectMethods(methodKey, compareKey string) ([]decision.Method, []string, error) {
 	if methodKey == "" && compareKey != "" {
-		return nil, nil, errors.New("a compare method needs a method to compare with")
+		return nil, nil, &Failure{Reason: FailureCompareNeedsMethod}
 	}
 	if methodKey == "" {
 		var methods []decision.Method
@@ -197,9 +198,12 @@ func (s *Scorecard) selectMethods(methodKey, compareKey string) ([]decision.Meth
 		if key == "" {
 			continue
 		}
+		if !slices.Contains(s.methods.Keys(), key) {
+			return nil, nil, &Failure{Reason: FailureUnknownMethod, Method: key}
+		}
 		m, err := s.methods.Get(key)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, failed(Failure{Reason: FailureMethodUnavailable, Method: key}, err)
 		}
 		methods = append(methods, m)
 	}

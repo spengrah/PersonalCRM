@@ -1559,6 +1559,10 @@ type Querier interface {
 	// contact. cut_off is the example's earliest judgment cut-off. Restricted to
 	// the given examples when any are named.
 	ListLatestExampleReviews(ctx context.Context, arg ListLatestExampleReviewsParams) ([]*ListLatestExampleReviewsRow, error)
+	// The contact's latest effective participation at or before the cut-off, one
+	// row per direction. Which directions set which cadence timestamp is
+	// repository.CadenceApplyFlagsByDirection's.
+	ListLatestParticipationByDirectionAt(ctx context.Context, arg ListLatestParticipationByDirectionAtParams) ([]*ListLatestParticipationByDirectionAtRow, error)
 	// Driver query for the address-book method reconcile (forward hooks +
 	// one-time catchup). Returns every live address-book row that is itself
 	// linked OR is a duplicate of a (live) canonical row, joining to the
