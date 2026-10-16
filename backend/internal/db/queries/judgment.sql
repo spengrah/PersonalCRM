@@ -103,13 +103,16 @@ SET obligations_opened = sqlc.arg('obligations_opened'),
 WHERE run_id = sqlc.arg('run_id') AND judgment_id = sqlc.arg('judgment_id') AND cut_off = sqlc.arg('cut_off');
 
 -- name: ListJudgmentAppearances :many
--- The appearances of the given judgments, or of every judgment in a run.
+-- The appearances of the given judgments, or of every judgment in a run, or
+-- of every judgment; fresh_only keeps only the appearance whose call produced
+-- each judgment. Oldest recorded first.
 SELECT a.run_id, a.judgment_id, a.cut_off, e.thread_id, e.id AS example_id
 FROM judgment_appearance a
 JOIN judgment j ON j.id = a.judgment_id
 JOIN judgment_example e ON e.id = j.example_id
 WHERE (cardinality(sqlc.arg('judgment_ids')::uuid[]) = 0 OR a.judgment_id = ANY(sqlc.arg('judgment_ids')::uuid[]))
   AND (sqlc.narg('run_id')::uuid IS NULL OR a.run_id = sqlc.narg('run_id')::uuid)
+  AND (NOT sqlc.arg('fresh_only')::boolean OR a.fresh)
 ORDER BY a.created_at, a.cut_off, a.run_id;
 
 -- name: CreateJudgmentOutcome :one

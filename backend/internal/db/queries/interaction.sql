@@ -282,6 +282,16 @@ SELECT * FROM effective_participation ep
 WHERE ep.contact_id = sqlc.arg('contact_id')
 ORDER BY ep.occurred_at DESC, ep.members->0->>'observation_id';
 
+-- name: ListLatestParticipationByDirectionAt :many
+-- The contact's latest effective participation at or before the cut-off, one
+-- row per direction. Which directions set which cadence timestamp is
+-- repository.CadenceApplyFlagsByDirection's.
+SELECT ep.direction, MAX(ep.occurred_at)::timestamptz AS occurred_at
+FROM effective_participation ep
+WHERE ep.contact_id = sqlc.arg('contact_id')
+  AND ep.occurred_at <= sqlc.arg('cut_off')::timestamptz
+GROUP BY ep.direction;
+
 -- name: ListInteractionParticipants :many
 -- The effective participants of the interaction whose alias tree holds
 -- node_id (the root or any node merged into it), each with its entry for the

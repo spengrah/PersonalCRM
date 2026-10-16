@@ -382,6 +382,10 @@ func run() int {
 	// external_sync_log retention (daily trim periodic job).
 	registerSyncLogTrim(reg, repository.NewSyncRepository(database.Queries), cfg)
 
+	// Decision-model records to the Langfuse extraction project (nightly
+	// periodic job; sends nothing with the extraction settings unset).
+	registerLangfuseExport(reg, cfg, judgments)
+
 	if err := riverClient.Start(ctx); err != nil {
 		logger.Fatal().Err(err).Msg("failed to start river client")
 	}

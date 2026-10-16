@@ -7,6 +7,8 @@ package judgment
 import (
 	"context"
 	"errors"
+	"maps"
+	"slices"
 	"time"
 
 	"personal-crm/backend/internal/threadctx"
@@ -63,6 +65,21 @@ type AnsweredQuestion struct {
 	ID             string
 	Probabilities  map[string]float64
 	OriginalAnswer string
+}
+
+// Chosen is the question's selected option: the model's original answer,
+// else its most probable option, ties to the first key.
+func (q AnsweredQuestion) Chosen() string {
+	if q.OriginalAnswer != "" {
+		return q.OriginalAnswer
+	}
+	best, bestP := "", -1.0
+	for _, k := range slices.Sorted(maps.Keys(q.Probabilities)) {
+		if q.Probabilities[k] > bestP {
+			best, bestP = k, q.Probabilities[k]
+		}
+	}
+	return best
 }
 
 // ParticipantOutcome is a per-participant outcome.

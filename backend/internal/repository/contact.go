@@ -113,6 +113,33 @@ func ForwardMax(prev *time.Time, incoming time.Time) time.Time {
 	return *prev
 }
 
+// InteractionTimestampsAt returns the contact's last_outreach_at and
+// last_response_at as of cutOff: each is the latest effective participation
+// at or before cutOff in a direction CadenceApplyFlagsByDirection applies to
+// that column, and nil when there is none.
+func (r *ContactRepository) InteractionTimestampsAt(ctx context.Context, contactID uuid.UUID, cutOff time.Time) (lastOutreachAt, lastResponseAt *time.Time, err error) {
+	rows, err := r.queries.ListLatestParticipationByDirectionAt(ctx, db.ListLatestParticipationByDirectionAtParams{
+		ContactID: contactID,
+		CutOff:    cutOff,
+	})
+	if err != nil {
+		return nil, nil, fmt.Errorf("list latest participation by direction: %w", err)
+	}
+	for _, row := range rows {
+		_, applyOutreach, applyResponse, _ := CadenceApplyFlagsByDirection(row.Direction)
+		at := row.OccurredAt.UTC()
+		if applyOutreach {
+			t := ForwardMax(lastOutreachAt, at)
+			lastOutreachAt = &t
+		}
+		if applyResponse {
+			t := ForwardMax(lastResponseAt, at)
+			lastResponseAt = &t
+		}
+	}
+	return lastOutreachAt, lastResponseAt, nil
+}
+
 // ContactCadenceFieldsFromContact extracts the four cadence columns from
 // an in-memory Contact row. Used by any path that needs to snapshot the
 // pre-cadence state without a DB round-trip (e.g. the InteractionRecorder

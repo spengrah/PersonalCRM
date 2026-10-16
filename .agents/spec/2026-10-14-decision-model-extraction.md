@@ -44,7 +44,7 @@ Confirmed by the user, in priority order:
 
 1. **Extraction quality before surfaces.** Get the data right first; showing it on a new surface is cheap later.
 2. **Recall over precision for actionable state.** A missed "I owe", a missed commitment, a missed big moment or an unflagged duplicate is worse than a false positive, because the user corrects false positives on the bench.
-3. **Privacy.** No real content at rest off the Pi in the CRM or its tooling. A hosted vendor passes for production only if it never trains on request content and retains nothing beyond masked content held temporarily. Two exposures are protected separately: the identities of the people in the content, and the link between the content and the user. Masking protects the first; identity-unlinkable access is an optional layer for the second.
+3. **Privacy.** No real content at rest off the Pi in the CRM or its tooling. Each hosted vendor's terms are recorded for the user's choice of production method (HC3). Two exposures are protected separately: the identities of the people in the content, and the link between the content and the user. Masking protects the first; identity-unlinkable access is an optional layer for the second.
 4. **One act of judgment.** Model answers are SP1 assertions. The user's confirmations and corrections on the bench are the product's correction path and the eval labels at once.
 5. **Trust grows through historical runs.** Run the jobs one past month at a time from January 2026, review and correct on the bench, improve the jobs, run the next month. The same loop is what later loosens the apply rule.
 6. **Batched questions over shared context.** One call per thread context asks every question. The context unit is chosen per question kind, never as a per-contact bundle that resends a group thread once per member.
@@ -77,8 +77,7 @@ Secondary: cost, latency and calibration.
 
 **Call-me-when:**
 
-- A production method would send content to a vendor whose terms are not verified as passing, or unmasked content to any hosted endpoint.
-- The masking cost, measured by the same model run masked and unmasked on reviewed thread contexts, is large enough to matter: choosing between privacy and accuracy is the user's.
+- A production method would send unmasked content to any hosted endpoint.
 - Any path would let a model output close an obligation, end a wait or move a date later without a claim.
 - A historical run's live task effects are more than the user can review in one sitting.
 - Thread contexts over a candidate model's limits are common enough that the one-batch constraint and recall conflict.
@@ -147,7 +146,7 @@ Secondary: cost, latency and calibration.
 ## Relation to existing & planned work
 
 - **LLM extraction program** (`.agents/spec/llm-extraction-program.md`, #379): this is the first SP3 slice, widened from ball-in-court alone to every decision-model workload over interaction content. The program's task-extraction and big-moment goals arrive here as obligations and flags; their generative halves stay with the program. The program's "visible why from day one" ruling is met by the bench showing the raw content beside each judgment.
-- **Decision-model session notes** (`.agents/spec/2026-10-12-decision-models-session-notes.md`): the research record. Its open rulings are settled: judgments are SP1 assertions (its Shape A), and the masker is production code with regression tests while scorers, metrics and the runner get throwaway tests only. Its eval priorities are absorbed into What matters, and its masking-cost method (one model, raw and masked) is adopted.
+- **Decision-model session notes** (`.agents/spec/2026-10-12-decision-models-session-notes.md`): the research record. Its open rulings are settled: judgments are SP1 assertions (its Shape A), and the masker is production code with regression tests while scorers, metrics and the runner get throwaway tests only. Its eval priorities are absorbed into What matters; its masking-cost method (one model, raw and masked) is not used, since no local model is compared (user ruling, 2026-10-16).
 - **Interaction review readiness** (`.agents/spec/2026-10-13-interaction-review-readiness.md`, #918): provides interaction nodes, corrections as SP1 assertions, the interaction-node merge, reusable row and drill-down components, and the read of assertions beside cited content (KNW-038). This spec builds the claim review that arc designed for but did not build, and the all-interactions view takes the place of its deferred cross-contact review queue. Its deferral of chat-burst identity stands.
 - **Awaiting-reply derivation and cadence skip** (`.agents/spec/2026-09-15-awaiting-reply-derivation-and-cadence-skip.md`, CAD-040…CAD-046): the timestamp rule and its contact-wide wait stay, and compose with obligations. CAD-040's rule that no Todoist-side action changes the awaiting-reply state still holds for that wait; obligation tasks are new, and completing one closes its own obligation. Contacts whose threads have no judgment behave exactly as today.
 - **Task kinds and lifecycles** (CAD-022, `.agents/spec/task-direction-taxonomy.md`): obligation tasks reuse the reach-out and reminder kinds for what completion records, and add a lifecycle for obligations.
@@ -166,9 +165,9 @@ Research ran on 2026-10-04…2026-10-12 (session notes) and 2026-10-14 (below). 
 - **Vendors and retention.**
   - Jev (TypeSafe): zero data retention and no training on prompts, per Vercel AI Gateway's ZDR table quoting TypeSafe's terms; self-serve access ([Vercel ZDR](https://vercel.com/docs/ai-gateway/security-and-compliance/zdr.md)).
   - Clef and Clef-Flash (Cloudflare Workers AI): no training, no storage unless the caller uses R2 or KV ([Workers AI data usage](https://developers.cloudflare.com/workers-ai/platform/data-usage/)).
-  - Sage (Levanto Labs, proprietary): no retention of prompts or results and no training, except full payloads kept 30 days for failed or abnormally slow requests ([Levanto privacy](https://levanto.ai/privacy)). With masking, that exception passes the user's vendor test.
+  - Sage (Levanto Labs, proprietary): no retention of prompts or results and no training, except full payloads kept 30 days for failed or abnormally slow requests ([Levanto privacy](https://levanto.ai/privacy)).
   - OpenAI Decisions API: public beta, account-based, ZDR for eligible customers ([OpenAI](https://developers.openai.com/api/docs/guides/decisions)).
-- **Local option.** MLX builds of Clef and Clef-Flash ship the decision head; community GGUF builds reportedly do not. Kev on an M5 answered five questions over a short thread in 0.15–0.7 s; Clef-Flash at 4 bits reportedly takes about 0.3 s per 1,000 tokens on an M5 Max ([mlx-community/clef-8bit](https://huggingface.co/mlx-community/clef-8bit), [Jundot/clef-flash-oQ4e](https://huggingface.co/Jundot/clef-flash-oQ4e)). The VPS CPU is too slow (8 tokens/s prefill, session notes). The Mac is where the masking cost is measured; it is not required for production.
+- **Local option.** MLX builds of Clef and Clef-Flash ship the decision head; community GGUF builds reportedly do not. Kev on an M5 answered five questions over a short thread in 0.15–0.7 s; Clef-Flash at 4 bits reportedly takes about 0.3 s per 1,000 tokens on an M5 Max ([mlx-community/clef-8bit](https://huggingface.co/mlx-community/clef-8bit), [Jundot/clef-flash-oQ4e](https://huggingface.co/Jundot/clef-flash-oQ4e)). The VPS CPU is too slow (8 tokens/s prefill, session notes). No local model is compared (user ruling, 2026-10-16).
 - **Identity-unlinkable access.** zkAPI (Ethereum Foundation and Open Anonymity, mainnet 2026-10-01) unlinks payment and account from requests through a zero-knowledge proof of a funded deposit, issuing short-lived OpenRouter keys. The provider still sees prompts and responses in full; content, IP addresses and timing can re-link sessions; deposits are public onchain; the repo calls the protocol experimental ([EF blog](https://blog.ethereum.org/2026/10/01/introducing-zkapi), [repo](https://github.com/ethereum/zkapi)). No source shows a zkAPI key reaching a decision model. Enclave-based services (Venice, NEAR AI, Tinfoil, Phala) keep the operator from reading content but stay account-based. Unlinkable access therefore complements masking and never replaces it.
 - **Masking.** Ball-in-court depends on who spoke last and the act of the message (question, request, promise, closer), not on who the people are, so masking costs it little in expectation. Passing the regression fixtures proves the listed identifiers are caught, not that a context is anonymous (session notes).
 
@@ -176,7 +175,7 @@ Research ran on 2026-10-04…2026-10-12 (session notes) and 2026-10-14 (below). 
 
 - **HC1** **No real content at rest off the Pi** in the CRM or its tooling. The runner, the scorecard and every tool keep no copy elsewhere; standard output is content-free. Transit to an inference endpoint is allowed under the next two constraints.
 - **HC2** **Masking before any hosted call,** over the whole request. No unmasked content or metadata reaches a hosted endpoint. The placeholder map never leaves the Pi.
-- **HC3** **Vendor terms verified for production.** A hosted vendor serves the production method only after its terms are read at the primary source and show that it never trains on request content and retains nothing beyond masked content held temporarily. Methods compared during evaluation may use any hosted vendor, on masked content only (HC2) (user ruling, 2026-10-15).
+- **HC3** **Vendor terms recorded.** Each hosted method's vendor terms are read at the primary source and recorded: what they show about training on request content and retaining it. The record informs the user's choice of production method and excludes no method; which terms are acceptable is the user's decision (user rulings, 2026-10-15 and 2026-10-16). Every hosted call carries masked content only (HC2).
 - **HC4** **One store for judgments.** Model answers, claims and the user's confirmations and corrections are SP1 assertions; no parallel judgment store.
 - **HC5** **Model output never removes actionable state without confirmation** under the starting apply rule.
 - **HC6** **The user's verdict wins.** A later judgment on the same input never re-proposes an answer the user rejected and never overwrites the user's correction. Only changed content reopens a question.
@@ -221,7 +220,7 @@ Research ran on 2026-10-04…2026-10-12 (session notes) and 2026-10-14 (below). 
 - **SC8** No path lets a judgment close an obligation, end a wait or move a date later without the user's confirmation.
 - **SC9** A rerun on an input the user already reviewed changes nothing the user decided.
 - **SC10** A message about a contact's new job raises a big-moment flag on that thread, visible on the bench beside the message.
-- **SC11** Running the same local model masked and unmasked on reviewed thread contexts reports the masking cost per outcome.
+- **SC11** Retired (user ruling, 2026-10-16): no local model is compared, because in production it would run on the Pi, which cannot serve one, and measuring the masking cost needs one model run both masked and unmasked.
 - **SC12** A masker regression test fails when a synthetic contact's name, phone number or email survives masking anywhere in a hosted request.
 - **SC13** No thread content is found at rest off the Pi after a scorecard run.
 
@@ -252,7 +251,7 @@ During the historical runs, the user opens the all-interactions view narrowed to
 - **Timing of an "I owe" task.** If the commitment states a date or timing and the search above exists, use it. Otherwise the arc picks a default, logs it, and the historical runs judge it.
 - **Others' big moments mentioned in passing** ("my sister's getting married"). The user is unsure. Ask it as a separate option in the tree, so the flag can be counted with or without it; the historical runs show whether it is noise.
 - **Meeting content in the thread context** (Anarlog sessions, meeting notes). If an existing content reader returns that content, ask the commitment and big-moment questions of it (ball-in-court does not apply to a meeting). Otherwise leave it to a later arc.
-- **Which methods to compare first.** Compare every decent option (user ruling, 2026-10-15): each hosted decision model worth comparing, masked, and one local decision model on the Mac run both masked and unmasked to measure masking cost. Vendor terms gate production (HC3), not comparison. Proposing the first production method is the arc's; choosing it is the user's (see User-reserved decisions).
+- **Which methods to compare first.** Compare every decent option (user ruling, 2026-10-15): each hosted decision model worth comparing, masked. No local model is compared (user ruling, 2026-10-16): in production it would run on the Pi, which cannot serve one. OpenAI Decisions is not compared (user ruling, 2026-10-16): the user's OpenRouter account cannot reach closed-source models. Each method's vendor terms are recorded (HC3) and exclude no method. Proposing the first production method is the arc's; choosing it is the user's (see User-reserved decisions).
 - **Interval values for cut-offs.** Nightly unless the historical runs show a shorter interval changes recall.
 
 ## Spec-item IDs (pre-allocated)

@@ -280,6 +280,51 @@ func TestBuild_InputHash(t *testing.T) {
 	})
 }
 
+// The input hash changes when a participant is matched, rematched or
+// unmatched, since its contact decides its questions and where their outcomes
+// land, and returns to its earlier value when content and bindings do.
+func TestBuild_InputHashFollowsContactBindings(t *testing.T) {
+	t.Parallel()
+	e := newBuilderEnv(t)
+	comms := repository.NewCommsMessageRepository(e.database.Queries)
+	comms.SetPool(e.database.Pool)
+	contacts := repository.NewContactRepository(e.database.Queries)
+	chat := "chat-" + uuid.NewString() + "@s.whatsapp.net"
+	peer := uuid.NewString()[:12] + "@s.whatsapp.net"
+	thread := e.venue(t, repository.InteractionSourceWhatsApp, repository.VenueKindDM, chat)
+	for i, direction := range []string{repository.InteractionDirectionInbound, repository.InteractionDirectionOutbound} {
+		body := "see you at 6"
+		_, err := comms.UpsertChatMessage(e.ctx, repository.UpsertChatMessageParams{Source: repository.InteractionSourceWhatsApp, ExternalID: uuid.NewString(), ThreadID: chat, Body: &body, PeerHandle: &peer, Direction: direction, SentAt: e.at(i + 1)})
+		require.NoError(t, err)
+	}
+	unmatched := e.build(t, thread, e.at(2))
+	require.Nil(t, unmatched.Participants[threadctx.RoleThem].ContactID)
+
+	a, b := e.contact(t), e.contact(t)
+	var matched string
+	t.Run("a participant matched after a judgment", func(t *testing.T) {
+		attached, _, err := comms.AttachUnmatchedByPeer(e.ctx, repository.InteractionSourceWhatsApp, nil, &peer, a)
+		require.NoError(t, err)
+		require.EqualValues(t, 2, attached)
+		matched = e.build(t, thread, e.at(2)).InputHash
+		assert.NotEqual(t, unmatched.InputHash, matched)
+	})
+
+	t.Run("a participant rematched after a judgment", func(t *testing.T) {
+		tx, err := e.database.Pool.Begin(e.ctx)
+		require.NoError(t, err)
+		defer func() { _ = tx.Rollback(e.ctx) }()
+		require.NoError(t, comms.RepointContactForMergeTx(e.ctx, tx, a, b))
+		require.NoError(t, tx.Commit(e.ctx))
+		assert.NotEqual(t, matched, e.build(t, thread, e.at(2)).InputHash)
+	})
+
+	t.Run("a participant unmatched after a judgment", func(t *testing.T) {
+		require.NoError(t, contacts.SoftDeleteContact(e.ctx, b))
+		assert.Equal(t, unmatched.InputHash, e.build(t, thread, e.at(2)).InputHash)
+	})
+}
+
 // A thread's latest content time and the threads that gained content in
 // a window agree with the contexts built at those cut-offs.
 func TestContentFacts_AgreeWithContexts(t *testing.T) {

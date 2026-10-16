@@ -814,6 +814,47 @@ func (q *Queries) ListInteractionsByIDs(ctx context.Context, ids []uuid.UUID) ([
 	return items, nil
 }
 
+const ListLatestParticipationByDirectionAt = `-- name: ListLatestParticipationByDirectionAt :many
+SELECT ep.direction, MAX(ep.occurred_at)::timestamptz AS occurred_at
+FROM effective_participation ep
+WHERE ep.contact_id = $1
+  AND ep.occurred_at <= $2::timestamptz
+GROUP BY ep.direction
+`
+
+type ListLatestParticipationByDirectionAtParams struct {
+	ContactID uuid.UUID `json:"contact_id"`
+	CutOff    time.Time `json:"cut_off"`
+}
+
+type ListLatestParticipationByDirectionAtRow struct {
+	Direction  string    `json:"direction"`
+	OccurredAt time.Time `json:"occurred_at"`
+}
+
+// The contact's latest effective participation at or before the cut-off, one
+// row per direction. Which directions set which cadence timestamp is
+// repository.CadenceApplyFlagsByDirection's.
+func (q *Queries) ListLatestParticipationByDirectionAt(ctx context.Context, arg ListLatestParticipationByDirectionAtParams) ([]*ListLatestParticipationByDirectionAtRow, error) {
+	rows, err := q.db.Query(ctx, ListLatestParticipationByDirectionAt, arg.ContactID, arg.CutOff)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []*ListLatestParticipationByDirectionAtRow{}
+	for rows.Next() {
+		var i ListLatestParticipationByDirectionAtRow
+		if err := rows.Scan(&i.Direction, &i.OccurredAt); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const ListLiveContactsObservedOnNodes = `-- name: ListLiveContactsObservedOnNodes :many
 SELECT DISTINCT i.contact_id
 FROM interaction i

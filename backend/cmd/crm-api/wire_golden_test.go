@@ -56,7 +56,7 @@ func migrationsPathForTest() string {
 
 // --- golden lists (sorted) -------------------------------------------------
 
-// baseWorkerKinds is the 19 unconditionally-registered workers (shapes 1 & 4).
+// baseWorkerKinds is the 20 unconditionally-registered workers (shapes 1 & 4).
 var baseWorkerKinds = sortedCopy([]string{
 	"noop",
 	"interaction_recorder",
@@ -77,6 +77,7 @@ var baseWorkerKinds = sortedCopy([]string{
 	"assertion_rollover",
 	"job_sample_trim",
 	"sync_log_trim",
+	"langfuse_export_nightly",
 })
 
 // syncWorkerKinds adds the two external-sync-gated workers (shapes 3 & 6).
@@ -85,7 +86,7 @@ var syncWorkerKinds = sortedCopy(append([]string{
 	"sync_provider_account",
 }, baseWorkerKinds...))
 
-// basePeriodicKinds is the 6 unconditionally-registered periodic jobs.
+// basePeriodicKinds is the 7 unconditionally-registered periodic jobs.
 var basePeriodicKinds = sortedCopy([]string{
 	"messaging_aggregate_sweeper",
 	"pairing_token_janitor",
@@ -93,6 +94,7 @@ var basePeriodicKinds = sortedCopy([]string{
 	"assertion_rollover",
 	"job_sample_trim",
 	"sync_log_trim",
+	"langfuse_export_nightly",
 })
 
 // syncPeriodicKinds adds the external-sync-gated scheduler tick.
@@ -268,6 +270,7 @@ func buildWireChainForGolden(t *testing.T, cfg *config.Config) wireChain {
 	// periodic or provider, so the golden lists are unaffected.
 	messaging.CommsMessageRepo.SetPool(database.Pool)
 	consumers := buildDomainConsumers(cfg, database, core, graph, eventBus, riverClient)
+	judgments := buildJudgmentStore(cfg, database, graph, consumers, messaging, riverClient)
 	contactService := buildContactService(cfg, database, core, graph, consumers, eventBus, riverClient)
 	interactionRecorder := buildInteractionRecorder(contactService, messaging, ingest, consumers, eventBus)
 	domain := buildDomainServices(database, core, graph, ingest, consumers, eventBus)
@@ -305,6 +308,7 @@ func buildWireChainForGolden(t *testing.T, cfg *config.Config) wireChain {
 	// pinned by the golden lists.
 	registerJobSampleWorkers(reg, repository.NewJobSampleRepository(database.Queries), cfg)
 	registerSyncLogTrim(reg, repository.NewSyncRepository(database.Queries), cfg)
+	registerLangfuseExport(reg, cfg, judgments)
 
 	return wireChain{
 		reg:       reg,

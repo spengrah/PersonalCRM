@@ -174,6 +174,59 @@
 //	                              numerically to the Tier-1 queue_wait_ms metric.
 //	                              Read-only; SAFE with crm-api running.
 //
+//	--judge-month YYYY-MM         Historical decision-model run over one month:
+//	      --method KEY            at each simulated nightly cut-off (the
+//	      [--measure]             midnights in the server's timezone that close
+//	                              the month's days), judge with method KEY every
+//	                              thread that gained content since the previous
+//	                              cut-off, over its whole content up to the
+//	                              cut-off, and record each judgment or incomplete
+//	                              report through the judgment store. Only the
+//	                              method DECISION_PRODUCTION_METHOD designates
+//	                              changes live state; a designation the method
+//	                              registry lacks fails before any call. A
+//	                              judgment the method version already holds for
+//	                              an input is reused, so repeating a month sends
+//	                              nothing. --measure builds the same contexts,
+//	                              sizes them against the method's limits, and
+//	                              sends and writes nothing. Prints a
+//	                              content-free report (IDs, counts, reasons).
+//	                              SAFE with crm-api running (it runs the Todoist
+//	                              jobs a run's live effects enqueue).
+//
+//	--scorecard                   Score decision-model methods against the
+//	      [--method KEY           user's reviews: rerun each method as an
+//	      [--compare-method KEY]] evidence-only rerun over every thread
+//	                              context the user reviewed (reusing judgments
+//	                              the method version already holds) and print,
+//	                              per method, per-outcome recall, precision and
+//	                              confusion, the user's "I owe" outcomes missed,
+//	                              the corrections caused and the method's terms
+//	                              status; the timestamp rule as a reference for
+//	                              they_owe_reply; and a proposed first
+//	                              production method among the scored
+//	                              methods. With no --method, every
+//	                              method in the registry is scored, and those
+//	                              whose route is not configured are listed.
+//	                              --compare-method adds the per-outcome
+//	                              difference and the
+//	                              examples that flipped, by example ID. Changes
+//	                              no designation and no live state. Prints a
+//	                              content-free report (IDs, keys, outcome
+//	                              values, counts, rates).
+//
+//	--langfuse-export             Send the decision-model records made since
+//	                              the previous export to the Langfuse
+//	                              extraction project (LANGFUSE_EXTRACTION_HOST,
+//	                              LANGFUSE_EXTRACTION_PUBLIC_KEY,
+//	                              LANGFUSE_EXTRACTION_SECRET_KEY): each
+//	                              judgment, finished run, rerun's scorecard
+//	                              metrics and review, content-free and keyed by
+//	                              example ID, as one record however often it
+//	                              runs. The nightly langfuse_export_nightly job
+//	                              does the same. With a setting unset, sends
+//	                              nothing and says so. Prints counts only.
+//
 // The seed/reset subcommands inherit the process env (CRM_ENV / TIME_BASE /
 // TIME_ACCELERATION / DATABASE_URL / MIGRATIONS_PATH) — on the Pi via
 // `set -a; . /srv/personalcrm/.env; set +a` — so the seeded world's cadence /
@@ -216,11 +269,14 @@ import (
 	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/events"
 	"personal-crm/backend/internal/google"
+	"personal-crm/backend/internal/langfuseexport"
 	"personal-crm/backend/internal/messages"
 	"personal-crm/backend/internal/repository"
+	"personal-crm/backend/internal/scorecard"
 	"personal-crm/backend/internal/service"
 	"personal-crm/backend/internal/sync"
 	"personal-crm/backend/internal/synthetic"
+	"personal-crm/backend/internal/threadctx"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -370,8 +426,17 @@ type adminDeps struct {
 	// whatsappHistory serves --whatsapp-list-history / --whatsapp-requeue-history
 	// (the operator recovery path for a history chunk that failed to drain).
 	whatsappHistory whatsappHistoryAdmin
-	stdout          io.Writer
-	stderr          io.Writer
+	// judgeMonth serves --judge-month and scorecard serves --scorecard. Both
+	// are built LAZILY (only when --judge-month or --scorecard is set)
+	// because loading the masker reads every contact name. Nil for all other
+	// subcommands.
+	judgeMonth judgeMonthRunner
+	scorecard  scorecardReporter
+	// langfuseExport serves --langfuse-export. Built LAZILY (only when
+	// --langfuse-export is set). Nil for all other subcommands.
+	langfuseExport langfuseExporter
+	stdout         io.Writer
+	stderr         io.Writer
 }
 
 // runOptions captures parsed flags. Exposed as a struct so tests can
@@ -439,6 +504,18 @@ type runOptions struct {
 	listWhatsAppHistory      bool
 	historyState             string
 	requeueWhatsAppHistoryID string
+	// Historical decision-model runs. judgeMonth <- --judge-month (YYYY-MM;
+	// empty = unset; non-empty selects the subcommand); judgeMethod <-
+	// --method (also read by --scorecard); judgeMeasure <- --measure.
+	judgeMonth   string
+	judgeMethod  string
+	judgeMeasure bool
+	// Decision-model scorecard. scorecard <- --scorecard (the bool subcommand
+	// selector); compareMethod <- --compare-method.
+	scorecard     bool
+	compareMethod string
+	// langfuseExport <- --langfuse-export.
+	langfuseExport bool
 }
 
 // exitErr carries an explicit process exit code so a subcommand can drive a
@@ -618,6 +695,15 @@ func validateSubcommand(opts runOptions) error {
 	if opts.requeueWhatsAppHistoryID != "" {
 		active++
 	}
+	if opts.judgeMonth != "" {
+		active++
+	}
+	if opts.scorecard {
+		active++
+	}
+	if opts.langfuseExport {
+		active++
+	}
 	if active == 0 {
 		return errors.New("no subcommand specified; pass exactly one of " +
 			subcommandList)
@@ -626,7 +712,10 @@ func validateSubcommand(opts runOptions) error {
 		return errors.New("subcommand flags are mutually exclusive; pass exactly one of " +
 			subcommandList)
 	}
-	return nil
+	if err := validateJudgeMonth(opts); err != nil {
+		return err
+	}
+	return validateScorecard(opts)
 }
 
 // subcommandList is the canonical subcommand enumeration shared by the
@@ -637,7 +726,8 @@ const subcommandList = "--messages-rematch-stranded, --reconcile-address-book-me
 	"--list-hosts, --revoke-host <uuid>, --rotate-host-key <uuid>, --seed, --reset-and-seed, " +
 	"--migrate, --migrate-check, --list-jobs, --retry-job <id>, --migrate-tags, " +
 	"--migrate-contact-knowledge-columns, --river-tier0, --whatsapp-list-history, " +
-	"--whatsapp-requeue-history <uuid>"
+	"--whatsapp-requeue-history <uuid>, --judge-month YYYY-MM --method <key> [--measure], " +
+	"--scorecard [--method <key> [--compare-method <key>]], --langfuse-export"
 
 // parseArgs uses a private FlagSet so tests can drive the parser
 // without polluting flag's global state.
@@ -745,6 +835,28 @@ func parseArgs(args []string) (runOptions, error) {
 		"Return a FAILED WhatsApp history chunk (by UUID from --whatsapp-list-history) to pending so "+
 			"the drainer retries it. Attempts are NOT reset -- they are lifetime triage evidence -- so "+
 			"a chunk past the attempt cap gets exactly one fresh attempt per requeue.")
+	fs.StringVar(&opts.judgeMonth, "judge-month", "",
+		"Historical decision-model run over one month (YYYY-MM): judge with --method each thread "+
+			"that gained content since the previous simulated nightly cut-off, recording every judgment "+
+			"or incomplete report. Only the designated production method changes live state. Prints a "+
+			"content-free summary.")
+	fs.StringVar(&opts.judgeMethod, "method", "",
+		"Decision-model method key for --judge-month, or the one method --scorecard scores.")
+	fs.BoolVar(&opts.judgeMeasure, "measure", false,
+		"With --judge-month: build every eligible context and size it against the method's limits, "+
+			"sending and writing nothing.")
+	fs.BoolVar(&opts.scorecard, "scorecard", false,
+		"Score decision-model methods against the user's reviews: rerun --method (or, without it, every "+
+			"method) over every reviewed thread context, report per-outcome recall, precision and confusion, "+
+			"\"I owe\" outcomes missed and corrections caused, and propose a first production method. Prints a "+
+			"content-free report and changes no designation.")
+	fs.StringVar(&opts.compareMethod, "compare-method", "",
+		"With --scorecard --method: a second method to compare, reporting the per-outcome difference and "+
+			"the examples that flipped.")
+	fs.BoolVar(&opts.langfuseExport, "langfuse-export", false,
+		"Send the decision-model records made since the previous export (judgments, finished runs, "+
+			"scorecard metrics, reviews) to the Langfuse extraction project, content-free; with its settings "+
+			"unset, send nothing and say so.")
 	if err := fs.Parse(args); err != nil {
 		return runOptions{}, err
 	}
@@ -869,6 +981,12 @@ func run(ctx context.Context, opts runOptions, deps adminDeps) error {
 		return runListWhatsAppHistory(ctx, opts, deps)
 	case opts.requeueWhatsAppHistoryID != "":
 		return runRequeueWhatsAppHistory(ctx, opts, deps)
+	case opts.judgeMonth != "":
+		return runJudgeMonth(ctx, opts, deps)
+	case opts.scorecard:
+		return runScorecard(ctx, opts, deps)
+	case opts.langfuseExport:
+		return runLangfuseExport(ctx, deps)
 	case opts.migrate, opts.migrateCheck:
 		// Migration subcommands are dispatched PRE-DB in runMain (they need
 		// only the database URL + migrations path, not deps), so they never
@@ -1630,6 +1748,8 @@ func buildProductionDeps(ctx context.Context, cfg *config.Config, database *db.D
 	// knowledge_cache_updater job — register the kind so the insert-only client
 	// accepts it (the cache refresh runs in the crm-api worker, not here).
 	river.AddWorker(workers, &noopKnowledgeCacheWorker{})
+	// A historical run's live effects enqueue Todoist task operations.
+	river.AddWorker(workers, &noopTodoistTaskOpWorker{})
 	riverClient, err := river.NewClient(riverpgxv5.New(database.Pool), &river.Config{
 		JobTimeout: cfg.River.JobTimeout,
 		Queues: map[string]river.QueueConfig{
@@ -1763,6 +1883,25 @@ func buildProductionDeps(ctx context.Context, cfg *config.Config, database *db.D
 		commsRepo := repository.NewCommsMessageRepository(database.Queries)
 		gmailProvider := google.NewGmailSyncProvider(oauthService, commsRepo, eventBus, database.Pool)
 		deps.rederive = google.NewCorrespondenceNameRederiveService(commsRepo, gmailProvider)
+	}
+
+	// LAZY: build the decision-model stack ONLY for --judge-month and
+	// --scorecard.
+	if opts.judgeMonth != "" || opts.scorecard {
+		stack, err := buildJudgmentStack(ctx, cfg, database, assertService, contactRepo, riverClient)
+		if err != nil {
+			return adminDeps{}, nil, err
+		}
+		deps.judgeMonth = stack.runner
+		deps.scorecard = scorecard.New(stack.store, stack.runner, stack.methods, contactRepo, cfg.Watchdog)
+	}
+
+	// LAZY: build the export ONLY for --langfuse-export. It reads the store's
+	// export reads alone, so it needs no masker or method registry.
+	if opts.langfuseExport {
+		contexts := threadctx.NewBuilder(repository.NewThreadContentRepository(database.Queries), repository.NewVenueRepository(database.Queries))
+		store := buildJudgmentStore(cfg, database, assertService, contactRepo, riverClient, contexts)
+		deps.langfuseExport = langfuseexport.New(cfg.LangfuseExtraction, store, scorecard.NewReader(store))
 	}
 
 	cleanup := func() {}

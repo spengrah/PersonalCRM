@@ -369,12 +369,14 @@ JOIN judgment j ON j.id = a.judgment_id
 JOIN judgment_example e ON e.id = j.example_id
 WHERE (cardinality($1::uuid[]) = 0 OR a.judgment_id = ANY($1::uuid[]))
   AND ($2::uuid IS NULL OR a.run_id = $2::uuid)
+  AND (NOT $3::boolean OR a.fresh)
 ORDER BY a.created_at, a.cut_off, a.run_id
 `
 
 type ListJudgmentAppearancesParams struct {
 	JudgmentIds []uuid.UUID `json:"judgment_ids"`
 	RunID       *uuid.UUID  `json:"run_id"`
+	FreshOnly   bool        `json:"fresh_only"`
 }
 
 type ListJudgmentAppearancesRow struct {
@@ -385,9 +387,11 @@ type ListJudgmentAppearancesRow struct {
 	ExampleID  string    `json:"example_id"`
 }
 
-// The appearances of the given judgments, or of every judgment in a run.
+// The appearances of the given judgments, or of every judgment in a run, or
+// of every judgment; fresh_only keeps only the appearance whose call produced
+// each judgment. Oldest recorded first.
 func (q *Queries) ListJudgmentAppearances(ctx context.Context, arg ListJudgmentAppearancesParams) ([]*ListJudgmentAppearancesRow, error) {
-	rows, err := q.db.Query(ctx, ListJudgmentAppearances, arg.JudgmentIds, arg.RunID)
+	rows, err := q.db.Query(ctx, ListJudgmentAppearances, arg.JudgmentIds, arg.RunID, arg.FreshOnly)
 	if err != nil {
 		return nil, err
 	}

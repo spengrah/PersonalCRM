@@ -31,6 +31,9 @@ type Config struct {
 	Health    HealthConfig
 	Sync      SyncConfig
 	Decision  DecisionConfig
+	// LangfuseExtraction is the Langfuse extraction project the decision-model
+	// export sends to.
+	LangfuseExtraction LangfuseExtractionConfig
 }
 
 // DecisionConfig holds the decision-model settings.
@@ -39,6 +42,20 @@ type DecisionConfig struct {
 	// judgments may change live state (DECISION_PRODUCTION_METHOD). Empty
 	// designates none, so no judgment changes live state.
 	ProductionMethod string
+	// Routes of the compared methods. An empty key or URL leaves the methods
+	// it serves unavailable.
+	OpenRouterAPIKey string // OPENROUTER_API_KEY
+	TypeSafeAPIKey   string // TYPESAFE_API_KEY
+	SageAPIKey       string // SAGE_API_KEY (Levanto)
+}
+
+// LangfuseExtractionConfig names the Langfuse extraction project, distinct
+// from the project LANGFUSE_HOST, LANGFUSE_PUBLIC_KEY and LANGFUSE_SECRET_KEY
+// name for the repository's other Langfuse tooling.
+type LangfuseExtractionConfig struct {
+	Host      string // LANGFUSE_EXTRACTION_HOST
+	PublicKey string // LANGFUSE_EXTRACTION_PUBLIC_KEY
+	SecretKey string // LANGFUSE_EXTRACTION_SECRET_KEY
 }
 
 // SyncConfig holds external-sync housekeeping settings.
@@ -588,6 +605,14 @@ func Load() (*Config, error) {
 		},
 		Decision: DecisionConfig{
 			ProductionMethod: getEnv("DECISION_PRODUCTION_METHOD", ""),
+			OpenRouterAPIKey: getEnv("OPENROUTER_API_KEY", ""),
+			TypeSafeAPIKey:   getEnv("TYPESAFE_API_KEY", ""),
+			SageAPIKey:       getEnv("SAGE_API_KEY", ""),
+		},
+		LangfuseExtraction: LangfuseExtractionConfig{
+			Host:      getEnv("LANGFUSE_EXTRACTION_HOST", ""),
+			PublicKey: getEnv("LANGFUSE_EXTRACTION_PUBLIC_KEY", ""),
+			SecretKey: getEnv("LANGFUSE_EXTRACTION_SECRET_KEY", ""),
 		},
 		EventBus: EventBusConfig{
 			InteractionMode:        getEnv("EVENT_BUS_INTERACTION_MODE", EventBusInteractionModeCutover),

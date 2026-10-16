@@ -1522,7 +1522,9 @@ type Querier interface {
 	// Test-only read of sample rows by river_job_id (raw SQL is banned in Go tests,
 	// so the real-Subscribe integration test reads rows back through this query).
 	ListJobExecSamplesByRiverJobIDForTest(ctx context.Context, riverJobIds []int64) ([]*ListJobExecSamplesByRiverJobIDForTestRow, error)
-	// The appearances of the given judgments, or of every judgment in a run.
+	// The appearances of the given judgments, or of every judgment in a run, or
+	// of every judgment; fresh_only keeps only the appearance whose call produced
+	// each judgment. Oldest recorded first.
 	ListJudgmentAppearances(ctx context.Context, arg ListJudgmentAppearancesParams) ([]*ListJudgmentAppearancesRow, error)
 	ListJudgmentIncomplete(ctx context.Context) ([]*JudgmentIncomplete, error)
 	// The outcomes of the given judgments, or the given outcomes.
@@ -1559,6 +1561,10 @@ type Querier interface {
 	// contact. cut_off is the example's earliest judgment cut-off. Restricted to
 	// the given examples when any are named.
 	ListLatestExampleReviews(ctx context.Context, arg ListLatestExampleReviewsParams) ([]*ListLatestExampleReviewsRow, error)
+	// The contact's latest effective participation at or before the cut-off, one
+	// row per direction. Which directions set which cadence timestamp is
+	// repository.CadenceApplyFlagsByDirection's.
+	ListLatestParticipationByDirectionAt(ctx context.Context, arg ListLatestParticipationByDirectionAtParams) ([]*ListLatestParticipationByDirectionAtRow, error)
 	// Driver query for the address-book method reconcile (forward hooks +
 	// one-time catchup). Returns every live address-book row that is itself
 	// linked OR is a duplicate of a (live) canonical row, joining to the
