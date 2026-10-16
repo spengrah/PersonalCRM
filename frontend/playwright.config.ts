@@ -184,6 +184,9 @@ export default defineConfig({
         // The Imports Interactions tab calls GET /meeting-notes/needs-attention,
         // which is only registered when event-bus ingest is enabled.
         EVENT_BUS_INGEST_ENABLED: process.env.EVENT_BUS_INGEST_ENABLED || 'true',
+        // The bench E2E seeds runs of this method key, so its judgments can be
+        // live or suggested; no other E2E test records judgments.
+        DECISION_PRODUCTION_METHOD: 'bench-production',
       },
     },
   ],

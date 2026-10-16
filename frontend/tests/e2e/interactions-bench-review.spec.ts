@@ -335,6 +335,7 @@ test.describe('Interactions bench review @area:interactions', () => {
     const flag = proposalList(proposal, 'Big moment')
 
     // spec: IXN-047.confirm-by-judged, IXN-047.shows-without-reload-or-error
+    await expect(listItem(iOwe, sam.name)).toHaveAttribute('data-state', 'suggested')
     await iOwe.getByRole('button', { name: `Confirm ${sam.name}` }).click()
     await expect(listItem(iOwe, sam.name)).toHaveAttribute('data-mark', 'confirmed', {
       timeout: SLOW_TIMEOUT_MS,
@@ -342,6 +343,7 @@ test.describe('Interactions bench review @area:interactions', () => {
     await expect(listItem(iOwe, sam.name).locator('[data-state-label]')).toHaveText('Live')
 
     // spec: IXN-047.remove-by-no-effect
+    await expect(listItem(commitments, `${kim.name} → Me`)).toHaveAttribute('data-state', 'live')
     await commitments.getByRole('button', { name: `Remove ${kim.name} → Me` }).click()
     await expect(listItem(commitments, `${kim.name} → Me`)).toHaveAttribute(
       'data-mark',

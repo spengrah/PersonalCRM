@@ -80,12 +80,13 @@ var expectedCuratedCatalog = map[string]expectedCuratedPredicate{
 	"removed_for_everyone": {"fact", "interaction", "", "bool", "single", false, "", "permanent", nil, nil, 50, "auto-if-confident", "none"},
 	"same_interaction_as":  {"edge", "interaction", "interaction", "", "multi", false, "", "permanent", nil, nil, 50, "auto-if-confident", "none"},
 	// The judgment predicates (migration 093).
-	"judgment_answer":    {"fact", "judgment_outcome", "", "text", "single", false, "", "permanent", nil, nil, 50, "auto-if-confident", "none"},
-	"judgment_addition":  {"fact", "judgment_outcome", "", "text", "multi", false, "", "permanent", nil, nil, 50, "auto-if-confident", "none"},
-	"judgment_removal":   {"fact", "judgment_outcome", "", "text", "multi", false, "", "permanent", nil, nil, 50, "always-confirm", "none"},
-	"judgment_no_effect": {"fact", "judgment_outcome", "", "text", "multi", false, "", "permanent", nil, nil, 50, "auto-if-confident", "none"},
-	"judgment_review":    {"fact", "judgment_outcome", "", "text", "single", false, "", "permanent", nil, nil, 50, "auto-if-confident", "none"},
-	"big_moment_flag":    {"fact", "venue", "", "text", "multi", false, "", "permanent", nil, nil, 50, "auto-if-confident", "none"},
+	"judgment_answer":            {"fact", "judgment_outcome", "", "text", "single", false, "", "permanent", nil, nil, 50, "auto-if-confident", "none"},
+	"judgment_addition":          {"fact", "judgment_outcome", "", "text", "multi", false, "", "permanent", nil, nil, 50, "auto-if-confident", "none"},
+	"judgment_removal":           {"fact", "judgment_outcome", "", "text", "multi", false, "", "permanent", nil, nil, 50, "always-confirm", "none"},
+	"judgment_no_effect":         {"fact", "judgment_outcome", "", "text", "multi", false, "", "permanent", nil, nil, 50, "auto-if-confident", "none"},
+	"judgment_review":            {"fact", "judgment_outcome", "", "text", "single", false, "", "permanent", nil, nil, 50, "auto-if-confident", "none"},
+	"judgment_review_keeps_date": {"fact", "judgment_outcome", "", "bool", "single", false, "", "permanent", nil, nil, 50, "auto-if-confident", "none"},
+	"big_moment_flag":            {"fact", "venue", "", "text", "multi", false, "", "permanent", nil, nil, 50, "auto-if-confident", "none"},
 }
 
 // expectedCuratedSubtypes is the exact set of entity_type subtype keys the seed
