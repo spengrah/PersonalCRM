@@ -55,6 +55,25 @@ func buildJudgmentStack(
 	if err != nil {
 		return judgmentStack{}, fmt.Errorf("load masker: %w", err)
 	}
+	store := buildJudgmentStore(cfg, database, assert, contacts, jobs, contexts)
+	methods := decision.NewRegistry(cfg.Decision, masker)
+	runner, err := judgerun.New(contexts, store, methods)
+	if err != nil {
+		return judgmentStack{}, err
+	}
+	return judgmentStack{store: store, methods: methods, runner: runner}, nil
+}
+
+// buildJudgmentStore wires the one judgment store over the thread-context
+// builder, with the production method DECISION_PRODUCTION_METHOD names.
+func buildJudgmentStore(
+	cfg *config.Config,
+	database *db.Database,
+	assert *service.AssertService,
+	contacts *repository.ContactRepository,
+	jobs repository.JobEnqueuer,
+	contexts *threadctx.Builder,
+) *judgment.Store {
 	cadence := consumer.NewCadenceUpdater(
 		repository.NewEventConsumerClaimRepository(database.Queries),
 		contacts,
@@ -63,7 +82,7 @@ func buildJudgmentStack(
 		cfg.EventBus.UnsafeAllowOffMode,
 		cfg.Watchdog,
 	)
-	store := judgment.NewStore(judgment.StoreDeps{
+	return judgment.NewStore(judgment.StoreDeps{
 		Pool:             database.Pool,
 		Queries:          database.Queries,
 		Assert:           assert,
@@ -73,12 +92,6 @@ func buildJudgmentStack(
 		Watchdog:         cfg.Watchdog,
 		ProductionMethod: cfg.Decision.ProductionMethod,
 	})
-	methods := decision.NewRegistry(cfg.Decision, masker)
-	runner, err := judgerun.New(contexts, store, methods)
-	if err != nil {
-		return judgmentStack{}, err
-	}
-	return judgmentStack{store: store, methods: methods, runner: runner}, nil
 }
 
 // validateJudgeMonth checks the flags --judge-month reads.

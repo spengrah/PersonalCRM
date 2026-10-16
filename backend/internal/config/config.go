@@ -31,6 +31,9 @@ type Config struct {
 	Health    HealthConfig
 	Sync      SyncConfig
 	Decision  DecisionConfig
+	// LangfuseExtraction is the Langfuse extraction project the decision-model
+	// export sends to.
+	LangfuseExtraction LangfuseExtractionConfig
 }
 
 // DecisionConfig holds the decision-model settings.
@@ -46,6 +49,15 @@ type DecisionConfig struct {
 	SageAPIKey       string // SAGE_API_KEY (Levanto)
 	KevBaseURL       string // KEV_BASE_URL
 	KevAPIKey        string // KEV_API_KEY
+}
+
+// LangfuseExtractionConfig names the Langfuse extraction project, distinct
+// from the project LANGFUSE_HOST, LANGFUSE_PUBLIC_KEY and LANGFUSE_SECRET_KEY
+// name for the repository's other Langfuse tooling.
+type LangfuseExtractionConfig struct {
+	Host      string // LANGFUSE_EXTRACTION_HOST
+	PublicKey string // LANGFUSE_EXTRACTION_PUBLIC_KEY
+	SecretKey string // LANGFUSE_EXTRACTION_SECRET_KEY
 }
 
 // SyncConfig holds external-sync housekeeping settings.
@@ -600,6 +612,11 @@ func Load() (*Config, error) {
 			SageAPIKey:       getEnv("SAGE_API_KEY", ""),
 			KevBaseURL:       getEnv("KEV_BASE_URL", ""),
 			KevAPIKey:        getEnv("KEV_API_KEY", ""),
+		},
+		LangfuseExtraction: LangfuseExtractionConfig{
+			Host:      getEnv("LANGFUSE_EXTRACTION_HOST", ""),
+			PublicKey: getEnv("LANGFUSE_EXTRACTION_PUBLIC_KEY", ""),
+			SecretKey: getEnv("LANGFUSE_EXTRACTION_SECRET_KEY", ""),
 		},
 		EventBus: EventBusConfig{
 			InteractionMode:        getEnv("EVENT_BUS_INTERACTION_MODE", EventBusInteractionModeCutover),

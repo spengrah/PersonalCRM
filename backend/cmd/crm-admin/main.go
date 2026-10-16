@@ -216,6 +216,18 @@
 //	                              content-free report (IDs, keys, outcome
 //	                              values, counts, rates).
 //
+//	--langfuse-export             Send the decision-model records made since
+//	                              the previous export to the Langfuse
+//	                              extraction project (LANGFUSE_EXTRACTION_HOST,
+//	                              LANGFUSE_EXTRACTION_PUBLIC_KEY,
+//	                              LANGFUSE_EXTRACTION_SECRET_KEY): each
+//	                              judgment, finished run, rerun's scorecard
+//	                              metrics and review, content-free and keyed by
+//	                              example ID, as one record however often it
+//	                              runs. The nightly langfuse_export_nightly job
+//	                              does the same. With a setting unset, sends
+//	                              nothing and says so. Prints counts only.
+//
 // The seed/reset subcommands inherit the process env (CRM_ENV / TIME_BASE /
 // TIME_ACCELERATION / DATABASE_URL / MIGRATIONS_PATH) — on the Pi via
 // `set -a; . /srv/personalcrm/.env; set +a` — so the seeded world's cadence /
@@ -258,12 +270,14 @@ import (
 	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/events"
 	"personal-crm/backend/internal/google"
+	"personal-crm/backend/internal/langfuseexport"
 	"personal-crm/backend/internal/messages"
 	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/scorecard"
 	"personal-crm/backend/internal/service"
 	"personal-crm/backend/internal/sync"
 	"personal-crm/backend/internal/synthetic"
+	"personal-crm/backend/internal/threadctx"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -419,8 +433,11 @@ type adminDeps struct {
 	// subcommands.
 	judgeMonth judgeMonthRunner
 	scorecard  scorecardReporter
-	stdout     io.Writer
-	stderr     io.Writer
+	// langfuseExport serves --langfuse-export. Built LAZILY (only when
+	// --langfuse-export is set). Nil for all other subcommands.
+	langfuseExport langfuseExporter
+	stdout         io.Writer
+	stderr         io.Writer
 }
 
 // runOptions captures parsed flags. Exposed as a struct so tests can
@@ -498,6 +515,8 @@ type runOptions struct {
 	// selector); compareMethod <- --compare-method.
 	scorecard     bool
 	compareMethod string
+	// langfuseExport <- --langfuse-export.
+	langfuseExport bool
 }
 
 // exitErr carries an explicit process exit code so a subcommand can drive a
@@ -683,6 +702,9 @@ func validateSubcommand(opts runOptions) error {
 	if opts.scorecard {
 		active++
 	}
+	if opts.langfuseExport {
+		active++
+	}
 	if active == 0 {
 		return errors.New("no subcommand specified; pass exactly one of " +
 			subcommandList)
@@ -706,7 +728,7 @@ const subcommandList = "--messages-rematch-stranded, --reconcile-address-book-me
 	"--migrate, --migrate-check, --list-jobs, --retry-job <id>, --migrate-tags, " +
 	"--migrate-contact-knowledge-columns, --river-tier0, --whatsapp-list-history, " +
 	"--whatsapp-requeue-history <uuid>, --judge-month YYYY-MM --method <key> [--measure], " +
-	"--scorecard [--method <key> [--compare-method <key>]]"
+	"--scorecard [--method <key> [--compare-method <key>]], --langfuse-export"
 
 // parseArgs uses a private FlagSet so tests can drive the parser
 // without polluting flag's global state.
@@ -832,6 +854,10 @@ func parseArgs(args []string) (runOptions, error) {
 	fs.StringVar(&opts.compareMethod, "compare-method", "",
 		"With --scorecard --method: a second method to compare, reporting the per-outcome difference and "+
 			"the examples that flipped.")
+	fs.BoolVar(&opts.langfuseExport, "langfuse-export", false,
+		"Send the decision-model records made since the previous export (judgments, finished runs, "+
+			"scorecard metrics, reviews) to the Langfuse extraction project, content-free; with its settings "+
+			"unset, send nothing and say so.")
 	if err := fs.Parse(args); err != nil {
 		return runOptions{}, err
 	}
@@ -960,6 +986,8 @@ func run(ctx context.Context, opts runOptions, deps adminDeps) error {
 		return runJudgeMonth(ctx, opts, deps)
 	case opts.scorecard:
 		return runScorecard(ctx, opts, deps)
+	case opts.langfuseExport:
+		return runLangfuseExport(ctx, deps)
 	case opts.migrate, opts.migrateCheck:
 		// Migration subcommands are dispatched PRE-DB in runMain (they need
 		// only the database URL + migrations path, not deps), so they never
@@ -1867,6 +1895,14 @@ func buildProductionDeps(ctx context.Context, cfg *config.Config, database *db.D
 		}
 		deps.judgeMonth = stack.runner
 		deps.scorecard = scorecard.New(stack.store, stack.runner, stack.methods, contactRepo, cfg.Watchdog)
+	}
+
+	// LAZY: build the export ONLY for --langfuse-export. It reads the store's
+	// export reads alone, so it needs no masker or method registry.
+	if opts.langfuseExport {
+		contexts := threadctx.NewBuilder(repository.NewThreadContentRepository(database.Queries), repository.NewVenueRepository(database.Queries))
+		store := buildJudgmentStore(cfg, database, assertService, contactRepo, riverClient, contexts)
+		deps.langfuseExport = langfuseexport.New(cfg.LangfuseExtraction, store, scorecard.NewReader(store))
 	}
 
 	cleanup := func() {}

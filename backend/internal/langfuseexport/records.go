@@ -1,0 +1,225 @@
+package langfuseexport
+
+import (
+	"cmp"
+	"crypto/sha256"
+	"encoding/hex"
+	"maps"
+	"slices"
+	"strconv"
+	"time"
+
+	"personal-crm/backend/internal/judgment"
+	"personal-crm/backend/internal/scorecard"
+)
+
+// Trace names, one per kind of record.
+const (
+	traceJudgment  = "judgment"
+	traceRun       = "judgment_run"
+	traceScorecard = "scorecard_run"
+	scoreVerdict   = "verdict"
+)
+
+// span is one trace's single root span: the unit the export sends over OTLP.
+type span struct {
+	traceID, spanID string
+	name            string
+	start, end      time.Time
+	// generation marks a judgment's call, which carries its model, usage and
+	// cost.
+	generation bool
+	model      string
+	usage      map[string]int
+	cost       map[string]float64
+	metadata   map[string]any
+	output     any
+}
+
+// score is one review, sent as a score on its judgment's trace.
+type score struct {
+	id, traceID string
+	at          time.Time
+	value       string
+	metadata    map[string]any
+}
+
+// judgmentKey is one judgment: a method version's answer for one example.
+type judgmentKey struct {
+	example judgment.ExampleID
+	method  judgment.MethodRef
+}
+
+func keyOf(example judgment.ExampleID, method judgment.MethodRef) judgmentKey {
+	return judgmentKey{example: example, method: method}
+}
+
+// ids are the judgment's trace and span; its reviews' scores name the trace.
+func (k judgmentKey) ids() (trace, span string) {
+	return ids(traceJudgment, string(k.example), k.method.Key, k.method.Version, k.method.WordingVersion)
+}
+
+// ids derives a trace ID (32 hex digits) and a span ID (16 hex digits) from
+// the parts naming one record, so every export sends a record under the same
+// IDs and Langfuse keeps one copy.
+func ids(parts ...string) (trace, span string) {
+	h := sha256.New()
+	for _, p := range parts {
+		h.Write([]byte(p))
+		h.Write([]byte{0})
+	}
+	sum := h.Sum(nil)
+	return hex.EncodeToString(sum[:16]), hex.EncodeToString(sum[16:24])
+}
+
+func methodMetadata(m judgment.MethodRef) map[string]any {
+	return map[string]any{"method_key": m.Key, "method_version": m.Version, "wording_version": m.WordingVersion}
+}
+
+// judgmentSpan is a judgment's call: timestamped at its execution time and
+// lasting its latency, with its cut-off as metadata, since Langfuse hides
+// observations far from their trace's date.
+func judgmentSpan(j judgment.JudgmentRecord) span {
+	trace, spanID := keyOf(j.Example, j.Method).ids()
+	s := span{
+		traceID: trace, spanID: spanID, name: traceJudgment,
+		start: j.JudgedAt, end: j.JudgedAt.Add(j.Usage.Latency),
+		generation: true, model: j.Method.Key,
+		metadata: methodMetadata(j.Method),
+		output:   questionsOf(j),
+	}
+	s.metadata["example_id"] = string(j.Example)
+	s.metadata["cut_off"] = j.CutOff.UTC().Format(time.RFC3339)
+	s.metadata["context_tokens"] = j.Usage.ContextTokens
+	s.metadata["question_count"] = j.Usage.Questions
+	s.metadata["latency_ms"] = j.Usage.Latency.Milliseconds()
+	// Decision models generate no text, so every billed token is input.
+	if j.Usage.BilledTokens != nil {
+		s.usage = map[string]int{"input": *j.Usage.BilledTokens}
+	}
+	if j.Usage.CostUSD != nil {
+		s.cost = map[string]float64{"total": *j.Usage.CostUSD}
+	}
+	return s
+}
+
+// question is one answered question as the export sends it.
+type question struct {
+	ID            string             `json:"id"`
+	Outcome       string             `json:"outcome,omitempty"`
+	Confidence    *float64           `json:"confidence,omitempty"`
+	Probabilities map[string]float64 `json:"probabilities"`
+}
+
+// questionsOf lists every answered question with its option probabilities
+// and, where the answer yields one, its outcome. A source-message question's
+// options are keyed by message keys, which are source identifiers, so its
+// probabilities are sent keyed by rank instead (candidate_1 the most
+// probable).
+func questionsOf(j judgment.JudgmentRecord) []question {
+	outcomes := map[string]judgment.QuestionOutcome{}
+	for _, o := range j.Outcomes {
+		outcomes[o.QuestionID] = o
+	}
+	sourceMessage := map[string]bool{}
+	for _, q := range j.Questions {
+		sourceMessage[judgment.SourceMessageQuestionID(q.ID)] = true
+	}
+	out := make([]question, len(j.Questions))
+	for i, q := range j.Questions {
+		out[i] = question{ID: q.ID, Probabilities: q.Probabilities}
+		if sourceMessage[q.ID] {
+			out[i].Probabilities = ranked(q.Probabilities)
+		}
+		if o, ok := outcomes[q.ID]; ok {
+			confidence := o.Confidence
+			out[i].Outcome, out[i].Confidence = o.Outcome, &confidence
+		}
+	}
+	return out
+}
+
+// ranked keys probabilities by rank, most probable first, ties in key order.
+func ranked(probabilities map[string]float64) map[string]float64 {
+	keys := slices.SortedFunc(maps.Keys(probabilities), func(a, b string) int {
+		return cmp.Or(cmp.Compare(probabilities[b], probabilities[a]), cmp.Compare(a, b))
+	})
+	out := make(map[string]float64, len(keys))
+	for i, k := range keys {
+		out["candidate_"+strconv.Itoa(i+1)] = probabilities[k]
+	}
+	return out
+}
+
+// runSpan is a finished run's summary, spanning the run.
+func runSpan(r judgment.RunRecord) span {
+	trace, spanID := ids(traceRun, r.Run.String())
+	incomplete := map[string]int{}
+	for reason, n := range r.Incomplete {
+		incomplete[string(reason)] = n
+	}
+	s := span{
+		traceID: trace, spanID: spanID, name: traceRun,
+		start: r.StartedAt, end: r.FinishedAt,
+		metadata: methodMetadata(r.Method),
+	}
+	s.metadata["run_id"] = r.Run.String()
+	s.metadata["kind"] = string(r.Kind)
+	s.metadata["judged"] = r.Judged
+	s.metadata["incomplete"] = incomplete
+	s.metadata["obligations_opened"] = r.Effects.ObligationsOpened
+	s.metadata["flags_raised"] = r.Effects.FlagsRaised
+	s.metadata["claims_raised"] = r.Effects.ClaimsRaised
+	if r.From != nil {
+		s.metadata["window_from"] = r.From.UTC().Format(time.RFC3339)
+	}
+	if r.To != nil {
+		s.metadata["window_to"] = r.To.UTC().Format(time.RFC3339)
+	}
+	if r.CostUSD != nil {
+		s.metadata["cost_usd"] = *r.CostUSD
+	}
+	return s
+}
+
+// outcomeMetrics is one outcome's scores as the export sends them.
+type outcomeMetrics struct {
+	Recall    float64                   `json:"recall"`
+	Precision float64                   `json:"precision"`
+	Confusion map[string]map[string]int `json:"confusion"`
+}
+
+// scorecardSpan is a finished rerun run's scorecard metrics, spanning the run.
+func scorecardSpan(r judgment.RunRecord, m scorecard.RunMetrics) span {
+	trace, spanID := ids(traceScorecard, r.Run.String())
+	perOutcome := make(map[string]outcomeMetrics, len(m.PerOutcome))
+	for key, o := range m.PerOutcome {
+		perOutcome[key] = outcomeMetrics{Recall: o.Recall, Precision: o.Precision, Confusion: o.Confusion}
+	}
+	s := span{
+		traceID: trace, spanID: spanID, name: traceScorecard,
+		start: r.StartedAt, end: r.FinishedAt,
+		metadata: methodMetadata(m.Method),
+		output:   perOutcome,
+	}
+	s.metadata["run_id"] = m.Run.String()
+	s.metadata["i_owe_missed"] = m.IOweMissed
+	s.metadata["corrections_caused"] = m.CorrectionsCaused
+	return s
+}
+
+// reviewScore is the user's verdict on one outcome of a judgment, a score on
+// that judgment's trace. Its ID names the judgment and the question, so a
+// later review of the same outcome replaces it.
+func reviewScore(r judgment.ReviewRecord) score {
+	id, _ := ids(scoreVerdict, string(r.Example), r.Method.Key, r.Method.Version, r.Method.WordingVersion, r.QuestionID)
+	metadata := methodMetadata(r.Method)
+	metadata["example_id"] = string(r.Example)
+	metadata["question_id"] = r.QuestionID
+	metadata["right_outcome"] = r.RightOutcome
+	trace, _ := keyOf(r.Example, r.Method).ids()
+	return score{
+		id: id, traceID: trace,
+		at: r.ReviewedAt, value: string(r.Verdict), metadata: metadata,
+	}
+}
