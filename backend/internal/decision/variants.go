@@ -2,7 +2,9 @@ package decision
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net/http"
 	"net/netip"
 	"net/url"
 
@@ -58,10 +60,19 @@ func NewLocalEndpoint(baseURL string) (LocalEndpoint, error) {
 // String returns the endpoint's base URL.
 func (e LocalEndpoint) String() string { return e.url }
 
+// errRedirected is a call to a local endpoint that answered with a redirect.
+var errRedirected = errors.New("local endpoint redirected the call")
+
+// client calls the endpoint and follows no redirect, since a redirect may
+// lead off the user's machines and the request body would be sent again there.
+func (e LocalEndpoint) client() *http.Client {
+	return &http.Client{Timeout: callTimeout, CheckRedirect: func(*http.Request, []*http.Request) error { return errRedirected }}
+}
+
 // NewUnmaskedMethod builds a method that sends requests unmasked to a local
 // System One server, the only route unmasked content may take.
 func NewUnmaskedMethod(def Definition, endpoint LocalEndpoint, apiKey, model string) Method {
-	client := newSystemOne(endpoint.url, apiKey, model, nil)
+	client := &systemOne{url: endpoint.url, apiKey: apiKey, model: model, http: endpoint.client()}
 	return newMethod(def, client.Route(), false, func(ctx context.Context, c threadctx.Context, questions []threadctx.Question) (prepared, error) {
 		wire := render(c.Kind, c.CutOff, c.Entries, questions)
 		return prepared{wire: wire, send: func(ctx context.Context) (Answers, error) { return client.post(ctx, wire) }}, nil

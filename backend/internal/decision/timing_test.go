@@ -29,6 +29,8 @@ func TestJudge_CommitmentDateFromTheMessage(t *testing.T) {
 		{"tomorrow", "I'll call you tomorrow", "tomorrow", day(2026, 1, 15)},
 		{"by the 17th", "I'll return the book by the 17th", "the 17th", day(2026, 1, 17)},
 		{"no expression", "I'll send you the recipe", "", nil},
+		{"this Wednesday in a Wednesday message", "I'll send the file by this Wednesday", "this Wednesday", day(2026, 1, 14)},
+		{"next Monday in a Wednesday message", "I'll send the file next Monday", "next Monday", day(2026, 1, 19)},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

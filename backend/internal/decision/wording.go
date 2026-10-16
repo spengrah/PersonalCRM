@@ -1,5 +1,7 @@
 package decision
 
+import "encoding/json"
+
 // Wording is the text of every question in the tree. In it, {party} is a
 // participant's role label; {debtor} and {creditor} are the roles of who made
 // a commitment and to whom; {message}, {expression} and {date} fill a
@@ -35,6 +37,20 @@ type OptionWording struct {
 	Key         string
 	Label       string
 	Description string
+}
+
+// clone copies the wording through the encoding its version digests, so the
+// copy shares no options with it, whatever fields the wording gains.
+func (w Wording) clone() Wording {
+	encoded, err := json.Marshal(w)
+	if err != nil {
+		panic(err) // plain structs of strings always encode
+	}
+	var out Wording
+	if err := json.Unmarshal(encoded, &out); err != nil {
+		panic(err)
+	}
+	return out
 }
 
 // Option keys the tree reads besides outcome values. A candidate question
@@ -100,7 +116,7 @@ var DefaultWording = Wording{
 // ReasonedWording is DefaultWording with reasons written into the
 // ball-in-court labels, one option per reason.
 var ReasonedWording = func() Wording {
-	w := DefaultWording
+	w := DefaultWording.clone()
 	w.BallInCourt = QuestionWording{
 		Instructions: DefaultWording.BallInCourt.Instructions,
 		Options: []OptionWording{

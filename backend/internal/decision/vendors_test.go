@@ -5,6 +5,12 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"personal-crm/backend/internal/decision"
+	"personal-crm/backend/internal/judgment"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // systemOneServer stands in for a System One vendor: it answers every noul
@@ -109,4 +115,24 @@ func writeJSON(t *testing.T, w http.ResponseWriter, v any) {
 	if err := json.NewEncoder(w).Encode(v); err != nil {
 		t.Error(err)
 	}
+}
+
+// An unmasked call follows no redirect: a local server, or a proxy in front
+// of it, redirecting the request elsewhere fails the call, and nothing reaches
+// the redirect's target.
+func TestUnmasked_RedirectIsNotFollowed(t *testing.T) {
+	reached := false
+	target := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { reached = true }))
+	t.Cleanup(target.Close)
+	local := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, target.URL+"/decide", http.StatusTemporaryRedirect)
+	}))
+	t.Cleanup(local.Close)
+
+	endpoint, err := decision.NewLocalEndpoint(local.URL)
+	require.NoError(t, err)
+	res, err := decision.NewUnmaskedMethod(definition(roomy), endpoint, "", "kev-latest").Judge(t.Context(), dm("I'll send the file on Friday"))
+	require.NoError(t, err)
+	assert.Equal(t, decision.Incomplete{Reason: judgment.IncompleteReasonCallFailed}, res)
+	assert.False(t, reached, "the request did not follow the redirect")
 }

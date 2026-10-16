@@ -171,6 +171,7 @@ func dateOptions(entries []threadctx.Entry, label string) []threadctx.Option {
 func (t tree) answer(byQuestion map[string]Answer) ([]judgment.AnsweredQuestion, judgment.Outcomes, error) {
 	answered := make([]judgment.AnsweredQuestion, len(t.questions))
 	probs := make(map[string]map[string]float64, len(t.questions))
+	choices := make(map[string]string, len(t.questions))
 	for i, q := range t.questions {
 		a, ok := byQuestion[q.ID]
 		if !ok {
@@ -189,18 +190,20 @@ func (t tree) answer(byQuestion map[string]Answer) ([]judgment.AnsweredQuestion,
 		if _, ok := p[chosen]; !ok {
 			chosen = ""
 		}
+		choices[q.ID] = chosen
 		answered[i] = judgment.AnsweredQuestion{ID: q.ID, Probabilities: p, OriginalAnswer: chosen}
 		if keys, ok := t.messages[q.ID]; ok {
 			answered[i] = rekey(answered[i], keys)
 		}
 	}
 
+	outcome := func(id string) (string, float64) { return decide(t.options(id), probs[id], choices[id]) }
 	var out judgment.Outcomes
 	notConversation := 0
 	for _, p := range t.parties {
 		if t.kind == threadctx.KindConversation {
 			id := ballInCourtID(p.role)
-			value, confidence := best(t.options(id), probs[id])
+			value, confidence := outcome(id)
 			out.BallInCourt = append(out.BallInCourt, judgment.ParticipantOutcome[judgment.BallInCourt]{
 				QuestionID: id, ContactID: p.contact, Outcome: judgment.BallInCourt(value), Confidence: confidence,
 			})
@@ -211,16 +214,16 @@ func (t tree) answer(byQuestion map[string]Answer) ([]judgment.AnsweredQuestion,
 		}
 		for _, d := range directions {
 			id := commitmentID(d, p.role)
-			value, confidence := best(t.options(id), probs[id])
+			value, confidence := outcome(id)
 			c := judgment.CommitmentOutcome{QuestionID: id, ContactID: p.contact, Direction: d, Outcome: judgment.CommitmentState(value), Confidence: confidence}
 			if c.Outcome == judgment.CommitmentStateOpen {
-				c.DueDate = dueDate(best(t.options(dateID(id)), probs[dateID(id)]))
+				c.DueDate = dueDate(outcome(dateID(id)))
 			}
 			out.Commitments = append(out.Commitments, c)
 		}
 	}
 	if len(t.parties) == 0 || notConversation < len(t.parties) {
-		value, confidence := best(t.options(bigMomentID), probs[bigMomentID])
+		value, confidence := outcome(bigMomentID)
 		out.BigMoment = judgment.Scored[judgment.BigMoment]{QuestionID: bigMomentID, Outcome: judgment.BigMoment(value), Confidence: confidence}
 	}
 	return answered, out, nil
@@ -231,10 +234,12 @@ func (t tree) options(id string) []threadctx.Option {
 	return t.questions[i].Options
 }
 
-// best returns the most probable outcome and its probability. Options keyed
-// "<outcome>.<reason>" are one outcome, their probabilities summed; ties go
-// to the earlier option.
-func best(options []threadctx.Option, p map[string]float64) (string, float64) {
+// decide returns the outcome an answer gives and its probability. Options
+// keyed "<outcome>.<reason>" are one outcome, their probabilities summed. The
+// outcome is the option the model chose; where it chose none, or chose a
+// reason, which splits an outcome rather than naming one, it is the most
+// probable outcome, ties going to the earlier option.
+func decide(options []threadctx.Option, p map[string]float64, chosen string) (string, float64) {
 	var order []string
 	sums := map[string]float64{}
 	for _, o := range options {
@@ -243,6 +248,9 @@ func best(options []threadctx.Option, p map[string]float64) (string, float64) {
 			order = append(order, outcome)
 		}
 		sums[outcome] += p[o.Key]
+	}
+	if _, _, reasoned := strings.Cut(chosen, "."); chosen != "" && !reasoned {
+		return chosen, min(sums[chosen], 1)
 	}
 	winner := slices.MaxFunc(order, func(a, b string) int { return cmp.Compare(sums[a], sums[b]) })
 	return winner, min(sums[winner], 1)

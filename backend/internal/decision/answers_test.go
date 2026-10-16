@@ -61,6 +61,29 @@ func TestJudge_AnswersBecomeOutcomes(t *testing.T) {
 		assert.InDelta(t, 0.9, answered(j, "commitment_theirs/THEM/date").Probabilities["2026-01-16"], 1e-9, "the date answer is kept as answered")
 	})
 
+	t.Run("an explicit answer less probable than another option", func(t *testing.T) {
+		f := &fake{answer: func(q threadctx.Question) decision.Answer {
+			switch q.ID {
+			case "commitment_theirs/THEM":
+				return decision.Answer{Probabilities: map[string]float64{"open": 0.35, "none": 0.65}, Chosen: "open"}
+			case "commitment_theirs/THEM/date":
+				a := pick(q, 0.3, key("2026-01-16"))
+				a.Probabilities["unknown"], a.Probabilities["unlisted"] = 0.7, 0
+				return a
+			default:
+				return plain(q)
+			}
+		}}
+		res, err := newMethod(definition(roomy), f).Judge(t.Context(), dm("I'll send the photos on Friday"))
+		require.NoError(t, err)
+		j := judged(t, res)
+		theirs := commitment(t, j, judgment.CommitmentDirectionTheirs)
+		assert.Equal(t, judgment.CommitmentStateOpen, theirs.Outcome, "the chosen option, not the most probable")
+		assert.InDelta(t, 0.35, theirs.Confidence, 1e-9)
+		assert.Equal(t, day(2026, 1, 16), theirs.DueDate, "the chosen date, not the most probable option")
+		assert.Equal(t, "open", answered(j, "commitment_theirs/THEM").OriginalAnswer)
+	})
+
 	t.Run("per-participant answers on a not_applicable thread", func(t *testing.T) {
 		f := &fake{answer: func(q threadctx.Question) decision.Answer {
 			switch {

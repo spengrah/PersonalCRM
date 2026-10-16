@@ -1,6 +1,7 @@
 package decision_test
 
 import (
+	"slices"
 	"testing"
 	"time"
 
@@ -73,6 +74,21 @@ func TestJudge_JudgmentCarriesItsUsage(t *testing.T) {
 		c := decision.NewMaskedMethod(reworded, masker, decision.NewSystemOneAdapter("https://one.example.test/v1/systemone", "", "vendor-1")).Ref()
 		assert.NotEqual(t, a.WordingVersion, c.WordingVersion, "a wording change changes the wording version")
 		assert.NotEqual(t, a.Version, c.Version)
+	})
+
+	t.Run("a definition changed after its method is built", func(t *testing.T) {
+		def := definition(roomy)
+		def.Wording.BallInCourt.Options = slices.Clone(def.Wording.BallInCourt.Options)
+		f := &fake{answer: plain}
+		m := newMethod(def, f)
+		ref := m.Ref()
+		def.Wording.BallInCourt.Options[0].Description = "reworded"
+		_, err := m.Judge(t.Context(), dm("see you friday?"))
+		require.NoError(t, err)
+		bic := f.requests[0].Questions()[0]
+		require.Equal(t, "ball_in_court/THEM", bic.ID)
+		assert.NotContains(t, bic.Options[0].Description, "reworded", "the method sends the wording its version derives from")
+		assert.Equal(t, ref, m.Ref())
 	})
 
 	t.Run("a group thread with two matched contacts", func(t *testing.T) {

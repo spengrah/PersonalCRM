@@ -17,18 +17,20 @@ func sageMethod(url string) decision.Method {
 }
 
 // Every option of every question carries a probability in a sage-masked
-// judgment; a yes/no answer of null, Sage's "not sure", keeps its
-// probabilities and records no original answer, so the most probable option
-// is the chosen one.
+// judgment; a yes/no answer is the outcome whatever its probability, and an
+// answer of null, Sage's "not sure", keeps its probabilities and records no
+// original answer, so the most probable option is the chosen one.
 func TestSage_EveryOptionHasAProbability(t *testing.T) {
 	yes := "yes"
 	cases := []struct {
-		name     string
-		answer   *string
-		original string
+		name       string
+		answer     *string
+		original   string
+		outcome    judgment.CommitmentState
+		confidence float64
 	}{
-		{"a yes/no answer with a probability", &yes, "open"},
-		{"a yes/no answer of null", nil, ""},
+		{"a yes/no answer with a probability", &yes, "open", judgment.CommitmentStateOpen, 0.35},
+		{"a yes/no answer of null", nil, "", judgment.CommitmentStateNone, 0.65},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -39,8 +41,8 @@ func TestSage_EveryOptionHasAProbability(t *testing.T) {
 			assert.Equal(t, map[string]float64{"open": 0.35, "none": 0.65}, q.Probabilities)
 			assert.Equal(t, tc.original, q.OriginalAnswer)
 			theirs := commitment(t, j, judgment.CommitmentDirectionTheirs)
-			assert.Equal(t, judgment.CommitmentStateNone, theirs.Outcome, "the most probable option")
-			assert.InDelta(t, 0.65, theirs.Confidence, 1e-9)
+			assert.Equal(t, tc.outcome, theirs.Outcome)
+			assert.InDelta(t, tc.confidence, theirs.Confidence, 1e-9)
 		})
 	}
 

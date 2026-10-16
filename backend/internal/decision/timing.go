@@ -20,22 +20,26 @@ type found struct {
 const monthPattern = `(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)`
 
 // timingRules are the date and timing expressions the search knows: weekday
-// names; today, tonight and tomorrow; this or next week and weekend; month and
-// day; numeric calendar dates; "the 17th"; "in N days" or weeks. Each resolves
-// against the local calendar date the message was sent on.
+// names, where "this" names the next such day, the sent date included, and
+// "next" that day in the following week; today, tonight and tomorrow; this or
+// next week and weekend; month and day; numeric calendar dates; "the 17th";
+// "in N days" or weeks. Each resolves against the local calendar date the
+// message was sent on.
 var timingRules = []struct {
 	pattern *regexp.Regexp
 	resolve func(m []string, sent time.Time) (time.Time, bool)
 }{
 	{regexp.MustCompile(`(?i)\b(?:(next|this)\s+)?(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b`), func(m []string, sent time.Time) (time.Time, bool) {
-		days := (weekdays[strings.ToLower(m[2])] - int(sent.Weekday()) + 7) % 7
-		if days == 0 {
-			days = 7
+		weekday := weekdays[strings.ToLower(m[2])]
+		ahead := (weekday - int(sent.Weekday()) + 7) % 7 // to the next such day, today included
+		switch {
+		case strings.EqualFold(m[1], "next"): // that day in the week after the sent date's
+			return nextMonday(sent).AddDate(0, 0, (weekday+6)%7), true
+		case strings.EqualFold(m[1], "this"), ahead > 0:
+			return sent.AddDate(0, 0, ahead), true
+		default: // a bare weekday names the next such day after the sent date
+			return sent.AddDate(0, 0, 7), true
 		}
-		if strings.EqualFold(m[1], "next") {
-			days += 7
-		}
-		return sent.AddDate(0, 0, days), true
 	}},
 	{regexp.MustCompile(`(?i)\b(today|tonight|tomorrow)\b`), func(m []string, sent time.Time) (time.Time, bool) {
 		if strings.EqualFold(m[1], "tomorrow") {
@@ -44,19 +48,17 @@ var timingRules = []struct {
 		return sent, true
 	}},
 	{regexp.MustCompile(`(?i)\b(this|next)\s+(week|weekend)\b`), func(m []string, sent time.Time) (time.Time, bool) {
-		monday := (int(sent.Weekday()) + 6) % 7 // days since Monday
+		monday := sinceMonday(sent)
 		next := strings.EqualFold(m[1], "next")
 		switch {
 		case strings.EqualFold(m[2], "week") && next: // Monday of next week
-			return sent.AddDate(0, 0, 7-monday), true
+			return nextMonday(sent), true
 		case strings.EqualFold(m[2], "week"): // this week's Friday, or today once past it
 			return sent.AddDate(0, 0, max(4-monday, 0)), true
-		default: // the weekend's Saturday, or today on its Sunday
-			saturday := sent.AddDate(0, 0, max(5-monday, 0))
-			if next {
-				saturday = saturday.AddDate(0, 0, 7)
-			}
-			return saturday, true
+		case next: // next week's Saturday
+			return nextMonday(sent).AddDate(0, 0, 5), true
+		default: // this weekend's Saturday, or today on its Sunday
+			return sent.AddDate(0, 0, max(5-monday, 0)), true
 		}
 	}},
 	{regexp.MustCompile(`(?i)\b` + monthPattern + `\.?\s+(\d{1,2})(?:st|nd|rd|th)?\b(?:,?\s+(\d{4})\b)?`), func(m []string, sent time.Time) (time.Time, bool) {
@@ -96,6 +98,12 @@ var timingRules = []struct {
 		return sent.AddDate(0, 0, n), true
 	}},
 }
+
+// Weeks start on Monday: sinceMonday counts the days since the sent date's
+// Monday, and nextMonday is the Monday of the following week.
+func sinceMonday(sent time.Time) int { return (int(sent.Weekday()) + 6) % 7 }
+
+func nextMonday(sent time.Time) time.Time { return sent.AddDate(0, 0, 7-sinceMonday(sent)) }
 
 var weekdays = map[string]int{"sunday": 0, "monday": 1, "tuesday": 2, "wednesday": 3, "thursday": 4, "friday": 5, "saturday": 6}
 

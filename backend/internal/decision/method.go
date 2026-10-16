@@ -83,7 +83,11 @@ type prepared struct {
 	send func(ctx context.Context) (Answers, error)
 }
 
+// newMethod builds a method on its own copy of the wording, so the wording
+// its version derives from is the wording it sends, whatever the caller later
+// does with the definition.
 func newMethod(def Definition, r Route, masked bool, prepare func(context.Context, threadctx.Context, []threadctx.Question) (prepared, error)) *method {
+	def.Wording = def.Wording.clone()
 	return &method{def: def, ref: def.ref(r, masked), prepare: prepare}
 }
 
