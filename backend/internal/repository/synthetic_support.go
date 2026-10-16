@@ -1377,3 +1377,35 @@ func (r *SyntheticSupportRepository) InsertAvailableRematchJobForContact(ctx con
 		RematchJobID: uuid.New().String(),
 	})
 }
+
+// DeleteJudgmentsForThreads hard-deletes the judgments of the given threads:
+// their outcomes' assertions and nodes, appearances, examples and incomplete
+// reports, the assertions on the threads' venue nodes, and each run left
+// holding nothing. It runs before the venue nodes are deleted, which these rows
+// reference.
+func (r *SyntheticSupportRepository) DeleteJudgmentsForThreads(ctx context.Context, threadIDs []uuid.UUID) (int64, error) {
+	if len(threadIDs) == 0 {
+		return 0, nil
+	}
+	runs, err := r.queries.SyntheticListJudgmentRunsForThreads(ctx, threadIDs)
+	if err != nil {
+		return 0, fmt.Errorf("list judgment runs: %w", err)
+	}
+	var total int64
+	for _, del := range []func(context.Context, []uuid.UUID) (int64, error){
+		r.queries.SyntheticDeleteJudgmentAssertionsForThreads,
+		r.queries.SyntheticDeleteJudgmentAppearancesForThreads,
+		r.queries.SyntheticDeleteJudgmentOutcomeNodesForThreads,
+		r.queries.SyntheticDeleteJudgmentsForThreads,
+		r.queries.SyntheticDeleteJudgmentExamplesForThreads,
+		r.queries.SyntheticDeleteJudgmentIncompleteForThreads,
+	} {
+		n, err := del(ctx, threadIDs)
+		total += n
+		if err != nil {
+			return total, err
+		}
+	}
+	n, err := r.queries.SyntheticDeleteEmptyJudgmentRuns(ctx, runs)
+	return total + n, err
+}

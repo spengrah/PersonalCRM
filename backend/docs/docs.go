@@ -3788,6 +3788,87 @@ const docTemplate = `{
                 }
             }
         },
+        "/interactions": {
+            "get": {
+                "description": "Every interaction across contacts, newest first: one row per interaction, naming each participant contact. Filters combine. run_id keeps the rows of threads with a judgment appearing in the run, and each row's proposals to those judgments. Each row carries the proposals of the thread judgments whose latest content it holds, compiled into the answers the user reviews.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "interactions"
+                ],
+                "summary": "List all interactions",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "default": 1,
+                        "description": "Page number",
+                        "name": "page",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "default": 20,
+                        "description": "Items per page",
+                        "name": "limit",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "format": "uuid",
+                        "description": "Participant contact ID",
+                        "name": "contact_id",
+                        "in": "query"
+                    },
+                    {
+                        "enum": [
+                            "message",
+                            "email",
+                            "calendar",
+                            "call",
+                            "other"
+                        ],
+                        "type": "string",
+                        "description": "Interaction type",
+                        "name": "type",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "format": "uuid",
+                        "description": "Judgment run ID",
+                        "name": "run_id",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/api.APIResponse"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/handlers.AllInteractionsResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/api.APIResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/interactions/merge": {
             "post": {
                 "description": "Declares the listed interactions one interaction for every attendee. Answers with contact_id's resulting participation.",
@@ -3904,6 +3985,54 @@ const docTemplate = `{
                 }
             }
         },
+        "/interactions/threads/{thread_id}/content": {
+            "get": {
+                "description": "The thread's messages, oldest first, each once however many per-contact copies hold it: the content its judgments read up to their cut-offs, and the content after them. A meeting's notes are its row's content and are not listed.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "interactions"
+                ],
+                "summary": "Get a judged thread's content",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "format": "uuid",
+                        "description": "Thread (venue) ID",
+                        "name": "thread_id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/api.APIResponse"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/handlers.BenchThreadContentResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/api.APIResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/interactions/{id}/participants": {
             "get": {
                 "description": "Lists the contacts with an effective participation in the interaction that holds the id (its merged interaction when the id was merged away), ordered by name: the contacts a removal can name.",
@@ -3999,6 +4128,158 @@ const docTemplate = `{
                     },
                     "404": {
                         "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/api.APIResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/judgment-outcomes/{id}/review": {
+            "post": {
+                "description": "Records the right outcome the user states for an outcome of any state and returns the outcome with the verdict the server derives: confirmed when it equals the judged outcome, rejected when it differs and has no effect, corrected otherwise. Reviewing an applied or claim outcome gives the thread the right outcome's effect. keep_current_date, with an open commitment's right outcome, keeps the obligation's current date against the judged later one, and the verdict is corrected.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "judgments"
+                ],
+                "summary": "Review a judgment outcome",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "format": "uuid",
+                        "description": "Outcome ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "The right outcome",
+                        "name": "review",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ReviewJudgmentOutcomeRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/api.APIResponse"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/handlers.JudgmentOutcomeResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/api.APIResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/api.APIResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/judgment-runs": {
+            "get": {
+                "description": "Every run with its kind, method, window, judged count (reused judgments included) and the threads it reported incomplete.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "judgments"
+                ],
+                "summary": "List judgment runs",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/api.APIResponse"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/handlers.JudgmentRunsResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    }
+                }
+            }
+        },
+        "/judgments": {
+            "get": {
+                "description": "Judgments of a thread, a run or both, each with every run it appears in and each outcome's state and review. At least one of thread_id and run_id is required.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "judgments"
+                ],
+                "summary": "List judgments",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "format": "uuid",
+                        "description": "Thread (venue) ID",
+                        "name": "thread_id",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "format": "uuid",
+                        "description": "Run ID",
+                        "name": "run_id",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/api.APIResponse"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/handlers.JudgmentsResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
                         "schema": {
                             "$ref": "#/definitions/api.APIResponse"
                         }
@@ -4812,6 +5093,109 @@ const docTemplate = `{
                                     }
                                 }
                             ]
+                        }
+                    }
+                }
+            }
+        },
+        "/test/judgment-obligations": {
+            "get": {
+                "description": "Every obligation on the thread of thread_interaction_id, open or closed, oldest first. Test-only (CRM_ENV=testing).",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "test"
+                ],
+                "summary": "List a thread's obligations",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "format": "uuid",
+                        "description": "An interaction of the thread",
+                        "name": "thread_interaction_id",
+                        "in": "query",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/api.APIResponse"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "type": "array",
+                                            "items": {
+                                                "$ref": "#/definitions/handlers.SeededObligationResponse"
+                                            }
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/api.APIResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/test/judgment-runs": {
+            "post": {
+                "description": "Record a decision-model run, its judgments and its incomplete threads through the judgment store. Test-only (CRM_ENV=testing).",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "test"
+                ],
+                "summary": "Seed a judgment run",
+                "parameters": [
+                    {
+                        "description": "The run",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/handlers.SeedJudgmentRunRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/api.APIResponse"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/handlers.SeedJudgmentRunResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/api.APIResponse"
                         }
                     }
                 }
@@ -5988,6 +6372,227 @@ const docTemplate = `{
                 }
             }
         },
+        "handlers.AllInteractionItemResponse": {
+            "type": "object",
+            "properties": {
+                "context_contact_id": {
+                    "type": "string"
+                },
+                "item": {
+                    "$ref": "#/definitions/handlers.InteractionListItemResponse"
+                },
+                "participants": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/handlers.InteractionParticipantResponse"
+                    }
+                },
+                "preview": {
+                    "$ref": "#/definitions/handlers.InteractionPreviewResponse"
+                },
+                "proposals": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/handlers.BenchProposalResponse"
+                    }
+                },
+                "to_review": {
+                    "type": "integer"
+                }
+            }
+        },
+        "handlers.AllInteractionsResponse": {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/handlers.AllInteractionItemResponse"
+                    }
+                },
+                "type_options": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/handlers.InteractionTypeOptionResponse"
+                    }
+                }
+            }
+        },
+        "handlers.BenchActResponse": {
+            "type": "object",
+            "properties": {
+                "act": {
+                    "type": "string"
+                },
+                "keep_current_date": {
+                    "type": "boolean"
+                },
+                "right_outcome": {
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.BenchAdditionResponse": {
+            "type": "object",
+            "properties": {
+                "contact": {
+                    "$ref": "#/definitions/handlers.BenchPartyResponse"
+                },
+                "debtor": {
+                    "type": "string"
+                },
+                "list": {
+                    "type": "string"
+                },
+                "outcome_id": {
+                    "type": "string"
+                },
+                "right_outcome": {
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.BenchItemChangeResponse": {
+            "type": "object",
+            "properties": {
+                "confidence": {
+                    "type": "number"
+                },
+                "due_date": {
+                    "type": "string"
+                },
+                "kind": {
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.BenchItemResponse": {
+            "type": "object",
+            "properties": {
+                "acts": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/handlers.BenchActResponse"
+                    }
+                },
+                "change": {
+                    "$ref": "#/definitions/handlers.BenchItemChangeResponse"
+                },
+                "confidence": {
+                    "type": "number"
+                },
+                "contact": {
+                    "$ref": "#/definitions/handlers.BenchPartyResponse"
+                },
+                "debtor": {
+                    "type": "string"
+                },
+                "due_date": {
+                    "type": "string"
+                },
+                "list": {
+                    "type": "string"
+                },
+                "mark": {
+                    "type": "string"
+                },
+                "outcome_id": {
+                    "type": "string"
+                },
+                "source": {
+                    "$ref": "#/definitions/handlers.BenchSourceMessageResponse"
+                },
+                "state": {
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.BenchPartyResponse": {
+            "type": "object",
+            "properties": {
+                "contact_id": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.BenchProposalResponse": {
+            "type": "object",
+            "properties": {
+                "additions": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/handlers.BenchAdditionResponse"
+                    }
+                },
+                "context_kind": {
+                    "type": "string"
+                },
+                "cut_off": {
+                    "type": "string"
+                },
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/handlers.BenchItemResponse"
+                    }
+                },
+                "judgment_id": {
+                    "type": "string"
+                },
+                "method_key": {
+                    "type": "string"
+                },
+                "method_version": {
+                    "type": "string"
+                },
+                "production": {
+                    "type": "boolean"
+                },
+                "reply_lists": {
+                    "type": "boolean"
+                },
+                "reused_at": {
+                    "type": "string"
+                },
+                "thread_id": {
+                    "type": "string"
+                },
+                "to_review": {
+                    "type": "integer"
+                }
+            }
+        },
+        "handlers.BenchSourceMessageResponse": {
+            "type": "object",
+            "properties": {
+                "content_ref": {
+                    "type": "string"
+                },
+                "sender": {
+                    "type": "string"
+                },
+                "sent_at": {
+                    "type": "string"
+                },
+                "text": {
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.BenchThreadContentResponse": {
+            "type": "object",
+            "properties": {
+                "messages": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/handlers.ContentMessageResponse"
+                    }
+                }
+            }
+        },
         "handlers.CalendarEventResponse": {
             "type": "object",
             "properties": {
@@ -6701,6 +7306,26 @@ const docTemplate = `{
                 }
             }
         },
+        "handlers.IncompleteThreadResponse": {
+            "type": "object",
+            "properties": {
+                "cut_off": {
+                    "type": "string"
+                },
+                "reason": {
+                    "type": "string"
+                },
+                "thread_id": {
+                    "type": "string"
+                },
+                "title": {
+                    "type": "string"
+                },
+                "venue_kind": {
+                    "type": "string"
+                }
+            }
+        },
         "handlers.InteractionListItemResponse": {
             "type": "object",
             "properties": {
@@ -6803,6 +7428,20 @@ const docTemplate = `{
                 }
             }
         },
+        "handlers.InteractionPreviewResponse": {
+            "type": "object",
+            "properties": {
+                "note": {
+                    "type": "boolean"
+                },
+                "sender": {
+                    "type": "string"
+                },
+                "text": {
+                    "type": "string"
+                }
+            }
+        },
         "handlers.InteractionRemovalRequest": {
             "type": "object",
             "properties": {
@@ -6854,6 +7493,166 @@ const docTemplate = `{
                 },
                 "source_ref": {
                     "type": "string"
+                }
+            }
+        },
+        "handlers.InteractionTypeOptionResponse": {
+            "type": "object",
+            "properties": {
+                "key": {
+                    "type": "string"
+                },
+                "label": {
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.JudgmentOutcomeResponse": {
+            "type": "object",
+            "properties": {
+                "confidence": {
+                    "type": "number"
+                },
+                "contact_id": {
+                    "type": "string"
+                },
+                "due_date": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "outcome": {
+                    "type": "string"
+                },
+                "question": {
+                    "type": "string"
+                },
+                "review": {
+                    "$ref": "#/definitions/handlers.JudgmentOutcomeReviewResponse"
+                },
+                "state": {
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.JudgmentOutcomeReviewResponse": {
+            "type": "object",
+            "properties": {
+                "reviewed_at": {
+                    "type": "string"
+                },
+                "right_outcome": {
+                    "type": "string"
+                },
+                "verdict": {
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.JudgmentResponse": {
+            "type": "object",
+            "properties": {
+                "context_kind": {
+                    "type": "string"
+                },
+                "cut_off": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "method_key": {
+                    "type": "string"
+                },
+                "method_version": {
+                    "type": "string"
+                },
+                "outcomes": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/handlers.JudgmentOutcomeResponse"
+                    }
+                },
+                "runs": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/handlers.JudgmentRunAppearanceResponse"
+                    }
+                },
+                "thread_id": {
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.JudgmentRunAppearanceResponse": {
+            "type": "object",
+            "properties": {
+                "cut_off": {
+                    "type": "string"
+                },
+                "run_id": {
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.JudgmentRunResponse": {
+            "type": "object",
+            "properties": {
+                "finished_at": {
+                    "type": "string"
+                },
+                "from": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "incomplete": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/handlers.IncompleteThreadResponse"
+                    }
+                },
+                "judged_count": {
+                    "type": "integer"
+                },
+                "kind": {
+                    "type": "string"
+                },
+                "method_key": {
+                    "type": "string"
+                },
+                "method_version": {
+                    "type": "string"
+                },
+                "started_at": {
+                    "type": "string"
+                },
+                "to": {
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.JudgmentRunsResponse": {
+            "type": "object",
+            "properties": {
+                "runs": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/handlers.JudgmentRunResponse"
+                    }
+                }
+            }
+        },
+        "handlers.JudgmentsResponse": {
+            "type": "object",
+            "properties": {
+                "judgments": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/handlers.JudgmentResponse"
+                    }
                 }
             }
         },
@@ -7304,6 +8103,20 @@ const docTemplate = `{
                 }
             }
         },
+        "handlers.ReviewJudgmentOutcomeRequest": {
+            "type": "object",
+            "required": [
+                "right_outcome"
+            ],
+            "properties": {
+                "keep_current_date": {
+                    "type": "boolean"
+                },
+                "right_outcome": {
+                    "type": "string"
+                }
+            }
+        },
         "handlers.SaveNoteRequest": {
             "type": "object",
             "properties": {
@@ -7369,6 +8182,166 @@ const docTemplate = `{
                 }
             }
         },
+        "handlers.SeedIncompleteRequest": {
+            "type": "object",
+            "required": [
+                "cut_off",
+                "reason",
+                "thread_interaction_id"
+            ],
+            "properties": {
+                "cut_off": {
+                    "type": "string"
+                },
+                "reason": {
+                    "type": "string"
+                },
+                "thread_interaction_id": {
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.SeedJudgmentRequest": {
+            "type": "object",
+            "required": [
+                "context_kind",
+                "cut_off",
+                "thread_interaction_id"
+            ],
+            "properties": {
+                "ball_in_court": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/handlers.SeedOutcomeRequest"
+                    }
+                },
+                "big_moment": {
+                    "$ref": "#/definitions/handlers.SeedOutcomeRequest"
+                },
+                "commitments": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/handlers.SeedOutcomeRequest"
+                    }
+                },
+                "context_kind": {
+                    "type": "string"
+                },
+                "cut_off": {
+                    "type": "string"
+                },
+                "input_hash": {
+                    "type": "string"
+                },
+                "questions": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/handlers.SeedQuestionRequest"
+                    }
+                },
+                "thread_interaction_id": {
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.SeedJudgmentRunRequest": {
+            "type": "object",
+            "required": [
+                "kind",
+                "method_key",
+                "method_version"
+            ],
+            "properties": {
+                "from": {
+                    "type": "string"
+                },
+                "incomplete": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/handlers.SeedIncompleteRequest"
+                    }
+                },
+                "judgments": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/handlers.SeedJudgmentRequest"
+                    }
+                },
+                "kind": {
+                    "type": "string"
+                },
+                "method_key": {
+                    "type": "string"
+                },
+                "method_version": {
+                    "type": "string"
+                },
+                "to": {
+                    "type": "string"
+                },
+                "unfinished": {
+                    "type": "boolean"
+                },
+                "wording_version": {
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.SeedJudgmentRunResponse": {
+            "type": "object",
+            "properties": {
+                "run_id": {
+                    "type": "string"
+                },
+                "threads": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
+        "handlers.SeedOutcomeRequest": {
+            "type": "object",
+            "properties": {
+                "confidence": {
+                    "type": "number"
+                },
+                "contact_id": {
+                    "type": "string"
+                },
+                "direction": {
+                    "type": "string"
+                },
+                "due_date": {
+                    "type": "string"
+                },
+                "outcome": {
+                    "type": "string"
+                },
+                "question_id": {
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.SeedQuestionRequest": {
+            "type": "object",
+            "properties": {
+                "id": {
+                    "type": "string"
+                },
+                "original_answer": {
+                    "type": "string"
+                },
+                "probabilities": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "number",
+                        "format": "float64"
+                    }
+                }
+            }
+        },
         "handlers.SeededEntityResponse": {
             "type": "object",
             "properties": {
@@ -7380,6 +8353,29 @@ const docTemplate = `{
                 },
                 "name": {
                     "type": "string"
+                }
+            }
+        },
+        "handlers.SeededObligationResponse": {
+            "type": "object",
+            "properties": {
+                "basis": {
+                    "type": "string"
+                },
+                "contact_id": {
+                    "type": "string"
+                },
+                "debtor": {
+                    "type": "string"
+                },
+                "due_date": {
+                    "type": "string"
+                },
+                "kind": {
+                    "type": "string"
+                },
+                "open": {
+                    "type": "boolean"
                 }
             }
         },

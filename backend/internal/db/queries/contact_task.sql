@@ -361,3 +361,83 @@ SELECT COUNT(*) FROM river_job
 WHERE kind = 'todoist_task_op'
   AND (args->>'contact_task_id') = sqlc.arg('contact_task_id')::text
   AND (args->>'op') = sqlc.arg('op')::text;
+
+-- name: CreateObligationTask :one
+-- Inserts an obligation's one task (lifecycle 'obligation'); the partial unique
+-- index idx_contact_task_obligation_open refuses a second open obligation for
+-- the same thread and owing party.
+INSERT INTO contact_task (
+    contact_id, provider, kind, lifecycle, external_task_id, state, metadata,
+    obligation_thread_id, obligation_debtor, obligation_basis, obligation_cut_off
+) VALUES (
+    sqlc.arg('contact_id'), sqlc.arg('provider'), sqlc.arg('kind'), 'obligation', '',
+    sqlc.arg('state'), sqlc.arg('metadata')::jsonb,
+    sqlc.arg('obligation_thread_id'), sqlc.arg('obligation_debtor'),
+    sqlc.arg('obligation_basis'), sqlc.arg('obligation_cut_off')
+) RETURNING *;
+
+-- name: ListObligationTasksByThread :many
+-- Every obligation task on a thread, open or closed, oldest first.
+SELECT * FROM contact_task
+WHERE lifecycle = 'obligation'
+  AND obligation_thread_id = sqlc.arg('thread_id')
+ORDER BY created_at, id;
+
+-- name: ListOpenReplyObligationsForContact :many
+-- The open reply obligations on the threads a contact takes part in: the
+-- contact's own interactions name the thread, or the contact holds the task.
+SELECT * FROM contact_task ct
+WHERE ct.lifecycle = 'obligation'
+  AND ct.obligation_basis = 'reply'
+  AND ct.state IN ('managed', 'pending_remote_create')
+  AND (ct.contact_id = sqlc.arg('contact_id')
+       OR ct.obligation_thread_id IN (
+           SELECT i.venue_id FROM interaction i
+           WHERE i.contact_id = sqlc.arg('contact_id')
+             AND i.venue_id IS NOT NULL
+             AND i.deleted_at IS NULL))
+ORDER BY ct.created_at, ct.id;
+
+-- name: ListObligationMergeCollisions :many
+-- Merge-time pairs of open obligations a participant owes on one thread, one
+-- held by the source and one by the target: idx_contact_task_obligation_open
+-- refuses repointing the source's while the target's is open.
+SELECT sqlc.embed(src), sqlc.embed(tgt)
+FROM contact_task src
+JOIN contact_task tgt
+  ON tgt.obligation_thread_id = src.obligation_thread_id
+ AND tgt.contact_id = sqlc.arg(target_contact_id)
+ AND tgt.lifecycle = 'obligation'
+ AND tgt.obligation_debtor = 'contact'
+ AND tgt.state IN ('managed', 'pending_remote_create')
+WHERE src.contact_id = sqlc.arg(source_contact_id)
+  AND src.lifecycle = 'obligation'
+  AND src.obligation_debtor = 'contact'
+  AND src.state IN ('managed', 'pending_remote_create')
+ORDER BY src.created_at, src.id;
+
+-- name: SetObligationBasis :exec
+-- Sets an obligation task's basis; a commitment supersedes a reply.
+UPDATE contact_task
+SET obligation_basis = sqlc.arg(basis),
+    updated_at = NOW()
+WHERE id = sqlc.arg(id)
+  AND lifecycle = 'obligation';
+
+-- name: SetObligationContinuedBy :exec
+-- Names the task that continues a closed obligation task's obligation.
+UPDATE contact_task
+SET obligation_continued_by = sqlc.arg(continued_by),
+    updated_at = NOW()
+WHERE id = sqlc.arg(id)
+  AND lifecycle = 'obligation';
+
+-- name: RepointObligationContactTasksToContact :exec
+-- Merge-time repoint of the source contact's obligation tasks to the target,
+-- all states, after ListObligationMergeCollisions' pairs are resolved: a user's
+-- obligation is keyed by its thread alone, so moving it collides with nothing.
+UPDATE contact_task
+SET contact_id = sqlc.arg(target_contact_id),
+    updated_at = NOW()
+WHERE contact_id = sqlc.arg(source_contact_id)
+  AND lifecycle = 'obligation';

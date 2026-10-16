@@ -585,6 +585,12 @@ TRUNCATE TABLE
     interaction,
     interaction_node,
     job_exec_sample,
+    judgment,
+    judgment_appearance,
+    judgment_example,
+    judgment_incomplete,
+    judgment_outcome,
+    judgment_run,
     mac_host,
     mac_host_pairing_token,
     meeting_note,
@@ -1691,6 +1697,21 @@ func (q *Queries) SyntheticDeleteContactsByIds(ctx context.Context, contactIds [
 	return result.RowsAffected(), nil
 }
 
+const SyntheticDeleteEmptyJudgmentRuns = `-- name: SyntheticDeleteEmptyJudgmentRuns :execrows
+DELETE FROM judgment_run r
+WHERE r.id = ANY($1::uuid[])
+  AND NOT EXISTS (SELECT 1 FROM judgment_appearance a WHERE a.run_id = r.id)
+  AND NOT EXISTS (SELECT 1 FROM judgment_incomplete i WHERE i.run_id = r.id)
+`
+
+func (q *Queries) SyntheticDeleteEmptyJudgmentRuns(ctx context.Context, runIds []uuid.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, SyntheticDeleteEmptyJudgmentRuns, runIds)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const SyntheticDeleteEntityTypesByKeyPrefix = `-- name: SyntheticDeleteEntityTypesByKeyPrefix :execrows
 DELETE FROM entity_type WHERE key LIKE $1 || '%'
 `
@@ -1844,6 +1865,97 @@ DELETE FROM interaction WHERE id = ANY($1::uuid[])
 // Cleanup step 2: interactions by tracked id.
 func (q *Queries) SyntheticDeleteInteractionsByIds(ctx context.Context, interactionIds []uuid.UUID) (int64, error) {
 	result, err := q.db.Exec(ctx, SyntheticDeleteInteractionsByIds, interactionIds)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const SyntheticDeleteJudgmentAppearancesForThreads = `-- name: SyntheticDeleteJudgmentAppearancesForThreads :execrows
+DELETE FROM judgment_appearance
+WHERE judgment_id IN (
+    SELECT j.id FROM judgment j
+    JOIN judgment_example e ON e.id = j.example_id
+    WHERE e.thread_id = ANY($1::uuid[]))
+`
+
+func (q *Queries) SyntheticDeleteJudgmentAppearancesForThreads(ctx context.Context, threadIds []uuid.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, SyntheticDeleteJudgmentAppearancesForThreads, threadIds)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const SyntheticDeleteJudgmentAssertionsForThreads = `-- name: SyntheticDeleteJudgmentAssertionsForThreads :execrows
+DELETE FROM assertion
+WHERE subject_node_id = ANY($1::uuid[])
+   OR object_node_id = ANY($1::uuid[])
+   OR subject_node_id IN (
+      SELECT o.node_id FROM judgment_outcome o
+      JOIN judgment j ON j.id = o.judgment_id
+      JOIN judgment_example e ON e.id = j.example_id
+      WHERE e.thread_id = ANY($1::uuid[]))
+`
+
+func (q *Queries) SyntheticDeleteJudgmentAssertionsForThreads(ctx context.Context, threadIds []uuid.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, SyntheticDeleteJudgmentAssertionsForThreads, threadIds)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const SyntheticDeleteJudgmentExamplesForThreads = `-- name: SyntheticDeleteJudgmentExamplesForThreads :execrows
+DELETE FROM judgment_example WHERE thread_id = ANY($1::uuid[])
+`
+
+func (q *Queries) SyntheticDeleteJudgmentExamplesForThreads(ctx context.Context, threadIds []uuid.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, SyntheticDeleteJudgmentExamplesForThreads, threadIds)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const SyntheticDeleteJudgmentIncompleteForThreads = `-- name: SyntheticDeleteJudgmentIncompleteForThreads :execrows
+DELETE FROM judgment_incomplete WHERE thread_id = ANY($1::uuid[])
+`
+
+func (q *Queries) SyntheticDeleteJudgmentIncompleteForThreads(ctx context.Context, threadIds []uuid.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, SyntheticDeleteJudgmentIncompleteForThreads, threadIds)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const SyntheticDeleteJudgmentOutcomeNodesForThreads = `-- name: SyntheticDeleteJudgmentOutcomeNodesForThreads :execrows
+DELETE FROM node
+WHERE type = 'judgment_outcome'
+  AND id IN (
+      SELECT o.node_id FROM judgment_outcome o
+      JOIN judgment j ON j.id = o.judgment_id
+      JOIN judgment_example e ON e.id = j.example_id
+      WHERE e.thread_id = ANY($1::uuid[]))
+`
+
+// The outcome subtype rows cascade from their nodes.
+func (q *Queries) SyntheticDeleteJudgmentOutcomeNodesForThreads(ctx context.Context, threadIds []uuid.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, SyntheticDeleteJudgmentOutcomeNodesForThreads, threadIds)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const SyntheticDeleteJudgmentsForThreads = `-- name: SyntheticDeleteJudgmentsForThreads :execrows
+DELETE FROM judgment
+WHERE example_id IN (SELECT id FROM judgment_example WHERE thread_id = ANY($1::uuid[]))
+`
+
+func (q *Queries) SyntheticDeleteJudgmentsForThreads(ctx context.Context, threadIds []uuid.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, SyntheticDeleteJudgmentsForThreads, threadIds)
 	if err != nil {
 		return 0, err
 	}
@@ -2291,6 +2403,43 @@ func (q *Queries) SyntheticListEventIdsForContacts(ctx context.Context, contactI
 			return nil, err
 		}
 		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const SyntheticListJudgmentRunsForThreads = `-- name: SyntheticListJudgmentRunsForThreads :many
+
+SELECT DISTINCT a.run_id
+FROM judgment_appearance a
+JOIN judgment j ON j.id = a.judgment_id
+JOIN judgment_example e ON e.id = j.example_id
+WHERE e.thread_id = ANY($1::uuid[])
+UNION
+SELECT DISTINCT run_id FROM judgment_incomplete WHERE thread_id = ANY($1::uuid[])
+`
+
+// Cleanup of the judgments of a namespace's threads (the bench's browser
+// tests record them through the judgment store). judgment_example and
+// judgment_incomplete reference the thread's venue node, the judgment's
+// outcome nodes carry its assertions, and a big-moment flag is an assertion
+// on the venue node, so all of it goes before the venue nodes. A run left
+// holding nothing of any thread is deleted with them.
+func (q *Queries) SyntheticListJudgmentRunsForThreads(ctx context.Context, threadIds []uuid.UUID) ([]uuid.UUID, error) {
+	rows, err := q.db.Query(ctx, SyntheticListJudgmentRunsForThreads, threadIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []uuid.UUID{}
+	for rows.Next() {
+		var run_id uuid.UUID
+		if err := rows.Scan(&run_id); err != nil {
+			return nil, err
+		}
+		items = append(items, run_id)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err

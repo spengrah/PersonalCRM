@@ -544,7 +544,7 @@ func (p *CadenceSyncProvider) processItem(
 			return p.handleFollowUpDismissal(ctx, item, task, contact)
 		case contacttask.LifecycleCadenceDue:
 			return p.handleSkipTrigger(ctx, item, task, contact, settings, accountID)
-		case contacttask.LifecycleManual:
+		case contacttask.LifecycleManual, contacttask.LifecycleObligation:
 			return p.handleManualDismissal(ctx, task)
 		default:
 			logger.Warn().
@@ -946,11 +946,12 @@ func (p *CadenceSyncProvider) handleFollowUpDismissal(
 }
 
 // handleManualDismissal transitions a manual-lifecycle task (kind in
-// reach_out / send / reminder) to state='dismissed' when the user
-// removes/deletes/unlabels it in Todoist. No interaction row, no event,
-// no successor task. This differs from the legacy action-row dismissal
-// (which transitions to 'unmanaged' to preserve historical behavior for
-// pre-046 ad-hoc tasks).
+// reach_out / send / reminder) or an obligation task to state='dismissed'
+// when the user removes/deletes/unlabels it in Todoist. No interaction row,
+// no event, no successor task. An obligation is open exactly while its task
+// is live, so dismissing the task closes the obligation. This differs from
+// the legacy action-row dismissal (which transitions to 'unmanaged' to
+// preserve historical behavior for pre-046 ad-hoc tasks).
 //
 // No ItemClose is enqueued — the dismissal trigger is "user deleted /
 // unlabelled / removed deadline in Todoist", so there is nothing to

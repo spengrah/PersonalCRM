@@ -619,6 +619,8 @@ func runEntity(
 		return runCalendarEvent(ctx, h, p, st)
 	case *messageInteractionPlan:
 		return runMessageInteraction(ctx, h, p, st)
+	case *groupChatPlan:
+		return runGroupChat(ctx, h, p, st)
 	case *phoneCallInteractionPlan:
 		return runPhoneCallInteraction(ctx, h, p, st)
 	case *loggedInteractionPlan:

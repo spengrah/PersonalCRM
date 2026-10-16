@@ -1033,6 +1033,12 @@ TRUNCATE TABLE
     interaction,
     interaction_node,
     job_exec_sample,
+    judgment,
+    judgment_appearance,
+    judgment_example,
+    judgment_incomplete,
+    judgment_outcome,
+    judgment_run,
     mac_host,
     mac_host_pairing_token,
     meeting_note,
@@ -1679,3 +1685,62 @@ SELECT id, contact_id, source, source_ref, occurred_at, description, created_at,
 FROM interaction
 WHERE contact_id = sqlc.arg('contact_id')
 ORDER BY id;
+
+-- Cleanup of the judgments of a namespace's threads (the bench's browser
+-- tests record them through the judgment store). judgment_example and
+-- judgment_incomplete reference the thread's venue node, the judgment's
+-- outcome nodes carry its assertions, and a big-moment flag is an assertion
+-- on the venue node, so all of it goes before the venue nodes. A run left
+-- holding nothing of any thread is deleted with them.
+
+-- name: SyntheticListJudgmentRunsForThreads :many
+SELECT DISTINCT a.run_id
+FROM judgment_appearance a
+JOIN judgment j ON j.id = a.judgment_id
+JOIN judgment_example e ON e.id = j.example_id
+WHERE e.thread_id = ANY(@thread_ids::uuid[])
+UNION
+SELECT DISTINCT run_id FROM judgment_incomplete WHERE thread_id = ANY(@thread_ids::uuid[]);
+
+-- name: SyntheticDeleteJudgmentAssertionsForThreads :execrows
+DELETE FROM assertion
+WHERE subject_node_id = ANY(@thread_ids::uuid[])
+   OR object_node_id = ANY(@thread_ids::uuid[])
+   OR subject_node_id IN (
+      SELECT o.node_id FROM judgment_outcome o
+      JOIN judgment j ON j.id = o.judgment_id
+      JOIN judgment_example e ON e.id = j.example_id
+      WHERE e.thread_id = ANY(@thread_ids::uuid[]));
+
+-- name: SyntheticDeleteJudgmentAppearancesForThreads :execrows
+DELETE FROM judgment_appearance
+WHERE judgment_id IN (
+    SELECT j.id FROM judgment j
+    JOIN judgment_example e ON e.id = j.example_id
+    WHERE e.thread_id = ANY(@thread_ids::uuid[]));
+
+-- name: SyntheticDeleteJudgmentOutcomeNodesForThreads :execrows
+-- The outcome subtype rows cascade from their nodes.
+DELETE FROM node
+WHERE type = 'judgment_outcome'
+  AND id IN (
+      SELECT o.node_id FROM judgment_outcome o
+      JOIN judgment j ON j.id = o.judgment_id
+      JOIN judgment_example e ON e.id = j.example_id
+      WHERE e.thread_id = ANY(@thread_ids::uuid[]));
+
+-- name: SyntheticDeleteJudgmentsForThreads :execrows
+DELETE FROM judgment
+WHERE example_id IN (SELECT id FROM judgment_example WHERE thread_id = ANY(@thread_ids::uuid[]));
+
+-- name: SyntheticDeleteJudgmentExamplesForThreads :execrows
+DELETE FROM judgment_example WHERE thread_id = ANY(@thread_ids::uuid[]);
+
+-- name: SyntheticDeleteJudgmentIncompleteForThreads :execrows
+DELETE FROM judgment_incomplete WHERE thread_id = ANY(@thread_ids::uuid[]);
+
+-- name: SyntheticDeleteEmptyJudgmentRuns :execrows
+DELETE FROM judgment_run r
+WHERE r.id = ANY(@run_ids::uuid[])
+  AND NOT EXISTS (SELECT 1 FROM judgment_appearance a WHERE a.run_id = r.id)
+  AND NOT EXISTS (SELECT 1 FROM judgment_incomplete i WHERE i.run_id = r.id);

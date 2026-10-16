@@ -37,4 +37,7 @@ const (
 	LifecycleCadenceDue = "cadence_due"
 	// LifecycleFollowUpLoop: FollowUpManager consumer creates after outbound interaction.
 	LifecycleFollowUpLoop = "followup_loop"
+	// LifecycleObligation identifies the one task that keeps a judgment
+	// obligation open.
+	LifecycleObligation = "obligation"
 )

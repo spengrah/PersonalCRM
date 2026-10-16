@@ -202,17 +202,22 @@ type ContactTag struct {
 }
 
 type ContactTask struct {
-	ID             uuid.UUID  `json:"id"`
-	ContactID      uuid.UUID  `json:"contact_id"`
-	Provider       string     `json:"provider"`
-	Kind           string     `json:"kind"`
-	ExternalTaskID string     `json:"external_task_id"`
-	State          string     `json:"state"`
-	Metadata       []byte     `json:"metadata"`
-	CreatedAt      *time.Time `json:"created_at"`
-	UpdatedAt      *time.Time `json:"updated_at"`
-	IdempotencyKey *string    `json:"idempotency_key"`
-	Lifecycle      string     `json:"lifecycle"`
+	ID                    uuid.UUID  `json:"id"`
+	ContactID             uuid.UUID  `json:"contact_id"`
+	Provider              string     `json:"provider"`
+	Kind                  string     `json:"kind"`
+	ExternalTaskID        string     `json:"external_task_id"`
+	State                 string     `json:"state"`
+	Metadata              []byte     `json:"metadata"`
+	CreatedAt             *time.Time `json:"created_at"`
+	UpdatedAt             *time.Time `json:"updated_at"`
+	IdempotencyKey        *string    `json:"idempotency_key"`
+	Lifecycle             string     `json:"lifecycle"`
+	ObligationThreadID    *uuid.UUID `json:"obligation_thread_id"`
+	ObligationDebtor      *string    `json:"obligation_debtor"`
+	ObligationBasis       *string    `json:"obligation_basis"`
+	ObligationCutOff      *time.Time `json:"obligation_cut_off"`
+	ObligationContinuedBy *uuid.UUID `json:"obligation_continued_by"`
 }
 
 type EffectiveParticipation struct {
@@ -394,6 +399,72 @@ type JobExecSample struct {
 	CreatedAt   time.Time `json:"created_at"`
 }
 
+type Judgment struct {
+	ID             uuid.UUID `json:"id"`
+	MethodKey      string    `json:"method_key"`
+	MethodVersion  string    `json:"method_version"`
+	WordingVersion string    `json:"wording_version"`
+	ExampleID      string    `json:"example_id"`
+	ContextKind    string    `json:"context_kind"`
+	CutOff         time.Time `json:"cut_off"`
+	JudgedAt       time.Time `json:"judged_at"`
+	ContextTokens  int32     `json:"context_tokens"`
+	QuestionCount  int32     `json:"question_count"`
+	BilledTokens   *int32    `json:"billed_tokens"`
+	CostUsd        *float64  `json:"cost_usd"`
+	LatencyNs      int64     `json:"latency_ns"`
+	Questions      []byte    `json:"questions"`
+	CreatedAt      time.Time `json:"created_at"`
+}
+
+type JudgmentAppearance struct {
+	RunID             uuid.UUID `json:"run_id"`
+	JudgmentID        uuid.UUID `json:"judgment_id"`
+	CutOff            time.Time `json:"cut_off"`
+	Fresh             bool      `json:"fresh"`
+	ObligationsOpened int32     `json:"obligations_opened"`
+	FlagsRaised       int32     `json:"flags_raised"`
+	ClaimsRaised      int32     `json:"claims_raised"`
+	CreatedAt         time.Time `json:"created_at"`
+}
+
+type JudgmentExample struct {
+	ID        string    `json:"id"`
+	ThreadID  uuid.UUID `json:"thread_id"`
+	InputHash string    `json:"input_hash"`
+}
+
+type JudgmentIncomplete struct {
+	RunID     uuid.UUID `json:"run_id"`
+	ThreadID  uuid.UUID `json:"thread_id"`
+	CutOff    time.Time `json:"cut_off"`
+	Reason    string    `json:"reason"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+type JudgmentOutcome struct {
+	NodeID           uuid.UUID  `json:"node_id"`
+	JudgmentID       uuid.UUID  `json:"judgment_id"`
+	Question         string     `json:"question"`
+	QuestionID       *string    `json:"question_id"`
+	ContactID        *uuid.UUID `json:"contact_id"`
+	DueDate          *time.Time `json:"due_date"`
+	Confidence       *float64   `json:"confidence"`
+	ObligationTaskID *uuid.UUID `json:"obligation_task_id"`
+}
+
+type JudgmentRun struct {
+	ID             uuid.UUID  `json:"id"`
+	Kind           string     `json:"kind"`
+	MethodKey      string     `json:"method_key"`
+	MethodVersion  string     `json:"method_version"`
+	WordingVersion string     `json:"wording_version"`
+	WindowFrom     *time.Time `json:"window_from"`
+	WindowTo       *time.Time `json:"window_to"`
+	StartedAt      time.Time  `json:"started_at"`
+	FinishedAt     *time.Time `json:"finished_at"`
+}
+
 type LiveContact struct {
 	ID                      uuid.UUID  `json:"id"`
 	FullName                string     `json:"full_name"`
@@ -572,26 +643,28 @@ type PhoneCall struct {
 }
 
 type Predicate struct {
-	Key                 string          `json:"key"`
-	Kind                string          `json:"kind"`
-	SubjectType         string          `json:"subject_type"`
-	ObjectType          *string         `json:"object_type"`
-	ValueType           *string         `json:"value_type"`
-	Cardinality         string          `json:"cardinality"`
-	Symmetric           bool            `json:"symmetric"`
-	InversePredicate    *string         `json:"inverse_predicate"`
-	TemporalProfile     string          `json:"temporal_profile"`
-	BaseRateDays        *int32          `json:"base_rate_days"`
-	TypicalDurationDays *int32          `json:"typical_duration_days"`
-	DefaultSalience     int16           `json:"default_salience"`
-	DefaultReviewPolicy string          `json:"default_review_policy"`
-	PropositionBucket   string          `json:"proposition_bucket"`
-	Status              string          `json:"status"`
-	Description         string          `json:"description"`
-	Synonyms            []string        `json:"synonyms"`
-	Embedding           pgvector.Vector `json:"embedding"`
-	CreatedAt           time.Time       `json:"created_at"`
-	Correction          bool            `json:"correction"`
+	Key                         string          `json:"key"`
+	Kind                        string          `json:"kind"`
+	SubjectType                 string          `json:"subject_type"`
+	ObjectType                  *string         `json:"object_type"`
+	ValueType                   *string         `json:"value_type"`
+	Cardinality                 string          `json:"cardinality"`
+	Symmetric                   bool            `json:"symmetric"`
+	InversePredicate            *string         `json:"inverse_predicate"`
+	TemporalProfile             string          `json:"temporal_profile"`
+	BaseRateDays                *int32          `json:"base_rate_days"`
+	TypicalDurationDays         *int32          `json:"typical_duration_days"`
+	DefaultSalience             int16           `json:"default_salience"`
+	DefaultReviewPolicy         string          `json:"default_review_policy"`
+	PropositionBucket           string          `json:"proposition_bucket"`
+	Status                      string          `json:"status"`
+	Description                 string          `json:"description"`
+	Synonyms                    []string        `json:"synonyms"`
+	Embedding                   pgvector.Vector `json:"embedding"`
+	CreatedAt                   time.Time       `json:"created_at"`
+	Correction                  bool            `json:"correction"`
+	Judgment                    bool            `json:"judgment"`
+	JudgmentConfidenceThreshold pgtype.Int2     `json:"judgment_confidence_threshold"`
 }
 
 type RelationshipSignal struct {
@@ -728,6 +801,21 @@ type TelegramUpdateState struct {
 	Seq       int32      `json:"seq"`
 	Date      int32      `json:"date"`
 	UpdatedAt *time.Time `json:"updated_at"`
+}
+
+type ThreadContent struct {
+	VenueID       uuid.UUID  `json:"venue_id"`
+	VenueKind     string     `json:"venue_kind"`
+	MessageKey    string     `json:"message_key"`
+	SentAt        time.Time  `json:"sent_at"`
+	FromUser      bool       `json:"from_user"`
+	PeerKey       string     `json:"peer_key"`
+	PeerContactID *uuid.UUID `json:"peer_contact_id"`
+	PeerAliases   []string   `json:"peer_aliases"`
+	UserAliases   []string   `json:"user_aliases"`
+	Body          string     `json:"body"`
+	Headers       []byte     `json:"headers"`
+	ObservationID *uuid.UUID `json:"observation_id"`
 }
 
 type Venue struct {

@@ -628,6 +628,12 @@ func runLadder(
 	step("external_contacts", func() (int64, error) {
 		return support.DeleteTelegramCandidatesInPeerBand(ctx, gen.PeerBandStart(), gen.PeerBandEnd())
 	})
+	// The judgments of the namespace's threads reference its venue nodes, and a
+	// judgment's outcomes reference its contacts, whose delete would cascade the
+	// outcome rows away from the nodes and assertions this step finds them by.
+	step("judgments", func() (int64, error) {
+		return support.DeleteJudgmentsForThreads(ctx, venueIDs)
+	})
 	step("contact_tasks", func() (int64, error) {
 		return support.DeleteContactTasksByContactIds(ctx, contactIDs)
 	})

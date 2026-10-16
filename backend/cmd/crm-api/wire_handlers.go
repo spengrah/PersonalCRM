@@ -5,6 +5,7 @@ import (
 	"personal-crm/backend/internal/config"
 	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/events"
+	"personal-crm/backend/internal/judgment"
 	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/service"
 )
@@ -17,13 +18,14 @@ type coreHandlers struct {
 	Interaction       *handlers.InteractionHandler
 	Correction        *handlers.InteractionCorrectionHandler
 	TimelineAssertion *handlers.TimelineAssertionHandler
+	Bench             *handlers.BenchHandler
 	System            *handlers.SystemHandler
 	Rematch           *handlers.RematchHandler
 	ContactMethod     *handlers.ContactMethodHandler
 }
 
 // buildCoreHandlers constructs the contact / note / interaction / interaction
-// correction / system / rematch handlers. manualHandler is nil in interaction-mode off (the
+// correction / bench / system / rematch handlers. manualHandler is nil in interaction-mode off (the
 // InteractionHandler tolerates a nil manual handler exactly as today).
 func buildCoreHandlers(
 	database *db.Database,
@@ -35,6 +37,7 @@ func buildCoreHandlers(
 	manualHandler *service.ManualInteractionHandler,
 	eventBus *events.Bus,
 	consumers eventConsumers,
+	judgments *judgment.Store,
 ) coreHandlers {
 	contactRepo := core.Contact
 	interactionRepo := core.Interaction
@@ -75,6 +78,7 @@ func buildCoreHandlers(
 		Interaction:       handlers.NewInteractionHandler(manualHandler, contentService),
 		Correction:        handlers.NewInteractionCorrectionHandler(correctionService),
 		TimelineAssertion: handlers.NewTimelineAssertionHandler(service.NewTimelineAssertionService(contentService, graph.GraphAssertion)),
+		Bench:             handlers.NewBenchHandler(judgment.NewBench(judgments, contentService)),
 		System:            handlers.NewSystemHandler(contactRepo, cfg.Runtime),
 		Rematch:           handlers.NewRematchHandler(rematchService, contactService),
 		ContactMethod:     handlers.NewContactMethodHandler(contactMethodService),

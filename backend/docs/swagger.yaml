@@ -53,6 +53,150 @@ definitions:
       total:
         type: integer
     type: object
+  handlers.AllInteractionItemResponse:
+    properties:
+      context_contact_id:
+        type: string
+      item:
+        $ref: '#/definitions/handlers.InteractionListItemResponse'
+      participants:
+        items:
+          $ref: '#/definitions/handlers.InteractionParticipantResponse'
+        type: array
+      preview:
+        $ref: '#/definitions/handlers.InteractionPreviewResponse'
+      proposals:
+        items:
+          $ref: '#/definitions/handlers.BenchProposalResponse'
+        type: array
+      to_review:
+        type: integer
+    type: object
+  handlers.AllInteractionsResponse:
+    properties:
+      items:
+        items:
+          $ref: '#/definitions/handlers.AllInteractionItemResponse'
+        type: array
+      type_options:
+        items:
+          $ref: '#/definitions/handlers.InteractionTypeOptionResponse'
+        type: array
+    type: object
+  handlers.BenchActResponse:
+    properties:
+      act:
+        type: string
+      keep_current_date:
+        type: boolean
+      right_outcome:
+        type: string
+    type: object
+  handlers.BenchAdditionResponse:
+    properties:
+      contact:
+        $ref: '#/definitions/handlers.BenchPartyResponse'
+      debtor:
+        type: string
+      list:
+        type: string
+      outcome_id:
+        type: string
+      right_outcome:
+        type: string
+    type: object
+  handlers.BenchItemChangeResponse:
+    properties:
+      confidence:
+        type: number
+      due_date:
+        type: string
+      kind:
+        type: string
+    type: object
+  handlers.BenchItemResponse:
+    properties:
+      acts:
+        items:
+          $ref: '#/definitions/handlers.BenchActResponse'
+        type: array
+      change:
+        $ref: '#/definitions/handlers.BenchItemChangeResponse'
+      confidence:
+        type: number
+      contact:
+        $ref: '#/definitions/handlers.BenchPartyResponse'
+      debtor:
+        type: string
+      due_date:
+        type: string
+      list:
+        type: string
+      mark:
+        type: string
+      outcome_id:
+        type: string
+      source:
+        $ref: '#/definitions/handlers.BenchSourceMessageResponse'
+      state:
+        type: string
+    type: object
+  handlers.BenchPartyResponse:
+    properties:
+      contact_id:
+        type: string
+      name:
+        type: string
+    type: object
+  handlers.BenchProposalResponse:
+    properties:
+      additions:
+        items:
+          $ref: '#/definitions/handlers.BenchAdditionResponse'
+        type: array
+      context_kind:
+        type: string
+      cut_off:
+        type: string
+      items:
+        items:
+          $ref: '#/definitions/handlers.BenchItemResponse'
+        type: array
+      judgment_id:
+        type: string
+      method_key:
+        type: string
+      method_version:
+        type: string
+      production:
+        type: boolean
+      reply_lists:
+        type: boolean
+      reused_at:
+        type: string
+      thread_id:
+        type: string
+      to_review:
+        type: integer
+    type: object
+  handlers.BenchSourceMessageResponse:
+    properties:
+      content_ref:
+        type: string
+      sender:
+        type: string
+      sent_at:
+        type: string
+      text:
+        type: string
+    type: object
+  handlers.BenchThreadContentResponse:
+    properties:
+      messages:
+        items:
+          $ref: '#/definitions/handlers.ContentMessageResponse'
+        type: array
+    type: object
   handlers.CalendarEventResponse:
     properties:
       attendee_count:
@@ -573,6 +717,19 @@ definitions:
           $ref: '#/definitions/handlers.SelectedMethodInput'
         type: array
     type: object
+  handlers.IncompleteThreadResponse:
+    properties:
+      cut_off:
+        type: string
+      reason:
+        type: string
+      thread_id:
+        type: string
+      title:
+        type: string
+      venue_kind:
+        type: string
+    type: object
   handlers.InteractionListItemResponse:
     properties:
       cadence_inert:
@@ -639,6 +796,15 @@ definitions:
       occurred_at:
         type: string
     type: object
+  handlers.InteractionPreviewResponse:
+    properties:
+      note:
+        type: boolean
+      sender:
+        type: string
+      text:
+        type: string
+    type: object
   handlers.InteractionRemovalRequest:
     properties:
       reason:
@@ -673,6 +839,110 @@ definitions:
         type: string
       source_ref:
         type: string
+    type: object
+  handlers.InteractionTypeOptionResponse:
+    properties:
+      key:
+        type: string
+      label:
+        type: string
+    type: object
+  handlers.JudgmentOutcomeResponse:
+    properties:
+      confidence:
+        type: number
+      contact_id:
+        type: string
+      due_date:
+        type: string
+      id:
+        type: string
+      outcome:
+        type: string
+      question:
+        type: string
+      review:
+        $ref: '#/definitions/handlers.JudgmentOutcomeReviewResponse'
+      state:
+        type: string
+    type: object
+  handlers.JudgmentOutcomeReviewResponse:
+    properties:
+      reviewed_at:
+        type: string
+      right_outcome:
+        type: string
+      verdict:
+        type: string
+    type: object
+  handlers.JudgmentResponse:
+    properties:
+      context_kind:
+        type: string
+      cut_off:
+        type: string
+      id:
+        type: string
+      method_key:
+        type: string
+      method_version:
+        type: string
+      outcomes:
+        items:
+          $ref: '#/definitions/handlers.JudgmentOutcomeResponse'
+        type: array
+      runs:
+        items:
+          $ref: '#/definitions/handlers.JudgmentRunAppearanceResponse'
+        type: array
+      thread_id:
+        type: string
+    type: object
+  handlers.JudgmentRunAppearanceResponse:
+    properties:
+      cut_off:
+        type: string
+      run_id:
+        type: string
+    type: object
+  handlers.JudgmentRunResponse:
+    properties:
+      finished_at:
+        type: string
+      from:
+        type: string
+      id:
+        type: string
+      incomplete:
+        items:
+          $ref: '#/definitions/handlers.IncompleteThreadResponse'
+        type: array
+      judged_count:
+        type: integer
+      kind:
+        type: string
+      method_key:
+        type: string
+      method_version:
+        type: string
+      started_at:
+        type: string
+      to:
+        type: string
+    type: object
+  handlers.JudgmentRunsResponse:
+    properties:
+      runs:
+        items:
+          $ref: '#/definitions/handlers.JudgmentRunResponse'
+        type: array
+    type: object
+  handlers.JudgmentsResponse:
+    properties:
+      judgments:
+        items:
+          $ref: '#/definitions/handlers.JudgmentResponse'
+        type: array
     type: object
   handlers.LinkContactResponse:
     properties:
@@ -1009,6 +1279,15 @@ definitions:
       resolved_count:
         type: integer
     type: object
+  handlers.ReviewJudgmentOutcomeRequest:
+    properties:
+      keep_current_date:
+        type: boolean
+      right_outcome:
+        type: string
+    required:
+    - right_outcome
+    type: object
   handlers.SaveNoteRequest:
     properties:
       body:
@@ -1062,6 +1341,113 @@ definitions:
           caller never asked for. Assertions must key off this, never the request.
         type: string
     type: object
+  handlers.SeedIncompleteRequest:
+    properties:
+      cut_off:
+        type: string
+      reason:
+        type: string
+      thread_interaction_id:
+        type: string
+    required:
+    - cut_off
+    - reason
+    - thread_interaction_id
+    type: object
+  handlers.SeedJudgmentRequest:
+    properties:
+      ball_in_court:
+        items:
+          $ref: '#/definitions/handlers.SeedOutcomeRequest'
+        type: array
+      big_moment:
+        $ref: '#/definitions/handlers.SeedOutcomeRequest'
+      commitments:
+        items:
+          $ref: '#/definitions/handlers.SeedOutcomeRequest'
+        type: array
+      context_kind:
+        type: string
+      cut_off:
+        type: string
+      input_hash:
+        type: string
+      questions:
+        items:
+          $ref: '#/definitions/handlers.SeedQuestionRequest'
+        type: array
+      thread_interaction_id:
+        type: string
+    required:
+    - context_kind
+    - cut_off
+    - thread_interaction_id
+    type: object
+  handlers.SeedJudgmentRunRequest:
+    properties:
+      from:
+        type: string
+      incomplete:
+        items:
+          $ref: '#/definitions/handlers.SeedIncompleteRequest'
+        type: array
+      judgments:
+        items:
+          $ref: '#/definitions/handlers.SeedJudgmentRequest'
+        type: array
+      kind:
+        type: string
+      method_key:
+        type: string
+      method_version:
+        type: string
+      to:
+        type: string
+      unfinished:
+        type: boolean
+      wording_version:
+        type: string
+    required:
+    - kind
+    - method_key
+    - method_version
+    type: object
+  handlers.SeedJudgmentRunResponse:
+    properties:
+      run_id:
+        type: string
+      threads:
+        items:
+          type: string
+        type: array
+    type: object
+  handlers.SeedOutcomeRequest:
+    properties:
+      confidence:
+        type: number
+      contact_id:
+        type: string
+      direction:
+        type: string
+      due_date:
+        type: string
+      outcome:
+        type: string
+      question_id:
+        type: string
+    type: object
+  handlers.SeedQuestionRequest:
+    properties:
+      id:
+        type: string
+      original_answer:
+        type: string
+      probabilities:
+        additionalProperties:
+          format: float64
+          type: number
+        type: object
+    type: object
   handlers.SeededEntityResponse:
     properties:
       id:
@@ -1070,6 +1456,21 @@ definitions:
         type: string
       name:
         type: string
+    type: object
+  handlers.SeededObligationResponse:
+    properties:
+      basis:
+        type: string
+      contact_id:
+        type: string
+      debtor:
+        type: string
+      due_date:
+        type: string
+      kind:
+        type: string
+      open:
+        type: boolean
     type: object
   handlers.SelectedMethodInput:
     properties:
@@ -3903,6 +4304,63 @@ paths:
       summary: Resolve method suggestions
       tags:
       - imports
+  /interactions:
+    get:
+      description: 'Every interaction across contacts, newest first: one row per interaction,
+        naming each participant contact. Filters combine. run_id keeps the rows of
+        threads with a judgment appearing in the run, and each row''s proposals to
+        those judgments. Each row carries the proposals of the thread judgments whose
+        latest content it holds, compiled into the answers the user reviews.'
+      parameters:
+      - default: 1
+        description: Page number
+        in: query
+        name: page
+        type: integer
+      - default: 20
+        description: Items per page
+        in: query
+        name: limit
+        type: integer
+      - description: Participant contact ID
+        format: uuid
+        in: query
+        name: contact_id
+        type: string
+      - description: Interaction type
+        enum:
+        - message
+        - email
+        - calendar
+        - call
+        - other
+        in: query
+        name: type
+        type: string
+      - description: Judgment run ID
+        format: uuid
+        in: query
+        name: run_id
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                data:
+                  $ref: '#/definitions/handlers.AllInteractionsResponse'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.APIResponse'
+      summary: List all interactions
+      tags:
+      - interactions
   /interactions/{id}/participants:
     get:
       description: 'Lists the contacts with an effective participation in the interaction
@@ -4043,6 +4501,139 @@ paths:
       summary: Preview an interaction merge
       tags:
       - interactions
+  /interactions/threads/{thread_id}/content:
+    get:
+      description: 'The thread''s messages, oldest first, each once however many per-contact
+        copies hold it: the content its judgments read up to their cut-offs, and the
+        content after them. A meeting''s notes are its row''s content and are not
+        listed.'
+      parameters:
+      - description: Thread (venue) ID
+        format: uuid
+        in: path
+        name: thread_id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                data:
+                  $ref: '#/definitions/handlers.BenchThreadContentResponse'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.APIResponse'
+      summary: Get a judged thread's content
+      tags:
+      - interactions
+  /judgment-outcomes/{id}/review:
+    post:
+      consumes:
+      - application/json
+      description: 'Records the right outcome the user states for an outcome of any
+        state and returns the outcome with the verdict the server derives: confirmed
+        when it equals the judged outcome, rejected when it differs and has no effect,
+        corrected otherwise. Reviewing an applied or claim outcome gives the thread
+        the right outcome''s effect. keep_current_date, with an open commitment''s
+        right outcome, keeps the obligation''s current date against the judged later
+        one, and the verdict is corrected.'
+      parameters:
+      - description: Outcome ID
+        format: uuid
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: The right outcome
+        in: body
+        name: review
+        required: true
+        schema:
+          $ref: '#/definitions/handlers.ReviewJudgmentOutcomeRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                data:
+                  $ref: '#/definitions/handlers.JudgmentOutcomeResponse'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.APIResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.APIResponse'
+      summary: Review a judgment outcome
+      tags:
+      - judgments
+  /judgment-runs:
+    get:
+      description: Every run with its kind, method, window, judged count (reused judgments
+        included) and the threads it reported incomplete.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                data:
+                  $ref: '#/definitions/handlers.JudgmentRunsResponse'
+              type: object
+      summary: List judgment runs
+      tags:
+      - judgments
+  /judgments:
+    get:
+      description: Judgments of a thread, a run or both, each with every run it appears
+        in and each outcome's state and review. At least one of thread_id and run_id
+        is required.
+      parameters:
+      - description: Thread (venue) ID
+        format: uuid
+        in: query
+        name: thread_id
+        type: string
+      - description: Run ID
+        format: uuid
+        in: query
+        name: run_id
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                data:
+                  $ref: '#/definitions/handlers.JudgmentsResponse'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.APIResponse'
+      summary: List judgments
+      tags:
+      - judgments
   /rematch/contacts/{id}/rescan:
     post:
       description: Re-runs rematch handlers for every method currently on the contact.
@@ -4497,6 +5088,70 @@ paths:
                   $ref: '#/definitions/api.APIError'
               type: object
       summary: Cleanup test data
+      tags:
+      - test
+  /test/judgment-obligations:
+    get:
+      description: Every obligation on the thread of thread_interaction_id, open or
+        closed, oldest first. Test-only (CRM_ENV=testing).
+      parameters:
+      - description: An interaction of the thread
+        format: uuid
+        in: query
+        name: thread_interaction_id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                data:
+                  items:
+                    $ref: '#/definitions/handlers.SeededObligationResponse'
+                  type: array
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.APIResponse'
+      summary: List a thread's obligations
+      tags:
+      - test
+  /test/judgment-runs:
+    post:
+      consumes:
+      - application/json
+      description: Record a decision-model run, its judgments and its incomplete threads
+        through the judgment store. Test-only (CRM_ENV=testing).
+      parameters:
+      - description: The run
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/handlers.SeedJudgmentRunRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                data:
+                  $ref: '#/definitions/handlers.SeedJudgmentRunResponse'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.APIResponse'
+      summary: Seed a judgment run
       tags:
       - test
   /test/seed/declared:

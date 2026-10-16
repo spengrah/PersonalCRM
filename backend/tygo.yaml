@@ -20,10 +20,13 @@ packages:
     include_files:
       - 'contact_dto.go'
       - 'interaction_dto.go'
+      - 'judgment_dto.go'
     type_mappings:
       time.Time: 'string'
     frontmatter: |
       import type { AssertionStatus } from './assertion'
+      import type { ActKind, BallInCourt, BigMoment, ChangeKind, CommitmentState, Debtor, IncompleteReason, ItemMark, ItemState, OutcomeState, ProposalList, Question, RunKind, Verdict } from './judgment'
+      import type { InteractionType } from './interaction-type'
       // ContactMethodType mirrors the `oneof` validation on
       // ContactMethodRequest.Type (backend/internal/api/handlers/contact.go);
       // referenced from Go via tstype tags.
@@ -46,4 +49,14 @@ packages:
     output_path: '../frontend/src/types/generated/assertion.ts'
     include_files:
       - 'assertion_status.go'
+    enum_style: 'union'
+  - path: 'personal-crm/backend/internal/judgment'
+    output_path: '../frontend/src/types/generated/judgment.ts'
+    include_files:
+      - 'values.go'
+    enum_style: 'union'
+  - path: 'personal-crm/backend/internal/service'
+    output_path: '../frontend/src/types/generated/interaction-type.ts'
+    include_files:
+      - 'interaction_types.go'
     enum_style: 'union'

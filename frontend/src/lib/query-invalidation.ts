@@ -10,7 +10,14 @@
  */
 
 import { queryClient } from './query-client'
-import { contactKeys, importKeys, syncKeys, contactTaskKeys, interactionKeys } from './query-keys'
+import {
+  contactKeys,
+  importKeys,
+  syncKeys,
+  contactTaskKeys,
+  interactionKeys,
+  judgmentKeys,
+} from './query-keys'
 
 /**
  * Domain events that trigger query invalidations.
@@ -29,6 +36,8 @@ export type DomainEvent =
   // Interaction events
   | 'interaction:created' // a manual / system interaction was logged
   | 'interaction:corrected' // interactions were merged or participations removed
+  // Judgment events
+  | 'judgment:reviewed' // the user reviewed a judgment outcome on the bench
   // Import events
   | 'import:imported' // imported as new contact
   | 'import:linked' // linked to existing contact
@@ -98,6 +107,18 @@ const invalidationRules: Record<DomainEvent, InvalidationKey[]> = {
     contactKeys.details(),
     contactTaskKeys.lists(),
     interactionKeys.all,
+  ],
+
+  // Judgment events — a review gives the thread the right outcome's effect:
+  // it may open or close obligations (tasks of any contact on the thread) and
+  // end a contact's awaiting-reply wait, and it changes the bench's proposals.
+  'judgment:reviewed': [
+    interactionKeys.allLists(),
+    judgmentKeys.all,
+    contactKeys.lists(),
+    contactKeys.overdue(),
+    contactKeys.details(),
+    contactTaskKeys.lists(),
   ],
 
   // Import events

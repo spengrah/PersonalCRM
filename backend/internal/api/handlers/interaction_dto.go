@@ -203,3 +203,130 @@ type TimelineAssertionResponse struct {
 type TimelineAssertionsResponse struct {
 	Items []TimelineAssertionResponse `json:"items"`
 }
+
+// AllInteractionsResponse is one page of the all-interactions view (the
+// bench) and the interaction types its type filter offers.
+type AllInteractionsResponse struct {
+	Items       []AllInteractionItemResponse    `json:"items"`
+	TypeOptions []InteractionTypeOptionResponse `json:"type_options"`
+}
+
+// InteractionTypeOptionResponse is one interaction type the view filters by.
+type InteractionTypeOptionResponse struct {
+	Key   string `json:"key" tstype:"InteractionType"`
+	Label string `json:"label"`
+}
+
+// AllInteractionItemResponse is one row: one interaction across contacts,
+// served as the contact history serves it in the participation of
+// context_contact_id, its first participant. proposals are the thread
+// judgments whose latest content the row holds; to_review counts their items
+// awaiting review.
+type AllInteractionItemResponse struct {
+	Item             InteractionListItemResponse      `json:"item"`
+	ContextContactID string                           `json:"context_contact_id"`
+	Participants     []InteractionParticipantResponse `json:"participants"`
+	Preview          *InteractionPreviewResponse      `json:"preview,omitempty"`
+	Proposals        []BenchProposalResponse          `json:"proposals"`
+	ToReview         int                              `json:"to_review"`
+}
+
+// InteractionPreviewResponse is the latest content a row shows: a message's
+// sender and text, or a meeting note's text (note true, no sender).
+type InteractionPreviewResponse struct {
+	Sender *string `json:"sender,omitempty"`
+	Text   string  `json:"text"`
+	Note   bool    `json:"note"`
+}
+
+// BenchProposalResponse is one thread judgment compiled into the answers the
+// user reviews. thread_id is the judged thread, whose content
+// /interactions/threads/{thread_id}/content returns; cut_off is its first
+// appearance, as of which its content is shown; reused_at is its appearance in
+// the run the view is narrowed to, when that run reused it. reply_lists is
+// false for a meeting.
+type BenchProposalResponse struct {
+	JudgmentID    string                  `json:"judgment_id"`
+	ThreadID      string                  `json:"thread_id"`
+	MethodKey     string                  `json:"method_key"`
+	MethodVersion string                  `json:"method_version"`
+	Production    bool                    `json:"production"`
+	ContextKind   string                  `json:"context_kind"`
+	CutOff        time.Time               `json:"cut_off"`
+	ReusedAt      *time.Time              `json:"reused_at,omitempty"`
+	ReplyLists    bool                    `json:"reply_lists"`
+	Items         []BenchItemResponse     `json:"items"`
+	Additions     []BenchAdditionResponse `json:"additions"`
+	ToReview      int                     `json:"to_review"`
+}
+
+// BenchThreadContentResponse is a judged thread's whole conversation, oldest
+// first, each message once.
+type BenchThreadContentResponse struct {
+	Messages []ContentMessageResponse `json:"messages"`
+}
+
+// BenchPartyResponse is a contact a proposal names.
+type BenchPartyResponse struct {
+	ContactID string `json:"contact_id"`
+	Name      string `json:"name"`
+}
+
+// BenchItemResponse is one item of a proposal, standing for one judged
+// outcome. contact is a reply item's participant or a commitment's
+// counterparty, absent for the flag; debtor says who owes a commitment. state
+// is absent once the user removed the item; mark is absent until a review.
+// due_date is a commitment's date (YYYY-MM-DD), absent when it has no stated
+// date. acts are the item's review controls, empty once reviewed.
+type BenchItemResponse struct {
+	OutcomeID  string                      `json:"outcome_id"`
+	List       string                      `json:"list" tstype:"ProposalList"`
+	Contact    *BenchPartyResponse         `json:"contact,omitempty"`
+	Debtor     *string                     `json:"debtor,omitempty" tstype:"Debtor"`
+	State      *string                     `json:"state,omitempty" tstype:"ItemState"`
+	Confidence *float64                    `json:"confidence,omitempty"`
+	DueDate    *string                     `json:"due_date,omitempty"`
+	Change     *BenchItemChangeResponse    `json:"change,omitempty"`
+	Source     *BenchSourceMessageResponse `json:"source,omitempty"`
+	Mark       *string                     `json:"mark,omitempty" tstype:"ItemMark"`
+	Acts       []BenchActResponse          `json:"acts"`
+}
+
+// BenchItemChangeResponse is a suggested change to a live item: its removal,
+// or a later due_date (YYYY-MM-DD). confidence is absent for a removal no
+// method answered.
+type BenchItemChangeResponse struct {
+	Kind       string   `json:"kind" tstype:"ChangeKind"`
+	DueDate    *string  `json:"due_date,omitempty"`
+	Confidence *float64 `json:"confidence,omitempty"`
+}
+
+// BenchSourceMessageResponse is the message a commitment's judgment names as
+// stating it. content_ref is the message's content reference, as the content
+// route gives it; sender is "Me" for the user's own message.
+type BenchSourceMessageResponse struct {
+	ContentRef string    `json:"content_ref"`
+	Sender     string    `json:"sender"`
+	SentAt     time.Time `json:"sent_at"`
+	Text       string    `json:"text"`
+}
+
+// BenchActResponse is one review control: the review body it posts to
+// /judgment-outcomes/{outcome_id}/review.
+type BenchActResponse struct {
+	Act             string `json:"act" tstype:"ActKind"`
+	RightOutcome    string `json:"right_outcome"`
+	KeepCurrentDate bool   `json:"keep_current_date"`
+}
+
+// BenchAdditionResponse is one choice of a proposal's pickers: adding contact
+// to a reply list, adding a commitment between the user and contact (debtor
+// says who owes it), or adding the flag, by posting right_outcome to the
+// outcome's review route.
+type BenchAdditionResponse struct {
+	List         string              `json:"list" tstype:"ProposalList"`
+	Contact      *BenchPartyResponse `json:"contact,omitempty"`
+	Debtor       *string             `json:"debtor,omitempty" tstype:"Debtor"`
+	OutcomeID    string              `json:"outcome_id"`
+	RightOutcome string              `json:"right_outcome"`
+}

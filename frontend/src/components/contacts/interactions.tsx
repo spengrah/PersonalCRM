@@ -1,6 +1,8 @@
 'use client'
 
 import { useState } from 'react'
+import Link from 'next/link'
+import { ArrowRight } from 'lucide-react'
 import { useContactInteractions } from '@/hooks/use-interactions'
 import { useUpcomingEventsForContact } from '@/hooks/use-calendar'
 import { useAcceleratedTime } from '@/hooks/use-accelerated-time'
@@ -127,8 +129,15 @@ export function Interactions({ contactId }: { contactId: string }) {
 
   return (
     <section aria-label="Interactions" className="bg-white shadow overflow-hidden sm:rounded-lg">
-      <div className="border-b border-gray-200 px-4 py-5 sm:px-6">
+      <div className="flex items-center justify-between gap-3 border-b border-gray-200 px-4 py-5 sm:px-6">
         <h3 className="text-lg font-medium leading-6 text-gray-900">Interactions</h3>
+        <Link
+          href={`/interactions?contact=${contactId}`}
+          className="inline-flex items-center gap-1 text-sm text-blue-600 hover:text-blue-800 hover:underline"
+        >
+          Review in all interactions
+          <ArrowRight aria-hidden="true" className="h-4 w-4" />
+        </Link>
       </div>
       <InteractionFilters
         venueOptions={venueOptions}

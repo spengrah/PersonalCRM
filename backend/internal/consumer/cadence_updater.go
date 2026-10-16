@@ -75,13 +75,45 @@ type contactCadenceReader interface {
 //   - ApplyContactByDirectSet: direct-invoke for a Todoist deadline edit,
 //     which also records the due date the user set directly.
 //   - ApplySkip / ApplyUndoSkip: direct-invoke CRM skip state setter and undo.
+//   - EndAwaitingReplyTx: direct-invoke for a confirmed "nobody owes" claim,
+//     which ends the awaiting-reply wait.
+//
+// HandleEvent and ApplyInteraction, which every recording of an interaction
+// reaches, also run the obligation closer (SetObligationCloser).
 type CadenceUpdater struct {
-	claims    eventClaimer
-	contacts  contactCadenceReader
-	queries   db.Querier
-	mode      string // config.EventBusCadenceMode*
-	unsafeOff bool   // mirrors config.EventBus.UnsafeAllowOffMode for self-reported diagnostics
-	watchdog  config.WatchdogConfig
+	claims      eventClaimer
+	contacts    contactCadenceReader
+	queries     db.Querier
+	mode        string // config.EventBusCadenceMode*
+	unsafeOff   bool   // mirrors config.EventBus.UnsafeAllowOffMode for self-reported diagnostics
+	watchdog    config.WatchdogConfig
+	obligations ObligationCloser
+}
+
+// ObligationCloser closes the reply obligations a newly recorded message
+// answers. *judgment.Store satisfies it; package judgment imports this one, so
+// the interface lives here. It runs inside the recording's transaction.
+type ObligationCloser interface {
+	CloseAnsweredObligationsTx(ctx context.Context, tx pgx.Tx, contactID uuid.UUID) error
+}
+
+// SetObligationCloser wires the closer every recording of an interaction runs
+// through (HandleEvent and ApplyInteraction). While none is set, recording
+// closes no obligation.
+func (h *CadenceUpdater) SetObligationCloser(c ObligationCloser) {
+	h.obligations = c
+}
+
+// closeAnsweredTx runs the obligation closer for a recorded interaction of
+// contactID, when one is set.
+func (h *CadenceUpdater) closeAnsweredTx(ctx context.Context, tx pgx.Tx, contactID uuid.UUID) error {
+	if h.obligations == nil {
+		return nil
+	}
+	if err := h.obligations.CloseAnsweredObligationsTx(ctx, tx, contactID); err != nil {
+		return fmt.Errorf("close answered obligations: %w", err)
+	}
+	return nil
 }
 
 // NewCadenceUpdater constructs the consumer. `queries` must be a
@@ -206,7 +238,10 @@ func (h *CadenceUpdater) HandleEvent(ctx context.Context, tx pgx.Tx, env *events
 	}
 
 	req := h.buildInteractionWrite(p.ContactID, p.Direction, p.Source, p.OccurredAt, prev, cadenceStr)
-	return h.applyTx(ctx, tx, req)
+	if err := h.applyTx(ctx, tx, req); err != nil {
+		return err
+	}
+	return h.closeAnsweredTx(ctx, tx, p.ContactID)
 }
 
 // ApplyInteraction is the direct-invoke entry point for
@@ -235,7 +270,10 @@ func (h *CadenceUpdater) ApplyInteraction(ctx context.Context, tx pgx.Tx, req re
 		cadenceStr = *contact.Cadence
 	}
 	writeReq := h.buildInteractionWrite(req.ContactID, req.Direction, req.Source, req.OccurredAt, prev, cadenceStr)
-	return h.applyTx(ctx, tx, writeReq)
+	if err := h.applyTx(ctx, tx, writeReq); err != nil {
+		return err
+	}
+	return h.closeAnsweredTx(ctx, tx, req.ContactID)
 }
 
 // BulkApply is the direct-invoke entry point for MergeContacts. The
@@ -358,6 +396,27 @@ func (h *CadenceUpdater) ApplyContactByDirectSet(ctx context.Context, tx pgx.Tx,
 		return err
 	}
 	return db.New(tx).ApplyContactByDirectSet(ctx, db.ApplyContactByDirectSetParams{ContactBy: contactBy, ID: contactID})
+}
+
+// EndAwaitingReplyTx is the direct-invoke entry point for the user's
+// confirmation that nobody owes a reply on the thread whose outreach started
+// the contact's awaiting-reply wait. It clears awaiting_reply_until and
+// nothing else: no skip is recorded, and contact_by and the interaction
+// timestamps keep their values, so the deferred cadence task proceeds
+// (CAD-042).
+func (h *CadenceUpdater) EndAwaitingReplyTx(ctx context.Context, tx pgx.Tx, contactID uuid.UUID) error {
+	if tx == nil {
+		return errors.New("cadence_updater: nil tx")
+	}
+	if h.mode == CadenceModeOff {
+		return nil
+	}
+	return h.applyTx(ctx, tx, cadenceWriteRequest{
+		ContactID:               contactID,
+		Branch:                  repository.CadenceBranchUnconditional,
+		ApplyAwaitingReplyUntil: true,
+		AwaitingReplyUntil:      nil,
+	})
 }
 
 // RecomputeAfterCorrection is the direct-invoke entry point for the

@@ -8,6 +8,7 @@ import (
 	"personal-crm/backend/internal/db"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/pgvector/pgvector-go"
 )
 
@@ -85,8 +86,13 @@ type Predicate struct {
 	Synonyms            []string `json:"synonyms"`
 	// Correction marks a correction predicate (migration 089): its assertions
 	// are the user's corrections of interactions.
-	Correction bool             `json:"correction"`
-	Embedding  *pgvector.Vector `json:"embedding,omitempty"`
+	Correction bool `json:"correction"`
+	// Judgment marks a judgment predicate (migration 093): the catalog alone
+	// decides its landing status. An auto-if-confident judgment predicate with
+	// a JudgmentConfidenceThreshold lands accepted only at or above it.
+	Judgment                    bool             `json:"judgment"`
+	JudgmentConfidenceThreshold *int16           `json:"judgment_confidence_threshold,omitempty"`
+	Embedding                   *pgvector.Vector `json:"embedding,omitempty"`
 }
 
 // CreatePredicateRequest is the input for minting a provisional predicate.
@@ -128,25 +134,27 @@ func NewPredicateRepository(queries db.Querier) *PredicateRepository {
 // field-identical; the small adapters below normalize them onto this one shape
 // so a single converter (convertPredicateRow) builds the domain struct.
 type predicateRow struct {
-	Key                 string
-	Kind                string
-	SubjectType         string
-	ObjectType          *string
-	ValueType           *string
-	Cardinality         string
-	Symmetric           bool
-	InversePredicate    *string
-	TemporalProfile     string
-	BaseRateDays        *int32
-	TypicalDurationDays *int32
-	DefaultSalience     int16
-	DefaultReviewPolicy string
-	PropositionBucket   string
-	Status              string
-	Description         string
-	Synonyms            []string
-	Correction          bool
-	CreatedAt           time.Time
+	Key                         string
+	Kind                        string
+	SubjectType                 string
+	ObjectType                  *string
+	ValueType                   *string
+	Cardinality                 string
+	Symmetric                   bool
+	InversePredicate            *string
+	TemporalProfile             string
+	BaseRateDays                *int32
+	TypicalDurationDays         *int32
+	DefaultSalience             int16
+	DefaultReviewPolicy         string
+	PropositionBucket           string
+	Status                      string
+	Description                 string
+	Synonyms                    []string
+	Correction                  bool
+	Judgment                    bool
+	JudgmentConfidenceThreshold pgtype.Int2
+	CreatedAt                   time.Time
 }
 
 func predicateRowFromGet(r *db.GetPredicateRow) predicateRow {
@@ -173,25 +181,32 @@ func predicateRowFromCorrection(r *db.ListCorrectionPredicatesRow) predicateRow 
 // always nil here — this layer never selects the column (it is populated and
 // read in a later layer).
 func convertPredicateRow(row predicateRow) Predicate {
+	var threshold *int16
+	if row.JudgmentConfidenceThreshold.Valid {
+		value := row.JudgmentConfidenceThreshold.Int16
+		threshold = &value
+	}
 	predicate := Predicate{
-		Key:                 row.Key,
-		Kind:                row.Kind,
-		SubjectType:         row.SubjectType,
-		ObjectType:          row.ObjectType,
-		ValueType:           row.ValueType,
-		Cardinality:         row.Cardinality,
-		Symmetric:           row.Symmetric,
-		InversePredicate:    row.InversePredicate,
-		TemporalProfile:     row.TemporalProfile,
-		BaseRateDays:        row.BaseRateDays,
-		TypicalDurationDays: row.TypicalDurationDays,
-		DefaultSalience:     row.DefaultSalience,
-		DefaultReviewPolicy: row.DefaultReviewPolicy,
-		PropositionBucket:   row.PropositionBucket,
-		Status:              row.Status,
-		Description:         row.Description,
-		Synonyms:            row.Synonyms,
-		Correction:          row.Correction,
+		Key:                         row.Key,
+		Kind:                        row.Kind,
+		SubjectType:                 row.SubjectType,
+		ObjectType:                  row.ObjectType,
+		ValueType:                   row.ValueType,
+		Cardinality:                 row.Cardinality,
+		Symmetric:                   row.Symmetric,
+		InversePredicate:            row.InversePredicate,
+		TemporalProfile:             row.TemporalProfile,
+		BaseRateDays:                row.BaseRateDays,
+		TypicalDurationDays:         row.TypicalDurationDays,
+		DefaultSalience:             row.DefaultSalience,
+		DefaultReviewPolicy:         row.DefaultReviewPolicy,
+		PropositionBucket:           row.PropositionBucket,
+		Status:                      row.Status,
+		Description:                 row.Description,
+		Synonyms:                    row.Synonyms,
+		Correction:                  row.Correction,
+		Judgment:                    row.Judgment,
+		JudgmentConfidenceThreshold: threshold,
 	}
 	return predicate
 }
