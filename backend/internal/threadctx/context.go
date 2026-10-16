@@ -72,6 +72,7 @@ type Context struct {
 	CutOff       time.Time
 	Entries      []Entry
 	Participants map[Role]Participant
-	// InputHash identifies the content up to the cut-off and nothing else.
+	// InputHash identifies the content up to the cut-off and each
+	// participant's matched contact, and nothing else.
 	InputHash string
 }

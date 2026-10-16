@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 	"time"
@@ -191,7 +192,7 @@ func assemble(rows []repository.ThreadContentRow, attendees []uuid.UUID) (Contex
 	for i, m := range messages {
 		entries[i] = Entry{Key: m.key, Role: roles[m.from], SentAt: m.sentAt, Headers: m.headers, Text: m.text}
 	}
-	hash, err := inputHash(entries)
+	hash, err := inputHash(entries, participants)
 	if err != nil {
 		return Context{}, err
 	}
@@ -264,19 +265,31 @@ func uniqueSorted(values []string) []string {
 	return slices.Compact(out)
 }
 
-// inputHash identifies the entries and nothing else: not the thread, the
-// cut-off or the participants' contacts, so equal content up to a cut-off gives
-// an equal hash whatever later reads it.
-func inputHash(entries []Entry) (string, error) {
+// inputHash identifies the entries and each participant's matched contact,
+// which decides the participant's questions and the contact their outcomes
+// land on, so a participant matched, unmatched or rematched gives a new hash.
+// It leaves out the thread and the cut-off, so equal content and bindings up
+// to a cut-off give an equal hash whatever later reads it.
+func inputHash(entries []Entry, participants map[Role]Participant) (string, error) {
 	type hashed struct {
 		Role    Role              `json:"role"`
 		SentAt  string            `json:"sent_at"`
 		Headers map[string]string `json:"headers"`
 		Text    string            `json:"text"`
 	}
-	canonical := make([]hashed, len(entries))
+	type binding struct {
+		Role    Role       `json:"role"`
+		Contact *uuid.UUID `json:"contact"`
+	}
+	canonical := struct {
+		Entries  []hashed  `json:"entries"`
+		Bindings []binding `json:"bindings"`
+	}{Entries: make([]hashed, len(entries))}
 	for i, e := range entries {
-		canonical[i] = hashed{Role: e.Role, SentAt: e.SentAt.UTC().Format(time.RFC3339Nano), Headers: e.Headers, Text: e.Text}
+		canonical.Entries[i] = hashed{Role: e.Role, SentAt: e.SentAt.UTC().Format(time.RFC3339Nano), Headers: e.Headers, Text: e.Text}
+	}
+	for _, role := range slices.Sorted(maps.Keys(participants)) {
+		canonical.Bindings = append(canonical.Bindings, binding{Role: role, Contact: participants[role].ContactID})
 	}
 	encoded, err := json.Marshal(canonical)
 	if err != nil {

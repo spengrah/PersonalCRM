@@ -10,7 +10,8 @@
 // its cut-off as metadata; each review is a score on its judgment's trace;
 // each finished run is one trace with its summary; each finished rerun run's
 // scorecard metrics are one trace. Every trace, span and score ID derives from
-// the record it carries, so a record sent twice is one record in Langfuse.
+// the record it carries, so a record sent twice is one record in Langfuse, and
+// a record sent again with changed values replaces the earlier ones.
 package langfuseexport
 
 import (
@@ -76,8 +77,8 @@ type Report struct {
 	// Missing names the extraction project's unset settings; when any is
 	// unset, the export sent nothing.
 	Missing []string
-	// Runs counts the finished runs sent; Skipped the runs whose records an
-	// earlier export already sent.
+	// Runs counts the finished runs sent; Skipped the runs whose judgments and
+	// summary an earlier export already sent.
 	Runs, Skipped int
 	// Judgments, Scorecards and Reviews count the records sent.
 	Judgments, Scorecards, Reviews int
@@ -86,20 +87,23 @@ type Report struct {
 // Sent reports whether the export reached Langfuse.
 func (r Report) Sent() bool { return len(r.Missing) == 0 }
 
-// Export sends every record made since the previous export. Each run's
-// records go as one batch: the judgments its calls produced, in the order it
-// recorded them, then, once it finished, its scorecard metrics if it is a
-// rerun and its own trace. A batch is sent in order, so Langfuse holding its
-// last record means an earlier export sent all of it, and the batch is
-// skipped; a judgment a run records later, or the run finishing, changes that
-// last record, so the next export sends the batch again. Judgments therefore
-// reach Langfuse whether or not their run finishes. Every live review is sent
-// on each export, so a changed verdict replaces the earlier one.
+// Export sends every record made since the previous export, and every record
+// derived from reviews, which can change after it was sent. Each run's
+// judgments and summary go as one batch: the judgments its calls produced, in
+// the order it recorded them, then, once it finished, its own trace. A batch
+// is sent in order, so Langfuse holding its last record means an earlier
+// export sent all of it, and the batch is skipped; a judgment a run records
+// later, or the run finishing, changes that last record, so the next export
+// sends the batch again. Judgments therefore reach Langfuse whether or not
+// their run finishes. A finished rerun's scorecard metrics are computed from
+// the latest reviews, and every live review is sent, on each export, so a
+// changed verdict replaces the earlier verdict and the metrics it changed.
 func (e *Exporter) Export(ctx context.Context) (Report, error) {
 	if e.client == nil {
 		return Report{Missing: e.missing}, nil
 	}
 	var report Report
+	var scorecards []span
 	runs, err := e.store.RunExports(ctx)
 	if err != nil {
 		return report, fmt.Errorf("read runs: %w", err)
@@ -110,13 +114,12 @@ func (e *Exporter) Export(ctx context.Context) (Report, error) {
 			spans = append(spans, judgmentSpan(j))
 		}
 		finished := run.Finished
-		rerun := finished != nil && finished.Kind == judgment.RunKindRerun
-		if rerun {
+		if finished != nil && finished.Kind == judgment.RunKindRerun {
 			m, err := e.metrics.Metrics(ctx, run.Run)
 			if err != nil {
 				return report, fmt.Errorf("read scorecard metrics of run %s: %w", run.Run, err)
 			}
-			spans = append(spans, scorecardSpan(*finished, m))
+			scorecards = append(scorecards, scorecardSpan(*finished, m))
 		}
 		if finished != nil {
 			spans = append(spans, runSpan(*finished))
@@ -139,10 +142,11 @@ func (e *Exporter) Export(ctx context.Context) (Report, error) {
 		if finished != nil {
 			report.Runs++
 		}
-		if rerun {
-			report.Scorecards++
-		}
 	}
+	if err := e.client.sendSpans(ctx, scorecards); err != nil {
+		return report, fmt.Errorf("send scorecard metrics: %w", err)
+	}
+	report.Scorecards = len(scorecards)
 	reviews, err := e.store.ReviewRecords(ctx)
 	if err != nil {
 		return report, fmt.Errorf("read reviews: %w", err)
