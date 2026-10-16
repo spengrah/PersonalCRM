@@ -2078,6 +2078,10 @@ type Querier interface {
 	// SyntheticDelete*ByKeyPrefix for its own provisional rows.)
 	ResetSyntheticData(ctx context.Context) error
 	ResetTelegramChatConfigBackfill(ctx context.Context, telegramChatID int64) error
+	// Each given contact with the contact it now is: the end of its chain of
+	// contact merges (node.merged_into), the contact itself when never merged. A
+	// contact without a node has no row.
+	ResolveContactMerges(ctx context.Context, contactIds []uuid.UUID) ([]*ResolveContactMergesRow, error)
 	// The observation step's resolution: finds or creates the interaction node of
 	// an observation by the per-source identity rule (resolve_interaction_node in
 	// migration 087, the one implementation). A burst source returns no row (no node).

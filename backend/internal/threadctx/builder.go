@@ -14,6 +14,7 @@ import (
 	"personal-crm/backend/internal/repository"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 )
 
 // contextKinds maps each thread venue kind to the context it gives. A venue of
@@ -37,6 +38,13 @@ type Builder struct {
 // NewBuilder builds a Builder.
 func NewBuilder(content *repository.ThreadContentRepository, venues *repository.VenueRepository) *Builder {
 	return &Builder{content: content, venues: venues}
+}
+
+// WithTx returns a Builder that reads through the transaction, so a caller
+// inside a transaction builds contexts and content facts from the content
+// that transaction wrote.
+func (b *Builder) WithTx(tx pgx.Tx) *Builder {
+	return &Builder{content: b.content.WithTx(tx), venues: b.venues.WithTx(tx)}
 }
 
 // Build returns the thread's content at or before cutOff, each message once

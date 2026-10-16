@@ -97,6 +97,6 @@ func (l *liveState) effectGone(ctx context.Context, o *outcomeRecord) (bool, err
 	if value != string(BallInCourtTheyOweReply) {
 		return true, nil
 	}
-	waiting, err := awaiting(ctx, l.q, contactOf(o.ContactID))
+	waiting, err := awaiting(ctx, l.q, contactOf(o.LiveContactID))
 	return !waiting, err
 }

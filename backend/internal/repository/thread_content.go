@@ -52,6 +52,12 @@ func NewThreadContentRepository(queries db.Querier) *ThreadContentRepository {
 	return &ThreadContentRepository{queries: queries}
 }
 
+// WithTx returns a repository bound to the transaction, so a caller inside a
+// transaction reads the content that transaction wrote.
+func (r *ThreadContentRepository) WithTx(tx pgx.Tx) *ThreadContentRepository {
+	return &ThreadContentRepository{queries: db.New(tx)}
+}
+
 // ListThreadContent returns every stored copy of the thread's content at or
 // before cutOff, ordered by time.
 func (r *ThreadContentRepository) ListThreadContent(ctx context.Context, venueID uuid.UUID, cutOff time.Time) ([]ThreadContentRow, error) {

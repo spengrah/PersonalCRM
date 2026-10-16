@@ -514,6 +514,163 @@ func TestBenchReadCompilesProposals(t *testing.T) {
 	}
 }
 
+// A review acts on the obligation its item's live effect is, followed through
+// the tasks continuing it, and on the contact the item's contact now is: it
+// never takes away another obligation of the same party, and a contact merge
+// does not detach the item from its obligation.
+func TestBenchReviewActsOnItsOwnObligation(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		direction judgment.CommitmentDirection
+		debtor    string
+	}{
+		{"mine", judgment.CommitmentDirectionMine, repository.ObligationDebtorUser},
+		{"theirs", judgment.CommitmentDirectionTheirs, repository.ObligationDebtorContact},
+	} {
+		t.Run("removing a completed "+tc.name+" commitment leaves a later judgment's commitment open", func(t *testing.T) {
+			// spec: IXN-052.state-is-live-effect
+			b := newBenchEnv(t)
+			x, th := b.contact(t), b.thread(t)
+			b.message(t, th, x, false, b.day(1))
+			b.record(t, th, x, repository.InteractionDirectionInbound, b.day(1))
+			b.run(t, judgment.RunKindScheduled, judgmentOf(prodMethod, th, b.day(1), "h1", judgment.Outcomes{
+				Commitments: []judgment.CommitmentOutcome{commitment(x, tc.direction, judgment.CommitmentStateOpen, 0.9, nil)},
+			}))
+			first := b.openObligations(t, th)
+			require.Len(t, first, 1)
+			_, err := b.tasks.UpdateContactTaskState(b.ctx, first[0].TaskID, repository.ContactTaskStateCompleted)
+			require.NoError(t, err)
+			b.message(t, th, x, false, b.day(2))
+			b.record(t, th, x, repository.InteractionDirectionInbound, b.day(2))
+			b.run(t, judgment.RunKindScheduled, judgmentOf(prodMethod, th, b.day(2), "h2", judgment.Outcomes{
+				Commitments: []judgment.CommitmentOutcome{commitment(x, tc.direction, judgment.CommitmentStateOpen, 0.9, nil)},
+			}))
+			replacement := b.openObligations(t, th)
+			require.Len(t, replacement, 1)
+			require.Equal(t, tc.debtor, replacement[0].Debtor)
+			require.Equal(t, repository.ObligationBasisCommitment, replacement[0].Basis)
+
+			page, _ := b.list(t, "contact_id="+x.String())
+			var old *handlers.BenchProposalResponse
+			for _, row := range page.Items {
+				for i, p := range row.Proposals {
+					if b.day(1).Equal(p.CutOff) {
+						old = &row.Proposals[i]
+					}
+				}
+			}
+			require.NotNil(t, old)
+			done := item(t, *old, "commitments", x)
+			require.Equal(t, ptr("not_acting"), done.State)
+			remove := acts(done)["remove"]
+			require.Equal(t, "none", remove.RightOutcome)
+			_, err = b.store.ReviewOutcome(b.ctx, uuid.MustParse(done.OutcomeID), judgment.ReviewRequest{RightOutcome: remove.RightOutcome})
+			require.NoError(t, err)
+
+			assert.Equal(t, replacement, b.openObligations(t, th), "removing the completed commitment records the label only")
+		})
+	}
+
+	t.Run("rejecting an earlier suggested reply leaves a later judgment's reply obligation open", func(t *testing.T) {
+		// spec: IXN-052.state-is-live-effect, KNW-046.live-review-gives-right-effect
+		b := newBenchEnv(t)
+		x, th := b.contact(t), b.thread(t)
+		b.message(t, th, x, false, b.day(1))
+		b.record(t, th, x, repository.InteractionDirectionInbound, b.day(1))
+		b.run(t, judgment.RunKindScheduled, judgmentOf(prodMethod, th, b.day(1), "h1", judgment.Outcomes{
+			BallInCourt: []judgment.ParticipantOutcome[judgment.BallInCourt]{bic(x, judgment.BallInCourtIOweReply, 0.49)},
+		}))
+		suggested := b.outcome(t, th, prodMethod, judgment.QuestionBallInCourt, &x)
+		require.Equal(t, judgment.OutcomeStateClaim, suggested.State)
+		b.message(t, th, x, false, b.day(2))
+		b.record(t, th, x, repository.InteractionDirectionInbound, b.day(2))
+		b.run(t, judgment.RunKindScheduled, judgmentOf(prodMethod, th, b.day(2), "h2", judgment.Outcomes{
+			BallInCourt: []judgment.ParticipantOutcome[judgment.BallInCourt]{bic(x, judgment.BallInCourtIOweReply, 0.9)},
+		}))
+		later := b.openObligations(t, th)
+		require.Len(t, later, 1)
+
+		_, err := b.store.ReviewOutcome(b.ctx, suggested.ID, judgment.ReviewRequest{RightOutcome: "nobody_owes"})
+		require.NoError(t, err)
+
+		assert.Equal(t, later, b.openObligations(t, th), "rejecting the suggestion takes away nothing it did not add")
+	})
+
+	t.Run("moving a completed reply item to the other reply list records the label only", func(t *testing.T) {
+		// spec: IXN-052.state-is-live-effect
+		b := newBenchEnv(t)
+		x, th := b.contact(t), b.thread(t)
+		b.message(t, th, x, false, b.day(1))
+		b.record(t, th, x, repository.InteractionDirectionInbound, b.day(1))
+		b.run(t, judgment.RunKindScheduled, judgmentOf(prodMethod, th, b.day(1), "h1", judgment.Outcomes{
+			BallInCourt: []judgment.ParticipantOutcome[judgment.BallInCourt]{bic(x, judgment.BallInCourtIOweReply, 0.9)},
+		}))
+		open := b.openObligations(t, th)
+		require.Len(t, open, 1)
+		_, err := b.tasks.UpdateContactTaskState(b.ctx, open[0].TaskID, repository.ContactTaskStateCompleted)
+		require.NoError(t, err)
+
+		_, err = b.store.ReviewOutcome(b.ctx, b.outcome(t, th, prodMethod, judgment.QuestionBallInCourt, &x).ID,
+			judgment.ReviewRequest{RightOutcome: "they_owe_reply"})
+		require.NoError(t, err)
+
+		assert.Empty(t, b.openObligations(t, th), "a review of a not-acting item opens nothing")
+	})
+
+	merged := func(t *testing.T, b *benchEnv, th thread, outcomes func(retired uuid.UUID) judgment.Outcomes) (retired, survivor uuid.UUID) {
+		t.Helper()
+		retired, survivor = b.contact(t), b.contact(t)
+		b.message(t, th, retired, false, b.day(1))
+		b.record(t, th, retired, repository.InteractionDirectionInbound, b.day(1))
+		b.run(t, judgment.RunKindScheduled, judgmentOf(prodMethod, th, b.day(1), "h1", outcomes(retired)))
+		_, err := b.contacts.MergeContacts(b.ctx, service.MergeContactsRequest{SourceContactID: retired, TargetContactID: survivor})
+		require.NoError(t, err)
+		return retired, survivor
+	}
+	outcomeOf := func(t *testing.T, b *benchEnv, th thread, question judgment.Question) uuid.UUID {
+		t.Helper()
+		outcomes := b.outcomes(t, th)
+		require.Len(t, outcomes, 1)
+		require.Equal(t, question, outcomes[0].Question)
+		return outcomes[0].ID
+	}
+
+	t.Run("removing a participant's commitment after a contact merge closes the obligation the merge moved", func(t *testing.T) {
+		// spec: IXN-052.state-is-live-effect, KNW-046.live-review-gives-right-effect
+		b := newBenchEnv(t)
+		th := b.thread(t)
+		_, survivor := merged(t, b, th, func(retired uuid.UUID) judgment.Outcomes {
+			return judgment.Outcomes{Commitments: []judgment.CommitmentOutcome{commitment(retired, judgment.CommitmentDirectionTheirs, judgment.CommitmentStateOpen, 0.9, nil)}}
+		})
+		moved := b.openObligations(t, th)
+		require.Len(t, moved, 1)
+		require.Equal(t, survivor, moved[0].ContactID, "the merge moves the obligation to the surviving contact")
+
+		_, err := b.store.ReviewOutcome(b.ctx, outcomeOf(t, b, th, judgment.QuestionCommitmentTheirs), judgment.ReviewRequest{RightOutcome: "none"})
+		require.NoError(t, err)
+
+		assert.Empty(t, b.openObligations(t, th), "the review removes the commitment the merge moved")
+	})
+
+	t.Run("confirming a suggested reply after a contact merge opens it for the surviving contact", func(t *testing.T) {
+		// spec: KNW-046.live-review-gives-right-effect
+		b := newBenchEnv(t)
+		th := b.thread(t)
+		_, survivor := merged(t, b, th, func(retired uuid.UUID) judgment.Outcomes {
+			return judgment.Outcomes{BallInCourt: []judgment.ParticipantOutcome[judgment.BallInCourt]{bic(retired, judgment.BallInCourtIOweReply, 0.49)}}
+		})
+		require.Empty(t, b.openObligations(t, th))
+
+		_, err := b.store.ReviewOutcome(b.ctx, outcomeOf(t, b, th, judgment.QuestionBallInCourt), judgment.ReviewRequest{RightOutcome: "i_owe_reply"})
+		require.NoError(t, err)
+
+		open := b.openObligations(t, th)
+		require.Len(t, open, 1)
+		assert.Equal(t, survivor, open[0].ContactID)
+		assert.Equal(t, repository.ObligationDebtorUser, open[0].Debtor)
+	})
+}
+
 // addition returns the one choice of the proposal's pickers adding the
 // contact to the list.
 func addition(t *testing.T, p handlers.BenchProposalResponse, list string, contact uuid.UUID) handlers.BenchAdditionResponse {

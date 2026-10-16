@@ -913,6 +913,6 @@ behaviors:
       - key: removal-keeps-its-target
         text: a suggested removal sits in the list of the live obligation or wait it would take away, and keeping it states that live outcome, whatever obligations the thread held before
       - key: state-is-live-effect
-        text: an item whose live effect no longer holds, its obligation closed or its flag withdrawn, is not acting even when another obligation of the same party is open, whatever judgment, method or review opened it, and a review restating that effect reopens nothing and leaves that other obligation as it is; an obligation a commitment superseded or a contact merge combined stays the item's
+        text: an item whose live effect no longer holds, its obligation closed or its flag withdrawn, is not acting even when another obligation of the same party is open, whatever judgment, method or review opened it, and any review of it records the label only, reopening nothing and leaving that other obligation as it is; an obligation a commitment superseded or a contact merge combined or moved stays the item's, and a review of the item acts on it
     provenance: [.agents/spec/2026-10-14-decision-model-extraction.md G3b G6 G9 HC7, designs/bench.md]
     notes: The bench's proposals (IXN-046) read these lists.

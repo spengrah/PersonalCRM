@@ -17,13 +17,17 @@ import (
 // targets, and the user's live review.
 // Confidence is the method's, at the precision it reported (absent for an
 // omission). ObligationTaskID is the obligation its live effect is, recorded
-// when it landed or was reviewed.
+// when it landed or was reviewed. ContactID is the contact the judgment
+// answered about, kept as the judgment's evidence; LiveContactID is the
+// contact that one now is after any contact merges, the one live state acts
+// on.
 type outcomeRecord struct {
 	ID               uuid.UUID
 	JudgmentID       uuid.UUID
 	Question         Question
 	QuestionID       string
 	ContactID        *uuid.UUID
+	LiveContactID    *uuid.UUID
 	DueDate          *time.Time
 	Confidence       *float64
 	ObligationTaskID *uuid.UUID
@@ -164,12 +168,14 @@ func loadOutcomes(ctx context.Context, q db.Querier, judgmentIDs, outcomeIDs []u
 	records := make([]*outcomeRecord, len(rows))
 	byID := make(map[uuid.UUID]*outcomeRecord, len(rows))
 	ids := make([]uuid.UUID, len(rows))
+	var contacts []uuid.UUID
 	for i, row := range rows {
 		r := &outcomeRecord{
 			ID:               row.NodeID,
 			JudgmentID:       row.JudgmentID,
 			Question:         Question(row.Question),
 			ContactID:        row.ContactID,
+			LiveContactID:    row.ContactID,
 			DueDate:          row.DueDate,
 			Confidence:       row.Confidence,
 			ObligationTaskID: row.ObligationTaskID,
@@ -177,10 +183,29 @@ func loadOutcomes(ctx context.Context, q db.Querier, judgmentIDs, outcomeIDs []u
 		if row.QuestionID != nil {
 			r.QuestionID = *row.QuestionID
 		}
+		if row.ContactID != nil {
+			contacts = append(contacts, *row.ContactID)
+		}
 		records[i], byID[r.ID], ids[i] = r, r, r.ID
 	}
 	if len(ids) == 0 {
 		return records, nil
+	}
+	merges, err := q.ResolveContactMerges(ctx, emptyIfNil(contacts))
+	if err != nil {
+		return nil, fmt.Errorf("resolve contact merges: %w", err)
+	}
+	live := make(map[uuid.UUID]uuid.UUID, len(merges))
+	for _, m := range merges {
+		live[m.ContactID] = m.LiveContactID
+	}
+	for _, r := range records {
+		if r.ContactID == nil {
+			continue
+		}
+		if to, ok := live[*r.ContactID]; ok {
+			r.LiveContactID = &to
+		}
 	}
 	assertions, err := q.ListOutcomeAssertions(ctx, db.ListOutcomeAssertionsParams{
 		OutcomeIds: ids,

@@ -791,7 +791,7 @@ behaviors:
     status: current
     surface: none
     given: an open reply obligation on a thread
-    when: a message on the thread is recorded, as a new interaction or by extending one, from any message source
+    when: a message on the thread is recorded, as a new interaction or by extending one, from any message source, including a message stored in the transaction that records it
     then:
       - key: user-message-closes-i-owe-reply
         text: the user's own message after the obligation's cut-off closes the thread's "I owe a reply" obligation and its task

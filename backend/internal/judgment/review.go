@@ -17,12 +17,16 @@ import (
 // as an assertion with user provenance holding the right outcome, and returns
 // the outcome with the verdict derived from it. Reviewing an applied or claim
 // outcome gives the thread the right outcome's live effect: confirming a claim
-// applies it, and rejecting an applied addition withdraws it. Reviewing an
-// evidence outcome records the label only, and so does a review that states
-// the value whose live effect the outcome stood for once that effect no longer
-// holds, so confirming never reopens a closed obligation. The review labels
-// the outcome's input for every method: a later judgment of that input leaves
-// its question to the user's verdict.
+// applies it, and rejecting an applied addition withdraws it. That effect acts
+// on the obligation the outcome's live effect is, followed through the tasks
+// that continue it (a superseding commitment, the task a contact merge kept),
+// and on the contact the judged contact now is after any merge; a review
+// closes no other obligation, whatever opened it. Reviewing an evidence
+// outcome records the label only, and so does any review of an outcome whose
+// live effect no longer holds (not acting), so a review never reopens a closed
+// obligation or touches one that replaced it. The review labels the outcome's
+// input for every method: a later judgment of that input leaves its question
+// to the user's verdict.
 //
 // A review stating an open commitment may keep the obligation's current date:
 // the commitment is kept, its judged date is not taken, and the verdict
@@ -106,10 +110,10 @@ func (s *Store) settleLandingTx(ctx context.Context, tx pgx.Tx, o *outcomeRecord
 }
 
 // applyReviewTx gives the thread the right outcome's live effect, unless the
-// right outcome is the value whose effect the outcome stood for and that
-// effect no longer holds, and records the obligation that effect opened or
-// found. The judgment's other outcomes keep what they hold: a reviewed one
-// its right outcome, an applied one its judged outcome.
+// outcome's own live effect no longer holds, and records the obligation that
+// effect opened or found. The only obligation it may close is the one the
+// outcome's live effect is. The judgment's other outcomes keep what they hold:
+// a reviewed one its right outcome, an applied one its judged outcome.
 func (s *Store) applyReviewTx(ctx context.Context, tx pgx.Tx, o *outcomeRecord, right string, keep bool) error {
 	q := db.New(tx)
 	rows, err := q.ListJudgmentRows(ctx, db.ListJudgmentRowsParams{Ids: []uuid.UUID{o.JudgmentID}, ExampleIds: []string{}})
@@ -122,7 +126,7 @@ func (s *Store) applyReviewTx(ctx context.Context, tx pgx.Tx, o *outcomeRecord, 
 		return err
 	}
 	gone, err := live.effectGone(ctx, o)
-	if err != nil || (gone && right == o.actingValue()) {
+	if err != nil || gone {
 		return err
 	}
 	due, err := s.reviewDueTx(ctx, tx, o, right, keep)
@@ -149,21 +153,24 @@ func (s *Store) applyReviewTx(ctx context.Context, tx pgx.Tx, o *outcomeRecord, 
 		default:
 			continue
 		}
-		siblings = append(siblings, sibling{x.Question, contactOf(x.ContactID), value})
+		siblings = append(siblings, sibling{x.Question, contactOf(x.LiveContactID), value})
 	}
 	withdraw := ""
 	if o.state() == OutcomeStateApplied {
 		withdraw = o.value()
 	}
-	p := &planner{s: s, tx: tx, thread: j.ThreadID, cutOff: j.CutOff, wants: wantsOf(siblings), openedNow: map[uuid.UUID]bool{}}
-	pl, err := p.plan(ctx, o.Question, o.ContactID, right, due, withdraw)
+	p := &planner{
+		s: s, tx: tx, thread: j.ThreadID, cutOff: j.CutOff, wants: wantsOf(siblings),
+		closable: onlyObligation(live.obligation(o)), openedNow: map[uuid.UUID]bool{},
+	}
+	pl, err := p.plan(ctx, o.Question, o.LiveContactID, right, due, withdraw)
 	if err != nil {
 		return err
 	}
 	if _, _, err := p.apply(ctx, pl, userLocator(), 100); err != nil {
 		return err
 	}
-	return p.recordObligation(ctx, o.ID, o.Question, o.ContactID, right)
+	return p.recordObligation(ctx, o.ID, o.Question, o.LiveContactID, right)
 }
 
 // reviewDueTx is the date a review gives a commitment: none when the review
@@ -177,7 +184,7 @@ func (s *Store) reviewDueTx(ctx context.Context, tx pgx.Tx, o *outcomeRecord, ri
 	case keep:
 		return nil, nil
 	case commitment && o.adds(right):
-		due, err := s.nudgeDateTx(ctx, tx, *o.ContactID)
+		due, err := s.nudgeDateTx(ctx, tx, *o.LiveContactID)
 		return &due, err
 	default:
 		return o.DueDate, nil

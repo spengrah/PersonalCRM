@@ -862,6 +862,50 @@ func (q *Queries) ListReviewRecords(ctx context.Context, arg ListReviewRecordsPa
 	return items, nil
 }
 
+const ResolveContactMerges = `-- name: ResolveContactMerges :many
+WITH RECURSIVE chain(contact_id, node_id, merged_into) AS (
+    SELECT n.id, n.id, n.merged_into
+    FROM node n
+    WHERE n.id = ANY($1::uuid[])
+  UNION
+    SELECT c.contact_id, n.id, n.merged_into
+    FROM chain c
+    JOIN node n ON n.id = c.merged_into
+)
+SELECT chain.contact_id, chain.node_id AS live_contact_id
+FROM chain
+WHERE chain.merged_into IS NULL
+ORDER BY chain.contact_id
+`
+
+type ResolveContactMergesRow struct {
+	ContactID     uuid.UUID `json:"contact_id"`
+	LiveContactID uuid.UUID `json:"live_contact_id"`
+}
+
+// Each given contact with the contact it now is: the end of its chain of
+// contact merges (node.merged_into), the contact itself when never merged. A
+// contact without a node has no row.
+func (q *Queries) ResolveContactMerges(ctx context.Context, contactIds []uuid.UUID) ([]*ResolveContactMergesRow, error) {
+	rows, err := q.db.Query(ctx, ResolveContactMerges, contactIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []*ResolveContactMergesRow{}
+	for rows.Next() {
+		var i ResolveContactMergesRow
+		if err := rows.Scan(&i.ContactID, &i.LiveContactID); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const SetJudgmentAppearanceEffects = `-- name: SetJudgmentAppearanceEffects :exec
 UPDATE judgment_appearance
 SET obligations_opened = $1,

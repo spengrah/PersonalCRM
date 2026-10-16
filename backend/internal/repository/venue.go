@@ -78,6 +78,12 @@ func NewVenueRepository(queries db.Querier) *VenueRepository {
 	return &VenueRepository{queries: queries}
 }
 
+// WithTx returns a repository bound to the transaction, so a caller inside a
+// transaction reads the venues that transaction wrote.
+func (r *VenueRepository) WithTx(tx pgx.Tx) *VenueRepository {
+	return &VenueRepository{queries: db.New(tx)}
+}
+
 func convertDbVenue(dbVenue *db.Venue) Venue {
 	venue := Venue{
 		Kind:              dbVenue.Kind,

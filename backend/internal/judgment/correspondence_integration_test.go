@@ -57,6 +57,18 @@ func TestRecordedMessagesCloseReplyObligations(t *testing.T) {
 			},
 		},
 		{
+			name:     "the user's outbound message stored and recorded in one transaction closes I owe a reply",
+			outcomes: iOwe,
+			answer: func(t *testing.T, e *env, th thread, c uuid.UUID) {
+				tx, err := e.database.Pool.Begin(e.ctx)
+				require.NoError(t, err)
+				defer func() { _ = tx.Rollback(e.ctx) }()
+				e.messageTx(t, tx, th, c, true, e.day(2))
+				e.recordTx(t, tx, th, c, repository.InteractionDirectionOutbound, e.day(2))
+				require.NoError(t, tx.Commit(e.ctx))
+			},
+		},
+		{
 			name:     "the user's outbound message extending an existing session closes I owe a reply",
 			outcomes: iOwe,
 			answer: func(t *testing.T, e *env, th thread, c uuid.UUID) {

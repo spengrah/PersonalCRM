@@ -23,13 +23,16 @@ func (s *Store) CloseAnsweredObligationsTx(ctx context.Context, tx pgx.Tx, conta
 	if err != nil {
 		return fmt.Errorf("list open reply obligations: %w", err)
 	}
+	// The builder reads through the recording's transaction, so the message
+	// being recorded is part of the thread it reads.
+	builder := s.contexts.WithTx(tx)
 	contexts := map[uuid.UUID]threadctx.Context{}
 	for i := range tasks {
 		task := &tasks[i]
 		thread := task.Obligation.ThreadID
 		c, ok := contexts[thread]
 		if !ok {
-			if c, err = s.contexts.Build(ctx, thread, now()); err != nil {
+			if c, err = builder.Build(ctx, thread, now()); err != nil {
 				return fmt.Errorf("build thread %s: %w", thread, err)
 			}
 			contexts[thread] = c

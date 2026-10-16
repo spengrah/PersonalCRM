@@ -201,30 +201,53 @@ func (e *env) thread(t *testing.T) thread {
 // false, else the user's own message to the contact.
 func (e *env) message(t *testing.T, th thread, contact uuid.UUID, fromUser bool, at time.Time) {
 	t.Helper()
+	_, err := e.comms.UpsertMessage(e.ctx, messageParams(th, contact, fromUser, at))
+	require.NoError(t, err)
+}
+
+// messageTx stores the message as message does, inside tx.
+func (e *env) messageTx(t *testing.T, tx pgx.Tx, th thread, contact uuid.UUID, fromUser bool, at time.Time) {
+	t.Helper()
+	_, err := e.comms.UpsertMessageTx(e.ctx, tx, messageParams(th, contact, fromUser, at))
+	require.NoError(t, err)
+}
+
+func messageParams(th thread, contact uuid.UUID, fromUser bool, at time.Time) repository.UpsertCommsMessageParams {
 	direction := repository.InteractionDirectionInbound
 	if fromUser {
 		direction = repository.InteractionDirectionOutbound
 	}
 	container, body, peer := th.container, "synthetic message body", "peer-"+contact.String()+"@example.test"
-	_, err := e.comms.UpsertMessage(e.ctx, repository.UpsertCommsMessageParams{
+	return repository.UpsertCommsMessageParams{
 		Source: repository.InteractionSourceEmail, ExternalID: uuid.NewString(), ThreadID: &container,
 		Body: &body, PeerHandle: &peer, PeerNormalized: &peer, Direction: direction, SentAt: at,
 		SourceMetadata: []byte("{}"), MatchedContactID: contact,
-	})
-	require.NoError(t, err)
+	}
 }
 
 // record records one interaction of the contact on the thread through the
 // contact service's recording path, returning it.
 func (e *env) record(t *testing.T, th thread, contact uuid.UUID, direction string, at time.Time) *repository.Interaction {
 	t.Helper()
-	ref := contact.String() + ":" + th.container + ":" + at.Format(time.RFC3339Nano)
-	ix, err := e.contacts.RecordInteraction(e.ctx, repository.RecordInteractionRequest{
-		ContactID: contact, Source: repository.InteractionSourceEmail, SourceRef: &ref,
-		OccurredAt: at, Direction: direction, VenueID: &th.id,
-	})
+	ix, err := e.contacts.RecordInteraction(e.ctx, recordRequest(th, contact, direction, at))
 	require.NoError(t, err)
 	return ix
+}
+
+// recordTx records the interaction as record does, inside tx, as an ingestion
+// path that stores a message and records it in one transaction does.
+func (e *env) recordTx(t *testing.T, tx pgx.Tx, th thread, contact uuid.UUID, direction string, at time.Time) {
+	t.Helper()
+	_, err := e.contacts.RecordInteractionTx(e.ctx, tx, false, recordRequest(th, contact, direction, at))
+	require.NoError(t, err)
+}
+
+func recordRequest(th thread, contact uuid.UUID, direction string, at time.Time) repository.RecordInteractionRequest {
+	ref := contact.String() + ":" + th.container + ":" + at.Format(time.RFC3339Nano)
+	return repository.RecordInteractionRequest{
+		ContactID: contact, Source: repository.InteractionSourceEmail, SourceRef: &ref,
+		OccurredAt: at, Direction: direction, VenueID: &th.id,
+	}
 }
 
 // judgmentOf builds a judgment of the thread at the cut-off.

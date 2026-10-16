@@ -216,7 +216,7 @@ func (s *Store) appearTx(ctx context.Context, tx pgx.Tx, run *db.JudgmentRun, ju
 	if added == 0 {
 		return Effects{}, nil
 	}
-	live, err := s.changesLiveState(ctx, run, thread, cutOff)
+	live, err := s.changesLiveStateTx(ctx, tx, run, thread, cutOff)
 	if err != nil || !live {
 		return Effects{}, err
 	}
@@ -237,11 +237,11 @@ func (s *Store) appearTx(ctx context.Context, tx pgx.Tx, run *db.JudgmentRun, ju
 	return effects, nil
 }
 
-// changesLiveState reports whether an appearance in run at cutOff can change
+// changesLiveStateTx reports whether an appearance in run at cutOff can change
 // live state: only a scheduled or historical run of the designated production
 // method, at a cut-off at or after the thread's latest content (a current
-// judgment).
-func (s *Store) changesLiveState(ctx context.Context, run *db.JudgmentRun, thread threadctx.VenueID, cutOff time.Time) (bool, error) {
+// judgment), read through the transaction.
+func (s *Store) changesLiveStateTx(ctx context.Context, tx pgx.Tx, run *db.JudgmentRun, thread threadctx.VenueID, cutOff time.Time) (bool, error) {
 	production, ok := s.ProductionMethod()
 	if !ok || run.MethodKey != production {
 		return false, nil
@@ -249,7 +249,7 @@ func (s *Store) changesLiveState(ctx context.Context, run *db.JudgmentRun, threa
 	if RunKind(run.Kind) != RunKindScheduled && RunKind(run.Kind) != RunKindHistorical {
 		return false, nil
 	}
-	latest, hasContent, err := s.contexts.LatestContentAt(ctx, thread, now())
+	latest, hasContent, err := s.contexts.WithTx(tx).LatestContentAt(ctx, thread, now())
 	if err != nil {
 		return false, fmt.Errorf("latest content of thread %s: %w", thread, err)
 	}

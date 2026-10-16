@@ -61,11 +61,11 @@ func (s *Store) landTx(ctx context.Context, tx pgx.Tx, judgmentID uuid.UUID, thr
 		} else if o.class == nil && o.QuestionID != "" {
 			pending = append(pending, o)
 		}
-		siblings = append(siblings, sibling{o.Question, contactOf(o.ContactID), value})
+		siblings = append(siblings, sibling{o.Question, contactOf(o.LiveContactID), value})
 	}
 	slices.SortStableFunc(pending, landingOrder)
 
-	p := &planner{s: s, tx: tx, thread: thread, cutOff: cutOff, wants: wantsOf(siblings), openedNow: map[uuid.UUID]bool{}}
+	p := &planner{s: s, tx: tx, thread: thread, cutOff: cutOff, wants: wantsOf(siblings), closable: anyObligation, openedNow: map[uuid.UUID]bool{}}
 	locator := judgmentLocator(j.ID, MethodRef{j.MethodKey, j.MethodVersion, j.WordingVersion}, j.InputHash)
 	var effects Effects
 	land := func(outcomeID uuid.UUID, question Question, contact *uuid.UUID, pl plan, value string, confidence int16) error {
@@ -94,11 +94,11 @@ func (s *Store) landTx(ctx context.Context, tx pgx.Tx, judgmentID uuid.UUID, thr
 		return p.recordObligation(ctx, outcomeID, question, contact, value)
 	}
 	for _, o := range pending {
-		pl, err := p.plan(ctx, o.Question, o.ContactID, o.value(), o.DueDate, "")
+		pl, err := p.plan(ctx, o.Question, o.LiveContactID, o.value(), o.DueDate, "")
 		if err != nil {
 			return Effects{}, err
 		}
-		if err := land(o.ID, o.Question, o.ContactID, pl, o.value(), percent(o.confidence())); err != nil {
+		if err := land(o.ID, o.Question, o.LiveContactID, pl, o.value(), percent(o.confidence())); err != nil {
 			return Effects{}, err
 		}
 	}
@@ -192,7 +192,7 @@ func mentions(outcomes []*outcomeRecord, task repository.ContactTask) bool {
 	question, _ := omissionOf(task)
 	user := task.Obligation.Debtor == repository.ObligationDebtorUser
 	return slices.ContainsFunc(outcomes, func(o *outcomeRecord) bool {
-		return o.Question == question && (user || contactOf(o.ContactID) == task.ContactID)
+		return o.Question == question && (user || contactOf(o.LiveContactID) == task.ContactID)
 	})
 }
 
@@ -400,9 +400,23 @@ type planner struct {
 	// closes a reply obligation.
 	cutOff time.Time
 	wants  wants
+	// closable reports whether a plan may close an open obligation: a landing
+	// may close any the judgment's outcomes speak to, a review only the one its
+	// outcome's live effect is (onlyObligation).
+	closable func(*repository.ContactTask) bool
 	// openedNow holds the obligations opened in this landing: a sibling's later
 	// date does not move them.
 	openedNow map[uuid.UUID]bool
+}
+
+// anyObligation lets a landing's plans close any open obligation.
+func anyObligation(*repository.ContactTask) bool { return true }
+
+// onlyObligation lets a plan close only own, the open obligation an outcome's
+// live effect is, so a review never takes away another obligation of the same
+// party, such as one a later judgment opened; with own nil it closes none.
+func onlyObligation(own *repository.ContactTask) func(*repository.ContactTask) bool {
+	return func(t *repository.ContactTask) bool { return own != nil && t.ID == own.ID }
 }
 
 func (p *planner) openObligations(ctx context.Context) ([]repository.ContactTask, error) {
@@ -430,8 +444,8 @@ func (p *planner) plan(ctx context.Context, question Question, contact *uuid.UUI
 	case QuestionBallInCourt:
 		c := *contact
 		user, their := find(repository.ObligationDebtorUser, c), find(repository.ObligationDebtorContact, c)
-		closeUser := replyOpen(user) && !p.wants.user
-		closeTheirs := replyOpen(their) && !p.wants.contactCommitment[c]
+		closeUser := replyOpen(user) && p.closable(user) && !p.wants.user
+		closeTheirs := replyOpen(their) && p.closable(their) && !p.wants.contactCommitment[c]
 		switch BallInCourt(value) {
 		case BallInCourtIOweReply:
 			if user == nil {
@@ -482,7 +496,7 @@ func (p *planner) plan(ctx context.Context, question Question, contact *uuid.UUI
 		}
 		task := find(debtor, c)
 		if value == string(CommitmentStateNone) {
-			if task != nil && task.Obligation.Basis == repository.ObligationBasisCommitment && !wanted {
+			if task != nil && task.Obligation.Basis == repository.ObligationBasisCommitment && !wanted && p.closable(task) {
 				pl.add(action{kind: actClose, task: task})
 			}
 			break

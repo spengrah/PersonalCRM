@@ -619,7 +619,7 @@ behaviors:
       - key: verdict-derived
         text: the verdict is confirmed when the right outcome equals the judged one, rejected when it differs and has no effect, corrected when it differs and has an effect
       - key: live-review-gives-right-effect
-        text: reviewing an applied or claim outcome gives the thread the right outcome's live effect, so confirming a claim applies it and rejecting an applied addition withdraws it
+        text: reviewing an applied or claim outcome gives the thread the right outcome's live effect, so confirming a claim applies it and rejecting an applied addition withdraws it; that effect acts on the contact the outcome's contact became through any contact merge, and closes no obligation other than the one the outcome's live effect is
       - key: evidence-review-labels-only
         text: reviewing an evidence outcome records the label and changes no live state
       - key: invalid-right-outcome-refused

@@ -132,6 +132,24 @@ WHERE judgment_id = ANY(sqlc.arg('judgment_ids')::uuid[])
    OR node_id = ANY(sqlc.arg('outcome_ids')::uuid[])
 ORDER BY judgment_id, question, question_id NULLS LAST, contact_id, node_id;
 
+-- name: ResolveContactMerges :many
+-- Each given contact with the contact it now is: the end of its chain of
+-- contact merges (node.merged_into), the contact itself when never merged. A
+-- contact without a node has no row.
+WITH RECURSIVE chain(contact_id, node_id, merged_into) AS (
+    SELECT n.id, n.id, n.merged_into
+    FROM node n
+    WHERE n.id = ANY(sqlc.arg('contact_ids')::uuid[])
+  UNION
+    SELECT c.contact_id, n.id, n.merged_into
+    FROM chain c
+    JOIN node n ON n.id = c.merged_into
+)
+SELECT chain.contact_id, chain.node_id AS live_contact_id
+FROM chain
+WHERE chain.merged_into IS NULL
+ORDER BY chain.contact_id;
+
 -- name: SetJudgmentOutcomeObligation :exec
 -- Records the obligation task an outcome's live effect is; NULL when its
 -- effect is no obligation.
