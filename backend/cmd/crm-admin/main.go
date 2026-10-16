@@ -174,6 +174,26 @@
 //	                              numerically to the Tier-1 queue_wait_ms metric.
 //	                              Read-only; SAFE with crm-api running.
 //
+//	--judge-month YYYY-MM         Historical decision-model run over one month:
+//	      --method KEY            at each simulated nightly cut-off (the
+//	      [--measure]             midnights in the server's timezone that close
+//	                              the month's days), judge with method KEY every
+//	                              thread that gained content since the previous
+//	                              cut-off, over its whole content up to the
+//	                              cut-off, and record each judgment or incomplete
+//	                              report through the judgment store. Only the
+//	                              method DECISION_PRODUCTION_METHOD designates
+//	                              changes live state; a designation the method
+//	                              registry lacks fails before any call. A
+//	                              judgment the method version already holds for
+//	                              an input is reused, so repeating a month sends
+//	                              nothing. --measure builds the same contexts,
+//	                              sizes them against the method's limits, and
+//	                              sends and writes nothing. Prints a
+//	                              content-free report (IDs, counts, reasons).
+//	                              SAFE with crm-api running (it runs the Todoist
+//	                              jobs a run's live effects enqueue).
+//
 // The seed/reset subcommands inherit the process env (CRM_ENV / TIME_BASE /
 // TIME_ACCELERATION / DATABASE_URL / MIGRATIONS_PATH) — on the Pi via
 // `set -a; . /srv/personalcrm/.env; set +a` — so the seeded world's cadence /
@@ -370,8 +390,12 @@ type adminDeps struct {
 	// whatsappHistory serves --whatsapp-list-history / --whatsapp-requeue-history
 	// (the operator recovery path for a history chunk that failed to drain).
 	whatsappHistory whatsappHistoryAdmin
-	stdout          io.Writer
-	stderr          io.Writer
+	// judgeMonth serves --judge-month. Built LAZILY (only when --judge-month
+	// is set) because loading the masker reads every contact name. Nil for
+	// all other subcommands.
+	judgeMonth judgeMonthRunner
+	stdout     io.Writer
+	stderr     io.Writer
 }
 
 // runOptions captures parsed flags. Exposed as a struct so tests can
@@ -439,6 +463,12 @@ type runOptions struct {
 	listWhatsAppHistory      bool
 	historyState             string
 	requeueWhatsAppHistoryID string
+	// Historical decision-model runs. judgeMonth <- --judge-month (YYYY-MM;
+	// empty = unset; non-empty selects the subcommand); judgeMethod <-
+	// --method; judgeMeasure <- --measure.
+	judgeMonth   string
+	judgeMethod  string
+	judgeMeasure bool
 }
 
 // exitErr carries an explicit process exit code so a subcommand can drive a
@@ -618,6 +648,9 @@ func validateSubcommand(opts runOptions) error {
 	if opts.requeueWhatsAppHistoryID != "" {
 		active++
 	}
+	if opts.judgeMonth != "" {
+		active++
+	}
 	if active == 0 {
 		return errors.New("no subcommand specified; pass exactly one of " +
 			subcommandList)
@@ -626,7 +659,7 @@ func validateSubcommand(opts runOptions) error {
 		return errors.New("subcommand flags are mutually exclusive; pass exactly one of " +
 			subcommandList)
 	}
-	return nil
+	return validateJudgeMonth(opts)
 }
 
 // subcommandList is the canonical subcommand enumeration shared by the
@@ -637,7 +670,7 @@ const subcommandList = "--messages-rematch-stranded, --reconcile-address-book-me
 	"--list-hosts, --revoke-host <uuid>, --rotate-host-key <uuid>, --seed, --reset-and-seed, " +
 	"--migrate, --migrate-check, --list-jobs, --retry-job <id>, --migrate-tags, " +
 	"--migrate-contact-knowledge-columns, --river-tier0, --whatsapp-list-history, " +
-	"--whatsapp-requeue-history <uuid>"
+	"--whatsapp-requeue-history <uuid>, --judge-month YYYY-MM --method <key> [--measure]"
 
 // parseArgs uses a private FlagSet so tests can drive the parser
 // without polluting flag's global state.
@@ -745,6 +778,16 @@ func parseArgs(args []string) (runOptions, error) {
 		"Return a FAILED WhatsApp history chunk (by UUID from --whatsapp-list-history) to pending so "+
 			"the drainer retries it. Attempts are NOT reset -- they are lifetime triage evidence -- so "+
 			"a chunk past the attempt cap gets exactly one fresh attempt per requeue.")
+	fs.StringVar(&opts.judgeMonth, "judge-month", "",
+		"Historical decision-model run over one month (YYYY-MM): judge with --method each thread "+
+			"that gained content since the previous simulated nightly cut-off, recording every judgment "+
+			"or incomplete report. Only the designated production method changes live state. Prints a "+
+			"content-free summary.")
+	fs.StringVar(&opts.judgeMethod, "method", "",
+		"Decision-model method key for --judge-month.")
+	fs.BoolVar(&opts.judgeMeasure, "measure", false,
+		"With --judge-month: build every eligible context and size it against the method's limits, "+
+			"sending and writing nothing.")
 	if err := fs.Parse(args); err != nil {
 		return runOptions{}, err
 	}
@@ -869,6 +912,8 @@ func run(ctx context.Context, opts runOptions, deps adminDeps) error {
 		return runListWhatsAppHistory(ctx, opts, deps)
 	case opts.requeueWhatsAppHistoryID != "":
 		return runRequeueWhatsAppHistory(ctx, opts, deps)
+	case opts.judgeMonth != "":
+		return runJudgeMonth(ctx, opts, deps)
 	case opts.migrate, opts.migrateCheck:
 		// Migration subcommands are dispatched PRE-DB in runMain (they need
 		// only the database URL + migrations path, not deps), so they never
@@ -1630,6 +1675,8 @@ func buildProductionDeps(ctx context.Context, cfg *config.Config, database *db.D
 	// knowledge_cache_updater job — register the kind so the insert-only client
 	// accepts it (the cache refresh runs in the crm-api worker, not here).
 	river.AddWorker(workers, &noopKnowledgeCacheWorker{})
+	// A historical run's live effects enqueue Todoist task operations.
+	river.AddWorker(workers, &noopTodoistTaskOpWorker{})
 	riverClient, err := river.NewClient(riverpgxv5.New(database.Pool), &river.Config{
 		JobTimeout: cfg.River.JobTimeout,
 		Queues: map[string]river.QueueConfig{
@@ -1763,6 +1810,15 @@ func buildProductionDeps(ctx context.Context, cfg *config.Config, database *db.D
 		commsRepo := repository.NewCommsMessageRepository(database.Queries)
 		gmailProvider := google.NewGmailSyncProvider(oauthService, commsRepo, eventBus, database.Pool)
 		deps.rederive = google.NewCorrespondenceNameRederiveService(commsRepo, gmailProvider)
+	}
+
+	// LAZY: build the historical-run stack ONLY for --judge-month.
+	if opts.judgeMonth != "" {
+		runner, err := buildJudgeMonthRunner(ctx, cfg, database, assertService, contactRepo, riverClient)
+		if err != nil {
+			return adminDeps{}, nil, err
+		}
+		deps.judgeMonth = runner
 	}
 
 	cleanup := func() {}

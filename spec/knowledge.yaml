@@ -693,3 +693,73 @@ behaviors:
       - key: unbounded-or-malformed-refused
         text: a judgments request with neither parameter, or a malformed ID, is refused with 400
     provenance: [JudgmentHandler.ListJudgmentRuns, JudgmentHandler.ListJudgments, judgment_dto.go]
+
+  # --- Judgment runs ---
+
+  - id: KNW-051
+    title: A historical run judges, at each simulated nightly cut-off, the threads that gained content since the previous one
+    type: business-logic
+    status: current
+    surface: none
+    given: a historical run of one method over a chosen month
+    when: the run executes
+    then:
+      - key: nightly-cut-offs
+        text: the run's cut-offs are the midnights, in the server's timezone, that close each day of the month
+      - key: gained-content-eligible
+        text: a thread is judged at a cut-off exactly when it has content after the previous cut-off and up to and including this one, the first window opening at the month's start, so a thread with content on two nights is judged at both and a thread whose only content precedes the month is not judged
+      - key: whole-content-context
+        text: each judgment reads the thread's whole content up to its cut-off, content from before the month included
+      - key: writes-as-production
+        text: each judgment and incomplete report is recorded through the judgment store as a production run's would be, so the production method's current judgments change live state
+    provenance: [judgerun.Runner.Historical, judgerun.eachEligible, judgerun.Month.CutOffs, crm-admin --judge-month, .agents/spec/2026-10-14-decision-model-extraction.md G10 SC1 "historical runs simulate the production schedule"]
+
+  - id: KNW-052
+    title: Every eligible thread of a run ends with a recorded judgment or an incomplete report
+    type: business-logic
+    status: current
+    surface: none
+    given: a thread a run must judge at a cut-off
+    when: the run judges it
+    then:
+      - key: judged-or-incomplete
+        text: the thread ends with a recorded judgment or an incomplete report naming its reason; none is truncated or skipped, and a failure the run cannot report stops the run with an error
+      - key: failed-calls-retried
+        text: a failed call is asked again, three attempts in all, before the thread is reported call_failed; an over-limit context is reported over_limit without being sent
+      - key: summary-counts-both
+        text: the run's summary counts the eligible thread contexts and how each ended, judged, reused or incomplete by reason
+    provenance: [judgerun.Runner.judge, judgerun.judgeWithRetries, .agents/spec/2026-10-14-decision-model-extraction.md G11 HC11 SC1]
+
+  - id: KNW-053
+    title: A run sends each thread context at most once per method version and input
+    type: business-logic
+    status: current
+    surface: none
+    given: a thread context a run would send to its method
+    when: the run's method version already holds a judgment of that thread and input hash
+    then:
+      - key: reused-not-sent
+        text: the run reuses that judgment through the store and sends nothing, so repeating a month sends nothing
+      - key: group-once-per-cut-off
+        text: a group thread is sent once per cut-off per method, never once per member
+      - key: rerun-reviewed-examples
+        text: a rerun judges each reviewed example's thread at the example's cut-off as an evidence-only run, reusing any judgment of that input, and reports an example whose rebuilt input differs as input_changed
+    provenance: [judgerun.Runner.judge, judgerun.Runner.Rerun, judgment.Store.ReuseJudgment, .agents/spec/2026-10-14-decision-model-extraction.md HC10 SC9]
+
+  - id: KNW-054
+    title: Runs check the production designation before any call and report content-free without blocking
+    type: business-logic
+    status: current
+    surface: none
+    given: a historical or measuring run started from crm-admin --judge-month
+    when: the run starts and finishes
+    then:
+      - key: unknown-designation-fails
+        text: a production designation naming a key the method registry lacks fails before any call, and a run with no designation proceeds and changes no live state
+      - key: measuring-run-sends-nothing
+        text: a measuring run builds every context a historical run of the month would judge, with the method's question tree, sends nothing, writes no judgment, run or live state, and reports how many contexts it built, the distribution of their token and question counts against the method's limits and how many exceed a limit
+      - key: summary-reports-live-effects
+        text: a historical run's summary reports the obligations it opened, the flags it raised and the claims it raised
+      - key: content-free-never-blocking
+        text: run output holds only IDs, counts and reasons, and no run refuses or stops on a size or a count
+    provenance: [judgerun.New, judgerun.Runner.Measure, judgerun.Summary, crm-admin --judge-month --measure, .agents/spec/2026-10-14-decision-model-extraction.md HC1 HC7 G15 "Assumptions & deferred questions"]
