@@ -16,7 +16,7 @@ import (
 // One thread context is one request holding the whole question tree: per
 // matched contact, ball-in-court (conversations only) and, per direction, a
 // commitment question, its date and its source message keyed by message key;
-// one big-moment question; nothing asked of or between non-contacts (PR3.c1).
+// one big-moment question; nothing asked of or between non-contacts.
 func TestJudge_OneRequestHoldsTheWholeTree(t *testing.T) {
 	perParty := func(role string, conversation bool) []string {
 		var ids []string

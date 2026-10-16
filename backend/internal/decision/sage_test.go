@@ -19,7 +19,7 @@ func sageMethod(url string) decision.Method {
 // Every option of every question carries a probability in a sage-masked
 // judgment; a yes/no answer of null, Sage's "not sure", keeps its
 // probabilities and records no original answer, so the most probable option
-// is the chosen one (PR3.c14).
+// is the chosen one.
 func TestSage_EveryOptionHasAProbability(t *testing.T) {
 	yes := "yes"
 	cases := []struct {
@@ -62,8 +62,7 @@ func TestSage_EveryOptionHasAProbability(t *testing.T) {
 }
 
 // When Sage refuses a call, as when the plan's usage runs out, sage-masked
-// reports the context incomplete as call_failed instead of ending the run
-// (PR3.c15).
+// reports the context incomplete as call_failed instead of ending the run.
 func TestSage_RefusedCallIsCallFailed(t *testing.T) {
 	for _, status := range []int{http.StatusPaymentRequired, http.StatusInternalServerError} {
 		t.Run(http.StatusText(status), func(t *testing.T) {

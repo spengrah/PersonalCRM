@@ -16,7 +16,7 @@ import (
 // A judgment carries its execution time, latency, the size Measure gives, the
 // billed tokens and cost its source reports (none where it reports none) and
 // its question-wording version; its outcomes name the question IDs they
-// answer, which name participants by role (PR3.c13).
+// answer, which name participants by role.
 func TestJudge_JudgmentCarriesItsUsage(t *testing.T) {
 	executedAt := time.Date(2026, 10, 16, 3, 0, 0, 0, time.UTC)
 	defer accelerated.SetNowForTest(func() time.Time { return executedAt })()

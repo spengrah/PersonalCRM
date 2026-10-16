@@ -14,7 +14,7 @@ import (
 
 // Answers become outcomes carrying the chosen option's probability; reasoned
 // options of one action sum; answers made irrelevant higher in the tree yield
-// no outcome (PR3.c2).
+// no outcome.
 func TestJudge_AnswersBecomeOutcomes(t *testing.T) {
 	t.Run("two reasoned yes options splitting one action", func(t *testing.T) {
 		f := &fake{answer: func(q threadctx.Question) decision.Answer {

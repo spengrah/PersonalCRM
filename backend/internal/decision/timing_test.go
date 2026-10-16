@@ -16,7 +16,7 @@ import (
 
 // A timing expression resolves against the sending message's timestamp, never
 // the time the run judges it, and the candidate the model selects becomes the
-// commitment's date (PR3.c3).
+// commitment's date.
 func TestJudge_CommitmentDateFromTheMessage(t *testing.T) {
 	// Judged in October; the messages were sent on Wednesday 2026-01-14.
 	defer accelerated.SetNowForTest(func() time.Time { return time.Date(2026, 10, 16, 12, 0, 0, 0, time.UTC) })()

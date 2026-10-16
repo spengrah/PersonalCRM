@@ -14,8 +14,7 @@ import (
 
 // A method measures a request against its own limits without sending it, and
 // judging returns over_limit, sending nothing, exactly when the measurement
-// exceeds a limit; under the limits the whole context is sent (PR3.c4,
-// PR3.c10). The tree has 7 questions per matched contact plus one, so 64 is
+// exceeds a limit; under the limits the whole context is sent. The tree has 7 questions per matched contact plus one, so 64 is
 // reachable and 65 is not: one over the question limit is a 64-question tree
 // against a limit of 63.
 func TestJudge_LimitsDecideBeforeSending(t *testing.T) {
@@ -71,8 +70,7 @@ func TestJudge_LimitsDecideBeforeSending(t *testing.T) {
 	}
 }
 
-// A call that fails returns call_failed, not an error that ends the run
-// (PR3.c4).
+// A call that fails returns call_failed, not an error that ends the run.
 func TestJudge_EndpointErrorIsCallFailed(t *testing.T) {
 	f := &fake{err: errEndpoint}
 	res, err := newMethod(definition(roomy), f).Judge(t.Context(), dm("are you around?"))
