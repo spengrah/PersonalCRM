@@ -7,8 +7,10 @@ import (
 	"maps"
 	"slices"
 	"strconv"
+	"strings"
 	"time"
 
+	"personal-crm/backend/internal/decision"
 	"personal-crm/backend/internal/judgment"
 	"personal-crm/backend/internal/scorecard"
 )
@@ -103,33 +105,38 @@ func judgmentSpan(j judgment.JudgmentRecord) span {
 	return s
 }
 
-// question is one answered question as the export sends it.
+// question is one answered question as the export sends it: the option the
+// method selected, every option's probability and, where the answer yields
+// one, its outcome.
 type question struct {
 	ID            string             `json:"id"`
+	Answer        string             `json:"answer"`
 	Outcome       string             `json:"outcome,omitempty"`
 	Confidence    *float64           `json:"confidence,omitempty"`
 	Probabilities map[string]float64 `json:"probabilities"`
 }
 
-// questionsOf lists every answered question with its option probabilities
-// and, where the answer yields one, its outcome. A source-message question's
-// options are keyed by message keys, which are source identifiers, so its
-// probabilities are sent keyed by rank instead (candidate_1 the most
-// probable).
+// questionsOf lists every answered question, outcome or not, with its
+// selected option and option probabilities. A source-message question's
+// candidate options are keyed by message keys, which are source identifiers,
+// so each message key is sent as an opaque candidate, the same candidate
+// wherever the judgment names that message; its own options, which name no
+// message, keep their keys.
 func questionsOf(j judgment.JudgmentRecord) []question {
 	outcomes := map[string]judgment.QuestionOutcome{}
 	for _, o := range j.Outcomes {
 		outcomes[o.QuestionID] = o
 	}
-	sourceMessage := map[string]bool{}
-	for _, q := range j.Questions {
-		sourceMessage[judgment.SourceMessageQuestionID(q.ID)] = true
-	}
+	candidates := messageCandidates(j)
 	out := make([]question, len(j.Questions))
 	for i, q := range j.Questions {
-		out[i] = question{ID: q.ID, Probabilities: q.Probabilities}
-		if sourceMessage[q.ID] {
-			out[i].Probabilities = ranked(q.Probabilities)
+		out[i] = question{ID: q.ID, Answer: q.Chosen(), Probabilities: q.Probabilities}
+		if isSourceMessage(q.ID) {
+			out[i].Answer = cmp.Or(candidates[out[i].Answer], out[i].Answer)
+			out[i].Probabilities = make(map[string]float64, len(q.Probabilities))
+			for k, p := range q.Probabilities {
+				out[i].Probabilities[cmp.Or(candidates[k], k)] = p
+			}
 		}
 		if o, ok := outcomes[q.ID]; ok {
 			confidence := o.Confidence
@@ -139,16 +146,46 @@ func questionsOf(j judgment.JudgmentRecord) []question {
 	return out
 }
 
-// ranked keys probabilities by rank, most probable first, ties in key order.
-func ranked(probabilities map[string]float64) map[string]float64 {
-	keys := slices.SortedFunc(maps.Keys(probabilities), func(a, b string) int {
-		return cmp.Or(cmp.Compare(probabilities[b], probabilities[a]), cmp.Compare(a, b))
-	})
-	out := make(map[string]float64, len(keys))
-	for i, k := range keys {
-		out["candidate_"+strconv.Itoa(i+1)] = probabilities[k]
+// sourceMessageOptions are the options a source-message question offers
+// besides its messages, in every wording; none names a message.
+var sourceMessageOptions = func() map[string]bool {
+	keys := map[string]bool{}
+	for _, w := range []decision.Wording{decision.DefaultWording, decision.ReasonedWording} {
+		for _, o := range w.SourceMessage.Options {
+			keys[o.Key] = true
+		}
 	}
-	return out
+	return keys
+}()
+
+// isSourceMessage reports whether a question is a source-message question,
+// by its own ID.
+func isSourceMessage(id string) bool {
+	return strings.HasSuffix(id, judgment.SourceMessageQuestionID(""))
+}
+
+// messageCandidates maps each message key the judgment's source-message
+// questions offer or select to an opaque candidate, numbered in key order.
+// Every key of those questions that is not one of their own options is taken
+// for a message key, so an unknown key is never sent as it is.
+func messageCandidates(j judgment.JudgmentRecord) map[string]string {
+	var keys []string
+	for _, q := range j.Questions {
+		if !isSourceMessage(q.ID) {
+			continue
+		}
+		for _, k := range append(slices.Collect(maps.Keys(q.Probabilities)), q.Chosen()) {
+			if k != "" && !sourceMessageOptions[k] && !slices.Contains(keys, k) {
+				keys = append(keys, k)
+			}
+		}
+	}
+	slices.Sort(keys)
+	candidates := make(map[string]string, len(keys))
+	for i, k := range keys {
+		candidates[k] = "candidate_" + strconv.Itoa(i+1)
+	}
+	return candidates
 }
 
 // runSpan is a finished run's summary, spanning the run.

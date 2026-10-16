@@ -473,7 +473,7 @@ func (s *Store) sourceMessage(ctx context.Context, pc *proposalContext, question
 	if i < 0 {
 		return nil, nil
 	}
-	key := chosenOption(questions[i])
+	key := questions[i].Chosen()
 	if key == "" {
 		return nil, nil
 	}
@@ -489,26 +489,6 @@ func (s *Store) sourceMessage(ctx context.Context, pc *proposalContext, question
 		source.Sender = m.ContactID
 	}
 	return source, nil
-}
-
-// chosenOption is a choice question's answer: the model's original answer,
-// else its most probable option.
-func chosenOption(q AnsweredQuestion) string {
-	if q.OriginalAnswer != "" {
-		return q.OriginalAnswer
-	}
-	best, bestP := "", -1.0
-	keys := make([]string, 0, len(q.Probabilities))
-	for k := range q.Probabilities {
-		keys = append(keys, k)
-	}
-	slices.Sort(keys)
-	for _, k := range keys {
-		if q.Probabilities[k] > bestP {
-			best, bestP = k, q.Probabilities[k]
-		}
-	}
-	return best
 }
 
 // sortProposal orders a proposal's items and additions by the participant's

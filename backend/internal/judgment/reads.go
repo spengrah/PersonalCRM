@@ -56,34 +56,84 @@ func (s *Store) FinishedRuns(ctx context.Context) ([]RunRecord, error) {
 	}
 	records := make([]RunRecord, len(rows))
 	for i, r := range rows {
-		counts := map[IncompleteReason]int{}
-		for _, t := range incomplete[r.ID] {
-			counts[t.Reason]++
-		}
-		var cost *float64
-		if r.CostReported {
-			c := r.CostUsd
-			cost = &c
-		}
-		records[i] = RunRecord{
-			Run:        r.ID,
-			Kind:       RunKind(r.Kind),
-			Method:     MethodRef{r.MethodKey, r.MethodVersion, r.WordingVersion},
-			From:       r.WindowFrom,
-			To:         r.WindowTo,
-			StartedAt:  r.StartedAt,
-			FinishedAt: *r.FinishedAt,
-			Judged:     int(r.JudgedCount),
-			Incomplete: counts,
-			Effects: Effects{
-				ObligationsOpened: int(r.ObligationsOpened),
-				FlagsRaised:       int(r.FlagsRaised),
-				ClaimsRaised:      int(r.ClaimsRaised),
-			},
-			CostUSD: cost,
-		}
+		records[i] = runRecord(r, incomplete[r.ID])
 	}
 	return records, nil
+}
+
+// RunExport is one run's content-free records: the judgments its calls
+// produced, in the order it recorded them (not those it reused, which another
+// run produced), and its record once it finished (nil until then).
+type RunExport struct {
+	Run       RunID
+	Judgments []JudgmentRecord
+	Finished  *RunRecord
+}
+
+// RunExports returns every run's content-free records, oldest run first, so
+// every judgment is in exactly one run's export, finished or not. Runs are
+// read before judgments, so a run read as finished has all its judgments
+// listed.
+func (s *Store) RunExports(ctx context.Context) ([]RunExport, error) {
+	rows, err := s.queries.ListJudgmentRunSummaries(ctx, false)
+	if err != nil {
+		return nil, fmt.Errorf("list runs: %w", err)
+	}
+	incomplete, err := s.incompleteByRun(ctx)
+	if err != nil {
+		return nil, err
+	}
+	appearances, err := s.queries.ListJudgmentAppearances(ctx, db.ListJudgmentAppearancesParams{JudgmentIds: []uuid.UUID{}, FreshOnly: true})
+	if err != nil {
+		return nil, fmt.Errorf("list fresh appearances: %w", err)
+	}
+	records, err := s.judgmentRecords(ctx, appearances)
+	if err != nil {
+		return nil, err
+	}
+	byRun := map[RunID][]JudgmentRecord{}
+	for i, a := range appearances {
+		byRun[a.RunID] = append(byRun[a.RunID], records[i])
+	}
+	exports := make([]RunExport, len(rows))
+	for i, r := range rows {
+		exports[i] = RunExport{Run: r.ID, Judgments: byRun[r.ID]}
+		if r.FinishedAt != nil {
+			record := runRecord(r, incomplete[r.ID])
+			exports[i].Finished = &record
+		}
+	}
+	return exports, nil
+}
+
+// runRecord is a finished run's content-free record.
+func runRecord(r *db.ListJudgmentRunSummariesRow, incomplete []IncompleteThread) RunRecord {
+	counts := map[IncompleteReason]int{}
+	for _, t := range incomplete {
+		counts[t.Reason]++
+	}
+	var cost *float64
+	if r.CostReported {
+		c := r.CostUsd
+		cost = &c
+	}
+	return RunRecord{
+		Run:        r.ID,
+		Kind:       RunKind(r.Kind),
+		Method:     MethodRef{r.MethodKey, r.MethodVersion, r.WordingVersion},
+		From:       r.WindowFrom,
+		To:         r.WindowTo,
+		StartedAt:  r.StartedAt,
+		FinishedAt: *r.FinishedAt,
+		Judged:     int(r.JudgedCount),
+		Incomplete: counts,
+		Effects: Effects{
+			ObligationsOpened: int(r.ObligationsOpened),
+			FlagsRaised:       int(r.FlagsRaised),
+			ClaimsRaised:      int(r.ClaimsRaised),
+		},
+		CostUSD: cost,
+	}
 }
 
 func (s *Store) incompleteByRun(ctx context.Context) (map[RunID][]IncompleteThread, error) {
@@ -239,6 +289,12 @@ func (s *Store) JudgmentRecords(ctx context.Context, run RunID) ([]JudgmentRecor
 	if err != nil {
 		return nil, fmt.Errorf("list run appearances: %w", err)
 	}
+	return s.judgmentRecords(ctx, appearances)
+}
+
+// judgmentRecords returns each appearance's judgment as a content-free record
+// at the appearance's cut-off, in the appearances' order.
+func (s *Store) judgmentRecords(ctx context.Context, appearances []*db.ListJudgmentAppearancesRow) ([]JudgmentRecord, error) {
 	ids := make([]uuid.UUID, len(appearances))
 	for i, a := range appearances {
 		ids[i] = a.JudgmentID
@@ -247,7 +303,7 @@ func (s *Store) JudgmentRecords(ctx context.Context, run RunID) ([]JudgmentRecor
 	if len(ids) > 0 {
 		rows, err := s.queries.ListJudgmentRows(ctx, db.ListJudgmentRowsParams{Ids: ids, ExampleIds: []string{}})
 		if err != nil {
-			return nil, fmt.Errorf("list run judgments: %w", err)
+			return nil, fmt.Errorf("list judgments: %w", err)
 		}
 		for _, r := range rows {
 			byID[r.ID] = r

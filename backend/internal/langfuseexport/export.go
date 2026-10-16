@@ -27,8 +27,7 @@ import (
 // Store is the judgment store's content-free export reads.
 // *judgment.Store satisfies it.
 type Store interface {
-	FinishedRuns(ctx context.Context) ([]judgment.RunRecord, error)
-	JudgmentRecords(ctx context.Context, run judgment.RunID) ([]judgment.JudgmentRecord, error)
+	RunExports(ctx context.Context) ([]judgment.RunExport, error)
 	ReviewRecords(ctx context.Context) ([]judgment.ReviewRecord, error)
 }
 
@@ -77,8 +76,8 @@ type Report struct {
 	// Missing names the extraction project's unset settings; when any is
 	// unset, the export sent nothing.
 	Missing []string
-	// Runs counts the finished runs sent; Skipped those an earlier export
-	// already sent.
+	// Runs counts the finished runs sent; Skipped the runs whose records an
+	// earlier export already sent.
 	Runs, Skipped int
 	// Judgments, Scorecards and Reviews count the records sent.
 	Judgments, Scorecards, Reviews int
@@ -87,39 +86,45 @@ type Report struct {
 // Sent reports whether the export reached Langfuse.
 func (r Report) Sent() bool { return len(r.Missing) == 0 }
 
-// Export sends every record made since the previous export. A finished run
-// goes with the judgments that first appear in it and, for a rerun, its
-// scorecard metrics; the run's own trace is sent last, so a run whose trace
-// Langfuse holds is complete there and is skipped. Every live review is sent
+// Export sends every record made since the previous export. Each run's
+// records go as one batch: the judgments its calls produced, in the order it
+// recorded them, then, once it finished, its scorecard metrics if it is a
+// rerun and its own trace. A batch is sent in order, so Langfuse holding its
+// last record means an earlier export sent all of it, and the batch is
+// skipped; a judgment a run records later, or the run finishing, changes that
+// last record, so the next export sends the batch again. Judgments therefore
+// reach Langfuse whether or not their run finishes. Every live review is sent
 // on each export, so a changed verdict replaces the earlier one.
 func (e *Exporter) Export(ctx context.Context) (Report, error) {
 	if e.client == nil {
 		return Report{Missing: e.missing}, nil
 	}
 	var report Report
-	runs, err := e.store.FinishedRuns(ctx)
+	runs, err := e.store.RunExports(ctx)
 	if err != nil {
-		return report, fmt.Errorf("read finished runs: %w", err)
+		return report, fmt.Errorf("read runs: %w", err)
 	}
-	// A judgment reused by later runs is one record, sent with the run it
-	// first appears in, at that run's cut-off.
-	first := map[judgmentKey]judgment.RunID{}
-	judgments := make(map[judgment.RunID][]judgment.JudgmentRecord, len(runs))
 	for _, run := range runs {
-		records, err := e.store.JudgmentRecords(ctx, run.Run)
-		if err != nil {
-			return report, fmt.Errorf("read judgments of run %s: %w", run.Run, err)
+		var spans []span
+		for _, j := range run.Judgments {
+			spans = append(spans, judgmentSpan(j))
 		}
-		for _, j := range records {
-			key := keyOf(j.Example, j.Method)
-			if _, seen := first[key]; !seen {
-				first[key] = run.Run
-				judgments[run.Run] = append(judgments[run.Run], j)
+		finished := run.Finished
+		rerun := finished != nil && finished.Kind == judgment.RunKindRerun
+		if rerun {
+			m, err := e.metrics.Metrics(ctx, run.Run)
+			if err != nil {
+				return report, fmt.Errorf("read scorecard metrics of run %s: %w", run.Run, err)
 			}
+			spans = append(spans, scorecardSpan(*finished, m))
 		}
-	}
-	for _, run := range runs {
-		sent, err := e.client.traceExists(ctx, runSpan(run).traceID)
+		if finished != nil {
+			spans = append(spans, runSpan(*finished))
+		}
+		if len(spans) == 0 {
+			continue
+		}
+		sent, err := e.client.traceExists(ctx, spans[len(spans)-1].traceID)
 		if err != nil {
 			return report, fmt.Errorf("look up run %s: %w", run.Run, err)
 		}
@@ -127,26 +132,14 @@ func (e *Exporter) Export(ctx context.Context) (Report, error) {
 			report.Skipped++
 			continue
 		}
-		var spans []span
-		for _, j := range judgments[run.Run] {
-			spans = append(spans, judgmentSpan(j))
-		}
-		if run.Kind == judgment.RunKindRerun {
-			m, err := e.metrics.Metrics(ctx, run.Run)
-			if err != nil {
-				return report, fmt.Errorf("read scorecard metrics: %w", err)
-			}
-			spans = append(spans, scorecardSpan(run, m))
-		}
 		if err := e.client.sendSpans(ctx, spans); err != nil {
 			return report, fmt.Errorf("send records of run %s: %w", run.Run, err)
 		}
-		if err := e.client.sendSpans(ctx, []span{runSpan(run)}); err != nil {
-			return report, fmt.Errorf("send run %s: %w", run.Run, err)
+		report.Judgments += len(run.Judgments)
+		if finished != nil {
+			report.Runs++
 		}
-		report.Runs++
-		report.Judgments += len(judgments[run.Run])
-		if run.Kind == judgment.RunKindRerun {
+		if rerun {
 			report.Scorecards++
 		}
 	}
