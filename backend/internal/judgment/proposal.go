@@ -137,15 +137,11 @@ func (s *Store) ThreadProposals(ctx context.Context, thread threadctx.VenueID, r
 			}
 		}
 	}
-	tasks, err := s.tasks.ListObligationTasksByThread(ctx, thread)
-	if err != nil {
-		return nil, fmt.Errorf("list thread obligations: %w", err)
-	}
-	live, err := loadLiveState(ctx, s.queries, thread, ids)
+	live, err := loadLiveState(ctx, s.queries, thread)
 	if err != nil {
 		return nil, err
 	}
-	pc := &proposalContext{thread: thread, obligations: tasks, live: live, messages: repository.NewThreadContentRepository(s.queries)}
+	pc := &proposalContext{thread: thread, live: live, messages: repository.NewThreadContentRepository(s.queries)}
 	proposals := make([]Proposal, len(rows))
 	for i, j := range rows {
 		p, err := s.compile(ctx, pc, j, outcomes[j.ID])
@@ -188,44 +184,11 @@ func appendContact(ids []uuid.UUID, contact *uuid.UUID, source *ThreadMessage) [
 }
 
 // proposalContext is what compiling a thread's proposals reads besides its
-// judgments: the thread's obligations, open and closed, oldest first, and its
-// live state.
+// judgments: the thread's live state and content.
 type proposalContext struct {
-	thread      uuid.UUID
-	obligations []repository.ContactTask
-	live        *liveState
-	messages    *repository.ThreadContentRepository
-}
-
-// commitmentDue is the due date of the debtor's latest commitment obligation
-// to or from the contact that opened at or before through, open ones first;
-// nil when the thread holds none. An obligation a later judgment opened is not
-// the item's.
-func (pc *proposalContext) commitmentDue(debtor Debtor, contact uuid.UUID, through time.Time) *time.Time {
-	want := repository.ObligationDebtorContact
-	if debtor == DebtorMe {
-		want = repository.ObligationDebtorUser
-	}
-	var found *repository.ContactTask
-	for i := range pc.obligations {
-		t := &pc.obligations[i]
-		if t.Obligation.Debtor != want || t.Obligation.Basis != repository.ObligationBasisCommitment || t.ContactID != contact ||
-			t.Obligation.CutOff.After(through) {
-			continue
-		}
-		if found == nil || t.IsLive() || !found.IsLive() {
-			found = t
-		}
-	}
-	if found == nil {
-		return nil
-	}
-	due, err := time.Parse(dateFormat, dueOf(found))
-	// best-effort: a task whose due date does not parse shows no date.
-	if err != nil {
-		return nil
-	}
-	return &due
+	thread   uuid.UUID
+	live     *liveState
+	messages *repository.ThreadContentRepository
 }
 
 // compile turns one judgment's outcomes into its proposal.
@@ -349,7 +312,7 @@ func (pc *proposalContext) itemOf(ctx context.Context, o *outcomeRecord) (Propos
 		case change == ChangeKindLaterDate && o.review != nil && !o.keepsCurrentDate():
 			item.DueDate = o.DueDate
 		case change != "":
-			item.DueDate = pc.commitmentDue(item.Debtor, contactOf(o.ContactID), pc.live.through[o.JudgmentID])
+			item.DueDate = pc.live.obligationDue(o)
 		default:
 			item.DueDate = o.DueDate
 		}

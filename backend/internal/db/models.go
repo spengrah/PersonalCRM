@@ -202,21 +202,22 @@ type ContactTag struct {
 }
 
 type ContactTask struct {
-	ID                 uuid.UUID  `json:"id"`
-	ContactID          uuid.UUID  `json:"contact_id"`
-	Provider           string     `json:"provider"`
-	Kind               string     `json:"kind"`
-	ExternalTaskID     string     `json:"external_task_id"`
-	State              string     `json:"state"`
-	Metadata           []byte     `json:"metadata"`
-	CreatedAt          *time.Time `json:"created_at"`
-	UpdatedAt          *time.Time `json:"updated_at"`
-	IdempotencyKey     *string    `json:"idempotency_key"`
-	Lifecycle          string     `json:"lifecycle"`
-	ObligationThreadID *uuid.UUID `json:"obligation_thread_id"`
-	ObligationDebtor   *string    `json:"obligation_debtor"`
-	ObligationBasis    *string    `json:"obligation_basis"`
-	ObligationCutOff   *time.Time `json:"obligation_cut_off"`
+	ID                    uuid.UUID  `json:"id"`
+	ContactID             uuid.UUID  `json:"contact_id"`
+	Provider              string     `json:"provider"`
+	Kind                  string     `json:"kind"`
+	ExternalTaskID        string     `json:"external_task_id"`
+	State                 string     `json:"state"`
+	Metadata              []byte     `json:"metadata"`
+	CreatedAt             *time.Time `json:"created_at"`
+	UpdatedAt             *time.Time `json:"updated_at"`
+	IdempotencyKey        *string    `json:"idempotency_key"`
+	Lifecycle             string     `json:"lifecycle"`
+	ObligationThreadID    *uuid.UUID `json:"obligation_thread_id"`
+	ObligationDebtor      *string    `json:"obligation_debtor"`
+	ObligationBasis       *string    `json:"obligation_basis"`
+	ObligationCutOff      *time.Time `json:"obligation_cut_off"`
+	ObligationContinuedBy *uuid.UUID `json:"obligation_continued_by"`
 }
 
 type EffectiveParticipation struct {
@@ -442,13 +443,14 @@ type JudgmentIncomplete struct {
 }
 
 type JudgmentOutcome struct {
-	NodeID     uuid.UUID  `json:"node_id"`
-	JudgmentID uuid.UUID  `json:"judgment_id"`
-	Question   string     `json:"question"`
-	QuestionID *string    `json:"question_id"`
-	ContactID  *uuid.UUID `json:"contact_id"`
-	DueDate    *time.Time `json:"due_date"`
-	Confidence *float64   `json:"confidence"`
+	NodeID           uuid.UUID  `json:"node_id"`
+	JudgmentID       uuid.UUID  `json:"judgment_id"`
+	Question         string     `json:"question"`
+	QuestionID       *string    `json:"question_id"`
+	ContactID        *uuid.UUID `json:"contact_id"`
+	DueDate          *time.Time `json:"due_date"`
+	Confidence       *float64   `json:"confidence"`
+	ObligationTaskID *uuid.UUID `json:"obligation_task_id"`
 }
 
 type JudgmentRun struct {

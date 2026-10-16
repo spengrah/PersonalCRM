@@ -402,58 +402,130 @@ func TestBenchReadCompilesProposals(t *testing.T) {
 		assert.Equal(t, ptr("confirmed"), reviewed.Mark)
 	})
 
+	t.Run("a confirmed reply stays live once a commitment the user adds supersedes its obligation", func(t *testing.T) {
+		// spec: IXN-052.state-is-live-effect
+		b := newBenchEnv(t)
+		x, th := b.contact(t), b.thread(t)
+		b.message(t, th, x, false, b.day(1))
+		b.record(t, th, x, repository.InteractionDirectionInbound, b.day(1))
+		b.run(t, judgment.RunKindScheduled, judgmentOf(prodMethod, th, b.day(1), "h1", judgment.Outcomes{
+			BallInCourt: []judgment.ParticipantOutcome[judgment.BallInCourt]{bic(x, judgment.BallInCourtIOweReply, 0.9)},
+			Commitments: []judgment.CommitmentOutcome{commitment(x, judgment.CommitmentDirectionMine, judgment.CommitmentStateNone, 0.8, nil)},
+		}))
+		page, _ := b.list(t, "contact_id="+x.String())
+		reply := item(t, page.Items[0].Proposals[0], "i_owe_reply", x)
+		_, err := b.store.ReviewOutcome(b.ctx, uuid.MustParse(reply.OutcomeID), judgment.ReviewRequest{RightOutcome: acts(reply)["confirm"].RightOutcome})
+		require.NoError(t, err)
+		add := addition(t, page.Items[0].Proposals[0], "commitments", x)
+		_, err = b.store.ReviewOutcome(b.ctx, uuid.MustParse(add.OutcomeID), judgment.ReviewRequest{RightOutcome: add.RightOutcome})
+		require.NoError(t, err)
+		open := b.openObligations(t, th)
+		require.Len(t, open, 1)
+		require.Equal(t, repository.ObligationBasisCommitment, open[0].Basis, "the commitment supersedes the reply")
+
+		page, _ = b.list(t, "contact_id="+x.String())
+
+		confirmed := item(t, page.Items[0].Proposals[0], "i_owe_reply", x)
+		assert.Equal(t, ptr("confirmed"), confirmed.Mark)
+		assert.Equal(t, ptr("live"), confirmed.State, "the commitment continues the reply's obligation")
+		assert.Equal(t, ptr("live"), item(t, page.Items[0].Proposals[0], "commitments", x).State)
+	})
+
+	// A replacement obligation opens another obligation of the completed
+	// commitment's party: through a later judgment, through the reply addition
+	// the same proposal offers, or through another version of the production
+	// method judging the same content at the same cut-off.
+	replacements := []struct {
+		name    string
+		replace func(t *testing.T, b *benchEnv, th thread, x uuid.UUID, reply judgment.BallInCourt, list string)
+	}{
+		{"a later judgment's reply obligation", func(t *testing.T, b *benchEnv, th thread, x uuid.UUID, reply judgment.BallInCourt, _ string) {
+			b.message(t, th, x, false, b.day(2))
+			b.run(t, judgment.RunKindScheduled, judgmentOf(prodMethod, th, b.day(2), "h2", judgment.Outcomes{
+				BallInCourt: []judgment.ParticipantOutcome[judgment.BallInCourt]{bic(x, reply, 0.9)},
+			}))
+		}},
+		{"the reply its own proposal adds", func(t *testing.T, b *benchEnv, th thread, x uuid.UUID, _ judgment.BallInCourt, list string) {
+			page, _ := b.list(t, "contact_id="+x.String())
+			add := addition(t, page.Items[0].Proposals[0], list, x)
+			_, err := b.store.ReviewOutcome(b.ctx, uuid.MustParse(add.OutcomeID), judgment.ReviewRequest{RightOutcome: add.RightOutcome})
+			require.NoError(t, err)
+		}},
+		{"another production version's reply obligation at the same cut-off", func(t *testing.T, b *benchEnv, th thread, x uuid.UUID, reply judgment.BallInCourt, _ string) {
+			v2 := prodMethod
+			v2.Version = "v2"
+			b.run(t, judgment.RunKindHistorical, judgmentOf(v2, th, b.day(1), "h1", judgment.Outcomes{
+				BallInCourt: []judgment.ParticipantOutcome[judgment.BallInCourt]{bic(x, reply, 0.9)},
+			}))
+		}},
+	}
 	for _, tc := range []struct {
 		name      string
 		direction judgment.CommitmentDirection
 		reply     judgment.BallInCourt
+		list      string
 		debtor    string
 	}{
-		{"mine", judgment.CommitmentDirectionMine, judgment.BallInCourtIOweReply, repository.ObligationDebtorUser},
-		{"theirs", judgment.CommitmentDirectionTheirs, judgment.BallInCourtTheyOweReply, repository.ObligationDebtorContact},
+		{"mine", judgment.CommitmentDirectionMine, judgment.BallInCourtIOweReply, "i_owe_reply", repository.ObligationDebtorUser},
+		{"theirs", judgment.CommitmentDirectionTheirs, judgment.BallInCourtTheyOweReply, "owes_me_reply", repository.ObligationDebtorContact},
 	} {
-		t.Run("a completed "+tc.name+" commitment stays not acting beside a later reply obligation, and confirming it keeps that reply", func(t *testing.T) {
-			// spec: IXN-052.state-is-live-effect
-			b := newBenchEnv(t)
-			x, th := b.contact(t), b.thread(t)
-			b.message(t, th, x, false, b.day(1))
-			b.record(t, th, x, repository.InteractionDirectionInbound, b.day(1))
-			b.run(t, judgment.RunKindScheduled, judgmentOf(prodMethod, th, b.day(1), "h1", judgment.Outcomes{
-				Commitments: []judgment.CommitmentOutcome{commitment(x, tc.direction, judgment.CommitmentStateOpen, 0.9, nil)},
-			}))
-			open := b.openObligations(t, th)
-			require.Len(t, open, 1)
-			_, err := b.tasks.UpdateContactTaskState(b.ctx, open[0].TaskID, repository.ContactTaskStateCompleted)
-			require.NoError(t, err)
-			b.message(t, th, x, false, b.day(2))
-			b.run(t, judgment.RunKindScheduled, judgmentOf(prodMethod, th, b.day(2), "h2", judgment.Outcomes{
-				BallInCourt: []judgment.ParticipantOutcome[judgment.BallInCourt]{bic(x, tc.reply, 0.9)},
-			}))
-			reply := b.openObligations(t, th)
-			require.Len(t, reply, 1)
-			require.Equal(t, tc.debtor, reply[0].Debtor)
-			require.Equal(t, repository.ObligationBasisReply, reply[0].Basis)
+		for _, r := range replacements {
+			t.Run("a completed "+tc.name+" commitment stays not acting beside "+r.name+", and confirming it keeps that reply", func(t *testing.T) {
+				// spec: IXN-052.state-is-live-effect
+				b := newBenchEnv(t)
+				x, th := b.contact(t), b.thread(t)
+				b.message(t, th, x, false, b.day(1))
+				b.record(t, th, x, repository.InteractionDirectionInbound, b.day(1))
+				b.run(t, judgment.RunKindScheduled, judgmentOf(prodMethod, th, b.day(1), "h1", judgment.Outcomes{
+					BallInCourt: []judgment.ParticipantOutcome[judgment.BallInCourt]{bic(x, judgment.BallInCourtNobodyOwes, 0.8)},
+					Commitments: []judgment.CommitmentOutcome{commitment(x, tc.direction, judgment.CommitmentStateOpen, 0.9, nil)},
+				}))
+				open := b.openObligations(t, th)
+				require.Len(t, open, 1)
+				_, err := b.tasks.UpdateContactTaskState(b.ctx, open[0].TaskID, repository.ContactTaskStateCompleted)
+				require.NoError(t, err)
+				r.replace(t, b, th, x, tc.reply, tc.list)
+				reply := b.openObligations(t, th)
+				require.Len(t, reply, 1)
+				require.Equal(t, tc.debtor, reply[0].Debtor)
+				require.Equal(t, repository.ObligationBasisReply, reply[0].Basis)
 
-			page, _ := b.list(t, "contact_id="+x.String())
+				page, _ := b.list(t, "contact_id="+x.String())
 
-			var first *handlers.BenchProposalResponse
-			for i, p := range page.Items[0].Proposals {
-				if b.day(1).Equal(p.CutOff) {
-					first = &page.Items[0].Proposals[i]
+				var first *handlers.BenchProposalResponse
+				for i, p := range page.Items[0].Proposals {
+					if b.day(1).Equal(p.CutOff) && p.MethodVersion == prodMethod.Version {
+						first = &page.Items[0].Proposals[i]
+					}
 				}
-			}
-			require.NotNil(t, first)
-			done := item(t, *first, "commitments", x)
-			assert.Equal(t, ptr("not_acting"), done.State, "a later judgment's reply obligation is not the completed commitment's effect")
-			confirm := acts(done)["confirm"]
-			require.Equal(t, "open", confirm.RightOutcome)
-			_, err = b.store.ReviewOutcome(b.ctx, uuid.MustParse(done.OutcomeID), judgment.ReviewRequest{RightOutcome: confirm.RightOutcome})
-			require.NoError(t, err)
-			after := b.openObligations(t, th)
-			require.Len(t, after, 1)
-			assert.Equal(t, reply[0].TaskID, after[0].TaskID, "confirming the completed commitment leaves the later reply task open")
-			assert.Equal(t, repository.ObligationBasisReply, after[0].Basis)
-		})
+				require.NotNil(t, first)
+				done := item(t, *first, "commitments", x)
+				assert.Equal(t, ptr("not_acting"), done.State, "another reply obligation is not the completed commitment's effect")
+				confirm := acts(done)["confirm"]
+				require.Equal(t, "open", confirm.RightOutcome)
+				_, err = b.store.ReviewOutcome(b.ctx, uuid.MustParse(done.OutcomeID), judgment.ReviewRequest{RightOutcome: confirm.RightOutcome})
+				require.NoError(t, err)
+				after := b.openObligations(t, th)
+				require.Len(t, after, 1)
+				assert.Equal(t, reply[0].TaskID, after[0].TaskID, "confirming the completed commitment leaves the reply task open")
+				assert.Equal(t, repository.ObligationBasisReply, after[0].Basis)
+			})
+		}
 	}
+}
+
+// addition returns the one choice of the proposal's pickers adding the
+// contact to the list.
+func addition(t *testing.T, p handlers.BenchProposalResponse, list string, contact uuid.UUID) handlers.BenchAdditionResponse {
+	t.Helper()
+	var found []handlers.BenchAdditionResponse
+	for _, a := range p.Additions {
+		if a.List == list && a.Contact != nil && a.Contact.ContactID == contact.String() {
+			found = append(found, a)
+		}
+	}
+	require.Len(t, found, 1, "%s additions naming %s", list, contact)
+	return found[0]
 }
 
 // messageKey is the key of the thread's one message.

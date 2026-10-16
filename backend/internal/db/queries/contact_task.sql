@@ -424,6 +424,14 @@ SET obligation_basis = sqlc.arg(basis),
 WHERE id = sqlc.arg(id)
   AND lifecycle = 'obligation';
 
+-- name: SetObligationContinuedBy :exec
+-- Names the task that continues a closed obligation task's obligation.
+UPDATE contact_task
+SET obligation_continued_by = sqlc.arg(continued_by),
+    updated_at = NOW()
+WHERE id = sqlc.arg(id)
+  AND lifecycle = 'obligation';
+
 -- name: RepointObligationContactTasksToContact :exec
 -- Merge-time repoint of the source contact's obligation tasks to the target,
 -- all states, after ListObligationMergeCollisions' pairs are resolved: a user's

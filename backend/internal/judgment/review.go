@@ -107,8 +107,9 @@ func (s *Store) settleLandingTx(ctx context.Context, tx pgx.Tx, o *outcomeRecord
 
 // applyReviewTx gives the thread the right outcome's live effect, unless the
 // right outcome is the value whose effect the outcome stood for and that
-// effect no longer holds. The judgment's other outcomes keep what they hold: a
-// reviewed one its right outcome, an applied one its judged outcome.
+// effect no longer holds, and records the obligation that effect opened or
+// found. The judgment's other outcomes keep what they hold: a reviewed one
+// its right outcome, an applied one its judged outcome.
 func (s *Store) applyReviewTx(ctx context.Context, tx pgx.Tx, o *outcomeRecord, right string, keep bool) error {
 	q := db.New(tx)
 	rows, err := q.ListJudgmentRows(ctx, db.ListJudgmentRowsParams{Ids: []uuid.UUID{o.JudgmentID}, ExampleIds: []string{}})
@@ -116,7 +117,7 @@ func (s *Store) applyReviewTx(ctx context.Context, tx pgx.Tx, o *outcomeRecord, 
 		return fmt.Errorf("load judgment %s: %w", o.JudgmentID, err)
 	}
 	j := rows[0]
-	live, err := loadLiveState(ctx, q, j.ThreadID, []uuid.UUID{o.JudgmentID})
+	live, err := loadLiveState(ctx, q, j.ThreadID)
 	if err != nil {
 		return err
 	}
@@ -159,8 +160,10 @@ func (s *Store) applyReviewTx(ctx context.Context, tx pgx.Tx, o *outcomeRecord, 
 	if err != nil {
 		return err
 	}
-	_, _, err = p.apply(ctx, pl, userLocator(), 100)
-	return err
+	if _, _, err := p.apply(ctx, pl, userLocator(), 100); err != nil {
+		return err
+	}
+	return p.recordObligation(ctx, o.ID, o.Question, o.ContactID, right)
 }
 
 // reviewDueTx is the date a review gives a commitment: none when the review

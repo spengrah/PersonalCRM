@@ -33,7 +33,9 @@ const dateFormat = "2006-01-02"
 // against live state, asserted under the class its plan has (addition,
 // removal or no effect), and applied when the catalog lands it accepted. An
 // open obligation the judgment does not mention raises an omission. An outcome
-// that landed before is never landed again.
+// that landed before is never landed again. Each landed outcome records the
+// obligation its live effect is: the one it opened or found when applied, or
+// the one a removal would take away.
 func (s *Store) landTx(ctx context.Context, tx pgx.Tx, judgmentID uuid.UUID, thread uuid.UUID, cutOff time.Time) (Effects, error) {
 	q := db.New(tx)
 	rows, err := q.ListJudgmentRows(ctx, db.ListJudgmentRowsParams{Ids: []uuid.UUID{judgmentID}, ExampleIds: []string{}})
@@ -66,7 +68,7 @@ func (s *Store) landTx(ctx context.Context, tx pgx.Tx, judgmentID uuid.UUID, thr
 	p := &planner{s: s, tx: tx, thread: thread, cutOff: cutOff, wants: wantsOf(siblings), openedNow: map[uuid.UUID]bool{}}
 	locator := judgmentLocator(j.ID, MethodRef{j.MethodKey, j.MethodVersion, j.WordingVersion}, j.InputHash)
 	var effects Effects
-	land := func(outcomeID uuid.UUID, pl plan, value string, confidence int16) error {
+	land := func(outcomeID uuid.UUID, question Question, contact *uuid.UUID, pl plan, value string, confidence int16) error {
 		accepted, err := s.assertClassTx(ctx, tx, outcomeID, pl.class(), value, confidence, locator)
 		if err != nil {
 			return err
@@ -78,19 +80,25 @@ func (s *Store) landTx(ctx context.Context, tx pgx.Tx, judgmentID uuid.UUID, thr
 		}
 		if !accepted {
 			effects.ClaimsRaised++
-			return nil
+			if pl.class() != predicateRemoval {
+				return nil
+			}
+			return p.recordObligation(ctx, outcomeID, question, contact, pl.target())
 		}
 		opened, flags, err := p.apply(ctx, pl, locator, confidence)
 		effects.ObligationsOpened += opened
 		effects.FlagsRaised += flags
-		return err
+		if err != nil {
+			return err
+		}
+		return p.recordObligation(ctx, outcomeID, question, contact, value)
 	}
 	for _, o := range pending {
 		pl, err := p.plan(ctx, o.Question, o.ContactID, o.value(), o.DueDate, "")
 		if err != nil {
 			return Effects{}, err
 		}
-		if err := land(o.ID, pl, o.value(), percent(o.confidence())); err != nil {
+		if err := land(o.ID, o.Question, o.ContactID, pl, o.value(), percent(o.confidence())); err != nil {
 			return Effects{}, err
 		}
 	}
@@ -120,7 +128,7 @@ func (s *Store) landTx(ctx context.Context, tx pgx.Tx, judgmentID uuid.UUID, thr
 		if err != nil {
 			return Effects{}, fmt.Errorf("create omission: %w", err)
 		}
-		if err := land(omission.NodeID, pl, value, 0); err != nil {
+		if err := land(omission.NodeID, question, &contact, pl, value, 0); err != nil {
 			return Effects{}, err
 		}
 	}
@@ -366,6 +374,22 @@ func liveObligation(open []repository.ContactTask, debtor string, contact uuid.U
 	return nil
 }
 
+// effectObligation is the open obligation value's live effect is for the
+// question and contact: the user's obligation for an owed reply or the user's
+// commitment, the contact's for the contact's commitment or a reply the
+// contact owes; nil for a flag, a value with no effect, or a reply owed while
+// only the timestamp rule shows the wait.
+func effectObligation(open []repository.ContactTask, question Question, contact uuid.UUID, value string) *repository.ContactTask {
+	switch {
+	case isNoEffectValue(value), question == QuestionBigMoment:
+		return nil
+	case question == QuestionCommitmentMine, value == string(BallInCourtIOweReply):
+		return liveObligation(open, repository.ObligationDebtorUser, contact)
+	default:
+		return liveObligation(open, repository.ObligationDebtorContact, contact)
+	}
+}
+
 // planner plans and applies outcomes' effects on one thread within one
 // transaction.
 type planner struct {
@@ -506,6 +530,31 @@ func (p *planner) plan(ctx context.Context, question Question, contact *uuid.UUI
 	return pl, nil
 }
 
+// recordObligation records, on the outcome, the obligation value's live
+// effect is on the thread as it now stands, or none: the obligation its
+// effect opened or found, or the one its removal would take away. A value
+// with no effect leaves the record naming the obligation the item stood for,
+// which a removed item still shows.
+func (p *planner) recordObligation(ctx context.Context, outcomeID uuid.UUID, question Question, contact *uuid.UUID, value string) error {
+	if isNoEffectValue(value) {
+		return nil
+	}
+	open, err := p.openObligations(ctx)
+	if err != nil {
+		return err
+	}
+	var id *uuid.UUID
+	if task := effectObligation(open, question, contactOf(contact), value); task != nil {
+		id = &task.ID
+	}
+	if err := db.New(p.tx).SetJudgmentOutcomeObligation(ctx, db.SetJudgmentOutcomeObligationParams{
+		NodeID: outcomeID, ObligationTaskID: id,
+	}); err != nil {
+		return fmt.Errorf("record outcome obligation: %w", err)
+	}
+	return nil
+}
+
 // defaultDueTx is an obligation's due date when the outcome selected none: the
 // day it opens for the user's, the contact's nudge date for a participant's.
 func (p *planner) defaultDueTx(ctx context.Context, debtor string, contactID uuid.UUID) (string, error) {
@@ -533,6 +582,12 @@ func (p *planner) apply(ctx context.Context, pl plan, locator service.Provenance
 			if task != nil {
 				p.openedNow[task.ID] = true
 				opened++
+			}
+			// The commitment continues the reply's obligation.
+			if a.kind == actUpgrade && task != nil {
+				if err := p.s.tasks.SetObligationContinuedByTx(ctx, p.tx, a.task.ID, task.ID); err != nil {
+					return 0, 0, fmt.Errorf("continue obligation %s: %w", a.task.ID, err)
+				}
 			}
 		case actClose:
 			if err := p.s.closeTaskTx(ctx, p.tx, a.task); err != nil {

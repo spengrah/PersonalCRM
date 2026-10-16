@@ -62,12 +62,16 @@ const (
 
 // TaskObligation is the obligation an obligation task keeps open: who owes
 // (the user, or the task's contact) what (a reply or a commitment) on which
-// thread, and the cut-off of the judgment that opened it.
+// thread, and the cut-off of the judgment that opened it. ContinuedBy names
+// the task that continues the obligation once this task closed: the
+// commitment task that superseded a reply task, or the task a contact merge
+// kept when two open obligations became one.
 type TaskObligation struct {
-	ThreadID uuid.UUID `json:"thread_id"`
-	Debtor   string    `json:"debtor"`
-	Basis    string    `json:"basis"`
-	CutOff   time.Time `json:"cut_off"`
+	ThreadID    uuid.UUID  `json:"thread_id"`
+	Debtor      string     `json:"debtor"`
+	Basis       string     `json:"basis"`
+	CutOff      time.Time  `json:"cut_off"`
+	ContinuedBy *uuid.UUID `json:"continued_by,omitempty"`
 }
 
 // IsLive reports whether the task is live: managed, or awaiting its remote
@@ -151,10 +155,11 @@ func convertDbContactTask(dbTask *db.ContactTask) ContactTask {
 	if dbTask.ObligationThreadID != nil && dbTask.ObligationDebtor != nil &&
 		dbTask.ObligationBasis != nil && dbTask.ObligationCutOff != nil {
 		task.Obligation = &TaskObligation{
-			ThreadID: *dbTask.ObligationThreadID,
-			Debtor:   *dbTask.ObligationDebtor,
-			Basis:    *dbTask.ObligationBasis,
-			CutOff:   *dbTask.ObligationCutOff,
+			ThreadID:    *dbTask.ObligationThreadID,
+			Debtor:      *dbTask.ObligationDebtor,
+			Basis:       *dbTask.ObligationBasis,
+			CutOff:      *dbTask.ObligationCutOff,
+			ContinuedBy: dbTask.ObligationContinuedBy,
 		}
 	}
 
@@ -945,8 +950,9 @@ func (r *ContactTaskRepository) TransferAutomatedTasksForMergeTx(
 // an open obligation a participant owes on one thread, the two become one
 // obligation with one task (G7a): the task due earlier stays open (the
 // target's on a tie), takes the commitment basis when either was a
-// commitment, and the other task closes. It returns refs for the tasks it
-// closed; pendingTempIDKey is as CompleteLiveTasksForContactTx takes it.
+// commitment, and the other task closes, continued by the one kept. It
+// returns refs for the tasks it closed; pendingTempIDKey is as
+// CompleteLiveTasksForContactTx takes it.
 func (r *ContactTaskRepository) TransferObligationTasksForMergeTx(
 	ctx context.Context, tx pgx.Tx, sourceID, targetID uuid.UUID, pendingTempIDKey string,
 ) ([]CompletedTaskRef, error) {
@@ -975,6 +981,9 @@ func (r *ContactTaskRepository) TransferObligationTasksForMergeTx(
 		}
 		if _, err := q.UpdateContactTaskState(ctx, db.UpdateContactTaskStateParams{ID: drop.ID, State: string(ContactTaskStateCompleted)}); err != nil {
 			return nil, fmt.Errorf("close merged obligation %s: %w", drop.ID, err)
+		}
+		if err := q.SetObligationContinuedBy(ctx, db.SetObligationContinuedByParams{ID: drop.ID, ContinuedBy: &keep.ID}); err != nil {
+			return nil, fmt.Errorf("continue merged obligation %s: %w", drop.ID, err)
 		}
 		pendingTempID, _ := drop.Metadata[pendingTempIDKey].(string)
 		closed = append(closed, CompletedTaskRef{
@@ -1043,6 +1052,15 @@ func (r *ContactTaskRepository) CreateObligationTaskTx(ctx context.Context, tx p
 	}
 	task := convertDbContactTask(dbTask)
 	return &task, nil
+}
+
+// SetObligationContinuedByTx records that the task by continues the closed
+// task id's obligation.
+func (r *ContactTaskRepository) SetObligationContinuedByTx(ctx context.Context, tx pgx.Tx, id, by uuid.UUID) error {
+	if tx == nil {
+		return fmt.Errorf("SetObligationContinuedByTx: %w", errNilTx)
+	}
+	return db.New(tx).SetObligationContinuedBy(ctx, db.SetObligationContinuedByParams{ID: id, ContinuedBy: &by})
 }
 
 // ListObligationTasksByThreadTx returns every obligation task on a thread, open

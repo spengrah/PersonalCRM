@@ -123,7 +123,7 @@ INSERT INTO judgment_outcome (node_id, judgment_id, question, question_id, conta
 SELECT outcome_node.id, $1, $2, $3,
        $4, $5, $6
 FROM outcome_node
-RETURNING node_id, judgment_id, question, question_id, contact_id, due_date, confidence
+RETURNING node_id, judgment_id, question, question_id, contact_id, due_date, confidence, obligation_task_id
 `
 
 type CreateJudgmentOutcomeParams struct {
@@ -154,6 +154,7 @@ func (q *Queries) CreateJudgmentOutcome(ctx context.Context, arg CreateJudgmentO
 		&i.ContactID,
 		&i.DueDate,
 		&i.Confidence,
+		&i.ObligationTaskID,
 	)
 	return &i, err
 }
@@ -442,7 +443,7 @@ func (q *Queries) ListJudgmentIncomplete(ctx context.Context) ([]*JudgmentIncomp
 }
 
 const ListJudgmentOutcomes = `-- name: ListJudgmentOutcomes :many
-SELECT node_id, judgment_id, question, question_id, contact_id, due_date, confidence FROM judgment_outcome
+SELECT node_id, judgment_id, question, question_id, contact_id, due_date, confidence, obligation_task_id FROM judgment_outcome
 WHERE judgment_id = ANY($1::uuid[])
    OR node_id = ANY($2::uuid[])
 ORDER BY judgment_id, question, question_id NULLS LAST, contact_id, node_id
@@ -471,6 +472,7 @@ func (q *Queries) ListJudgmentOutcomes(ctx context.Context, arg ListJudgmentOutc
 			&i.ContactID,
 			&i.DueDate,
 			&i.Confidence,
+			&i.ObligationTaskID,
 		); err != nil {
 			return nil, err
 		}
@@ -886,5 +888,23 @@ func (q *Queries) SetJudgmentAppearanceEffects(ctx context.Context, arg SetJudgm
 		arg.JudgmentID,
 		arg.CutOff,
 	)
+	return err
+}
+
+const SetJudgmentOutcomeObligation = `-- name: SetJudgmentOutcomeObligation :exec
+UPDATE judgment_outcome
+SET obligation_task_id = $1
+WHERE node_id = $2
+`
+
+type SetJudgmentOutcomeObligationParams struct {
+	ObligationTaskID *uuid.UUID `json:"obligation_task_id"`
+	NodeID           uuid.UUID  `json:"node_id"`
+}
+
+// Records the obligation task an outcome's live effect is; NULL when its
+// effect is no obligation.
+func (q *Queries) SetJudgmentOutcomeObligation(ctx context.Context, arg SetJudgmentOutcomeObligationParams) error {
+	_, err := q.db.Exec(ctx, SetJudgmentOutcomeObligation, arg.ObligationTaskID, arg.NodeID)
 	return err
 }

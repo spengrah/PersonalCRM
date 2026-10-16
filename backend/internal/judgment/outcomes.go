@@ -16,20 +16,22 @@ import (
 // (absent while the outcome is evidence), the live value a removal landing
 // targets, and the user's live review.
 // Confidence is the method's, at the precision it reported (absent for an
-// omission).
+// omission). ObligationTaskID is the obligation its live effect is, recorded
+// when it landed or was reviewed.
 type outcomeRecord struct {
-	ID         uuid.UUID
-	JudgmentID uuid.UUID
-	Question   Question
-	QuestionID string
-	ContactID  *uuid.UUID
-	DueDate    *time.Time
-	Confidence *float64
-	answer     *db.Assertion
-	class      *db.Assertion
-	target     *db.Assertion
-	review     *db.Assertion
-	keepsDate  *db.Assertion
+	ID               uuid.UUID
+	JudgmentID       uuid.UUID
+	Question         Question
+	QuestionID       string
+	ContactID        *uuid.UUID
+	DueDate          *time.Time
+	Confidence       *float64
+	ObligationTaskID *uuid.UUID
+	answer           *db.Assertion
+	class            *db.Assertion
+	target           *db.Assertion
+	review           *db.Assertion
+	keepsDate        *db.Assertion
 }
 
 // value is the judged outcome: the method's answer, or the omission's value.
@@ -164,12 +166,13 @@ func loadOutcomes(ctx context.Context, q db.Querier, judgmentIDs, outcomeIDs []u
 	ids := make([]uuid.UUID, len(rows))
 	for i, row := range rows {
 		r := &outcomeRecord{
-			ID:         row.NodeID,
-			JudgmentID: row.JudgmentID,
-			Question:   Question(row.Question),
-			ContactID:  row.ContactID,
-			DueDate:    row.DueDate,
-			Confidence: row.Confidence,
+			ID:               row.NodeID,
+			JudgmentID:       row.JudgmentID,
+			Question:         Question(row.Question),
+			ContactID:        row.ContactID,
+			DueDate:          row.DueDate,
+			Confidence:       row.Confidence,
+			ObligationTaskID: row.ObligationTaskID,
 		}
 		if row.QuestionID != nil {
 			r.QuestionID = *row.QuestionID

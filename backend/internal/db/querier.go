@@ -2187,6 +2187,9 @@ type Querier interface {
 	// nil bytes → SQL NULL.
 	SetExternalContactPendingAndDismissed(ctx context.Context, arg SetExternalContactPendingAndDismissedParams) (*ExternalContact, error)
 	SetJudgmentAppearanceEffects(ctx context.Context, arg SetJudgmentAppearanceEffectsParams) error
+	// Records the obligation task an outcome's live effect is; NULL when its
+	// effect is no obligation.
+	SetJudgmentOutcomeObligation(ctx context.Context, arg SetJudgmentOutcomeObligationParams) error
 	// Test-only: stamps last_heartbeat_at to a caller-supplied (typically past)
 	// value so staleness-watchdog tests can simulate a host that has not
 	// heartbeated recently. SeedHostForTest bumps last_heartbeat_at to NOW() via
@@ -2198,6 +2201,8 @@ type Querier interface {
 	SetNodeMergedInto(ctx context.Context, arg SetNodeMergedIntoParams) error
 	// Sets an obligation task's basis; a commitment supersedes a reply.
 	SetObligationBasis(ctx context.Context, arg SetObligationBasisParams) error
+	// Names the task that continues a closed obligation task's obligation.
+	SetObligationContinuedBy(ctx context.Context, arg SetObligationContinuedByParams) error
 	// Test-only: backdates a log row's started_at so retention tests can plant rows
 	// older than the cutoff without driving the real write path (which always
 	// stamps the current app-clock time). Production code must never call this.

@@ -132,6 +132,13 @@ WHERE judgment_id = ANY(sqlc.arg('judgment_ids')::uuid[])
    OR node_id = ANY(sqlc.arg('outcome_ids')::uuid[])
 ORDER BY judgment_id, question, question_id NULLS LAST, contact_id, node_id;
 
+-- name: SetJudgmentOutcomeObligation :exec
+-- Records the obligation task an outcome's live effect is; NULL when its
+-- effect is no obligation.
+UPDATE judgment_outcome
+SET obligation_task_id = sqlc.narg('obligation_task_id')
+WHERE node_id = sqlc.arg('node_id');
+
 -- name: ListOutcomeAssertions :many
 -- The assertions about the given outcome nodes under the given predicates,
 -- oldest first.
