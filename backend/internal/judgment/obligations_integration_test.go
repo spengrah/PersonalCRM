@@ -215,7 +215,7 @@ func TestCommitmentUpgradesAnOpenReplyObligation(t *testing.T) {
 		claim := e.outcome(t, th, prodMethod, judgment.QuestionCommitmentMine, &c)
 		require.Equal(t, judgment.OutcomeStateClaim, claim.State)
 
-		_, err := e.store.ReviewOutcome(e.ctx, claim.ID, string(judgment.CommitmentStateOpen))
+		_, err := e.store.ReviewOutcome(e.ctx, claim.ID, judgment.ReviewRequest{RightOutcome: string(judgment.CommitmentStateOpen)})
 		require.NoError(t, err)
 
 		open := e.openObligations(t, th)

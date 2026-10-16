@@ -775,6 +775,7 @@ SELECT
     o.question, o.question_id,
     COALESCE(ans.value_text, cls.value_text, '')::text AS judged_value,
     a.value_text AS right_outcome,
+    COALESCE(kd.value_bool, FALSE)::boolean AS keeps_date,
     a.knowledge_from AS reviewed_at
 FROM assertion a
 JOIN judgment_outcome o ON o.node_id = a.subject_node_id
@@ -791,15 +792,22 @@ LEFT JOIN LATERAL (
     WHERE x.subject_node_id = o.node_id AND x.predicate_key = ANY($2::text[])
     ORDER BY x.created_at DESC LIMIT 1
 ) cls ON TRUE
-WHERE a.predicate_key = $3::text
+LEFT JOIN LATERAL (
+    SELECT x.value_bool FROM assertion x
+    WHERE x.subject_node_id = o.node_id AND x.predicate_key = $3::text
+      AND x.status = 'accepted'
+    ORDER BY x.created_at DESC LIMIT 1
+) kd ON TRUE
+WHERE a.predicate_key = $4::text
   AND a.status = 'accepted'
 ORDER BY a.knowledge_from, a.id
 `
 
 type ListReviewRecordsParams struct {
-	AnswerPredicate string   `json:"answer_predicate"`
-	ClassPredicates []string `json:"class_predicates"`
-	ReviewPredicate string   `json:"review_predicate"`
+	AnswerPredicate    string   `json:"answer_predicate"`
+	ClassPredicates    []string `json:"class_predicates"`
+	KeepsDatePredicate string   `json:"keeps_date_predicate"`
+	ReviewPredicate    string   `json:"review_predicate"`
 }
 
 type ListReviewRecordsRow struct {
@@ -811,12 +819,18 @@ type ListReviewRecordsRow struct {
 	QuestionID     *string   `json:"question_id"`
 	JudgedValue    string    `json:"judged_value"`
 	RightOutcome   *string   `json:"right_outcome"`
+	KeepsDate      bool      `json:"keeps_date"`
 	ReviewedAt     time.Time `json:"reviewed_at"`
 }
 
 // Every live review with the reviewed outcome's judgment, for the export.
 func (q *Queries) ListReviewRecords(ctx context.Context, arg ListReviewRecordsParams) ([]*ListReviewRecordsRow, error) {
-	rows, err := q.db.Query(ctx, ListReviewRecords, arg.AnswerPredicate, arg.ClassPredicates, arg.ReviewPredicate)
+	rows, err := q.db.Query(ctx, ListReviewRecords,
+		arg.AnswerPredicate,
+		arg.ClassPredicates,
+		arg.KeepsDatePredicate,
+		arg.ReviewPredicate,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -833,6 +847,7 @@ func (q *Queries) ListReviewRecords(ctx context.Context, arg ListReviewRecordsPa
 			&i.QuestionID,
 			&i.JudgedValue,
 			&i.RightOutcome,
+			&i.KeepsDate,
 			&i.ReviewedAt,
 		); err != nil {
 			return nil, err

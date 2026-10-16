@@ -63,16 +63,25 @@ var assertionStoreStems = []string{
 const assertionStoreRead = "GET /api/v1/timeline-items/:kind/:id/assertions"
 
 // judgmentRoutes are the bench's routes over judgments: the runs and
-// judgments reads and the review of one outcome.
+// judgments reads, the review of one outcome, and the all-interactions list,
+// whose rows carry their thread judgments compiled for review.
 var judgmentRoutes = []string{
 	"GET /api/v1/judgment-runs",
 	"GET /api/v1/judgments",
 	"POST /api/v1/judgment-outcomes/:id/review",
+	"GET /api/v1/interactions",
+}
+
+// testJudgmentRoutes record and read judgments for browser tests while no
+// method runs. registerRoutes serves them only under CRM_ENV testing or test.
+var testJudgmentRoutes = []string{
+	"POST /api/v1/test/judgment-runs",
+	"GET /api/v1/test/judgment-obligations",
 }
 
 // allowedAssertionStoreRoutes are the only routes that may expose the
 // assertion store.
-var allowedAssertionStoreRoutes = append([]string{assertionStoreRead}, judgmentRoutes...)
+var allowedAssertionStoreRoutes = slices.Concat([]string{assertionStoreRead}, judgmentRoutes, testJudgmentRoutes)
 
 // requireNoAssertionStoreRoutes scans every registered route path other than
 // the allowed ones for the forbidden stems and fails naming the offending

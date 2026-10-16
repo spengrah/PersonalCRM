@@ -32,7 +32,8 @@ function Annotation({ node }: { node: ReactNode | undefined }) {
   return <div data-annotation>{node}</div>
 }
 
-function Message({
+/** One message as the drill-down shows it; the user's own sender name is blue. */
+export function TimelineMessage({
   message,
   annotations,
 }: {
@@ -40,8 +41,10 @@ function Message({
   annotations?: Record<string, ReactNode>
 }) {
   return (
-    <div data-message-id={message.id} className="space-y-1">
-      <div data-message-sender>{message.sender}</div>
+    <div data-message-id={message.id} data-content-ref={message.content_ref} className="space-y-1">
+      <div data-message-sender className={message.is_outgoing ? 'text-blue-700' : undefined}>
+        {message.sender}
+      </div>
       <div data-message-timestamp>{formatDateTime(message.sent_at)}</div>
       <Channel channel={message.channel} />
       <div data-message-body className="whitespace-pre-wrap">
@@ -52,7 +55,8 @@ function Message({
   )
 }
 
-function Note({
+/** One meeting note as the drill-down shows it. */
+export function TimelineNote({
   note,
   annotations,
 }: {
@@ -91,10 +95,10 @@ function MemberSection({
         {SOURCE_LABELS[member.source] ?? member.source}
       </h4>
       {messages.map(message => (
-        <Message key={message.id} message={message} annotations={annotations} />
+        <TimelineMessage key={message.id} message={message} annotations={annotations} />
       ))}
       {member.meeting_notes.map(note => (
-        <Note key={note.content_ref} note={note} annotations={annotations} />
+        <TimelineNote key={note.content_ref} note={note} annotations={annotations} />
       ))}
       {empty && <p className="text-xs text-gray-500">No content to show</p>}
     </section>

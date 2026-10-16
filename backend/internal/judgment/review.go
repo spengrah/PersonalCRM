@@ -3,6 +3,7 @@ package judgment
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/repository"
@@ -20,7 +21,11 @@ import (
 // evidence outcome records the label only. The review labels the outcome's
 // input for every method: a later judgment of that input leaves its question
 // to the user's verdict.
-func (s *Store) ReviewOutcome(ctx context.Context, outcomeID uuid.UUID, rightOutcome string) (OutcomeView, error) {
+//
+// A review stating an open commitment may keep the obligation's current date:
+// the commitment is kept, its judged date is not taken, and the verdict
+// records that the judged outcome was wrong.
+func (s *Store) ReviewOutcome(ctx context.Context, outcomeID uuid.UUID, review ReviewRequest) (OutcomeView, error) {
 	var view OutcomeView
 	err := s.inTx(ctx, func(tx pgx.Tx) error {
 		q := db.New(tx)
@@ -32,24 +37,41 @@ func (s *Store) ReviewOutcome(ctx context.Context, outcomeID uuid.UUID, rightOut
 			return ErrNotFound
 		}
 		o := records[0]
-		if !isOutcomeValue(o.Question, rightOutcome) {
+		right, keep := review.RightOutcome, review.KeepCurrentDate
+		if !isOutcomeValue(o.Question, right) {
 			return ErrInvalidRightOutcome
 		}
-		right := rightOutcome
+		if keep && !keepsDateApplies(o.Question, right) {
+			return ErrInvalidKeepCurrentDate
+		}
+		locator := userLocator()
 		if _, err := s.assert.AssertTx(ctx, tx, service.AssertRequest{
 			SubjectNodeID: o.ID,
 			PredicateKey:  predicateReview,
 			ValueText:     &right,
 			Confidence:    100,
-			Locators:      []service.ProvenanceLocator{userLocator()},
+			Locators:      []service.ProvenanceLocator{locator},
 		}); err != nil {
 			return fmt.Errorf("assert review: %w", err)
 		}
+		if _, err := s.assert.AssertTx(ctx, tx, service.AssertRequest{
+			SubjectNodeID: o.ID,
+			PredicateKey:  predicateReviewKeepsDate,
+			ValueBool:     &keep,
+			Confidence:    100,
+			Locators:      []service.ProvenanceLocator{locator},
+		}); err != nil {
+			return fmt.Errorf("assert review keeps date: %w", err)
+		}
 		if o.state() != OutcomeStateEvidence {
-			if err := s.settleLandingTx(ctx, tx, o, o.value() == right); err != nil {
+			if err := s.settleLandingTx(ctx, tx, o, o.value() == right && !keep); err != nil {
 				return err
 			}
-			if err := s.applyReviewTx(ctx, tx, o, right); err != nil {
+			due := o.DueDate
+			if keep {
+				due = nil
+			}
+			if err := s.applyReviewTx(ctx, tx, o, right, due); err != nil {
 				return err
 			}
 		}
@@ -82,10 +104,11 @@ func (s *Store) settleLandingTx(ctx context.Context, tx pgx.Tx, o *outcomeRecord
 	return nil
 }
 
-// applyReviewTx gives the thread the right outcome's live effect. The
-// judgment's other outcomes keep what they hold: a reviewed one its right
-// outcome, an applied one its judged outcome.
-func (s *Store) applyReviewTx(ctx context.Context, tx pgx.Tx, o *outcomeRecord, right string) error {
+// applyReviewTx gives the thread the right outcome's live effect, at due for a
+// commitment (nil keeps an open obligation's date). The judgment's other
+// outcomes keep what they hold: a reviewed one its right outcome, an applied
+// one its judged outcome.
+func (s *Store) applyReviewTx(ctx context.Context, tx pgx.Tx, o *outcomeRecord, right string, due *time.Time) error {
 	q := db.New(tx)
 	rows, err := q.ListJudgmentRows(ctx, db.ListJudgmentRowsParams{Ids: []uuid.UUID{o.JudgmentID}, ExampleIds: []string{}})
 	if err != nil || len(rows) != 1 {
@@ -119,7 +142,7 @@ func (s *Store) applyReviewTx(ctx context.Context, tx pgx.Tx, o *outcomeRecord, 
 		withdraw = o.value()
 	}
 	p := &planner{s: s, tx: tx, thread: j.ThreadID, cutOff: j.CutOff, wants: wantsOf(siblings), openedNow: map[uuid.UUID]bool{}}
-	pl, err := p.plan(ctx, o.Question, o.ContactID, right, o.DueDate, withdraw)
+	pl, err := p.plan(ctx, o.Question, o.ContactID, right, due, withdraw)
 	if err != nil {
 		return err
 	}

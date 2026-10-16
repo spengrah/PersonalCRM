@@ -17,6 +17,10 @@ const (
 	predicateNoEffect = "judgment_no_effect"
 	// predicateReview holds the right outcome the user stated.
 	predicateReview = "judgment_review"
+	// predicateReviewKeepsDate says whether a review keeps an open
+	// commitment's current date against the judged later date; it is written
+	// beside every review.
+	predicateReviewKeepsDate = "judgment_review_keeps_date"
 	// predicateFlag is a big-moment flag on a thread.
 	predicateFlag = "big_moment_flag"
 )
@@ -48,10 +52,12 @@ func isNoEffectValue(value string) bool {
 	}
 }
 
-// deriveVerdict derives a review's verdict from the judged and right outcomes.
-func deriveVerdict(judged, right string) Verdict {
+// deriveVerdict derives a review's verdict from the judged and right outcomes
+// and whether the review kept the current date against the judged one, which
+// makes the judged outcome wrong although its value is right.
+func deriveVerdict(judged, right string, keepsDate bool) Verdict {
 	switch {
-	case right == judged:
+	case right == judged && !keepsDate:
 		return VerdictConfirmed
 	case isNoEffectValue(right):
 		return VerdictRejected
@@ -65,6 +71,12 @@ func deriveVerdict(judged, right string) Verdict {
 func percent(confidence float64) int16 {
 	p := math.Floor(confidence*100 + 1e-9)
 	return int16(min(max(p, 0), 100))
+}
+
+// keepsDateApplies reports whether a review of the question stating right may
+// keep the current date: only an open commitment has a date to keep.
+func keepsDateApplies(question Question, right string) bool {
+	return (question == QuestionCommitmentMine || question == QuestionCommitmentTheirs) && right == string(CommitmentStateOpen)
 }
 
 // commitmentQuestion is the question a commitment direction answers.

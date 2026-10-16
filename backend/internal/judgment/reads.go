@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"personal-crm/backend/internal/db"
+	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/threadctx"
 
 	"github.com/google/uuid"
@@ -21,6 +22,9 @@ func (s *Store) ListRuns(ctx context.Context) ([]RunSummary, error) {
 	}
 	incomplete, err := s.incompleteByRun(ctx)
 	if err != nil {
+		return nil, err
+	}
+	if err := s.nameIncomplete(ctx, incomplete); err != nil {
 		return nil, err
 	}
 	runs := make([]RunSummary, len(rows))
@@ -92,6 +96,27 @@ func (s *Store) incompleteByRun(ctx context.Context) (map[RunID][]IncompleteThre
 		byRun[r.RunID] = append(byRun[r.RunID], IncompleteThread{Thread: r.ThreadID, CutOff: r.CutOff, Reason: IncompleteReason(r.Reason)})
 	}
 	return byRun, nil
+}
+
+// nameIncomplete sets each incomplete thread's venue kind and title.
+func (s *Store) nameIncomplete(ctx context.Context, byRun map[RunID][]IncompleteThread) error {
+	venues := repository.NewVenueRepository(s.queries)
+	named := map[threadctx.VenueID]*repository.Venue{}
+	for _, threads := range byRun {
+		for i := range threads {
+			t := &threads[i]
+			venue, ok := named[t.Thread]
+			if !ok {
+				v, err := venues.GetVenue(ctx, t.Thread)
+				if err != nil {
+					return fmt.Errorf("get incomplete thread %s: %w", t.Thread, err)
+				}
+				venue, named[t.Thread] = v, v
+			}
+			t.VenueKind, t.Title = venue.Kind, venue.Title
+		}
+	}
+	return nil
 }
 
 // ListJudgments returns the judgments of a thread, of a run (every judgment
@@ -264,6 +289,7 @@ func (s *Store) JudgmentRecords(ctx context.Context, run RunID) ([]JudgmentRecor
 func (s *Store) ReviewRecords(ctx context.Context) ([]ReviewRecord, error) {
 	rows, err := s.queries.ListReviewRecords(ctx, db.ListReviewRecordsParams{
 		AnswerPredicate: predicateAnswer, ClassPredicates: classPredicates, ReviewPredicate: predicateReview,
+		KeepsDatePredicate: predicateReviewKeepsDate,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("list reviews: %w", err)
@@ -281,7 +307,7 @@ func (s *Store) ReviewRecords(ctx context.Context) ([]ReviewRecord, error) {
 			Example:      ExampleID(r.ExampleID),
 			Method:       MethodRef{r.MethodKey, r.MethodVersion, r.WordingVersion},
 			QuestionID:   questionID,
-			Verdict:      deriveVerdict(r.JudgedValue, *r.RightOutcome),
+			Verdict:      deriveVerdict(r.JudgedValue, *r.RightOutcome, r.KeepsDate),
 			RightOutcome: *r.RightOutcome,
 			ReviewedAt:   r.ReviewedAt,
 		})

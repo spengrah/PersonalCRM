@@ -1082,6 +1082,9 @@ type Querier interface {
 	GetTelegramMessageContainer(ctx context.Context, id uuid.UUID) (*GetTelegramMessageContainerRow, error)
 	GetTelegramSession(ctx context.Context) (*TelegramSession, error)
 	GetTelegramUpdateState(ctx context.Context, userID int64) (*TelegramUpdateState, error)
+	// One message of a thread by its key: its time, whether the user wrote it, its
+	// text, and the contact a copy attributes it to.
+	GetThreadMessage(ctx context.Context, arg GetThreadMessageParams) (*GetThreadMessageRow, error)
 	// The Todoist settings a new task's metadata snapshots, from the most recently
 	// updated Todoist sync state.
 	GetTodoistTaskSettings(ctx context.Context) ([]byte, error)
@@ -1317,6 +1320,12 @@ type Querier interface {
 	// any participant appears in either position.
 	ListAcceptedSlotNodes(ctx context.Context, arg ListAcceptedSlotNodesParams) ([]*ListAcceptedSlotNodesRow, error)
 	ListActiveMacHosts(ctx context.Context) ([]*MacHost, error)
+	// Reads of the all-interactions view (the bench). Participation comes from the
+	// one derivation, the effective_participation view of migration 089; content
+	// comes from the one definition of a thread's content, the thread_content view
+	// of migrations 091 and 096.
+	// Every live contact's effective participations.
+	ListAllEffectiveParticipation(ctx context.Context) ([]*EffectiveParticipation, error)
 	// List all OAuth credentials
 	ListAllOAuthCredentials(ctx context.Context) ([]*OauthCredential, error)
 	ListAllUnmatchedExternalContacts(ctx context.Context, arg ListAllUnmatchedExternalContactsParams) ([]*ExternalContact, error)
@@ -1492,6 +1501,9 @@ type Querier interface {
 	// The cm.type ASC tiebreaker keeps iteration / test assertions stable when
 	// the same address has both a gchat and an email method on one contact.
 	ListGChatIdentitiesForSync(ctx context.Context) ([]*ListGChatIdentitiesForSyncRow, error)
+	// Each group-chat message key with every observation holding a copy of it: a
+	// group message is stored once per member contact.
+	ListGroupChatMessageCopies(ctx context.Context) ([]*ListGroupChatMessageCopiesRow, error)
 	ListIdentitiesBySource(ctx context.Context, arg ListIdentitiesBySourceParams) ([]*ExternalIdentity, error)
 	ListIdentitiesForContact(ctx context.Context, contactID *uuid.UUID) ([]*ExternalIdentity, error)
 	// Every node of the alias tree that holds node_id, each with its own alias
@@ -1572,6 +1584,8 @@ type Querier interface {
 	// so a soft-deleted (merged-away or deleted) endpoint drops the row. A fact
 	// (object_node_id NULL) is gated on the subject only.
 	ListLiveEdgesForNode(ctx context.Context, arg ListLiveEdgesForNodeParams) ([]*Assertion, error)
+	// The venue of every live observation recorded in one.
+	ListLiveObservationVenues(ctx context.Context) ([]*ListLiveObservationVenuesRow, error)
 	ListMacHosts(ctx context.Context) ([]*MacHost, error)
 	// List all managed tasks for a provider (for reconciliation)
 	ListManagedContactTasks(ctx context.Context, provider string) ([]*ListManagedContactTasksRow, error)
@@ -1666,6 +1680,9 @@ type Querier interface {
 	ListTelegramMessagesByChatUnprocessed(ctx context.Context, telegramChatID int64) ([]*TelegramMessage, error)
 	ListTelegramMessagesByChatWindow(ctx context.Context, arg ListTelegramMessagesByChatWindowParams) ([]*TelegramMessage, error)
 	ListTelegramMessagesByInteractionIDs(ctx context.Context, interactionIds []uuid.UUID) ([]*TelegramMessage, error)
+	// The live observations holding a copy of the thread's latest content at or
+	// before the cut-off.
+	ListThreadAnchorObservations(ctx context.Context, arg ListThreadAnchorObservationsParams) ([]uuid.UUID, error)
 	// Thread content reads for the thread-context builder (internal/threadctx).
 	// Every content read goes through the thread_content view (migration 091), so
 	// a thread's context, its latest content time and the eligibility window agree.
@@ -1752,6 +1769,8 @@ type Querier interface {
 	// The live contacts with a live interaction in a venue at or before as_of: a
 	// meeting's participants, which meeting notes do not name as contacts.
 	ListVenueContactsAsOf(ctx context.Context, arg ListVenueContactsAsOfParams) ([]uuid.UUID, error)
+	// A venue's live observations, oldest first.
+	ListVenueObservations(ctx context.Context, venueID *uuid.UUID) ([]*ListVenueObservationsRow, error)
 	// The settings surface's chat list. Only groups are ever written here (the gate
 	// returns before touching the repository for a private chat), so this is the
 	// discovered-group list without needing a chat_type filter. Ordered by title
@@ -2506,6 +2525,7 @@ type Querier interface {
 	// Cleanup step 13: contact by tracked id. A true DELETE (not soft) so
 	// ON DELETE CASCADE fires for contact_enrichment (and any cascade FK).
 	SyntheticDeleteContactsByIds(ctx context.Context, contactIds []uuid.UUID) (int64, error)
+	SyntheticDeleteEmptyJudgmentRuns(ctx context.Context, runIds []uuid.UUID) (int64, error)
 	// Graph identity cleanup: entity_type is a catalog table with no canonical_label,
 	// so a test that seeds its own ns-prefixed entity_type rows clears them by key
 	// prefix (the curated catalog seed rows use bare keys and are never
@@ -2560,6 +2580,13 @@ type Querier interface {
 	SyntheticDeleteInteractionsByContactIds(ctx context.Context, contactIds []uuid.UUID) (int64, error)
 	// Cleanup step 2: interactions by tracked id.
 	SyntheticDeleteInteractionsByIds(ctx context.Context, interactionIds []uuid.UUID) (int64, error)
+	SyntheticDeleteJudgmentAppearancesForThreads(ctx context.Context, threadIds []uuid.UUID) (int64, error)
+	SyntheticDeleteJudgmentAssertionsForThreads(ctx context.Context, threadIds []uuid.UUID) (int64, error)
+	SyntheticDeleteJudgmentExamplesForThreads(ctx context.Context, threadIds []uuid.UUID) (int64, error)
+	SyntheticDeleteJudgmentIncompleteForThreads(ctx context.Context, threadIds []uuid.UUID) (int64, error)
+	// The outcome subtype rows cascade from their nodes.
+	SyntheticDeleteJudgmentOutcomeNodesForThreads(ctx context.Context, threadIds []uuid.UUID) (int64, error)
+	SyntheticDeleteJudgmentsForThreads(ctx context.Context, threadIds []uuid.UUID) (int64, error)
 	// Cleanup step 14: the seeded revoked synthetic mac_host by id.
 	SyntheticDeleteMacHostById(ctx context.Context, id uuid.UUID) (int64, error)
 	// Cleanup step 5: messages_message rows whose guid is ns-prefixed.
@@ -2695,6 +2722,13 @@ type Querier interface {
 	// (interaction.recorded uses interaction.ID as source_id, calendar.attended
 	// uses an internal ref, etc.) generically via payload->>'contact_id'.
 	SyntheticListEventIdsForContacts(ctx context.Context, contactIds []string) ([]uuid.UUID, error)
+	// Cleanup of the judgments of a namespace's threads (the bench's browser
+	// tests record them through the judgment store). judgment_example and
+	// judgment_incomplete reference the thread's venue node, the judgment's
+	// outcome nodes carry its assertions, and a big-moment flag is an assertion
+	// on the venue node, so all of it goes before the venue nodes. A run left
+	// holding nothing of any thread is deleted with them.
+	SyntheticListJudgmentRunsForThreads(ctx context.Context, threadIds []uuid.UUID) ([]uuid.UUID, error)
 	// The namespace-scoped form of ListPastEventsNeedingUpdate, for the GCal replay
 	// adapters' provider wrapper. Scoping in SQL rather than filtering the production
 	// query's result in Go is not a refinement — it is the difference between working

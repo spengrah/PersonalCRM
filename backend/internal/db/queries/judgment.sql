@@ -167,6 +167,7 @@ SELECT
     o.question, o.question_id,
     COALESCE(ans.value_text, cls.value_text, '')::text AS judged_value,
     a.value_text AS right_outcome,
+    COALESCE(kd.value_bool, FALSE)::boolean AS keeps_date,
     a.knowledge_from AS reviewed_at
 FROM assertion a
 JOIN judgment_outcome o ON o.node_id = a.subject_node_id
@@ -183,6 +184,12 @@ LEFT JOIN LATERAL (
     WHERE x.subject_node_id = o.node_id AND x.predicate_key = ANY(sqlc.arg('class_predicates')::text[])
     ORDER BY x.created_at DESC LIMIT 1
 ) cls ON TRUE
+LEFT JOIN LATERAL (
+    SELECT x.value_bool FROM assertion x
+    WHERE x.subject_node_id = o.node_id AND x.predicate_key = sqlc.arg('keeps_date_predicate')::text
+      AND x.status = 'accepted'
+    ORDER BY x.created_at DESC LIMIT 1
+) kd ON TRUE
 WHERE a.predicate_key = sqlc.arg('review_predicate')::text
   AND a.status = 'accepted'
 ORDER BY a.knowledge_from, a.id;

@@ -449,6 +449,135 @@ export interface TimelineAssertionResponse {
 export interface TimelineAssertionsResponse {
   items: TimelineAssertionResponse[];
 }
+/**
+ * AllInteractionsResponse is one page of the all-interactions view (the
+ * bench) and the interaction types its type filter offers.
+ */
+export interface AllInteractionsResponse {
+  items: AllInteractionItemResponse[];
+  type_options: InteractionTypeOptionResponse[];
+}
+/**
+ * InteractionTypeOptionResponse is one interaction type the view filters by.
+ */
+export interface InteractionTypeOptionResponse {
+  key: 'message' | 'email' | 'calendar' | 'call' | 'other';
+  label: string;
+}
+/**
+ * AllInteractionItemResponse is one row: one interaction across contacts,
+ * served as the contact history serves it in the participation of
+ * context_contact_id, its first participant. proposals are the thread
+ * judgments whose latest content the row holds; to_review counts their items
+ * awaiting review.
+ */
+export interface AllInteractionItemResponse {
+  item: InteractionListItemResponse;
+  context_contact_id: string;
+  participants: InteractionParticipantResponse[];
+  preview?: InteractionPreviewResponse;
+  proposals: BenchProposalResponse[];
+  to_review: number /* int */;
+}
+/**
+ * InteractionPreviewResponse is the latest content a row shows: a message's
+ * sender and text, or a meeting note's text (note true, no sender).
+ */
+export interface InteractionPreviewResponse {
+  sender?: string;
+  text: string;
+  note: boolean;
+}
+/**
+ * BenchProposalResponse is one thread judgment compiled into the answers the
+ * user reviews. cut_off is its first appearance, as of which its content is
+ * shown; reused_at is its appearance in the run the view is narrowed to, when
+ * that run reused it. reply_lists is false for a meeting.
+ */
+export interface BenchProposalResponse {
+  judgment_id: string;
+  method_key: string;
+  method_version: string;
+  production: boolean;
+  context_kind: 'conversation' | 'meeting';
+  cut_off: string;
+  reused_at?: string;
+  reply_lists: boolean;
+  items: BenchItemResponse[];
+  additions: BenchAdditionResponse[];
+  to_review: number /* int */;
+}
+/**
+ * BenchPartyResponse is a contact a proposal names.
+ */
+export interface BenchPartyResponse {
+  contact_id: string;
+  name: string;
+}
+/**
+ * BenchItemResponse is one item of a proposal, standing for one judged
+ * outcome. contact is a reply item's participant or a commitment's
+ * counterparty, absent for the flag; debtor says who owes a commitment. state
+ * is absent once the user removed the item; mark is absent until a review.
+ * due_date is a commitment's date (YYYY-MM-DD), absent when it has no stated
+ * date. acts are the item's review controls, empty once reviewed.
+ */
+export interface BenchItemResponse {
+  outcome_id: string;
+  list: 'i_owe_reply' | 'owes_me_reply' | 'commitments' | 'big_moment';
+  contact?: BenchPartyResponse;
+  debtor?: 'me' | 'contact';
+  state?: 'live' | 'suggested' | 'not_acting' | 'live_with_change';
+  confidence?: number /* float64 */;
+  due_date?: string;
+  change?: BenchItemChangeResponse;
+  source?: BenchSourceMessageResponse;
+  mark?: 'confirmed' | 'removed' | 'added';
+  acts: BenchActResponse[];
+}
+/**
+ * BenchItemChangeResponse is a suggested change to a live item: its removal,
+ * or a later due_date (YYYY-MM-DD). confidence is absent for a removal no
+ * method answered.
+ */
+export interface BenchItemChangeResponse {
+  kind: 'remove' | 'later_date';
+  due_date?: string;
+  confidence?: number /* float64 */;
+}
+/**
+ * BenchSourceMessageResponse is the message a commitment's judgment names as
+ * stating it. content_ref is the message's content reference, as the content
+ * route gives it; sender is "Me" for the user's own message.
+ */
+export interface BenchSourceMessageResponse {
+  content_ref: string;
+  sender: string;
+  sent_at: string;
+  text: string;
+}
+/**
+ * BenchActResponse is one review control: the review body it posts to
+ * /judgment-outcomes/{outcome_id}/review.
+ */
+export interface BenchActResponse {
+  act: 'confirm' | 'remove' | 'accept' | 'keep' | 'keep_original';
+  right_outcome: string;
+  keep_current_date: boolean;
+}
+/**
+ * BenchAdditionResponse is one choice of a proposal's pickers: adding contact
+ * to a reply list, adding a commitment between the user and contact (debtor
+ * says who owes it), or adding the flag, by posting right_outcome to the
+ * outcome's review route.
+ */
+export interface BenchAdditionResponse {
+  list: 'i_owe_reply' | 'owes_me_reply' | 'commitments' | 'big_moment';
+  contact?: BenchPartyResponse;
+  debtor?: 'me' | 'contact';
+  outcome_id: string;
+  right_outcome: string;
+}
 
 //////////
 // source: judgment_dto.go
@@ -477,12 +606,15 @@ export interface JudgmentRunResponse {
   incomplete: IncompleteThreadResponse[];
 }
 /**
- * IncompleteThreadResponse is a thread a run reported incomplete.
+ * IncompleteThreadResponse is a thread a run reported incomplete, named by
+ * its venue's kind and title (absent when the venue has none).
  */
 export interface IncompleteThreadResponse {
   thread_id: string;
   cut_off: string;
   reason: IncompleteReason;
+  venue_kind: string;
+  title?: string;
 }
 /**
  * JudgmentsResponse lists judgments of a thread, a run or both.
@@ -538,8 +670,11 @@ export interface JudgmentOutcomeReviewResponse {
 }
 /**
  * ReviewJudgmentOutcomeRequest is a review: the outcome's right outcome. The
- * server derives the verdict; a client never sends one.
+ * server derives the verdict; a client never sends one. keep_current_date,
+ * allowed only with an open commitment's right outcome, keeps the
+ * obligation's current date against the judged later one.
  */
 export interface ReviewJudgmentOutcomeRequest {
   right_outcome: string;
+  keep_current_date?: boolean;
 }

@@ -23,11 +23,14 @@ type JudgmentRunResponse struct {
 	Incomplete    []IncompleteThreadResponse `json:"incomplete"`
 }
 
-// IncompleteThreadResponse is a thread a run reported incomplete.
+// IncompleteThreadResponse is a thread a run reported incomplete, named by
+// its venue's kind and title (absent when the venue has none).
 type IncompleteThreadResponse struct {
-	ThreadID string    `json:"thread_id"`
-	CutOff   time.Time `json:"cut_off"`
-	Reason   string    `json:"reason" tstype:"IncompleteReason"`
+	ThreadID  string    `json:"thread_id"`
+	CutOff    time.Time `json:"cut_off"`
+	Reason    string    `json:"reason" tstype:"IncompleteReason"`
+	VenueKind string    `json:"venue_kind"`
+	Title     *string   `json:"title,omitempty"`
 }
 
 // JudgmentsResponse lists judgments of a thread, a run or both.
@@ -78,7 +81,10 @@ type JudgmentOutcomeReviewResponse struct {
 }
 
 // ReviewJudgmentOutcomeRequest is a review: the outcome's right outcome. The
-// server derives the verdict; a client never sends one.
+// server derives the verdict; a client never sends one. keep_current_date,
+// allowed only with an open commitment's right outcome, keeps the
+// obligation's current date against the judged later one.
 type ReviewJudgmentOutcomeRequest struct {
-	RightOutcome string `json:"right_outcome" binding:"required"`
+	RightOutcome    string `json:"right_outcome" binding:"required"`
+	KeepCurrentDate bool   `json:"keep_current_date,omitempty"`
 }

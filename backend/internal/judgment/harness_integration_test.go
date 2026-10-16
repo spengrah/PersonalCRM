@@ -18,6 +18,7 @@ import (
 	"personal-crm/backend/internal/service"
 	"personal-crm/backend/internal/synthetic"
 	"personal-crm/backend/internal/synthetic/factory"
+	"personal-crm/backend/internal/testdb"
 	"personal-crm/backend/internal/threadctx"
 	"personal-crm/backend/internal/todoist"
 	"personal-crm/backend/tests/testsupport"
@@ -60,17 +61,33 @@ type env struct {
 type envOption func(*envWiring)
 
 type envWiring struct {
-	followUp bool
+	followUp    bool
+	ownDatabase bool
 }
 
 // withFollowUp wires the follow-up manager into the recording path, so an
 // outbound recording opens the contact's follow-up reminder.
 func withFollowUp() envOption { return func(w *envWiring) { w.followUp = true } }
 
+// withOwnDatabase runs the env on a database clone of its own, so reads
+// across every contact see only what the test seeds.
+func withOwnDatabase() envOption { return func(w *envWiring) { w.ownDatabase = true } }
+
 // newEnv builds an env whose store designates productionMethod ("" for none).
 func newEnv(t *testing.T, productionMethod string, opts ...envOption) *env {
 	t.Helper()
-	database := testsupport.OpenDatabase(t)
+	var wiring envWiring
+	for _, opt := range opts {
+		opt(&wiring)
+	}
+	var database *db.Database
+	if wiring.ownDatabase {
+		url, drop := testdb.NewEphemeralClone(t)
+		t.Cleanup(drop)
+		database = testsupport.OpenDatabaseAt(t, url)
+	} else {
+		database = testsupport.OpenDatabase(t)
+	}
 	ctx := t.Context()
 	jobs := newInsertOnlyClient(t, database)
 	bus := events.NewBus(database.Pool, jobs, repository.NewEventRepository(database.Queries))
@@ -97,10 +114,6 @@ func newEnv(t *testing.T, productionMethod string, opts ...envOption) *env {
 	cadence.SetObligationCloser(store)
 	tasks := repository.NewContactTaskRepository(database.Queries)
 	interactions := repository.NewInteractionRepository(database.Queries)
-	var wiring envWiring
-	for _, opt := range opts {
-		opt(&wiring)
-	}
 	var followUp service.FollowUpConsumer
 	if wiring.followUp {
 		followUp = consumer.NewFollowUpManager(consumer.FollowUpModeCutover,

@@ -813,6 +813,7 @@ type ThreadContent struct {
 	UserAliases   []string   `json:"user_aliases"`
 	Body          string     `json:"body"`
 	Headers       []byte     `json:"headers"`
+	ObservationID *uuid.UUID `json:"observation_id"`
 }
 
 type Venue struct {

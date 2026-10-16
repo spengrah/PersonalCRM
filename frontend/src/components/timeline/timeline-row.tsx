@@ -34,7 +34,7 @@ function callServiceLabel(service: string): string {
   return 'Voice call'
 }
 
-function DirectionGlyph({ direction }: { direction: InteractionDirection }) {
+export function DirectionGlyph({ direction }: { direction: InteractionDirection }) {
   const glyph = direction === 'inbound' ? '←' : direction === 'outbound' ? '→' : '↔'
   return (
     <span aria-label={direction} title={direction} className="text-gray-500">
@@ -59,7 +59,7 @@ function ContentIndicator({ member }: { member: TimelineMemberResponse }) {
   )
 }
 
-function Caret({ expanded }: { expanded: boolean }) {
+export function Caret({ expanded }: { expanded: boolean }) {
   return (
     <svg
       aria-hidden="true"
@@ -78,7 +78,7 @@ function Caret({ expanded }: { expanded: boolean }) {
   )
 }
 
-function EventDetails({ member }: { member: TimelineMemberResponse }) {
+export function EventDetails({ member }: { member: TimelineMemberResponse }) {
   if (!member.event) return null
   const { event } = member
   return (
@@ -111,7 +111,7 @@ function callState(call: CallSummaryResponse): string {
   return call.answered === true ? 'Answered' : 'Missed'
 }
 
-function CallDetails({ member }: { member: TimelineMemberResponse }) {
+export function CallDetails({ member }: { member: TimelineMemberResponse }) {
   if (!member.call) return null
   const state = callState(member.call)
   return (
@@ -131,7 +131,7 @@ function CallDetails({ member }: { member: TimelineMemberResponse }) {
   )
 }
 
-function OverflowMenu({
+export function OverflowMenu({
   identity,
   context,
   actions,

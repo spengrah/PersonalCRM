@@ -196,7 +196,7 @@ func TestScorecardReads(t *testing.T) {
 			judgment.Outcomes{BallInCourt: []judgment.ParticipantOutcome[judgment.BallInCourt]{bic(c, judgment.BallInCourtNobodyOwes, 0.6)}}))
 		prodOutcomes := judgment.Outcomes{BallInCourt: []judgment.ParticipantOutcome[judgment.BallInCourt]{bic(c, judgment.BallInCourtIOweReply, 0.8)}}
 		e.run(t, judgment.RunKindRerun, judgmentOf(prodMethod, th, e.day(1), "h1", prodOutcomes))
-		_, err := e.store.ReviewOutcome(e.ctx, e.outcome(t, th, otherMethod, judgment.QuestionBallInCourt, &c).ID, string(judgment.BallInCourtIOweReply))
+		_, err := e.store.ReviewOutcome(e.ctx, e.outcome(t, th, otherMethod, judgment.QuestionBallInCourt, &c).ID, judgment.ReviewRequest{RightOutcome: string(judgment.BallInCourtIOweReply)})
 		require.NoError(t, err)
 
 		examples, err := e.store.ReviewedExamples(e.ctx)
@@ -225,9 +225,9 @@ func TestScorecardReads(t *testing.T) {
 			BallInCourt: []judgment.ParticipantOutcome[judgment.BallInCourt]{bic(c, judgment.BallInCourtNobodyOwes, 0.6)},
 			BigMoment:   judgment.Scored[judgment.BigMoment]{QuestionID: "big_moment", Outcome: judgment.BigMomentNone, Confidence: 0.7},
 		}))
-		_, err := e.store.ReviewOutcome(e.ctx, e.outcome(t, th, otherMethod, judgment.QuestionBallInCourt, &c).ID, string(judgment.BallInCourtNobodyOwes))
+		_, err := e.store.ReviewOutcome(e.ctx, e.outcome(t, th, otherMethod, judgment.QuestionBallInCourt, &c).ID, judgment.ReviewRequest{RightOutcome: string(judgment.BallInCourtNobodyOwes)})
 		require.NoError(t, err)
-		_, err = e.store.ReviewOutcome(e.ctx, e.outcome(t, th, otherMethod, judgment.QuestionBigMoment, nil).ID, string(judgment.BigMomentParticipant))
+		_, err = e.store.ReviewOutcome(e.ctx, e.outcome(t, th, otherMethod, judgment.QuestionBigMoment, nil).ID, judgment.ReviewRequest{RightOutcome: string(judgment.BigMomentParticipant)})
 		require.NoError(t, err)
 
 		examples, err := e.store.ReviewedExamples(e.ctx)
@@ -245,7 +245,7 @@ func TestScorecardReads(t *testing.T) {
 		e.message(t, th, c, false, e.day(1))
 		e.run(t, judgment.RunKindRerun, judgmentOf(otherMethod, th, e.day(1), "h1",
 			judgment.Outcomes{BallInCourt: []judgment.ParticipantOutcome[judgment.BallInCourt]{bic(c, judgment.BallInCourtNobodyOwes, 0.6)}}))
-		_, err := e.store.ReviewOutcome(e.ctx, e.outcome(t, th, otherMethod, judgment.QuestionBallInCourt, &c).ID, string(judgment.BallInCourtIOweReply))
+		_, err := e.store.ReviewOutcome(e.ctx, e.outcome(t, th, otherMethod, judgment.QuestionBallInCourt, &c).ID, judgment.ReviewRequest{RightOutcome: string(judgment.BallInCourtIOweReply)})
 		require.NoError(t, err)
 		examples, err := e.store.ReviewedExamples(e.ctx)
 		require.NoError(t, err)
@@ -304,7 +304,7 @@ func TestExportReads(t *testing.T) {
 		e.message(t, th, c, false, e.day(1))
 		outcomes := judgment.Outcomes{BallInCourt: []judgment.ParticipantOutcome[judgment.BallInCourt]{bic(c, judgment.BallInCourtIOweReply, 0.9)}}
 		run, _ := e.run(t, judgment.RunKindScheduled, judgmentOf(prodMethod, th, e.day(1), "h1", outcomes))
-		_, err := e.store.ReviewOutcome(e.ctx, e.outcome(t, th, prodMethod, judgment.QuestionBallInCourt, &c).ID, string(judgment.BallInCourtNobodyOwes))
+		_, err := e.store.ReviewOutcome(e.ctx, e.outcome(t, th, prodMethod, judgment.QuestionBallInCourt, &c).ID, judgment.ReviewRequest{RightOutcome: string(judgment.BallInCourtNobodyOwes)})
 		require.NoError(t, err)
 		judgments, err := e.store.JudgmentRecords(e.ctx, run)
 		require.NoError(t, err)

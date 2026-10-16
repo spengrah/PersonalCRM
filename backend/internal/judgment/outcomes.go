@@ -27,6 +27,7 @@ type outcomeRecord struct {
 	answer     *db.Assertion
 	class      *db.Assertion
 	review     *db.Assertion
+	keepsDate  *db.Assertion
 }
 
 // value is the judged outcome: the method's answer, or the omission's value.
@@ -69,12 +70,19 @@ func (o *outcomeRecord) reviewView() *OutcomeReview {
 	if o.review == nil || o.review.ValueText == nil {
 		return nil
 	}
-	right := *o.review.ValueText
+	right, keeps := *o.review.ValueText, o.keepsCurrentDate()
 	return &OutcomeReview{
-		Verdict:      deriveVerdict(o.value(), right),
+		Verdict:      deriveVerdict(o.value(), right, keeps),
 		RightOutcome: right,
+		KeepsDate:    keeps,
 		ReviewedAt:   o.review.KnowledgeFrom,
 	}
+}
+
+// keepsCurrentDate reports whether the user's review kept an open
+// commitment's current date.
+func (o *outcomeRecord) keepsCurrentDate() bool {
+	return o.keepsDate != nil && o.keepsDate.ValueBool != nil && *o.keepsDate.ValueBool
 }
 
 func (o *outcomeRecord) view() OutcomeView {
@@ -140,7 +148,7 @@ func loadOutcomes(ctx context.Context, q db.Querier, judgmentIDs, outcomeIDs []u
 	}
 	assertions, err := q.ListOutcomeAssertions(ctx, db.ListOutcomeAssertionsParams{
 		OutcomeIds: ids,
-		Predicates: append([]string{predicateAnswer, predicateReview}, classPredicates...),
+		Predicates: append([]string{predicateAnswer, predicateReview, predicateReviewKeepsDate}, classPredicates...),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("list outcome assertions: %w", err)
@@ -156,6 +164,10 @@ func loadOutcomes(ctx context.Context, q db.Querier, judgmentIDs, outcomeIDs []u
 		case predicateReview:
 			if a.Status == repository.AssertionStatusAccepted {
 				r.review = a
+			}
+		case predicateReviewKeepsDate:
+			if a.Status == repository.AssertionStatusAccepted {
+				r.keepsDate = a
 			}
 		default:
 			r.class = a

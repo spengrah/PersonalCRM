@@ -44,6 +44,7 @@ type routeDeps struct {
 	InteractionHandler       *handlers.InteractionHandler
 	CorrectionHandler        *handlers.InteractionCorrectionHandler
 	TimelineAssertionHandler *handlers.TimelineAssertionHandler
+	BenchHandler             *handlers.BenchHandler
 	Judgments                *judgment.Store
 	NoteHandler              *handlers.NoteHandler
 	ContactMethodHandler     *handlers.ContactMethodHandler
@@ -159,8 +160,10 @@ func registerRoutes(deps routeDeps) {
 		})
 
 		// Judgment routes (unconditional): the bench's read and review of
-		// decision-model judgments.
+		// decision-model judgments, and the all-interactions view they are
+		// reviewed on.
 		handlers.RegisterJudgmentRoutes(v1, handlers.NewJudgmentHandler(deps.Judgments))
+		handlers.RegisterBenchRoutes(v1, deps.BenchHandler)
 
 		// Meeting-note conflict-resolution — user-driven, called from
 		// the frontend with the global API key. Stays under the v1
@@ -262,6 +265,9 @@ func registerRoutes(deps routeDeps) {
 			// on the TestHandler type too; do not "fix" it by minting a service.
 			testHandler := handlers.NewTestHandler(testSeedService, testLockService, database)
 			handlers.RegisterTestRoutes(v1, testHandler)
+			// Judgments are recorded through the store's write seam, so the
+			// bench can be reviewed in tests while no method runs.
+			handlers.RegisterJudgmentTestRoutes(v1, handlers.NewJudgmentSeedHandler(deps.Judgments, repository.NewInteractionRepository(database.Queries)))
 			logger.Info().Msg("test API endpoints enabled (CRM_ENV=testing)")
 		}
 	}

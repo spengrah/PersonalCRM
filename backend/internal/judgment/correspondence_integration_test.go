@@ -195,7 +195,7 @@ func TestTheyOweReplyComposesWithTheAwaitingReplyWait(t *testing.T) {
 		before := e.contactRow(t, c)
 
 		claim := e.outcome(t, th, prodMethod, judgment.QuestionBallInCourt, &c)
-		reviewed, err := e.store.ReviewOutcome(e.ctx, claim.ID, string(judgment.BallInCourtNobodyOwes))
+		reviewed, err := e.store.ReviewOutcome(e.ctx, claim.ID, judgment.ReviewRequest{RightOutcome: string(judgment.BallInCourtNobodyOwes)})
 		require.NoError(t, err)
 		require.Equal(t, judgment.VerdictConfirmed, reviewed.Review.Verdict)
 

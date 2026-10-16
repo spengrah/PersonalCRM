@@ -120,7 +120,7 @@ func buildRouterForOAuthWiring(t *testing.T, cfg *config.Config) *gin.Engine {
 	agg := buildAggregationEngines(cfg, database, core, contactService, graph, ingest, messaging, consumers, eventBus, riverClient, nil, syncStk.GChatProvider, syncStk.GChatSyncStates, whatsappEngine)
 	registerMessagingWorkers(reg, ingest, messaging, agg, riverClient)
 
-	handlersCore := buildCoreHandlers(database, core, contactService, graph, cfg, domain.NoteService, manualHandler, eventBus, consumers)
+	handlersCore := buildCoreHandlers(database, core, contactService, graph, cfg, domain.NoteService, manualHandler, eventBus, consumers, judgments)
 	machost := buildMacHost(reg, database, core, ingest)
 	staleness := buildStaleness(reg, cfg, database, machost)
 	registerAssertionRollover(reg, graph)

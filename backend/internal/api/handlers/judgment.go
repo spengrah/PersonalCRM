@@ -39,7 +39,7 @@ func (h *JudgmentHandler) ListJudgmentRuns(c *gin.Context) {
 	for i, r := range runs {
 		incomplete := make([]IncompleteThreadResponse, len(r.Incomplete))
 		for j, t := range r.Incomplete {
-			incomplete[j] = IncompleteThreadResponse{ThreadID: t.Thread.String(), CutOff: t.CutOff, Reason: string(t.Reason)}
+			incomplete[j] = IncompleteThreadResponse{ThreadID: t.Thread.String(), CutOff: t.CutOff, Reason: string(t.Reason), VenueKind: t.VenueKind, Title: t.Title}
 		}
 		out[i] = JudgmentRunResponse{
 			ID: r.ID.String(), Kind: string(r.Kind), MethodKey: r.Method.Key, MethodVersion: r.Method.Version,
@@ -107,7 +107,7 @@ func (h *JudgmentHandler) ListJudgments(c *gin.Context) {
 
 // ReviewJudgmentOutcome records the user's review of an outcome.
 // @Summary Review a judgment outcome
-// @Description Records the right outcome the user states for an outcome of any state and returns the outcome with the verdict the server derives: confirmed when it equals the judged outcome, rejected when it differs and has no effect, corrected otherwise. Reviewing an applied or claim outcome gives the thread the right outcome's effect.
+// @Description Records the right outcome the user states for an outcome of any state and returns the outcome with the verdict the server derives: confirmed when it equals the judged outcome, rejected when it differs and has no effect, corrected otherwise. Reviewing an applied or claim outcome gives the thread the right outcome's effect. keep_current_date, with an open commitment's right outcome, keeps the obligation's current date against the judged later one, and the verdict is corrected.
 // @Tags judgments
 // @Accept json
 // @Produce json
@@ -127,11 +127,15 @@ func (h *JudgmentHandler) ReviewJudgmentOutcome(c *gin.Context) {
 		api.SendValidationError(c, "Invalid review", "right_outcome is required")
 		return
 	}
-	view, err := h.store.ReviewOutcome(c.Request.Context(), id, req.RightOutcome)
+	view, err := h.store.ReviewOutcome(c.Request.Context(), id, judgment.ReviewRequest{
+		RightOutcome: req.RightOutcome, KeepCurrentDate: req.KeepCurrentDate,
+	})
 	if err != nil {
 		switch {
 		case errors.Is(err, judgment.ErrInvalidRightOutcome):
 			api.SendValidationError(c, "Invalid right_outcome", "right_outcome must be one of the question's outcome values")
+		case errors.Is(err, judgment.ErrInvalidKeepCurrentDate):
+			api.SendValidationError(c, "Invalid keep_current_date", "keep_current_date is allowed only with an open commitment")
 		case errors.Is(err, judgment.ErrNotFound):
 			api.SendNotFound(c, "Judgment outcome")
 		default:

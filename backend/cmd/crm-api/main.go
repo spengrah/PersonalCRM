@@ -349,7 +349,7 @@ func run() int {
 	registerMessagingWorkers(reg, ingest, messaging, agg, riverClient)
 
 	// Core HTTP handlers.
-	handlersCore := buildCoreHandlers(database, core, contactService, graph, cfg, noteService, manualHandler, eventBus, consumers)
+	handlersCore := buildCoreHandlers(database, core, contactService, graph, cfg, noteService, manualHandler, eventBus, consumers, judgments)
 	contactHandler := handlersCore.Contact
 	noteHandler := handlersCore.Note
 	interactionHandler := handlersCore.Interaction
@@ -419,6 +419,7 @@ func run() int {
 		InteractionHandler:       interactionHandler,
 		CorrectionHandler:        handlersCore.Correction,
 		TimelineAssertionHandler: handlersCore.TimelineAssertion,
+		BenchHandler:             handlersCore.Bench,
 		Judgments:                judgments,
 		NoteHandler:              noteHandler,
 		ContactMethodHandler:     handlersCore.ContactMethod,

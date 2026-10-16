@@ -28,7 +28,7 @@ func TestReviewOutcome(t *testing.T) {
 		require.Equal(t, judgment.OutcomeStateClaim, claim.State)
 		require.Empty(t, e.openObligations(t, th))
 
-		reviewed, err := e.store.ReviewOutcome(e.ctx, claim.ID, string(judgment.BallInCourtIOweReply))
+		reviewed, err := e.store.ReviewOutcome(e.ctx, claim.ID, judgment.ReviewRequest{RightOutcome: string(judgment.BallInCourtIOweReply)})
 
 		require.NoError(t, err)
 		require.NotNil(t, reviewed.Review)
@@ -50,7 +50,7 @@ func TestReviewOutcome(t *testing.T) {
 		require.Equal(t, judgment.OutcomeStateApplied, applied.State)
 		require.Len(t, e.openObligations(t, th), 1)
 
-		reviewed, err := e.store.ReviewOutcome(e.ctx, applied.ID, string(judgment.BallInCourtNobodyOwes))
+		reviewed, err := e.store.ReviewOutcome(e.ctx, applied.ID, judgment.ReviewRequest{RightOutcome: string(judgment.BallInCourtNobodyOwes)})
 
 		require.NoError(t, err)
 		require.NotNil(t, reviewed.Review)
@@ -77,7 +77,7 @@ func TestReviewOutcome(t *testing.T) {
 		claim := views[1].Outcomes[0]
 		require.Equal(t, judgment.OutcomeStateClaim, claim.State)
 
-		reviewed, err := e.store.ReviewOutcome(e.ctx, claim.ID, string(judgment.BallInCourtTheyOweReply))
+		reviewed, err := e.store.ReviewOutcome(e.ctx, claim.ID, judgment.ReviewRequest{RightOutcome: string(judgment.BallInCourtTheyOweReply)})
 
 		require.NoError(t, err)
 		require.NotNil(t, reviewed.Review)
@@ -98,7 +98,7 @@ func TestReviewOutcome(t *testing.T) {
 		claim := e.outcome(t, th, prodMethod, judgment.QuestionBallInCourt, &c)
 
 		for _, right := range []string{"", string(judgment.CommitmentStateOpen)} {
-			_, err := e.store.ReviewOutcome(e.ctx, claim.ID, right)
+			_, err := e.store.ReviewOutcome(e.ctx, claim.ID, judgment.ReviewRequest{RightOutcome: right})
 			require.ErrorIs(t, err, judgment.ErrInvalidRightOutcome, "right outcome %q", right)
 		}
 
@@ -118,7 +118,7 @@ func TestReviewOutcome(t *testing.T) {
 		evidence := e.outcome(t, th, otherMethod, judgment.QuestionBallInCourt, &c)
 		require.Equal(t, judgment.OutcomeStateEvidence, evidence.State)
 
-		reviewed, err := e.store.ReviewOutcome(e.ctx, evidence.ID, string(judgment.BallInCourtIOweReply))
+		reviewed, err := e.store.ReviewOutcome(e.ctx, evidence.ID, judgment.ReviewRequest{RightOutcome: string(judgment.BallInCourtIOweReply)})
 
 		require.NoError(t, err)
 		require.NotNil(t, reviewed.Review)
@@ -129,7 +129,7 @@ func TestReviewOutcome(t *testing.T) {
 
 	t.Run("an unknown outcome is not found", func(t *testing.T) {
 		e := newEnv(t, production)
-		_, err := e.store.ReviewOutcome(e.ctx, e.contact(t), string(judgment.BallInCourtIOweReply))
+		_, err := e.store.ReviewOutcome(e.ctx, e.contact(t), judgment.ReviewRequest{RightOutcome: string(judgment.BallInCourtIOweReply)})
 		require.ErrorIs(t, err, judgment.ErrNotFound)
 	})
 }
@@ -147,7 +147,7 @@ func TestUserVerdictWins(t *testing.T) {
 			judgment.Outcomes{BallInCourt: []judgment.ParticipantOutcome[judgment.BallInCourt]{bic(c, judgment.BallInCourtIOweReply, 0.9)}})
 		e.run(t, judgment.RunKindScheduled, j)
 		applied := e.outcome(t, th, prodMethod, judgment.QuestionBallInCourt, &c)
-		_, err := e.store.ReviewOutcome(e.ctx, applied.ID, string(judgment.BallInCourtNobodyOwes))
+		_, err := e.store.ReviewOutcome(e.ctx, applied.ID, judgment.ReviewRequest{RightOutcome: string(judgment.BallInCourtNobodyOwes)})
 		require.NoError(t, err)
 
 		_, effects := e.run(t, judgment.RunKindScheduled, j)
@@ -167,7 +167,7 @@ func TestUserVerdictWins(t *testing.T) {
 		e.run(t, judgment.RunKindScheduled, judgmentOf(prodMethod, th, e.day(1), "h1",
 			judgment.Outcomes{BallInCourt: []judgment.ParticipantOutcome[judgment.BallInCourt]{bic(c, judgment.BallInCourtNobodyOwes, 0.9)}}))
 		judged := e.outcome(t, th, prodMethod, judgment.QuestionBallInCourt, &c)
-		corrected, err := e.store.ReviewOutcome(e.ctx, judged.ID, string(judgment.BallInCourtIOweReply))
+		corrected, err := e.store.ReviewOutcome(e.ctx, judged.ID, judgment.ReviewRequest{RightOutcome: string(judgment.BallInCourtIOweReply)})
 		require.NoError(t, err)
 		require.Equal(t, judgment.VerdictCorrected, corrected.Review.Verdict)
 		before := e.openObligations(t, th)
@@ -190,7 +190,7 @@ func TestUserVerdictWins(t *testing.T) {
 		e.run(t, judgment.RunKindScheduled, judgmentOf(prodMethod, th, e.day(1), "h1",
 			judgment.Outcomes{BallInCourt: []judgment.ParticipantOutcome[judgment.BallInCourt]{bic(c, judgment.BallInCourtIOweReply, 0.9)}}))
 		applied := e.outcome(t, th, prodMethod, judgment.QuestionBallInCourt, &c)
-		_, err := e.store.ReviewOutcome(e.ctx, applied.ID, string(judgment.BallInCourtNobodyOwes))
+		_, err := e.store.ReviewOutcome(e.ctx, applied.ID, judgment.ReviewRequest{RightOutcome: string(judgment.BallInCourtNobodyOwes)})
 		require.NoError(t, err)
 
 		e.message(t, th, c, false, e.day(2))

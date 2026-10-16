@@ -27,6 +27,9 @@ var (
 	// ErrInvalidRightOutcome is returned for an empty right outcome, or one not
 	// among the reviewed question's outcome values.
 	ErrInvalidRightOutcome = errors.New("invalid judgment right outcome")
+	// ErrInvalidKeepCurrentDate is returned for a review that keeps the current
+	// date of anything but an open commitment.
+	ErrInvalidKeepCurrentDate = errors.New("only a review stating an open commitment can keep its current date")
 	// ErrUnboundedQuery is returned by ListJudgments with neither thread nor run.
 	ErrUnboundedQuery = errors.New("judgment query must name a thread or run")
 )
@@ -206,11 +209,14 @@ type RunSummary struct {
 	Incomplete  []IncompleteThread
 }
 
-// IncompleteThread is a thread a run reported incomplete.
+// IncompleteThread is a thread a run reported incomplete. ListRuns names it
+// by its venue's kind and title (nil when the venue has none).
 type IncompleteThread struct {
-	Thread threadctx.VenueID
-	CutOff time.Time
-	Reason IncompleteReason
+	Thread    threadctx.VenueID
+	CutOff    time.Time
+	Reason    IncompleteReason
+	VenueKind string
+	Title     *string
 }
 
 // JudgmentQuery selects judgments by thread, run or both.
@@ -254,10 +260,20 @@ type OutcomeView struct {
 	Review     *OutcomeReview
 }
 
-// OutcomeReview is the user's review of an outcome.
+// ReviewRequest is the user's review of one outcome: the right outcome, and,
+// for an open commitment, whether its obligation keeps its current date
+// against the judged later one.
+type ReviewRequest struct {
+	RightOutcome    string
+	KeepCurrentDate bool
+}
+
+// OutcomeReview is the user's review of an outcome. KeepsDate is set when the
+// review kept an open commitment's current date.
 type OutcomeReview struct {
 	Verdict      Verdict
 	RightOutcome string
+	KeepsDate    bool
 	ReviewedAt   time.Time
 }
 
