@@ -43,6 +43,10 @@ func PersonRole(n int) Role { return Role("PERSON_" + strconv.Itoa(n)) }
 // Entry is one message of a thread context. A meeting note is an entry the
 // user wrote.
 type Entry struct {
+	// Key is the message's key in the thread's content, equal for every
+	// per-contact copy of it. It is a source identifier, so it stays on the Pi:
+	// a masked entry carries none.
+	Key     string
 	Role    Role
 	SentAt  time.Time
 	Headers map[string]string

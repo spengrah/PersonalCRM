@@ -39,6 +39,13 @@ type DecisionConfig struct {
 	// judgments may change live state (DECISION_PRODUCTION_METHOD). Empty
 	// designates none, so no judgment changes live state.
 	ProductionMethod string
+	// Routes of the compared methods. An empty key or URL leaves the methods
+	// it serves unavailable.
+	OpenRouterAPIKey string // OPENROUTER_API_KEY
+	TypeSafeAPIKey   string // TYPESAFE_API_KEY
+	SageAPIKey       string // SAGE_API_KEY (Levanto)
+	KevBaseURL       string // KEV_BASE_URL
+	KevAPIKey        string // KEV_API_KEY
 }
 
 // SyncConfig holds external-sync housekeeping settings.
@@ -588,6 +595,11 @@ func Load() (*Config, error) {
 		},
 		Decision: DecisionConfig{
 			ProductionMethod: getEnv("DECISION_PRODUCTION_METHOD", ""),
+			OpenRouterAPIKey: getEnv("OPENROUTER_API_KEY", ""),
+			TypeSafeAPIKey:   getEnv("TYPESAFE_API_KEY", ""),
+			SageAPIKey:       getEnv("SAGE_API_KEY", ""),
+			KevBaseURL:       getEnv("KEV_BASE_URL", ""),
+			KevAPIKey:        getEnv("KEV_API_KEY", ""),
 		},
 		EventBus: EventBusConfig{
 			InteractionMode:        getEnv("EVENT_BUS_INTERACTION_MODE", EventBusInteractionModeCutover),

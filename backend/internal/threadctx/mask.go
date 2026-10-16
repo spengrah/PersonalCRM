@@ -58,7 +58,7 @@ func LoadMasker(ctx context.Context, content *repository.ThreadContentRepository
 
 // MaskedRequest is a thread context and its questions with every identifier
 // replaced by a placeholder. Only Mask constructs one, and it carries no
-// placeholder map.
+// placeholder map and no message key.
 type MaskedRequest struct {
 	kind      ContextKind
 	cutOff    time.Time

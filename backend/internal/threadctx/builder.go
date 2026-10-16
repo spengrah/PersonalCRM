@@ -143,6 +143,7 @@ func assemble(rows []repository.ThreadContentRow, attendees []uuid.UUID) (Contex
 	}
 
 	type message struct {
+		key     string
 		from    *party
 		sentAt  time.Time
 		headers map[string]string
@@ -169,7 +170,7 @@ func assemble(rows []repository.ThreadContentRow, attendees []uuid.UUID) (Contex
 		if err != nil {
 			return Context{}, err
 		}
-		messages = append(messages, message{from: from, sentAt: first.SentAt, headers: headers, text: first.Body})
+		messages = append(messages, message{key: first.MessageKey, from: from, sentAt: first.SentAt, headers: headers, text: first.Body})
 		start = end
 	}
 	for _, id := range attendees {
@@ -188,7 +189,7 @@ func assemble(rows []repository.ThreadContentRow, attendees []uuid.UUID) (Contex
 	}
 	entries := make([]Entry, len(messages))
 	for i, m := range messages {
-		entries[i] = Entry{Role: roles[m.from], SentAt: m.sentAt, Headers: m.headers, Text: m.text}
+		entries[i] = Entry{Key: m.key, Role: roles[m.from], SentAt: m.sentAt, Headers: m.headers, Text: m.text}
 	}
 	hash, err := inputHash(entries)
 	if err != nil {
