@@ -4,22 +4,22 @@ The bench is one new page, the all-interactions view at `/interactions`, where t
 
 The canvas is "Judgment Bench" (https://claude.ai/artifact/1d1TcFH9iXtdtRABK6n4iX), a Design canvas of ten artboards. Every artboard after the two lists shows one thread. Where an artboard shows several states of one proposal, each state is labeled as a step of that proposal ("Step 1 of 3 · The proposal as judged"). Every person, message and date on it is synthetic.
 
-The user's approval of this design is open, and so are the user's rulings on the four options below. PR5 builds against this note only once the user approves it.
+The user's approval of this design is open. The user has ruled on the four options from the reference artifacts (see "Options from the reference artifacts"). PR5 builds against this note only once the user approves it.
 
 Sources: `.agents/spec/2026-10-14-decision-model-extraction.md` (G3, G5, G7f, G8, G9, G11, SC1, SC4, SC5, SC7, SC10, NG3, NG4, rabbit hole 4), the bench routes of the decision-model foundation plan (S4): `GET /api/v1/judgment-runs`, `GET /api/v1/judgments` and `POST /api/v1/judgment-outcomes/:id/review`, PR5's `GET /api/v1/interactions`, and the bench read PR5 adds, which returns each judged thread's proposal already compiled, each commitment with its source message when the judgment holds one. Wire fields are snake_case (`right_outcome`, `cut_off`, `run_id`, `contact_id`).
 
 ## The proposal
 
-Each thread judgment is shown as one proposal of four lists. The questions sent to the decision model never appear.
+Each thread judgment is shown as one proposal of four lists in three sections, stacked top to bottom: the replies section, holding "I owe a reply" and "Owes me a reply" side by side; Commitments; and Big moment. The questions sent to the decision model never appear.
 
 | List | Holds | Item text |
 |---|---|---|
 | I owe a reply | each participant contact the user owes a reply | the contact's name |
 | Owes me a reply | each participant contact who owes the user a reply | the contact's name |
 | Commitments | every open commitment, the user's own and the participants', in one list | "{debtor} → {creditor}", with "due {date}" or "no stated date", and its source message beneath |
-| Big moment | the thread's big-moment flag, at most one | "Participant's own" or "Someone else's" |
+| Big moment | the thread's big-moment flag, at most one | "Big moment" |
 
-The user is "Me" in a commitment's text. A reply list holds at most one person in a one-to-one thread and possibly several in a group thread. A meeting context's proposal has no reply lists, since ball-in-court is not asked of meetings. A list with no item reads "None". Big moments stay a flag on the thread, attached to no contact, until generative inference can attach them to contacts.
+The user is "Me" in a commitment's text. A reply list holds at most one person in a one-to-one thread and possibly several in a group thread. A meeting context's proposal has no reply lists, since ball-in-court is not asked of meetings. A list with no item reads "None". Big moments stay a flag on the thread, attached to no contact, until generative inference can attach them to contacts. The flag reads "Big moment" whether the judgment found a participant's own moment (`participant_moment`) or another person's moment mentioned in passing (`other_person_moment`): the distinction stays in the data and appears in no label.
 
 The server compiles the question tree into these lists, so the client applies no judgment rule. In particular, a party's commitment absorbs that party's reply item in the same direction: when the user committed to Sam, the proposal shows "Me → Sam" and no "I owe Sam a reply" item, since the two are one obligation (G3b, SC4). An outcome with a no-effect value (`nobody_owes`, `not_applicable`, `none`) produces no item, unless it is a suggested change to a live item.
 
@@ -69,14 +69,14 @@ Every act is inline, on the item or at the foot of its list, with no modal and n
 | Remove a commitment | × button on the item | that contact's `commitment_mine` or `commitment_theirs` | `none` |
 | Add a commitment | "Add commitment", then a "{debtor} → {creditor}" chip | `commitment_mine` for "Me → X", `commitment_theirs` for "X → Me" | `open` |
 | Remove the flag | × button on the item | the thread's `big_moment` | `none` |
-| Add a flag | "Add", then "Participant's own" or "Someone else's" | the thread's `big_moment` | `participant_moment` or `other_person_moment` |
+| Add the flag | "Add" | the thread's `big_moment` | `participant_moment` |
 | Accept a suggested change | "Accept" on the strip | the item's outcome | the judged outcome |
 | Keep a live item against a suggested removal | "Keep" on the strip | the item's outcome | the live value, such as `they_owe_reply` for a wait |
 | Keep a commitment's date against a suggested later date | "Keep original" on the strip | the item's outcome | `open`, at the obligation's current date (see "Not designed") |
 
-An item's controls are a check button and a × button, both 32 px icon buttons with labels for assistive technology ("Confirm Sam Okafor", "Remove Sam Okafor"). A live item with a suggested change shows "Accept" and "Keep" on a removal's strip, or "Accept" and "Keep original" on a later date's strip, instead. "Keep original" leaves the obligation's date as it was. Adding a person to one reply list moves the person out of the other, since both lists answer the same question.
+An item's controls are a check button and a × button, both 32 px icon buttons with labels for assistive technology ("Confirm Sam Okafor", "Remove Sam Okafor"; on the flag, "Confirm big moment" and "Remove big moment"). A live item with a suggested change shows "Accept" and "Keep" on a removal's strip, or "Accept" and "Keep original" on a later date's strip, instead. "Keep original" leaves the obligation's date as it was. Adding a person to one reply list moves the person out of the other, since both lists answer the same question.
 
-"Add" and "Add commitment" open an inline picker under the list: one chip per choice and a close button. The reply lists' picker offers each participant contact not already in that list whose `ball_in_court` outcome has no review. The commitments picker offers each "Me → X" and "X → Me" pair that is not already an item and whose commitment outcome has no review. The flag's picker offers its two values while the thread has no flag. Choosing a chip records the review and closes the picker. Only one picker is open at a time. A list whose picker would offer nothing shows no Add control.
+The reply lists' "Add" and "Add commitment" open an inline picker under the list: one chip per choice and a close button. The flag's "Add" records the review at once, with no picker: the flag carries one label, so the bench offers one choice, and an added flag records `participant_moment`, the big moment G3c defines. The reply lists' picker offers each participant contact not already in that list whose `ball_in_court` outcome has no review. The commitments picker offers each "Me → X" and "X → Me" pair that is not already an item and whose commitment outcome has no review. Choosing a chip records the review and closes the picker. Only one picker is open at a time. A list whose picker would offer nothing shows no Add control, and the flag's "Add" shows only while the thread has no flag and its `big_moment` outcome has no review.
 
 Removing a commitment that absorbed a reply item reviews only the commitment, so the reply item can appear on the next read.
 
@@ -84,11 +84,11 @@ A review shows on its item at once, without a reload. If the request fails, the 
 
 ## Styling
 
-The bench uses the app's shipped styling and components: the Tailwind gray and blue palette, Geist, the white card with a light shadow, the shipped row's parts (direction glyph, source badge, label, expand and actions buttons) and `TimelineDrillDown`, the shipped `Button` variants, native selects as on the contact history's venue filter, and the shipped `Pagination`. It adds the item states above, the row's review indicator, and the big-moment flag in pink (pink-50 fill, pink-300 border, pink-800 text, with a flag icon). The states differ in lightness and border style as well as hue.
+The bench uses the app's shipped styling and components: the Tailwind gray and blue palette, Geist, the white card with a light shadow, the shipped row's parts (direction glyph, source badge, label, expand and actions buttons) and `TimelineDrillDown`, the shipped `Button` variants, native selects as on the contact history's venue filter, and the shipped `Pagination`. It also takes the two styles the user accepted from the reference artifacts: the type filter as a segmented control, and the user's own sender name, "Me", in blue-700 in the drill-down (O4 and O2). It adds the item states above, the row's review indicator, and the big-moment flag in pink (pink-50 fill, pink-300 border, pink-800 text, with a flag icon). The states differ in lightness and border style as well as hue.
 
 The page sits in the app's list-page container, `max-w-7xl mx-auto py-6 px-4 sm:px-6 lg:px-8`, as the dashboard and the main navigation do, and the canvas draws it at that width: 1280 px, 1216 px of content. Rows and drill-downs span the whole card. The inbound (←), outbound (→) and mutual (↔) direction glyphs lead each row as the shipped row draws them.
 
-The bench carries no explanatory copy. The styles the reference artifacts carry that the app has not shipped are options on artboard 10, each off by default (see "Options from the reference artifacts").
+The bench carries no explanatory copy. Artboard 10 records the user's ruling on each style the reference artifacts carry that the app has not shipped, and artboards 1–9 draw the accepted ones (see "Options from the reference artifacts").
 
 ## The list row
 
@@ -111,13 +111,13 @@ Artboards 1, 3, 4 and 5 are the view narrowed to one run, so each row shows only
 
 The main navigation gains an "Interactions" entry between Contacts and Birthdays. The page header reads "Interactions" with the subtitle "Every interaction across your contacts". One card holds the filter bar, the run summary, the rows and the pagination.
 
-The filter bar holds three labelled selects and a "Clear filters" link:
+The filter bar holds, from the left, the type filter, two labelled selects and a "Clear filters" link:
 
+- Type: a labelled segmented control, the first filter, with "All" and then one segment per interaction type the list route offers. The selected segment is gray-900 with white text; the others are gray-600 on white. The canvas draws "All", "Messages", "Email", "Calendar", "Calls" and "Other" for illustration.
 - Contact: "All contacts", then every contact.
-- Type: "All types", then the interaction types the list route offers.
 - Run: "Any run, or none", then every run from `GET /api/v1/judgment-runs`, newest first, each named "{kind} · {content window} · {method key} {method version}", for example "Historical · Jan 1–31, 2026 · clef-masked v1".
 
-A select whose value narrows the list carries the blue border. The filters live in the page's query string, so a link opens the view filtered.
+A select whose value narrows the list carries the blue border; the segmented control shows its choice by its selected segment. The filters live in the page's query string, so a link opens the view filtered.
 
 When a run is chosen, a blue-50 strip under the filters states the run: its kind, its content window, its method and version, "Finished {time}" or "Running", the number of threads judged, and, in amber, the number incomplete. Below it an "Incomplete threads" disclosure, open by default, lists each incomplete thread with its label, its cut-off and its reason in words: `over_limit` "Over the model's limit", `call_failed` "The call failed", `input_changed` "Content changed during the run".
 
@@ -127,9 +127,9 @@ Rows follow, newest first, as "The list row" describes. The artboard draws six: 
 
 Expanding a judged row opens the drill-down, laid out in content order:
 
-1. A frame with a blue-200 border holding, in order, the messages the judgment read, as the shipped drill-down shows them; the cut-off rule; and the proposal, directly under the rule.
+1. A frame with a blue-200 border holding, in order, the messages the judgment read, as the shipped drill-down shows them, with the user's own sender name "Me" in blue-700; the cut-off rule; and the proposal, directly under the rule.
 2. The cut-off rule: a blue line across the thread, broken by an up arrow and "judged up to {cut-off date and time}", so the arrow points at the content the judgment read.
-3. The proposal's header: "Proposal", the method key and version, "production method" when it is the designated one, and at its right "{n} to review" in amber or "All reviewed" in green. Under it the four lists side by side (I owe a reply, Owes me a reply, Commitments, Big moment), Commitments twice as wide as the others, wrapping to a stack at narrow widths. Each list's items stack in it, with its Add control at its foot.
+3. The proposal's header: "Proposal", the method key and version, "production method" when it is the designated one, and at its right "{n} to review" in amber or "All reviewed" in green. Under it the proposal's three sections stack, each across the proposal's full width: the replies section, with "I owe a reply" and "Owes me a reply" side by side in two equal columns; Commitments; and Big moment. A gray-200 rule separates each section from the one above it. Each list's items stack in it, with its Add control at its foot.
 4. Each other judgment of the same content, by another method, inside the same frame under the first proposal, collapsed to one line: "Proposal", its method and version, "Not acting · {n} items", and a "Show proposal" button. Opened, it shows its lists as the first proposal does, each item still reviewable.
 5. Content after the cut-off, below the frame, at reduced opacity, each message tagged "After the judgment".
 
@@ -161,7 +161,7 @@ Accepting instead would leave the item reading "due Fri, Jan 23", Live and Confi
 
 ### 6 and 7. Big-moment flags on the thread, beneath the content judged
 
-The flag is the Big moment list's one item, inside the proposal directly beneath the content the judgment read. It reads "Participant's own" or "Someone else's", with a pink flag icon, its confidence, its state and its review mark. It never summarizes the moment. A flag is accepted when its item is Live, which includes a flag the user confirmed or added under the production method. Artboard 6 draws a participant's new job, Live and awaiting review; artboard 7 draws a sibling's wedding mentioned in passing, Live and Confirmed.
+The flag is the Big moment list's one item, inside the proposal directly beneath the content the judgment read. It reads "Big moment", with a pink flag icon, its confidence, its state and its review mark, whichever of the two big-moment values the judgment holds. It never summarizes the moment. A flag is accepted when its item is Live, which includes a flag the user confirmed or added under the production method. Artboard 6 draws a participant's new job, Live and awaiting review; artboard 7 draws a sibling's wedding mentioned in passing, Live and Confirmed.
 
 ### 8. Without a run: every interaction, by contact and type
 
@@ -173,7 +173,7 @@ The contact's Interactions section header gains a link at its right, "Review in 
 
 ### 10. Options from the reference artifacts
 
-Four options, each drawn beside its default. See "Options from the reference artifacts" below for each ruling.
+Four options, each drawn beside the shipped style it would replace and labelled with the user's ruling: "Kept" and "Rejected" where the shipped style stays, "Replaced" and "Accepted" where the option became the design's default. See "Options from the reference artifacts" below.
 
 ## The bench presentation questions, settled
 
@@ -189,14 +189,14 @@ Four options, each drawn beside its default. See "Options from the reference art
 
 ## Options from the reference artifacts
 
-The design starts from the shipped app. The references are `designs/ui-components.pen`, `.agents/spec/wireframes/` and the user's artifacts "Interactions Section", "Skip This Cycle" and "Back to list — CON-051 prototype". Each style a reference artifact carries that the app has not shipped is listed here. Where the bench has an element it applies to, artboard 10 draws it as an option beside the default, and the default stays the shipped style.
+The design starts from the shipped app. The references are `designs/ui-components.pen`, `.agents/spec/wireframes/` and the user's artifacts "Interactions Section", "Skip This Cycle" and "Back to list — CON-051 prototype". Each style a reference artifact carries that the app has not shipped is listed here. Where the bench has an element it applies to, artboard 10 draws it as an option beside the shipped style, and the user ruled on each (arc ruling R24, read from where the user's comments sit on artboard 10). An accepted option becomes the design's default; a rejected one leaves the shipped style in place.
 
 | Option | Source | Default | Option | Ruling |
 |---|---|---|---|---|
-| O1 Row layout | Interactions Section | The shipped row: direction glyph, source badge first, label below | Kind icon leading the row, label first, outlined venue chip, gray Group chip with an icon. Accepting changes the shared row, so the contact page changes too, and the bench row's first column takes the kind icon and the outlined chip | Open: the default holds until the user rules |
-| O2 "Me" in blue | Interactions Section | Every sender in gray-700 | The user's own sender name in blue-700 in the drill-down. Accepting changes the shared drill-down | Open: the default holds until the user rules |
-| O3 Secondary controls as text buttons | Skip This Cycle | Outline buttons for "Keep", "Keep original", "Add" and "Add commitment" | Those four as gray underlined text buttons, so "Accept" and the item buttons stand alone as buttons | Open: the default holds until the user rules |
-| O4 Type filter as a segmented control | Interactions Section | A select, like the contact filter | A segmented control with a dark selected segment | Open: the default holds until the user rules |
+| O1 Row layout | Interactions Section | The shipped row: direction glyph, source badge first, label below | Kind icon leading the row, label first, outlined venue chip, gray Group chip with an icon | Rejected: the shipped row stays, on the bench and on the contact page |
+| O2 "Me" in blue | Interactions Section | Every sender in gray-700 | The user's own sender name in blue-700 in the drill-down | Accepted: "Me" is blue-700 in the drill-down. The drill-down is shared, so the contact page's drill-down changes too |
+| O3 Secondary controls as text buttons | Skip This Cycle | Outline buttons for "Keep", "Keep original", "Add" and "Add commitment" | Those four as gray underlined text buttons | Rejected: the outline buttons stay |
+| O4 Type filter as a segmented control | Interactions Section | A select, like the contact filter | A segmented control with a dark selected segment | Accepted: the type filter is a segmented control, the first filter on the left |
 
 These reference styles are not offered, because the bench has no element they apply to:
 
@@ -224,6 +224,6 @@ Each behavior the design asks PR5 to build is one `status: proposed` row in `spe
 ## Not designed
 
 - How the review route records "Keep original". S4's review body carries `right_outcome` alone, and against a suggested later date both "Accept" and "Keep original" state `open`, the judged outcome, so the body S4 pins cannot tell them apart. PR5 extends the review route with an optional flag that keeps the obligation's current date (arc ruling R23).
-- Re-reviewing an outcome. A reviewed item offers no control, and the pickers leave out a person or pair whose outcome has a review, since S4 does not say whether a second review replaces the first. Changing a flag between "Participant's own" and "Someone else's" after a review falls under the same gap.
+- Re-reviewing an outcome. A reviewed item offers no control, and the pickers leave out a person or pair whose outcome has a review, since S4 does not say whether a second review replaces the first.
 - The type filter's values, which PR5 settles from its list route.
 - Any surface beyond the view and its navigation entry (NG4).

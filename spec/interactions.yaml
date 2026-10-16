@@ -750,7 +750,7 @@ behaviors:
       - a reply list holds at most one contact for a one-to-one thread, and a meeting's proposal has no reply lists
       - a commitment shows the due date its judgment selected, or that it has no stated date, and a party's commitment stands in for that party's reply owed in the same direction
       - a commitment whose judgment names the message that states it quotes that message and leads to it in the thread; a commitment whose judgment names none shows no quote
-      - the big-moment flag belongs to the thread, not to a contact, and tells a participant's own moment from another person's
+      - the big-moment flag belongs to the thread, not to a contact, and shows the same whether the moment is a participant's own or another person's
       - the questions put to the decision model are not shown
       - each item shows its confidence and one state of live, suggested, not acting, or live with a suggested removal or later date, and the four are told apart
       - no item is hidden because of its confidence
@@ -766,14 +766,15 @@ behaviors:
     then:
       - the user confirms an item, or accepts a suggested change, by stating the judged outcome as the right one
       - the user removes an item from a reply list or from the commitments, or removes the flag, by stating the outcome's no-effect value as the right one
-      - the user adds a participant contact to a reply list, which moves that contact out of the other reply list, adds a commitment in either direction, or adds the flag of either kind, by stating that outcome as the right one
+      - the user adds a participant contact to a reply list, which moves that contact out of the other reply list, adds a commitment in either direction, or adds the flag, by stating that outcome as the right one
       - the user keeps a live item against a suggested removal by stating the live outcome as the right one
       - the user keeps a commitment's date against a suggested later date, and the obligation keeps its current date
       - a commitment the user adds has no stated date and takes the timing of a commitment without one
+      - a flag the user adds is recorded as a participant's own moment
       - an addition offers only participant contacts, and only outcomes not yet reviewed
       - every correction happens on the proposal itself, with no modal or separate form, and the client never sends a verdict
       - each correction shows on its item without a reload, and a failed correction leaves the item's controls in place with an error
-    provenance: [.agents/spec/2026-10-14-decision-model-extraction.md G5 G7d G8 SC5 SC7, designs/bench.md]
+    provenance: [.agents/spec/2026-10-14-decision-model-extraction.md G3c G5 G7d G8 SC5 SC7, designs/bench.md]
 
   - id: IXN-048
     title: Each reviewed item shows its review in place after a reload
@@ -799,7 +800,7 @@ behaviors:
     when: the row holding the judgment is viewed and expanded
     then:
       - the flag shows in the proposal directly beneath the content the judgment read
-      - the flag tells a participant's own moment from another person's moment mentioned in passing
+      - a participant's own moment and another person's moment mentioned in passing show as the same flag
       - the flag carries no summary of the moment
     provenance: [.agents/spec/2026-10-14-decision-model-extraction.md G3c G7f SC10 NG3, designs/bench.md]
 
