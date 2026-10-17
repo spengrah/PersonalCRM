@@ -40,6 +40,7 @@ When adding a recipe for a behavior with no spec ID, add the behavior to `spec/`
 
 - [Dashboard](./dashboard.md) covers the overdue list, sorting, Log Interaction and Skip this cycle.
 - [Contacts](./contacts.md) covers the list (search, filter, sort), create, detail, edit, delete and merge.
+- [Interactions](./interactions.md) covers the all-interactions list, its filters, run review and row corrections.
 - [Birthdays](./birthdays.md) covers the read-only birthday sections.
-- [Imports](./imports.md) covers import candidates (import, link, ignore) and method suggestions.
-- [Settings](./settings.md) covers the integration sections, backup download, and Mac pairing, with the controls that must not be driven locally.
+- [Imports](./imports.md) covers import candidates (import, link, ignore), method suggestions, name candidates and orphan meeting notes.
+- [Settings](./settings.md) covers the integration sections, backup download and validate, and paired Macs, with the controls that must not be driven locally.
