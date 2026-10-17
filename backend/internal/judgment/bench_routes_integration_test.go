@@ -90,7 +90,7 @@ func nodeOf(ix *repository.Interaction) string { return ix.InteractionNodeID.Str
 
 // The all-interactions list returns every interaction across contacts, one
 // row per interaction, paginated, filterable by contact and by type, and
-// narrowable to the rows of threads judged in one run.
+// narrowable to the rows one run's judgments are placed on.
 func TestListAllInteractions(t *testing.T) {
 	t.Run("pages cover every interaction across contacts once, a shared one as one row", func(t *testing.T) {
 		// spec: IXN-051.every-interaction-one-row, IXN-051.pages-without-gaps
@@ -137,8 +137,24 @@ func TestListAllInteractions(t *testing.T) {
 		assert.Equal(t, []string{"message", "email", "calendar", "call", "other"}, keys)
 	})
 
+	t.Run("a run filter keeps only the row each judgment is placed on, not the thread's other rows", func(t *testing.T) {
+		// spec: IXN-051.run-keeps-judgment-rows
+		b := newBenchEnv(t)
+		c := b.contact(t)
+		th := b.thread(t)
+		b.record(t, th, c, repository.InteractionDirectionInbound, b.day(1))
+		placed := b.record(t, th, c, repository.InteractionDirectionOutbound, b.day(2))
+		b.record(t, th, c, repository.InteractionDirectionInbound, b.day(4))
+		run, _ := b.run(t, judgment.RunKindHistorical, judgmentOf(prodMethod, th, b.day(3), "h-mid", judgment.Outcomes{}))
+
+		page, meta := b.list(t, "run_id="+run.String())
+
+		assert.Equal(t, []string{nodeOf(placed)}, rowIDs(page.Items), "the row holding the latest content at or before the cut-off, not the earlier or later rows of the thread")
+		assert.Equal(t, int64(1), meta.Total)
+	})
+
 	t.Run("a run filter excludes a thread judged only in another run", func(t *testing.T) {
-		// spec: IXN-051.run-keeps-judged-threads
+		// spec: IXN-051.run-keeps-judgment-rows
 		b := newBenchEnv(t)
 		c := b.contact(t)
 		judged, other := b.thread(t), b.thread(t)
@@ -155,7 +171,7 @@ func TestListAllInteractions(t *testing.T) {
 	})
 
 	t.Run("a run filter includes a thread whose judgment the run reused", func(t *testing.T) {
-		// spec: IXN-051.run-keeps-judged-threads
+		// spec: IXN-051.run-keeps-judgment-rows
 		b := newBenchEnv(t)
 		c := b.contact(t)
 		th := b.thread(t)
@@ -174,6 +190,27 @@ func TestListAllInteractions(t *testing.T) {
 		require.Len(t, page.Items[0].Proposals, 1)
 		require.NotNil(t, page.Items[0].Proposals[0].ReusedAt)
 		assert.True(t, b.day(5).Equal(*page.Items[0].Proposals[0].ReusedAt))
+	})
+
+	t.Run("a reused judgment keeps its row when content is backfilled between its cut-off and the reuse", func(t *testing.T) {
+		// spec: IXN-051.run-keeps-judgment-rows, IXN-042.run-filter-includes-reused
+		b := newBenchEnv(t)
+		c := b.contact(t)
+		th := b.thread(t)
+		placed := b.record(t, th, c, repository.InteractionDirectionInbound, b.day(1))
+		b.run(t, judgment.RunKindScheduled, judgmentOf(prodMethod, th, b.day(2), "h1", judgment.Outcomes{}))
+		reusing, err := b.store.StartRun(b.ctx, judgment.RunSpec{Kind: judgment.RunKindScheduled, Method: prodMethod})
+		require.NoError(t, err)
+		_, found, err := b.store.ReuseJudgment(b.ctx, reusing, th.id, b.day(5), "h1")
+		require.NoError(t, err)
+		require.True(t, found)
+		b.record(t, th, c, repository.InteractionDirectionInbound, b.day(4))
+
+		page, meta := b.list(t, "run_id="+reusing.String())
+
+		require.Equal(t, []string{nodeOf(placed)}, rowIDs(page.Items), "the row the judgment's own cut-off places it on, not the backfilled row before the reuse")
+		assert.Equal(t, int64(1), meta.Total)
+		assert.Len(t, page.Items[0].Proposals, 1)
 	})
 }
 

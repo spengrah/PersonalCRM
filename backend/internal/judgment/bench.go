@@ -34,9 +34,9 @@ func NewBench(store *Store, content *service.InteractionContentService) *Bench {
 	}
 }
 
-// BenchQuery selects a page of the view. Run narrows it to the rows of
-// threads with a judgment appearing in the run, and each row's proposals to
-// the judgments appearing in it.
+// BenchQuery selects a page of the view. Run narrows it to the rows a
+// judgment appearing in the run is placed on (anchorRow), and each row's
+// proposals to the judgments appearing in it.
 type BenchQuery struct {
 	ContactID *uuid.UUID
 	Type      *service.InteractionType
@@ -61,18 +61,29 @@ type BenchPage struct {
 
 // List returns one page of the view.
 func (b *Bench) List(ctx context.Context, q BenchQuery) (*BenchPage, error) {
+	idx, err := b.content.IndexInteractions(ctx)
+	if err != nil {
+		return nil, err
+	}
+	placed := &placements{bench: b, rowOf: idx.RowOf, rows: map[placementKey]placedRow{}}
 	filter := service.InteractionsFilter{ContactID: q.ContactID, Type: q.Type, Limit: q.Limit, Offset: q.Offset}
 	if q.Run != nil {
-		judged, err := b.store.ThreadsJudgedInRun(ctx, *q.Run)
+		judged, err := b.store.RunJudgmentCutOffs(ctx, *q.Run)
 		if err != nil {
 			return nil, err
 		}
-		filter.Threads = make([]uuid.UUID, 0, len(judged))
+		filter.Rows = make(map[service.TimelineIdentity]struct{}, len(judged))
 		for _, t := range judged {
-			filter.Threads = append(filter.Threads, t.Thread)
+			row, ok, err := placed.row(ctx, t.Thread, t.CutOff)
+			if err != nil {
+				return nil, err
+			}
+			if ok {
+				filter.Rows[row] = struct{}{}
+			}
 		}
 	}
-	page, err := b.content.ListInteractions(ctx, filter)
+	page, err := b.content.ListInteractions(ctx, idx, filter)
 	if err != nil {
 		return nil, err
 	}
@@ -91,7 +102,7 @@ func (b *Bench) List(ctx context.Context, q BenchQuery) (*BenchPage, error) {
 			return nil, err
 		}
 		for _, p := range proposals {
-			row, ok, err := b.anchorRow(ctx, page.RowOf, thread, p.CutOff)
+			row, ok, err := placed.row(ctx, thread, p.CutOff)
 			if err != nil {
 				return nil, err
 			}
@@ -163,6 +174,38 @@ func (b *Bench) ThreadContent(ctx context.Context, thread uuid.UUID) (*ThreadCon
 
 // conversationVenues are the venue kinds whose content is messages.
 var conversationVenues = []string{repository.VenueKindDM, repository.VenueKindGroupChat, repository.VenueKindEmailThread}
+
+// placements resolves a judgment's placement, its thread and its own cut-off,
+// to the row it appears on, once per read: the run filter and the placement of
+// proposals on rows read the same resolved rows.
+type placements struct {
+	bench *Bench
+	rowOf map[uuid.UUID]service.TimelineIdentity
+	rows  map[placementKey]placedRow
+}
+
+type placementKey struct {
+	thread uuid.UUID
+	cutOff int64
+}
+
+type placedRow struct {
+	row service.TimelineIdentity
+	ok  bool
+}
+
+func (p *placements) row(ctx context.Context, thread uuid.UUID, cutOff time.Time) (service.TimelineIdentity, bool, error) {
+	key := placementKey{thread, cutOff.UnixNano()}
+	if r, done := p.rows[key]; done {
+		return r.row, r.ok, nil
+	}
+	row, ok, err := p.bench.anchorRow(ctx, p.rowOf, thread, cutOff)
+	if err != nil {
+		return service.TimelineIdentity{}, false, err
+	}
+	p.rows[key] = placedRow{row, ok}
+	return row, ok, nil
+}
 
 // anchorRow is the row a judgment of the thread at cutOff appears on: the row
 // holding the thread's latest content at or before the cut-off; for a thread

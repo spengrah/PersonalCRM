@@ -80,23 +80,29 @@ type InteractionRow struct {
 }
 
 // InteractionsFilter selects rows of the all-interactions view. A nil field
-// keeps every row; Threads keeps the rows with an observation in one of the
-// threads, so an empty non-nil slice keeps none.
+// keeps every row; Rows keeps the rows whose identity it holds, so an empty
+// non-nil set keeps none.
 type InteractionsFilter struct {
 	ContactID *uuid.UUID
 	Type      *InteractionType
-	Threads   []uuid.UUID
+	Rows      map[TimelineIdentity]struct{}
 	Limit     int32
 	Offset    int32
 }
 
 // InteractionsPage is one page of rows and the number of rows the filter
-// keeps. RowOf maps every observation of every row, kept or not, to its row's
-// identity.
+// keeps.
 type InteractionsPage struct {
 	Rows  []InteractionRow
 	Total int
-	RowOf map[uuid.UUID]TimelineIdentity
+}
+
+// InteractionIndex is every row of the all-interactions view, before any
+// filter or page. RowOf maps every observation of every row to its row's
+// identity.
+type InteractionIndex struct {
+	candidates []candidateRow
+	RowOf      map[uuid.UUID]TimelineIdentity
 }
 
 // candidateRow is a row before its page is read, with its first
@@ -107,12 +113,10 @@ type candidateRow struct {
 	call *repository.PhoneCall
 }
 
-// ListInteractions returns one page of every interaction across contacts,
-// newest first with the contact history's tie-breaker: each contact's
-// effective participations, merged into one row per interaction, and every
-// missed call of a contact. Each row on the page is enriched as the contact
-// history enriches it, in its context contact's participation.
-func (s *InteractionContentService) ListInteractions(ctx context.Context, f InteractionsFilter) (*InteractionsPage, error) {
+// IndexInteractions returns every interaction across contacts as rows: each
+// contact's effective participations, merged into one row per interaction,
+// and every missed call of a contact.
+func (s *InteractionContentService) IndexInteractions(ctx context.Context) (*InteractionIndex, error) {
 	candidates, err := s.candidateRows(ctx)
 	if err != nil {
 		return nil, err
@@ -123,8 +127,16 @@ func (s *InteractionContentService) ListInteractions(ctx context.Context, f Inte
 			rowOf[id] = c.row.Identity
 		}
 	}
-	kept := candidates[:0]
-	for _, c := range candidates {
+	return &InteractionIndex{candidates: candidates, RowOf: rowOf}, nil
+}
+
+// ListInteractions returns one page of the index's rows the filter keeps,
+// newest first with the contact history's tie-breaker. Each row on the page is
+// enriched as the contact history enriches it, in its context contact's
+// participation.
+func (s *InteractionContentService) ListInteractions(ctx context.Context, idx *InteractionIndex, f InteractionsFilter) (*InteractionsPage, error) {
+	var kept []candidateRow
+	for _, c := range idx.candidates {
 		if keepRow(c.row, f) {
 			kept = append(kept, c)
 		}
@@ -143,7 +155,7 @@ func (s *InteractionContentService) ListInteractions(ctx context.Context, f Inte
 	if err != nil {
 		return nil, err
 	}
-	return &InteractionsPage{Rows: rows, Total: total, RowOf: rowOf}, nil
+	return &InteractionsPage{Rows: rows, Total: total}, nil
 }
 
 func keepRow(row InteractionRow, f InteractionsFilter) bool {
@@ -153,8 +165,10 @@ func keepRow(row InteractionRow, f InteractionsFilter) bool {
 	if f.Type != nil && !slices.Contains(row.Types, *f.Type) {
 		return false
 	}
-	if f.Threads != nil && !slices.ContainsFunc(row.Threads, func(t uuid.UUID) bool { return slices.Contains(f.Threads, t) }) {
-		return false
+	if f.Rows != nil {
+		if _, ok := f.Rows[row.Identity]; !ok {
+			return false
+		}
 	}
 	return true
 }
