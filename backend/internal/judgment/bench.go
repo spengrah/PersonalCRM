@@ -34,9 +34,9 @@ func NewBench(store *Store, content *service.InteractionContentService) *Bench {
 	}
 }
 
-// BenchQuery selects a page of the view. Run narrows it to the rows of
-// threads with a judgment appearing in the run, and each row's proposals to
-// the judgments appearing in it.
+// BenchQuery selects a page of the view. Run narrows it to the rows a
+// judgment appearing in the run is placed on (anchorRow), and each row's
+// proposals to the judgments appearing in it.
 type BenchQuery struct {
 	ContactID *uuid.UUID
 	Type      *service.InteractionType
@@ -61,18 +61,28 @@ type BenchPage struct {
 
 // List returns one page of the view.
 func (b *Bench) List(ctx context.Context, q BenchQuery) (*BenchPage, error) {
+	idx, err := b.content.IndexInteractions(ctx)
+	if err != nil {
+		return nil, err
+	}
 	filter := service.InteractionsFilter{ContactID: q.ContactID, Type: q.Type, Limit: q.Limit, Offset: q.Offset}
 	if q.Run != nil {
 		judged, err := b.store.ThreadsJudgedInRun(ctx, *q.Run)
 		if err != nil {
 			return nil, err
 		}
-		filter.Threads = make([]uuid.UUID, 0, len(judged))
+		filter.Rows = make(map[service.TimelineIdentity]struct{}, len(judged))
 		for _, t := range judged {
-			filter.Threads = append(filter.Threads, t.Thread)
+			row, ok, err := b.anchorRow(ctx, idx.RowOf, t.Thread, t.CutOff)
+			if err != nil {
+				return nil, err
+			}
+			if ok {
+				filter.Rows[row] = struct{}{}
+			}
 		}
 	}
-	page, err := b.content.ListInteractions(ctx, filter)
+	page, err := b.content.ListInteractions(ctx, idx, filter)
 	if err != nil {
 		return nil, err
 	}
@@ -91,7 +101,7 @@ func (b *Bench) List(ctx context.Context, q BenchQuery) (*BenchPage, error) {
 			return nil, err
 		}
 		for _, p := range proposals {
-			row, ok, err := b.anchorRow(ctx, page.RowOf, thread, p.CutOff)
+			row, ok, err := b.anchorRow(ctx, idx.RowOf, thread, p.CutOff)
 			if err != nil {
 				return nil, err
 			}

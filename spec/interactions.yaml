@@ -702,7 +702,7 @@ behaviors:
       - key: type-filter
         text: a type filter keeps the rows of that interaction type
       - key: run-filter-includes-reused
-        text: a run filter keeps the rows of threads with a judgment appearing in that run, including a judgment the run reused
+        text: a run filter keeps only the rows a judgment appearing in that run is placed on (IXN-044), including a judgment the run reused, so a judged thread's earlier and later rows are left out
       - key: filters-combine
         text: filters combine, and pagination totals count the filtered rows
       - key: filters-in-address
@@ -891,8 +891,8 @@ behaviors:
         text: rows order newest first with a deterministic tie-breaker, and pages cover them without gaps or duplicates, the total counting the rows the filters keep
       - key: filters-combine
         text: the contact filter keeps the rows a contact takes part in, the type filter the rows of one interaction type, and the two combine
-      - key: run-keeps-judged-threads
-        text: the run filter keeps the rows of threads with a judgment appearing in the run, including a judgment the run reused, and excludes a thread judged only in another run
+      - key: run-keeps-judgment-rows
+        text: the run filter keeps only the row each judgment appearing in the run is placed on, the row holding the thread's latest content at or before its cut-off, including a judgment the run reused; it leaves out the thread's other rows and a thread judged only in another run, and the total counts the kept rows
     provenance: [.agents/spec/2026-10-14-decision-model-extraction.md G9, designs/bench.md]
     notes: The bench's list (IXN-041, IXN-042) reads this route.
 

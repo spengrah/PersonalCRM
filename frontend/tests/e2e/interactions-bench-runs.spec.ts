@@ -156,18 +156,26 @@ test.describe('Interactions bench runs @area:interactions', () => {
       ],
     })
 
-    // spec: IXN-044.one-row-latest-content, IXN-044.collapsed-indicator, IXN-044.names-no-outcomes
+    // spec: IXN-044.one-row-latest-content, IXN-044.collapsed-indicator, IXN-044.names-no-outcomes, IXN-042.run-filter-includes-reused
     await page.goto(`/interactions?run=${production.run_id}`)
     const thirdView = benchRow(page, thirdRow.item.identity.id)
     await expect(thirdView.locator('[data-review-indicator]')).toHaveText('2 to review', {
       timeout: SLOW_TIMEOUT_MS,
     })
     for (const row of [firstRow, secondRow]) {
-      await expect(benchRow(page, row.item.identity.id)).toBeVisible()
+      await expect(benchRow(page, row.item.identity.id)).toHaveCount(0)
+    }
+    for (const [member, row] of [
+      [first, firstRow],
+      [second, secondRow],
+    ] as const) {
+      await page.goto(`/interactions?contact=${member.id}`)
+      await expect(benchRow(page, row.item.identity.id)).toBeVisible({ timeout: SLOW_TIMEOUT_MS })
       await expect(
         benchRow(page, row.item.identity.id).locator('[data-review-indicator]')
       ).toHaveCount(0)
     }
+    await page.goto(`/interactions?run=${production.run_id}`)
     await expect(thirdView.locator('[data-proposal]')).toHaveCount(0)
     await expect(thirdView).not.toContainText('Owes me a reply')
     await expect(thirdView).not.toContainText('Proposal')

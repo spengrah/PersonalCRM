@@ -90,7 +90,7 @@ func nodeOf(ix *repository.Interaction) string { return ix.InteractionNodeID.Str
 
 // The all-interactions list returns every interaction across contacts, one
 // row per interaction, paginated, filterable by contact and by type, and
-// narrowable to the rows of threads judged in one run.
+// narrowable to the rows one run's judgments are placed on.
 func TestListAllInteractions(t *testing.T) {
 	t.Run("pages cover every interaction across contacts once, a shared one as one row", func(t *testing.T) {
 		// spec: IXN-051.every-interaction-one-row, IXN-051.pages-without-gaps
@@ -137,8 +137,24 @@ func TestListAllInteractions(t *testing.T) {
 		assert.Equal(t, []string{"message", "email", "calendar", "call", "other"}, keys)
 	})
 
+	t.Run("a run filter keeps only the row each judgment is placed on, not the thread's other rows", func(t *testing.T) {
+		// spec: IXN-051.run-keeps-judgment-rows
+		b := newBenchEnv(t)
+		c := b.contact(t)
+		th := b.thread(t)
+		b.record(t, th, c, repository.InteractionDirectionInbound, b.day(1))
+		placed := b.record(t, th, c, repository.InteractionDirectionOutbound, b.day(2))
+		b.record(t, th, c, repository.InteractionDirectionInbound, b.day(4))
+		run, _ := b.run(t, judgment.RunKindHistorical, judgmentOf(prodMethod, th, b.day(3), "h-mid", judgment.Outcomes{}))
+
+		page, meta := b.list(t, "run_id="+run.String())
+
+		assert.Equal(t, []string{nodeOf(placed)}, rowIDs(page.Items), "the row holding the latest content at or before the cut-off, not the earlier or later rows of the thread")
+		assert.Equal(t, int64(1), meta.Total)
+	})
+
 	t.Run("a run filter excludes a thread judged only in another run", func(t *testing.T) {
-		// spec: IXN-051.run-keeps-judged-threads
+		// spec: IXN-051.run-keeps-judgment-rows
 		b := newBenchEnv(t)
 		c := b.contact(t)
 		judged, other := b.thread(t), b.thread(t)
@@ -155,7 +171,7 @@ func TestListAllInteractions(t *testing.T) {
 	})
 
 	t.Run("a run filter includes a thread whose judgment the run reused", func(t *testing.T) {
-		// spec: IXN-051.run-keeps-judged-threads
+		// spec: IXN-051.run-keeps-judgment-rows
 		b := newBenchEnv(t)
 		c := b.contact(t)
 		th := b.thread(t)
