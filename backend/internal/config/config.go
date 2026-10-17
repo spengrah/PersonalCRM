@@ -45,7 +45,7 @@ type DecisionConfig struct {
 	// Routes of the compared methods. An empty key or URL leaves the methods
 	// it serves unavailable.
 	OpenRouterAPIKey string // OPENROUTER_API_KEY
-	TypeSafeAPIKey   string // TYPESAFE_API_KEY
+	VeniceAPIKey     string // VENICE_API_KEY
 	SageAPIKey       string // SAGE_API_KEY (Levanto)
 }
 
@@ -606,7 +606,7 @@ func Load() (*Config, error) {
 		Decision: DecisionConfig{
 			ProductionMethod: getEnv("DECISION_PRODUCTION_METHOD", ""),
 			OpenRouterAPIKey: getEnv("OPENROUTER_API_KEY", ""),
-			TypeSafeAPIKey:   getEnv("TYPESAFE_API_KEY", ""),
+			VeniceAPIKey:     getEnv("VENICE_API_KEY", ""),
 			SageAPIKey:       getEnv("SAGE_API_KEY", ""),
 		},
 		LangfuseExtraction: LangfuseExtractionConfig{
