@@ -218,13 +218,22 @@ test.describe('Interactions bench list @area:interactions', () => {
       'Calls',
       'Other',
     ])
-    await expect(filters.getByRole('combobox')).toHaveCount(2)
-    await expect(filters.getByLabel('Contact', { exact: true })).toBeVisible()
+    const contactFilter = filters.getByRole('group', { name: 'Contact', exact: true })
+    await expect(filters.getByRole('combobox')).toHaveCount(1)
+    await expect(contactFilter).toBeVisible()
     await expect(filters.getByLabel('Run', { exact: true })).toBeVisible()
     await expect(filters.getByRole('textbox')).toHaveCount(0)
 
+    // spec: IXN-042.contact-chosen-by-search
+    await contactFilter.getByText('Search contacts...').click()
+    await contactFilter.getByPlaceholder('Search contacts...').fill(subject.name)
+    const options = contactFilter.getByRole('option')
+    await expect(options).toHaveCount(2)
+    await expect(options.first()).toHaveText('All contacts')
+    await expect(options.last()).toContainText(subject.name)
+
     // spec: IXN-042.contact-filter
-    await filters.getByLabel('Contact', { exact: true }).selectOption(subject.id)
+    await options.filter({ hasText: subject.name }).click()
     await expect(page).toHaveURL(new RegExp(`contact=${subject.id}`))
     await expect(list.locator(':scope > [role="listitem"]')).toHaveCount(3, {
       timeout: SLOW_TIMEOUT_MS,
@@ -250,7 +259,7 @@ test.describe('Interactions bench list @area:interactions', () => {
     await expect(list.locator(':scope > [role="listitem"]')).toHaveCount(1, {
       timeout: SLOW_TIMEOUT_MS,
     })
-    await expect(filters.getByLabel('Contact', { exact: true })).toHaveValue(subject.id)
+    await expect(contactFilter.getByText(subject.name, { exact: true })).toBeVisible()
     await expect(filters.getByRole('button', { name: 'Email' })).toHaveAttribute(
       'aria-pressed',
       'true'
@@ -364,6 +373,10 @@ test.describe('Interactions bench list @area:interactions', () => {
     for (const row of otherOnly) {
       await expect(benchRow(page, row.item.identity.id)).toHaveCount(0)
     }
-    await expect(page.getByLabel('Contact', { exact: true })).toHaveValue(subject.id)
+    await expect(
+      page
+        .getByRole('group', { name: 'Contact', exact: true })
+        .getByText(subject.name, { exact: true })
+    ).toBeVisible()
   })
 })

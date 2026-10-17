@@ -697,6 +697,8 @@ behaviors:
     then:
       - key: contact-filter
         text: a contact filter keeps the rows that contact takes part in
+      - key: contact-chosen-by-search
+        text: the contact is chosen by typing part of its name or a contact method, which narrows the choices to the matching contacts
       - key: type-filter
         text: a type filter keeps the rows of that interaction type
       - key: run-filter-includes-reused
