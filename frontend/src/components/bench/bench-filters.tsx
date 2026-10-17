@@ -78,7 +78,9 @@ export function BenchFilters({ filters, typeOptions, runs, onChange }: BenchFilt
           />
         </div>
       </div>
-      <div className="min-w-[16rem]">
+      {/* A zero flex basis keeps a long run label from widening the select
+          past the row; the select fills what the row leaves and clips. */}
+      <div className="min-w-[12rem] flex-1">
         <Select
           id="bench-run"
           label="Run"
