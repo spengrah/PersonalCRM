@@ -216,6 +216,22 @@ func (s *Store) ListJudgments(ctx context.Context, query JudgmentQuery) ([]Judgm
 	return views, nil
 }
 
+// RunJudgmentCutOffs returns, for each judgment appearing in a run (a reused
+// one included), its thread and the judgment's own cut-off: the cut-off its
+// proposal carries and is placed at, which for a reused judgment precedes the
+// run's.
+func (s *Store) RunJudgmentCutOffs(ctx context.Context, run RunID) ([]ThreadCutOff, error) {
+	rows, err := s.queries.ListJudgmentRows(ctx, db.ListJudgmentRowsParams{Ids: []uuid.UUID{}, RunID: &run, ExampleIds: []string{}})
+	if err != nil {
+		return nil, fmt.Errorf("list run judgments: %w", err)
+	}
+	cutOffs := make([]ThreadCutOff, len(rows))
+	for i, r := range rows {
+		cutOffs[i] = ThreadCutOff{Thread: r.ThreadID, CutOff: r.CutOff}
+	}
+	return cutOffs, nil
+}
+
 // ThreadsJudgedInRun returns each thread a run judged, at the run's cut-off,
 // reused appearances included.
 func (s *Store) ThreadsJudgedInRun(ctx context.Context, run RunID) ([]ThreadCutOff, error) {

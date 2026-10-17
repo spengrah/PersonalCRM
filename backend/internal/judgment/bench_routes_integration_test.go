@@ -191,6 +191,27 @@ func TestListAllInteractions(t *testing.T) {
 		require.NotNil(t, page.Items[0].Proposals[0].ReusedAt)
 		assert.True(t, b.day(5).Equal(*page.Items[0].Proposals[0].ReusedAt))
 	})
+
+	t.Run("a reused judgment keeps its row when content is backfilled between its cut-off and the reuse", func(t *testing.T) {
+		// spec: IXN-051.run-keeps-judgment-rows, IXN-042.run-filter-includes-reused
+		b := newBenchEnv(t)
+		c := b.contact(t)
+		th := b.thread(t)
+		placed := b.record(t, th, c, repository.InteractionDirectionInbound, b.day(1))
+		b.run(t, judgment.RunKindScheduled, judgmentOf(prodMethod, th, b.day(2), "h1", judgment.Outcomes{}))
+		reusing, err := b.store.StartRun(b.ctx, judgment.RunSpec{Kind: judgment.RunKindScheduled, Method: prodMethod})
+		require.NoError(t, err)
+		_, found, err := b.store.ReuseJudgment(b.ctx, reusing, th.id, b.day(5), "h1")
+		require.NoError(t, err)
+		require.True(t, found)
+		b.record(t, th, c, repository.InteractionDirectionInbound, b.day(4))
+
+		page, meta := b.list(t, "run_id="+reusing.String())
+
+		require.Equal(t, []string{nodeOf(placed)}, rowIDs(page.Items), "the row the judgment's own cut-off places it on, not the backfilled row before the reuse")
+		assert.Equal(t, int64(1), meta.Total)
+		assert.Len(t, page.Items[0].Proposals, 1)
+	})
 }
 
 // item returns the one item of the list naming the contact.
