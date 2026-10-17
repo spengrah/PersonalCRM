@@ -1,6 +1,7 @@
 'use client'
 
 import { clsx } from 'clsx'
+import { ContactSelector } from '@/components/ui/contact-selector'
 import { Select } from '@/components/ui/select'
 import { useContact, useContacts } from '@/hooks/use-contacts'
 import type { AllInteractionsFilters, InteractionType } from '@/lib/bench-api'
@@ -64,21 +65,18 @@ export function BenchFilters({ filters, typeOptions, runs, onChange }: BenchFilt
           })}
         </div>
       </div>
-      <div className="min-w-[12rem]">
-        <Select
-          id="bench-contact"
-          label="Contact"
-          value={filters.contact_id ?? ''}
-          onChange={event => set({ contact_id: event.target.value || undefined })}
-          className={clsx(filters.contact_id && 'border-blue-500')}
-        >
-          <option value="">All contacts</option>
-          {[...missing, ...contactOptions].map(contact => (
-            <option key={contact.id} value={contact.id}>
-              {contact.full_name}
-            </option>
-          ))}
-        </Select>
+      <div className="flex min-w-[16rem] flex-col gap-1 text-sm">
+        <span id="bench-contact-label" className="font-medium text-gray-700">
+          Contact
+        </span>
+        <div role="group" aria-labelledby="bench-contact-label">
+          <ContactSelector
+            contacts={[...missing, ...contactOptions]}
+            value={filters.contact_id}
+            onChange={contactId => set({ contact_id: contactId })}
+            noContactLabel="All contacts"
+          />
+        </div>
       </div>
       <div className="min-w-[16rem]">
         <Select
