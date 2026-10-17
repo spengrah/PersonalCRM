@@ -12,7 +12,7 @@ import (
 // Endpoints of the hosted routes.
 const (
 	openRouterDecisionsURL = "https://openrouter.ai/api/alpha/decisions"
-	typeSafeURL            = "https://api.typesafe.ai/v1/systemone"
+	veniceDecisionsURL     = "https://api.venice.ai/api/v1/decisions"
 	sageURL                = "https://sage.levanto.ai/decide/batch"
 )
 
@@ -42,10 +42,13 @@ var (
 	// data beyond processing the request.
 	deepInfraTerms = TermsStatus{Training: TermsShown, Retention: TermsShown, Sources: sources(slices.Concat(openRouterSources, []string{
 		"https://deepinfra.com/terms", "https://deepinfra.com/privacy", "https://deepinfra.com/docs/data"})...)}
-	// TypeSafe promises no training, but keeps customer data "as long as
+	// Venice relays Jev to TypeSafe without the user's Venice identity and
+	// stores no prompt or response content; TypeSafe still sees the masked
+	// content, promises no training, but keeps customer data "as long as
 	// necessary" and offers zero retention to enterprise customers only.
-	typeSafeTerms = TermsStatus{Training: TermsShown, Retention: TermsContradicted, Sources: sources(
-		"https://typesafe.ai/legal/privacy-policy", "https://typesafe.ai/legal/data-processing", "https://typesafe.ai/legal/mca", "https://docs.typesafe.ai/legal.md")}
+	veniceJevTerms = TermsStatus{Training: TermsShown, Retention: TermsContradicted, Sources: append(
+		[]TermsSource{{URL: "https://docs.venice.ai/overview/privacy", ReadOn: time.Date(2026, 10, 17, 0, 0, 0, 0, time.UTC)}},
+		sources("https://typesafe.ai/legal/privacy-policy", "https://typesafe.ai/legal/data-processing", "https://typesafe.ai/legal/mca", "https://docs.typesafe.ai/legal.md")...)}
 	// Levanto promises no training and keeps no content after responding,
 	// except diagnostic payloads of failed or slow requests, deleted after 30
 	// days: temporary, and masked.
@@ -59,9 +62,10 @@ var (
 	clefLimits = Limits{Tokens: 65536, Questions: 64}
 	// Clef-Flash on DeepInfra: a 24,576-token context; 64 questions.
 	clefFlashLimits = Limits{Tokens: 24576, Questions: 64}
-	// Jev: 32,768 tokens for the state with any one question, the tighter of
-	// its two limits; no question cap.
-	jevLimits = Limits{Tokens: 32768, Questions: 32768}
+	// Jev on Venice: 32,000 tokens for the state with its longest question,
+	// the tighter of its two limits (64,000 for the state with every
+	// question); no question cap.
+	jevLimits = Limits{Tokens: 32000, Questions: 32000}
 	// Sage: 32,768 tokens on plans below Growth, which alone extends the
 	// context to 131,072; no documented question cap.
 	sageLimits = Limits{Tokens: 32768, Questions: 32768}
@@ -98,11 +102,13 @@ func NewRegistry(cfg config.DecisionConfig, masker *threadctx.Masker) *Registry 
 			"OPENROUTER_API_KEY", cfg.OpenRouterAPIKey, openRouter("cloudflare/clef", zeroRetention("deepinfra"))},
 		{Definition{Key: "clef-flash-masked", Wording: DefaultWording, Limits: clefFlashLimits, Terms: deepInfraTerms},
 			"OPENROUTER_API_KEY", cfg.OpenRouterAPIKey, openRouter("cloudflare/clef-flash", zeroRetention("deepinfra"))},
-		// TypeSafe's native route offers a self-serve account no zero
-		// retention, so Jev runs without it, on masked content only.
-		{Definition{Key: "jev-masked", Wording: DefaultWording, Limits: jevLimits, Terms: typeSafeTerms},
-			"TYPESAFE_API_KEY", cfg.TypeSafeAPIKey, func(def Definition) (Method, error) {
-				return NewMaskedMethod(def, masker, newSystemOne(typeSafeURL, cfg.TypeSafeAPIKey, "jev-1.14.0", nil)), nil
+		// Venice relays Jev without the user's identity, but its route offers
+		// no zero retention at TypeSafe, so Jev runs on masked content only.
+		// Venice serves only jev-latest and reports no release, so a new Jev
+		// release does not change this method's version.
+		{Definition{Key: "jev-masked", Wording: DefaultWording, Limits: jevLimits, Terms: veniceJevTerms},
+			"VENICE_API_KEY", cfg.VeniceAPIKey, func(def Definition) (Method, error) {
+				return NewMaskedMethod(def, masker, newSystemOne(veniceDecisionsURL, cfg.VeniceAPIKey, "jev-latest", nil)), nil
 			}},
 		// Levanto's route offers no zero retention either.
 		{Definition{Key: "sage-masked", Wording: DefaultWording, Limits: sageLimits, Terms: sageTerms},

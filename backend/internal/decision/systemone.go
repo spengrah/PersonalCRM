@@ -23,7 +23,7 @@ type openRouterRouting struct {
 	AllowFallbacks bool     `json:"allow_fallbacks"`
 }
 
-// systemOne speaks the System One wire shape, which TypeSafe's native API,
+// systemOne speaks the System One wire shape, which Venice's decisions API
 // and OpenRouter's decisions endpoint share: a state, and
 // questions keyed by ID with their criteria; answers keyed by the same IDs.
 type systemOne struct {
@@ -33,7 +33,7 @@ type systemOne struct {
 }
 
 // NewSystemOneAdapter is an adapter for a System One endpoint at url, such as
-// TypeSafe's native API.
+// Venice's decisions API.
 func NewSystemOneAdapter(url, apiKey, model string) Adapter {
 	return newSystemOne(url, apiKey, model, nil)
 }
