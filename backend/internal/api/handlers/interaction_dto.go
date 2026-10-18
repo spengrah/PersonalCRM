@@ -221,7 +221,10 @@ type InteractionTypeOptionResponse struct {
 // served as the contact history serves it in the participation of
 // context_contact_id, its first participant. proposals are the thread
 // judgments whose latest content the row holds; to_review counts their items
-// awaiting review.
+// awaiting review. review_status, present on a row carrying a proposal, is
+// to_review while any of its proposals' items has no label, else
+// nones_to_review while any holds a negative decision without a label, else
+// all_reviewed.
 type AllInteractionItemResponse struct {
 	Item             InteractionListItemResponse      `json:"item"`
 	ContextContactID string                           `json:"context_contact_id"`
@@ -229,6 +232,7 @@ type AllInteractionItemResponse struct {
 	Preview          *InteractionPreviewResponse      `json:"preview,omitempty"`
 	Proposals        []BenchProposalResponse          `json:"proposals"`
 	ToReview         int                              `json:"to_review"`
+	ReviewStatus     *string                          `json:"review_status,omitempty" tstype:"ReviewStatus"`
 }
 
 // InteractionPreviewResponse is the latest content a row shows: a message's
@@ -244,7 +248,13 @@ type InteractionPreviewResponse struct {
 // /interactions/threads/{thread_id}/content returns; cut_off is its first
 // appearance, as of which its content is shown; reused_at is its appearance in
 // the run the view is narrowed to, when that run reused it. reply_lists is
-// false for a meeting.
+// false for a meeting. to_review counts its items without a label;
+// review_status is to_review while it has one, else nones_to_review while it
+// holds a negative decision without a label, else all_reviewed. confirm_nones
+// is true exactly when it has no items and holds a negative decision without
+// a label, and /judgments/{judgment_id}/confirm-nones labels them. lists has
+// one entry per list it shows, in display order; a meeting's carries no reply
+// lists.
 type BenchProposalResponse struct {
 	JudgmentID    string                  `json:"judgment_id"`
 	ThreadID      string                  `json:"thread_id"`
@@ -258,6 +268,30 @@ type BenchProposalResponse struct {
 	Items         []BenchItemResponse     `json:"items"`
 	Additions     []BenchAdditionResponse `json:"additions"`
 	ToReview      int                     `json:"to_review"`
+	ReviewStatus  string                  `json:"review_status" tstype:"ReviewStatus"`
+	ConfirmNones  bool                    `json:"confirm_nones"`
+	Lists         []BenchListResponse     `json:"lists"`
+}
+
+// BenchListResponse is one list a proposal shows. closest is the decision the
+// judgment came closest to answering with the list's value among the
+// decisions no item of the list represents, absent when the list has no
+// candidate. nones_reviewed is true exactly when at least one negative
+// decision sits behind the list and every one has a label.
+type BenchListResponse struct {
+	List          string                `json:"list" tstype:"ProposalList"`
+	Closest       *BenchClosestResponse `json:"closest,omitempty"`
+	NonesReviewed bool                  `json:"nones_reviewed"`
+}
+
+// BenchClosestResponse names a list's closest decision by the party fields an
+// item of that list carries (contact for a reply list, contact and debtor for
+// a commitment, neither for the big moment), with the probability of the
+// list's value as a whole percent from 0 to 100.
+type BenchClosestResponse struct {
+	Contact *BenchPartyResponse `json:"contact,omitempty"`
+	Debtor  *string             `json:"debtor,omitempty" tstype:"Debtor"`
+	Percent int                 `json:"percent"`
 }
 
 // BenchThreadContentResponse is a judged thread's whole conversation, oldest
@@ -274,22 +308,28 @@ type BenchPartyResponse struct {
 
 // BenchItemResponse is one item of a proposal, standing for one judged
 // outcome. contact is a reply item's participant or a commitment's
-// counterparty, absent for the flag; debtor says who owes a commitment. state
-// is absent once the user removed the item; mark is absent until a review.
+// counterparty, absent for the flag; debtor says who owes a commitment. mark
+// is the decision's label, from whichever proposal on the same content it was
+// made in, absent until one exists. state is the item's live state, beside
+// its mark where they disagree, absent only when a removal took effect.
 // due_date is a commitment's date (YYYY-MM-DD), absent when it has no stated
-// date. acts are the item's review controls, empty once reviewed.
+// date; for a commitment whose label states its date, the date the label
+// kept, and live_due_date the obligation's live date where it differs. acts
+// are the item's review controls; on an item with a mark they are its
+// re-review controls, and posting one records the label only.
 type BenchItemResponse struct {
-	OutcomeID  string                      `json:"outcome_id"`
-	List       string                      `json:"list" tstype:"ProposalList"`
-	Contact    *BenchPartyResponse         `json:"contact,omitempty"`
-	Debtor     *string                     `json:"debtor,omitempty" tstype:"Debtor"`
-	State      *string                     `json:"state,omitempty" tstype:"ItemState"`
-	Confidence *float64                    `json:"confidence,omitempty"`
-	DueDate    *string                     `json:"due_date,omitempty"`
-	Change     *BenchItemChangeResponse    `json:"change,omitempty"`
-	Source     *BenchSourceMessageResponse `json:"source,omitempty"`
-	Mark       *string                     `json:"mark,omitempty" tstype:"ItemMark"`
-	Acts       []BenchActResponse          `json:"acts"`
+	OutcomeID   string                      `json:"outcome_id"`
+	List        string                      `json:"list" tstype:"ProposalList"`
+	Contact     *BenchPartyResponse         `json:"contact,omitempty"`
+	Debtor      *string                     `json:"debtor,omitempty" tstype:"Debtor"`
+	State       *string                     `json:"state,omitempty" tstype:"ItemState"`
+	Confidence  *float64                    `json:"confidence,omitempty"`
+	DueDate     *string                     `json:"due_date,omitempty"`
+	Change      *BenchItemChangeResponse    `json:"change,omitempty"`
+	Source      *BenchSourceMessageResponse `json:"source,omitempty"`
+	Mark        *string                     `json:"mark,omitempty" tstype:"ItemMark"`
+	Acts        []BenchActResponse          `json:"acts"`
+	LiveDueDate *string                     `json:"live_due_date,omitempty"`
 }
 
 // BenchItemChangeResponse is a suggested change to a live item: its removal,
@@ -322,7 +362,9 @@ type BenchActResponse struct {
 // BenchAdditionResponse is one choice of a proposal's pickers: adding contact
 // to a reply list, adding a commitment between the user and contact (debtor
 // says who owes it), or adding the flag, by posting right_outcome to the
-// outcome's review route.
+// outcome's review route. The pickers offer every participant or pair not
+// already in the list whose decision has no label or is negative, labeled or
+// not.
 type BenchAdditionResponse struct {
 	List         string              `json:"list" tstype:"ProposalList"`
 	Contact      *BenchPartyResponse `json:"contact,omitempty"`

@@ -100,3 +100,32 @@ func (l *liveState) effectGone(ctx context.Context, o *outcomeRecord) (bool, err
 	waiting, err := awaiting(ctx, l.q, contactOf(o.LiveContactID))
 	return !waiting, err
 }
+
+// holds reports whether the live effect of value, as the outcome stands for
+// it, holds now, whatever the decision's label says: an owed reply or a
+// commitment while the obligation the outcome recorded, followed through the
+// tasks continuing it, stays open and is owed by the party value names; "they
+// owe a reply" also while the timestamp rule shows the contact awaiting a
+// reply; a big moment while its flag is raised. Evidence never acted, and
+// neither did a claim suggesting an addition that was never confirmed.
+func (l *liveState) holds(ctx context.Context, o *outcomeRecord, value string) (bool, error) {
+	switch {
+	case o.state() == OutcomeStateEvidence, o.state() == OutcomeStateClaim && o.kept() == "":
+		return false, nil
+	case value == "", isNoEffectValue(value):
+		return false, nil
+	case o.Question == QuestionBigMoment:
+		return flagRaised(ctx, l.q, l.thread, value)
+	}
+	debtor := repository.ObligationDebtorContact
+	if o.Question == QuestionCommitmentMine || value == string(BallInCourtIOweReply) {
+		debtor = repository.ObligationDebtorUser
+	}
+	if t := l.obligation(o); t != nil && t.IsLive() && t.Obligation.Debtor == debtor {
+		return true, nil
+	}
+	if value != string(BallInCourtTheyOweReply) {
+		return false, nil
+	}
+	return awaiting(ctx, l.q, contactOf(o.LiveContactID))
+}

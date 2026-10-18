@@ -451,6 +451,7 @@ type JudgmentOutcome struct {
 	DueDate          *time.Time `json:"due_date"`
 	Confidence       *float64   `json:"confidence"`
 	ObligationTaskID *uuid.UUID `json:"obligation_task_id"`
+	KeptDueDate      *time.Time `json:"kept_due_date"`
 }
 
 type JudgmentRun struct {

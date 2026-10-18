@@ -20,15 +20,19 @@ import (
 // when it landed or was reviewed. ContactID is the contact the judgment
 // answered about, kept as the judgment's evidence; LiveContactID is the
 // contact that one now is after any contact merges, the one live state acts
-// on.
+// on. Example is the content its judgment judged, which with Question and
+// ContactID names the decision the outcome answers. KeptDueDate is the date
+// its obligation held when the user first reviewed the later date it suggests.
 type outcomeRecord struct {
 	ID               uuid.UUID
 	JudgmentID       uuid.UUID
+	Example          ExampleID
 	Question         Question
 	QuestionID       string
 	ContactID        *uuid.UUID
 	LiveContactID    *uuid.UUID
 	DueDate          *time.Time
+	KeptDueDate      *time.Time
 	Confidence       *float64
 	ObligationTaskID *uuid.UUID
 	answer           *db.Assertion
@@ -138,15 +142,11 @@ func (o *outcomeRecord) view() OutcomeView {
 	}
 }
 
-// key names the question and contact an outcome answers, the unit a review
+// decision names the decision the outcome answers: its judged content, its
+// question and the contact the judgment answered about, the unit a review
 // labels and the user's verdict governs.
-func (o *outcomeRecord) key() outcomeKey {
-	return outcomeKey{question: o.Question, contact: contactOf(o.ContactID)}
-}
-
-type outcomeKey struct {
-	question Question
-	contact  uuid.UUID
+func (o *outcomeRecord) decision() decisionKey {
+	return decisionKey{example: o.Example, question: o.Question, contact: contactOf(o.ContactID)}
 }
 
 func contactOf(id *uuid.UUID) uuid.UUID {
@@ -173,10 +173,12 @@ func loadOutcomes(ctx context.Context, q db.Querier, judgmentIDs, outcomeIDs []u
 		r := &outcomeRecord{
 			ID:               row.NodeID,
 			JudgmentID:       row.JudgmentID,
+			Example:          ExampleID(row.ExampleID),
 			Question:         Question(row.Question),
 			ContactID:        row.ContactID,
 			LiveContactID:    row.ContactID,
 			DueDate:          row.DueDate,
+			KeptDueDate:      row.KeptDueDate,
 			Confidence:       row.Confidence,
 			ObligationTaskID: row.ObligationTaskID,
 		}

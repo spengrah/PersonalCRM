@@ -47,10 +47,14 @@ type BenchQuery struct {
 
 // BenchRow is one row with the proposals it carries, the production method's
 // first and then by method key, and how many of their items await review.
+// ReviewStatus is what remains to review across its proposals: their items
+// without a label, else their negative decisions without a label, else
+// nothing; nil on a row carrying no proposal.
 type BenchRow struct {
 	service.InteractionRow
-	Proposals []Proposal
-	ToReview  int
+	Proposals    []Proposal
+	ToReview     int
+	ReviewStatus *ReviewStatus
 }
 
 // BenchPage is one page of rows and the number of rows the query keeps.
@@ -121,9 +125,22 @@ func (b *Bench) List(ctx context.Context, q BenchQuery) (*BenchPage, error) {
 			}
 			return cmp.Or(cmp.Compare(a.Method.Key, b.Method.Key), cmp.Compare(a.Method.Version, b.Method.Version), a.CutOff.Compare(b.CutOff))
 		})
+		nones := false
 		for _, p := range rows[i].Proposals {
 			rows[i].ToReview += p.ToReview
+			nones = nones || p.ReviewStatus == ReviewStatusNonesToReview
 		}
+		if len(rows[i].Proposals) == 0 {
+			continue
+		}
+		status := ReviewStatusAllReviewed
+		switch {
+		case rows[i].ToReview > 0:
+			status = ReviewStatusToReview
+		case nones:
+			status = ReviewStatusNonesToReview
+		}
+		rows[i].ReviewStatus = &status
 	}
 	return &BenchPage{Rows: rows, Total: page.Total}, nil
 }

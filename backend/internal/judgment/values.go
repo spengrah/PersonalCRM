@@ -131,7 +131,8 @@ const (
 	ItemMarkAdded     ItemMark = "added"
 )
 
-// ActKind names a review control of an unreviewed item.
+// ActKind names a review control of an item; on a reviewed item it is a
+// re-review control.
 type ActKind string
 
 const (
@@ -148,4 +149,15 @@ type Debtor string
 const (
 	DebtorMe      Debtor = "me"
 	DebtorContact Debtor = "contact"
+)
+
+// ReviewStatus is what remains for the user to review in a proposal or a
+// row: items without a label (to review), else negative decisions without a
+// label (nones to review), else nothing (all reviewed).
+type ReviewStatus string
+
+const (
+	ReviewStatusToReview      ReviewStatus = "to_review"
+	ReviewStatusNonesToReview ReviewStatus = "nones_to_review"
+	ReviewStatusAllReviewed   ReviewStatus = "all_reviewed"
 )

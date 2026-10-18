@@ -215,6 +215,15 @@
 //	                              content-free report (IDs, keys, outcome
 //	                              values, counts, rates).
 //
+//	--infer-negative-labels       One-time catchup for the judgment bench:
+//	                              label, with its judged value, every negative
+//	                              decision of a proposal whose items all have
+//	                              labels, as a review on the bench would have.
+//	                              Never replaces a label and labels nothing in
+//	                              a proposal with no items; a second run
+//	                              records nothing. Prints the count recorded.
+//	                              SAFE with crm-api running.
+//
 //	--langfuse-export             Send the decision-model records made since
 //	                              the previous export to the Langfuse
 //	                              extraction project (LANGFUSE_EXTRACTION_HOST,
@@ -435,6 +444,9 @@ type adminDeps struct {
 	// langfuseExport serves --langfuse-export. Built LAZILY (only when
 	// --langfuse-export is set). Nil for all other subcommands.
 	langfuseExport langfuseExporter
+	// negativeLabels serves --infer-negative-labels. Built LAZILY (only when
+	// --infer-negative-labels is set). Nil for all other subcommands.
+	negativeLabels negativeLabeler
 	stdout         io.Writer
 	stderr         io.Writer
 }
@@ -516,6 +528,8 @@ type runOptions struct {
 	compareMethod string
 	// langfuseExport <- --langfuse-export.
 	langfuseExport bool
+	// inferNegativeLabels <- --infer-negative-labels.
+	inferNegativeLabels bool
 }
 
 // exitErr carries an explicit process exit code so a subcommand can drive a
@@ -704,6 +718,9 @@ func validateSubcommand(opts runOptions) error {
 	if opts.langfuseExport {
 		active++
 	}
+	if opts.inferNegativeLabels {
+		active++
+	}
 	if active == 0 {
 		return errors.New("no subcommand specified; pass exactly one of " +
 			subcommandList)
@@ -727,7 +744,7 @@ const subcommandList = "--messages-rematch-stranded, --reconcile-address-book-me
 	"--migrate, --migrate-check, --list-jobs, --retry-job <id>, --migrate-tags, " +
 	"--migrate-contact-knowledge-columns, --river-tier0, --whatsapp-list-history, " +
 	"--whatsapp-requeue-history <uuid>, --judge-month YYYY-MM --method <key> [--measure], " +
-	"--scorecard [--method <key> [--compare-method <key>]], --langfuse-export"
+	"--scorecard [--method <key> [--compare-method <key>]], --langfuse-export, --infer-negative-labels"
 
 // parseArgs uses a private FlagSet so tests can drive the parser
 // without polluting flag's global state.
@@ -857,6 +874,10 @@ func parseArgs(args []string) (runOptions, error) {
 		"Send the decision-model records made since the previous export (judgments, finished runs, "+
 			"scorecard metrics, reviews) to the Langfuse extraction project, content-free; with its settings "+
 			"unset, send nothing and say so.")
+	fs.BoolVar(&opts.inferNegativeLabels, "infer-negative-labels", false,
+		"One-time catchup for the judgment bench: label, with its judged value, every negative decision of a "+
+			"proposal whose items all have labels. Never replaces a label; a second run records nothing. Prints "+
+			"the count recorded.")
 	if err := fs.Parse(args); err != nil {
 		return runOptions{}, err
 	}
@@ -987,6 +1008,8 @@ func run(ctx context.Context, opts runOptions, deps adminDeps) error {
 		return runScorecard(ctx, opts, deps)
 	case opts.langfuseExport:
 		return runLangfuseExport(ctx, deps)
+	case opts.inferNegativeLabels:
+		return runInferNegativeLabels(ctx, deps)
 	case opts.migrate, opts.migrateCheck:
 		// Migration subcommands are dispatched PRE-DB in runMain (they need
 		// only the database URL + migrations path, not deps), so they never
@@ -1902,6 +1925,12 @@ func buildProductionDeps(ctx context.Context, cfg *config.Config, database *db.D
 		contexts := threadctx.NewBuilder(repository.NewThreadContentRepository(database.Queries), repository.NewVenueRepository(database.Queries))
 		store := buildJudgmentStore(cfg, database, assertService, contactRepo, riverClient, contexts)
 		deps.langfuseExport = langfuseexport.New(cfg.LangfuseExtraction, store, scorecard.NewReader(store))
+	}
+
+	// LAZY: build the judgment store for --infer-negative-labels.
+	if opts.inferNegativeLabels {
+		contexts := threadctx.NewBuilder(repository.NewThreadContentRepository(database.Queries), repository.NewVenueRepository(database.Queries))
+		deps.negativeLabels = buildJudgmentStore(cfg, database, assertService, contactRepo, riverClient, contexts)
 	}
 
 	cleanup := func() {}

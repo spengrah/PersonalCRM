@@ -3,6 +3,7 @@ package judgment
 import (
 	"math"
 	"slices"
+	"strings"
 )
 
 // Predicates of the judgment store (migration 093). The catalog rows hold the
@@ -43,6 +44,15 @@ var questionValues = map[Question][]string{
 // isOutcomeValue reports whether value is one of question's outcome values.
 func isOutcomeValue(question Question, value string) bool {
 	return slices.Contains(questionValues[question], value)
+}
+
+// OptionValue is the outcome value an answered option stands for: its key,
+// or for a reasoned option keyed "<outcome>.<reason>", that outcome. The
+// decision tree decides by it, and the bench sums a value's probability by
+// it.
+func OptionValue(key string) string {
+	value, _, _ := strings.Cut(key, ".")
+	return value
 }
 
 // isNoEffectValue reports whether an outcome value opens and raises nothing.

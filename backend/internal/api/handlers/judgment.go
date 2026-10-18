@@ -107,7 +107,7 @@ func (h *JudgmentHandler) ListJudgments(c *gin.Context) {
 
 // ReviewJudgmentOutcome records the user's review of an outcome.
 // @Summary Review a judgment outcome
-// @Description Records the right outcome the user states for an outcome of any state and returns the outcome with the verdict the server derives: confirmed when it equals the judged outcome, rejected when it differs and has no effect, corrected otherwise. Reviewing an applied or claim outcome gives the thread the right outcome's effect. keep_current_date, with an open commitment's right outcome, keeps the obligation's current date against the judged later one, and the verdict is corrected.
+// @Description Records the right outcome the user states for an outcome of any state and returns the outcome with the verdict the server derives: confirmed when it equals the judged outcome, rejected when it differs and has no effect, corrected otherwise. The review is its decision's label for every proposal on the same content. A first review of an applied or claim outcome gives the thread the right outcome's effect; a review of a decision that already has a label records the label only, except an Add on a negative decision, which has the effect the same review of an unlabeled negative has. A review that gives a proposal's last unlabeled item its label also labels that proposal's negative decisions with their judged values; the review records all of its labels or none. keep_current_date, with an open commitment's right outcome, keeps the obligation's current date against the judged later one, and the verdict is corrected.
 // @Tags judgments
 // @Accept json
 // @Produce json
@@ -144,6 +144,35 @@ func (h *JudgmentHandler) ReviewJudgmentOutcome(c *gin.Context) {
 		return
 	}
 	api.SendSuccess(c, http.StatusOK, outcomeResponse(view), nil)
+}
+
+// ConfirmNones labels a proposal's negative decisions.
+// @Summary Confirm a proposal's Nones
+// @Description Labels every negative decision of the judgment's proposal that has no label from any proposal with its judged value, as ordinary reviews that change nothing live, and then labels the negative decisions of every other proposal on the same content whose items those labels leave all labeled. It records all of its labels or none. A proposal with an item, or one holding no negative decision without a label, is refused.
+// @Tags judgments
+// @Param id path string true "Judgment ID" format(uuid)
+// @Success 204 "Every label recorded"
+// @Failure 400 {object} api.APIResponse
+// @Failure 404 {object} api.APIResponse
+// @Failure 409 {object} api.APIResponse
+// @Router /judgments/{id}/confirm-nones [post]
+func (h *JudgmentHandler) ConfirmNones(c *gin.Context) {
+	id, ok := api.ParseUUIDParam(c, "id", "judgment")
+	if !ok {
+		return
+	}
+	if err := h.store.ConfirmNones(c.Request.Context(), id); err != nil {
+		switch {
+		case errors.Is(err, judgment.ErrConfirmNonesRefused):
+			api.SendConflict(c, "The proposal has an item or no negative decision without a label")
+		case errors.Is(err, judgment.ErrNotFound):
+			api.SendNotFound(c, "Judgment")
+		default:
+			api.RespondInternal(c, err)
+		}
+		return
+	}
+	c.Status(http.StatusNoContent)
 }
 
 func outcomeResponse(o judgment.OutcomeView) JudgmentOutcomeResponse {

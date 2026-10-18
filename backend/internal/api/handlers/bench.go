@@ -160,6 +160,10 @@ func allInteractionItemResponse(row judgment.BenchRow) AllInteractionItemRespons
 		Proposals:        make([]BenchProposalResponse, len(row.Proposals)),
 		ToReview:         row.ToReview,
 	}
+	if row.ReviewStatus != nil {
+		status := string(*row.ReviewStatus)
+		out.ReviewStatus = &status
+	}
 	if row.Preview != nil {
 		out.Preview = &InteractionPreviewResponse{Text: row.Preview.Text, Note: row.Preview.Note}
 		if !row.Preview.Note {
@@ -190,6 +194,13 @@ func benchProposalResponse(p judgment.Proposal) BenchProposalResponse {
 		Production: p.Production, ContextKind: string(p.Kind), CutOff: p.CutOff, ReusedAt: p.ReusedAt,
 		ReplyLists: p.ReplyLists, Items: make([]BenchItemResponse, len(p.Items)),
 		Additions: make([]BenchAdditionResponse, len(p.Additions)), ToReview: p.ToReview,
+		ReviewStatus: string(p.ReviewStatus), ConfirmNones: p.ConfirmNones, Lists: make([]BenchListResponse, len(p.Lists)),
+	}
+	for i, l := range p.Lists {
+		out.Lists[i] = BenchListResponse{List: string(l.List), NonesReviewed: l.NonesReviewed}
+		if c := l.Closest; c != nil {
+			out.Lists[i].Closest = &BenchClosestResponse{Contact: party(c.Contact), Debtor: optional(string(c.Debtor)), Percent: c.Percent}
+		}
 	}
 	for i, item := range p.Items {
 		acts := make([]BenchActResponse, len(item.Acts))
@@ -200,6 +211,7 @@ func benchProposalResponse(p judgment.Proposal) BenchProposalResponse {
 			OutcomeID: item.OutcomeID.String(), List: string(item.List), Contact: party(item.Contact),
 			Debtor: optional(string(item.Debtor)), State: optional(string(item.State)), Confidence: item.Confidence,
 			DueDate: dateString(item.DueDate), Mark: optional(string(item.Mark)), Acts: acts,
+			LiveDueDate: dateString(item.LiveDueDate),
 		}
 		if item.Change != nil {
 			r.Change = &BenchItemChangeResponse{Kind: string(item.Change.Kind), DueDate: dateString(item.Change.DueDate), Confidence: item.Change.Confidence}

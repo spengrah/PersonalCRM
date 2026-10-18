@@ -243,7 +243,7 @@ func decide(options []threadctx.Option, p map[string]float64, chosen string) (st
 	var order []string
 	sums := map[string]float64{}
 	for _, o := range options {
-		outcome, _, _ := strings.Cut(o.Key, ".")
+		outcome := judgment.OptionValue(o.Key)
 		if _, ok := sums[outcome]; !ok {
 			order = append(order, outcome)
 		}

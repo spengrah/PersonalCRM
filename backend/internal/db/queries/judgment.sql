@@ -129,11 +129,14 @@ FROM outcome_node
 RETURNING *;
 
 -- name: ListJudgmentOutcomes :many
--- The outcomes of the given judgments, or the given outcomes.
-SELECT * FROM judgment_outcome
-WHERE judgment_id = ANY(sqlc.arg('judgment_ids')::uuid[])
-   OR node_id = ANY(sqlc.arg('outcome_ids')::uuid[])
-ORDER BY judgment_id, question, question_id NULLS LAST, contact_id, node_id;
+-- The outcomes of the given judgments, or the given outcomes, each with the
+-- example its judgment judged.
+SELECT o.*, j.example_id
+FROM judgment_outcome o
+JOIN judgment j ON j.id = o.judgment_id
+WHERE o.judgment_id = ANY(sqlc.arg('judgment_ids')::uuid[])
+   OR o.node_id = ANY(sqlc.arg('outcome_ids')::uuid[])
+ORDER BY o.judgment_id, o.question, o.question_id NULLS LAST, o.contact_id, o.node_id;
 
 -- name: ResolveContactMerges :many
 -- Each given contact with the contact it now is: the end of its chain of
@@ -153,6 +156,13 @@ FROM chain
 WHERE chain.merged_into IS NULL
 ORDER BY chain.contact_id;
 
+-- name: SetJudgmentOutcomeKeptDueDate :exec
+-- Records the date an outcome's obligation held when the user first reviewed
+-- the later date the outcome suggests.
+UPDATE judgment_outcome
+SET kept_due_date = sqlc.narg('kept_due_date')
+WHERE node_id = sqlc.arg('node_id');
+
 -- name: SetJudgmentOutcomeObligation :exec
 -- Records the obligation task an outcome's live effect is; NULL when its
 -- effect is no obligation.
@@ -171,21 +181,30 @@ ORDER BY created_at, id;
 -- name: ListLatestExampleReviews :many
 -- The user's latest review of each question and contact on each example,
 -- whichever method's outcome it reviewed, ordered by example, question and
--- contact. cut_off is the example's earliest judgment cut-off. Restricted to
--- the given examples when any are named.
+-- contact: the one definition of a decision and its label. keeps_date is
+-- whether that review kept an open commitment's current date. cut_off is the
+-- example's earliest judgment cut-off. Restricted to the given examples when
+-- any are named.
 SELECT DISTINCT ON (e.id, o.question, o.contact_id)
     e.id AS example_id, e.thread_id, e.input_hash,
     (SELECT min(j2.cut_off) FROM judgment j2 WHERE j2.example_id = e.id)::timestamptz AS cut_off,
     o.question, o.contact_id,
-    a.value_text AS right_outcome
+    a.value_text AS right_outcome,
+    COALESCE(kd.value_bool, FALSE)::boolean AS keeps_date
 FROM assertion a
 JOIN judgment_outcome o ON o.node_id = a.subject_node_id
 JOIN judgment j ON j.id = o.judgment_id
 JOIN judgment_example e ON e.id = j.example_id
+LEFT JOIN LATERAL (
+    SELECT x.value_bool FROM assertion x
+    WHERE x.subject_node_id = o.node_id AND x.predicate_key = sqlc.arg('keeps_date_predicate')::text
+      AND x.status = 'accepted'
+    ORDER BY x.created_at DESC LIMIT 1
+) kd ON TRUE
 WHERE a.predicate_key = sqlc.arg('review_predicate')::text
   AND a.status = 'accepted'
   AND (cardinality(sqlc.arg('example_ids')::text[]) = 0 OR e.id = ANY(sqlc.arg('example_ids')::text[]))
-ORDER BY e.id, o.question, o.contact_id, a.created_at DESC;
+ORDER BY e.id, o.question, o.contact_id, a.created_at DESC, a.id DESC;
 
 -- name: ListReviewRecords :many
 -- Every live review with the reviewed outcome's judgment, for the export.
