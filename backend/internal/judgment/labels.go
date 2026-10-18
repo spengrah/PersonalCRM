@@ -168,13 +168,13 @@ func (s *Store) labelNegativesTx(ctx context.Context, tx pgx.Tx, judgments []uui
 	}
 	for changed := true; changed; {
 		changed = false
-		spare := spared(byJudgment, lb)
+		sp := spared(byJudgment, lb)
 		for _, j := range rows {
 			sorted := sortOutcomes(byJudgment[j.ID], lb)
 			if !sorted.holdsLabel(lb) {
 				continue
 			}
-			pending := sorted.unlabeledNegatives(lb, spare)
+			pending := sorted.unlabeledNegatives(lb, sp.spares)
 			if err := labelAll(pending); err != nil {
 				return 0, err
 			}

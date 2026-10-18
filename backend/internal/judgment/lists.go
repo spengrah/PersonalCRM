@@ -11,7 +11,7 @@ import (
 // the decision the judgment came closest to answering with the list's value
 // among the decisions no item of the list represents; nil when the list has
 // no candidate. NonesReviewed is true exactly when at least one negative
-// decision sits behind the list and every one has a label.
+// decision sits behind the list and none is a None to review.
 type ProposalListView struct {
 	List          ProposalList
 	Closest       *ClosestDecision
@@ -77,7 +77,7 @@ func (spec listSpec) party(o *outcomeRecord) *uuid.UUID {
 
 // listViews compiles each list a proposal shows, in display order: the reply
 // lists only where ball-in-court was asked.
-func listViews(replyLists bool, questions []AnsweredQuestion, outcomes []*outcomeRecord, sorted sorting, lb labels) []ProposalListView {
+func listViews(replyLists bool, questions []AnsweredQuestion, outcomes []*outcomeRecord, sorted sorting, lb labels, sp spare) []ProposalListView {
 	views := []ProposalListView{}
 	for _, spec := range listSpecs {
 		if !replyLists && slices.Contains(spec.questions, QuestionBallInCourt) {
@@ -86,7 +86,7 @@ func listViews(replyLists bool, questions []AnsweredQuestion, outcomes []*outcom
 		views = append(views, ProposalListView{
 			List:          spec.list,
 			Closest:       spec.closest(questions, outcomes, sorted),
-			NonesReviewed: spec.nonesReviewed(sorted, lb),
+			NonesReviewed: spec.nonesReviewed(sorted, lb, sp),
 		})
 	}
 	return views
@@ -133,17 +133,8 @@ func (spec listSpec) probability(q AnsweredQuestion) float64 {
 }
 
 // nonesReviewed reports whether at least one negative decision of the list's
-// questions sits behind the list and every one has a label.
-func (spec listSpec) nonesReviewed(sorted sorting, lb labels) bool {
-	behind := 0
-	for _, o := range sorted.negatives {
-		if !slices.Contains(spec.questions, o.Question) {
-			continue
-		}
-		if lb.of(o) == nil {
-			return false
-		}
-		behind++
-	}
-	return behind > 0
+// questions sits behind the list and none is a None to review.
+func (spec listSpec) nonesReviewed(sorted sorting, lb labels, sp spare) bool {
+	behind := func(o *outcomeRecord) bool { return slices.Contains(spec.questions, o.Question) }
+	return slices.ContainsFunc(sorted.negatives, behind) && !slices.ContainsFunc(sorted.nonesToReview(lb, sp), behind)
 }

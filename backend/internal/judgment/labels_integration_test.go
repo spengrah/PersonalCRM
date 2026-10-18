@@ -245,8 +245,8 @@ func TestBenchConfirmNones(t *testing.T) {
 		assert.Equal(t, reviews, again)
 	})
 
-	t.Run("a reply another proposal's commitment absorbs gains no label, so that proposal shows no reply item", func(t *testing.T) {
-		// spec: IXN-056.absorbed-reply-stays
+	t.Run("a reply another proposal's commitment absorbs gains no label, so that proposal shows no reply item, and holds back no Nones", func(t *testing.T) {
+		// spec: IXN-056.absorbed-reply-stays, IXN-054.nones-to-review
 		b := newBenchEnv(t)
 		x, th := b.oneToOne(t)
 		b.run(t, judgment.RunKindScheduled, judgmentOf(prodMethod, th, b.day(1), "h1", owesAndCommits(x)))
@@ -258,8 +258,11 @@ func TestBenchConfirmNones(t *testing.T) {
 		assert.Equal(t, map[string]string{
 			decision(judgment.QuestionCommitmentTheirs, &x): "none",
 			decision(judgment.QuestionBigMoment, nil):       "none",
-		}, b.labels(t), "the absorbed reply and the commitment absorbing it stay to review")
+		}, b.labels(t), "the absorbed reply and the commitment absorbing it stay unlabeled")
 		assert.Empty(t, listContacts(b.proposal(t, x, prodMethod), "i_owe_reply"), "no reply item the user never acted on")
+		other := b.proposal(t, x, otherMethod)
+		assert.True(t, listView(t, other, "i_owe_reply").NonesReviewed, "the absorbed reply does not hold back the reply list's Nones")
+		assert.False(t, other.ConfirmNones)
 	})
 
 	t.Run("an unknown judgment is not found", func(t *testing.T) {
@@ -381,8 +384,8 @@ func TestBenchInference(t *testing.T) {
 		})
 	})
 
-	t.Run("a close leaves a reply another proposal's commitment absorbs without a label, so that proposal shows no reply item", func(t *testing.T) {
-		// spec: IXN-057.absorbed-reply-stays
+	t.Run("a close leaves a reply another proposal's commitment absorbs without a label, and no proposal holds it as a None to review", func(t *testing.T) {
+		// spec: IXN-057.absorbed-reply-stays, IXN-054.nones-to-review, IXN-054.proposal-status, IXN-055.nones-reviewed, IXN-051.row-review-status
 		b := newBenchEnv(t)
 		x, th := b.oneToOne(t)
 		b.run(t, judgment.RunKindScheduled, judgmentOf(prodMethod, th, b.day(1), "h1", owesAndCommits(x)))
@@ -397,10 +400,14 @@ func TestBenchInference(t *testing.T) {
 			decision(judgment.QuestionCommitmentTheirs, &x): "none",
 			decision(judgment.QuestionBigMoment, nil):       "none",
 		}, b.labels(t), "the other proposal's negatives are labeled but for the reply the production proposal's commitment absorbs")
-		prod := b.proposal(t, x, prodMethod)
+		row := b.row(t, x)
+		prod, other := b.proposal(t, x, prodMethod), b.proposal(t, x, otherMethod)
 		assert.Empty(t, listContacts(prod, "i_owe_reply"), "no reply item the user never acted on")
 		assert.Equal(t, "all_reviewed", prod.ReviewStatus)
-		assert.Equal(t, "nones_to_review", b.proposal(t, x, otherMethod).ReviewStatus)
+		assert.Equal(t, "all_reviewed", other.ReviewStatus, "the absorbed reply is no None to review")
+		assert.False(t, other.ConfirmNones)
+		assert.True(t, listView(t, other, "i_owe_reply").NonesReviewed, "the absorbed reply does not hold back the reply list's Nones")
+		assert.Equal(t, ptr("all_reviewed"), row.ReviewStatus)
 	})
 
 	t.Run("a close naming an unknown judgment is not found and records nothing", func(t *testing.T) {

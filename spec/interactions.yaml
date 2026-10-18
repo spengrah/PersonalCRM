@@ -738,7 +738,7 @@ behaviors:
       - key: one-row-latest-content
         text: the judgment appears on exactly one row, the row holding the thread's latest content at or before the judgment's cut-off
       - key: collapsed-indicator
-        text: that row shows, collapsed, one review indicator from the server's review status, either how many items of its proposals await review while any does, else that their Nones await review while any of its proposals holds a negative decision without a label, else that all are reviewed
+        text: that row shows, collapsed, one review indicator from the server's review status, either how many items of its proposals await review while any does, else that their Nones await review while any of its proposals holds a None to review (IXN-054), else that all are reviewed
       - key: names-no-outcomes
         text: the row names none of the judgment's outcomes; the proposal appears only when the row is expanded
       - key: several-methods-production-first
@@ -894,7 +894,7 @@ behaviors:
       - key: run-keeps-judgment-rows
         text: the run filter keeps only the row each judgment appearing in the run is placed on, the row holding the thread's latest content at or before its cut-off, including a judgment the run reused; it leaves out the thread's other rows and a thread judged only in another run, and the total counts the kept rows
       - key: row-review-status
-        text: a row carrying proposals carries a review status, to review with the count of its proposals' items without a label while any has one, else nones to review while any of its proposals holds a negative decision without a label, else all reviewed; a row carrying no proposal carries none
+        text: a row carrying proposals carries a review status, to review with the count of its proposals' items without a label while any has one, else nones to review while any of its proposals holds a None to review (IXN-054), else all reviewed; a row carrying no proposal carries none
     provenance: [.agents/spec/2026-10-14-decision-model-extraction.md G9, .agents/spec/2026-10-17-bench-negative-decisions.md G6 SC1 SC8, designs/bench.md]
     notes: The bench's list (IXN-041, IXN-042) reads this route.
 
@@ -955,7 +955,9 @@ behaviors:
     when: the all-interactions list returns the row holding the content they read
     then:
       - key: proposal-status
-        text: each proposal reads to review with the count of its items without a label while it has one, else nones to review while it holds a negative decision without a label, else all reviewed
+        text: each proposal reads to review with the count of its items without a label while it has one, else nones to review while it holds a None to review, else all reviewed
+      - key: nones-to-review
+        text: a None to review is a negative decision without a label, but for one that some proposal on the same content holds as a reply its own commitment absorbs and none holds as an item without a label; that reply is a positive decision no label will reach, so it is a None to review in no proposal, holds back no list's Nones and keeps no Confirm Nones offered
       - key: negative-decisions
         text: a negative decision is an answered outcome that stands for no item; a no-effect outcome that suggests removing a live item is an item, a reply its party's commitment in the same direction absorbs is neither, and a probability stored for a question that yields no outcome adds none
       - key: confirm-nones-offered
@@ -975,7 +977,7 @@ behaviors:
       - key: latest-review-is-label
         text: a decision's label is its latest review from any proposal on the content
       - key: nones-reviewed
-        text: a list reads its nones reviewed exactly when at least one negative decision sits behind it and every one has a label, whichever proposal labeled it
+        text: a list reads its nones reviewed exactly when at least one negative decision sits behind it and none is a None to review (IXN-054), whichever proposal labeled them
     provenance: [.agents/spec/2026-10-17-bench-negative-decisions.md G5 T1 T2 SC4]
 
   - id: IXN-056
@@ -991,7 +993,7 @@ behaviors:
       - key: item-awaits-review
         text: a negative decision that another proposal on the same content holds as an item without a label gains no label, the item keeps no mark and still counts to review, and the proposal still reads nones to review
       - key: absorbed-reply-stays
-        text: a negative decision that another proposal on the same content holds as a reply its own commitment absorbs gains no label, so that proposal shows no reply item the user never acted on
+        text: a negative decision that another proposal on the same content holds as a reply its own commitment absorbs gains no label, so that proposal shows no reply item the user never acted on, and the decision is a None to review in no proposal
       - key: keeps-labels
         text: a negative decision already labeled from another proposal keeps its label
       - key: refuses-items
@@ -1015,7 +1017,7 @@ behaviors:
       - key: item-awaits-review
         text: a negative decision that another proposal on the same content holds as an item without a label gains no label from a close, whether or not that proposal is on the row; the item keeps no mark and still counts to review, and the proposal holding the negative still reads nones to review
       - key: absorbed-reply-stays
-        text: a negative decision that another proposal on the same content holds as a reply its own commitment absorbs gains no label from a close, so that proposal shows no reply item the user never acted on, and the proposal holding the negative still reads nones to review
+        text: a negative decision that another proposal on the same content holds as a reply its own commitment absorbs gains no label from a close, so that proposal shows no reply item the user never acted on; the decision is a None to review in no proposal, so the proposal holding the negative reads all reviewed once nothing else remains, its list's Nones read reviewed, and so does the row
       - key: no-label-gains-none
         text: a proposal holding no label gains none from a close
       - key: across-proposals
@@ -1139,7 +1141,7 @@ behaviors:
       - key: nones-wait-for-close
         text: before the close, the proposal's Nones still await review, however many of its items the user reviewed
       - key: close-confirms-nones
-        text: once the row is closed and opened again, each None of the proposal reads Confirmed, but for one that another proposal on the same content shows as an item awaiting review or holds as a reply its own commitment absorbs
+        text: once the row is closed and opened again, each None of the proposal reads Confirmed, but for one that another proposal on the same content shows as an item awaiting review
       - key: items-stay-to-review
         text: an item the user did not review still awaits review after the close
       - key: close-after-saves

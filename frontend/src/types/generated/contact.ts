@@ -472,8 +472,9 @@ export interface InteractionTypeOptionResponse {
  * judgments whose latest content the row holds; to_review counts their items
  * awaiting review. review_status, present on a row carrying a proposal, is
  * to_review while any of its proposals' items has no label, else
- * nones_to_review while any holds a negative decision without a label, else
- * all_reviewed.
+ * nones_to_review while any holds a None to review, else all_reviewed. A None
+ * to review is a negative decision without a label, unless another proposal on
+ * the same content holds it as a reply its own commitment absorbs.
  */
 export interface AllInteractionItemResponse {
   item: InteractionListItemResponse;
@@ -501,9 +502,10 @@ export interface InteractionPreviewResponse {
  * the run the view is narrowed to, when that run reused it. reply_lists is
  * false for a meeting. to_review counts its items without a label;
  * review_status is to_review while it has one, else nones_to_review while it
- * holds a negative decision without a label, else all_reviewed. confirm_nones
- * is true exactly when it has no items and holds a negative decision without
- * a label, and /judgments/{judgment_id}/confirm-nones labels them. lists has
+ * holds a None to review, else all_reviewed. confirm_nones is true exactly
+ * when it has no items and holds a negative decision without a label that no
+ * proposal on the same content holds as an unreviewed item or an absorbed
+ * reply; /judgments/{judgment_id}/confirm-nones labels those. lists has
  * one entry per list it shows, in display order; a meeting's carries no reply
  * lists.
  */
@@ -529,7 +531,7 @@ export interface BenchProposalResponse {
  * judgment came closest to answering with the list's value among the
  * decisions no item of the list represents, absent when the list has no
  * candidate. nones_reviewed is true exactly when at least one negative
- * decision sits behind the list and every one has a label.
+ * decision sits behind the list and none is a None to review.
  */
 export interface BenchListResponse {
   list: ProposalList;
