@@ -55,4 +55,10 @@ export const benchApi = {
       body
     )
   },
+
+  // Labels every negative decision of a proposal that has no label with its
+  // judged value; the server decides which, and refuses a proposal with an item.
+  async confirmNones(judgmentId: string): Promise<void> {
+    await apiClient.post<void>(`/api/v1/judgments/${judgmentId}/confirm-nones`)
+  },
 }
