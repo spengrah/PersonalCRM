@@ -27,6 +27,39 @@ func hasAddition(p handlers.BenchProposalResponse, list string, contact uuid.UUI
 	return false
 }
 
+// debtorIs reports whether a wire debtor is debtor ("" for none).
+func debtorIs(got *string, debtor string) bool {
+	return (got == nil && debtor == "") || (got != nil && *got == debtor)
+}
+
+// listItem returns the proposal's one item in the list owed by the debtor
+// ("" for none).
+func listItem(t *testing.T, p handlers.BenchProposalResponse, list, debtor string) handlers.BenchItemResponse {
+	t.Helper()
+	var found []handlers.BenchItemResponse
+	for _, it := range p.Items {
+		if it.List == list && debtorIs(it.Debtor, debtor) {
+			found = append(found, it)
+		}
+	}
+	require.Len(t, found, 1, "%s items owed by %q in %+v", list, debtor, p.Items)
+	return found[0]
+}
+
+// listAddition returns the proposal's one addition to the list owed by the
+// debtor ("" for none).
+func listAddition(t *testing.T, p handlers.BenchProposalResponse, list, debtor string) handlers.BenchAdditionResponse {
+	t.Helper()
+	var found []handlers.BenchAdditionResponse
+	for _, a := range p.Additions {
+		if a.List == list && debtorIs(a.Debtor, debtor) {
+			found = append(found, a)
+		}
+	}
+	require.Len(t, found, 1, "%s additions owed by %q", list, debtor)
+	return found[0]
+}
+
 // A review of a decision that already has a label records the new label and
 // changes nothing live; the item then shows its live state beside its mark.
 func TestBenchReReview(t *testing.T) {
@@ -166,6 +199,26 @@ func TestBenchReReview(t *testing.T) {
 		assert.Equal(t, ptr("live"), confirmed.State)
 		assert.Nil(t, confirmed.LiveDueDate)
 	})
+
+	t.Run("a positive item added to the other reply list and then removed stays where it was added, live beside its mark", func(t *testing.T) {
+		// spec: IXN-058.label-only, IXN-060.removal-not-taken
+		b := newBenchEnv(t)
+		x, th := owedReply(t, b, 0.9)
+		b.add(t, addition(t, b.proposal(t, x, prodMethod), "owes_me_reply", x))
+		open := b.openObligations(t, th)
+		require.Len(t, open, 1)
+		require.Equal(t, repository.ObligationDebtorContact, open[0].Debtor, "the first review moves the reply")
+
+		b.act(t, item(t, b.proposal(t, x, prodMethod), "owes_me_reply", x), "remove")
+
+		assert.Equal(t, open, b.openObligations(t, th), "the re-review closes no task")
+		p := b.proposal(t, x, prodMethod)
+		assert.Empty(t, listContacts(p, "i_owe_reply"))
+		removed := item(t, p, "owes_me_reply", x)
+		assert.Equal(t, ptr("removed"), removed.Mark)
+		assert.Equal(t, ptr("live"), removed.State)
+		assert.Equal(t, handlers.BenchActResponse{Act: "confirm", RightOutcome: "they_owe_reply"}, acts(removed)["confirm"])
+	})
 }
 
 // The Add pickers offer every negative decision, labeled or not, and an Add
@@ -192,6 +245,52 @@ func TestBenchAddAfterLabels(t *testing.T) {
 		added := item(t, b.proposal(t, x, prodMethod), "i_owe_reply", x)
 		assert.Equal(t, ptr("added"), added.Mark)
 		assert.Equal(t, ptr("live"), added.State)
+	})
+
+	t.Run("an added item changed to removed keeps its list and its live effect, live beside its mark with its controls", func(t *testing.T) {
+		// spec: IXN-058.label-only, IXN-058.controls-again, IXN-060.removal-not-taken
+		for _, tc := range []struct{ list, debtor, value string }{
+			{"i_owe_reply", "", "i_owe_reply"},
+			{"commitments", "me", "open"},
+			{"big_moment", "", "participant_moment"},
+		} {
+			t.Run(tc.list, func(t *testing.T) {
+				b := newBenchEnv(t)
+				x, th := confirmed(t, b, prodMethod, judgment.RunKindScheduled)
+				b.add(t, listAddition(t, b.proposal(t, x, prodMethod), tc.list, tc.debtor))
+				added := listItem(t, b.proposal(t, x, prodMethod), tc.list, tc.debtor)
+				require.Equal(t, ptr("live"), added.State)
+				open := b.openObligations(t, th)
+
+				b.act(t, added, "remove")
+
+				assert.Equal(t, open, b.openObligations(t, th), "the re-review closes no task")
+				removed := listItem(t, b.proposal(t, x, prodMethod), tc.list, tc.debtor)
+				assert.Equal(t, added.OutcomeID, removed.OutcomeID)
+				assert.Equal(t, ptr("removed"), removed.Mark)
+				assert.Equal(t, ptr("live"), removed.State, "the removal did not take effect")
+				assert.Equal(t, handlers.BenchActResponse{Act: "confirm", RightOutcome: tc.value}, acts(removed)["confirm"])
+				assert.Contains(t, acts(removed), "remove")
+			})
+		}
+	})
+
+	t.Run("an added item removed in another proposal on the same content stays an item of both", func(t *testing.T) {
+		// spec: IXN-060.removal-not-taken
+		b := newBenchEnv(t)
+		x, th := b.oneToOne(t)
+		b.run(t, judgment.RunKindScheduled, judgmentOf(prodMethod, th, b.day(1), "h1", nothingFound(x)))
+		b.run(t, judgment.RunKindRerun, judgmentOf(otherMethod, th, b.day(1), "h1", nothingFound(x)))
+		require.Equal(t, http.StatusNoContent, b.confirmNones(t, b.proposal(t, x, prodMethod)).Code)
+		b.add(t, addition(t, b.proposal(t, x, prodMethod), "i_owe_reply", x))
+
+		b.act(t, item(t, b.proposal(t, x, otherMethod), "i_owe_reply", x), "remove")
+
+		require.Len(t, b.openObligations(t, th), 1, "the re-review closes no task")
+		acting := item(t, b.proposal(t, x, prodMethod), "i_owe_reply", x)
+		assert.Equal(t, ptr("removed"), acting.Mark)
+		assert.Equal(t, ptr("live"), acting.State)
+		assert.Equal(t, ptr("removed"), item(t, b.proposal(t, x, otherMethod), "i_owe_reply", x).Mark)
 	})
 
 	t.Run("an Add on a labeled negative in a non-acting proposal records the label only", func(t *testing.T) {

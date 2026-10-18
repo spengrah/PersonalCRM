@@ -3,6 +3,8 @@ package judgment
 import (
 	"context"
 	"fmt"
+	"maps"
+	"slices"
 	"time"
 
 	"personal-crm/backend/internal/db"
@@ -23,6 +25,10 @@ import (
 // on. Example is the content its judgment judged, which with Question and
 // ContactID names the decision the outcome answers. KeptDueDate is the date
 // its obligation held when the user first reviewed the later date it suggests.
+// LastEffect is the right outcome of the latest review of the outcome's
+// decision that had an effect, from whichever outcome it was made on, the
+// label's earlier reviews included; empty when no review of the decision had
+// one. A label with no effect removes the item that review stood for.
 type outcomeRecord struct {
 	ID               uuid.UUID
 	JudgmentID       uuid.UUID
@@ -35,6 +41,7 @@ type outcomeRecord struct {
 	KeptDueDate      *time.Time
 	Confidence       *float64
 	ObligationTaskID *uuid.UUID
+	LastEffect       string
 	answer           *db.Assertion
 	class            *db.Assertion
 	target           *db.Assertion
@@ -209,16 +216,28 @@ func loadOutcomes(ctx context.Context, q db.Querier, judgmentIDs, outcomeIDs []u
 			r.LiveContactID = &to
 		}
 	}
+	decisions, err := contentDecisions(ctx, q, rows)
+	if err != nil {
+		return nil, err
+	}
 	assertions, err := q.ListOutcomeAssertions(ctx, db.ListOutcomeAssertionsParams{
-		OutcomeIds: ids,
+		OutcomeIds: slices.Collect(maps.Keys(decisions)),
 		Predicates: append([]string{predicateAnswer, predicateReview, predicateReviewKeepsDate, predicateRemovalTarget}, classPredicates...),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("list outcome assertions: %w", err)
 	}
-	// Assertions arrive oldest first, so the last of each role wins.
+	// Assertions arrive oldest first, so the last of each role wins. Every
+	// review of a decision, retracted or not, counts toward its last effect.
+	lastEffect := map[decisionKey]string{}
 	for _, a := range assertions {
-		r := byID[a.SubjectNodeID]
+		if a.PredicateKey == predicateReview && a.ValueText != nil && !isNoEffectValue(*a.ValueText) {
+			lastEffect[decisions[a.SubjectNodeID]] = *a.ValueText
+		}
+		r, ok := byID[a.SubjectNodeID]
+		if !ok {
+			continue
+		}
 		switch a.PredicateKey {
 		case predicateAnswer:
 			if a.Status == repository.AssertionStatusAccepted {
@@ -240,7 +259,36 @@ func loadOutcomes(ctx context.Context, q db.Querier, judgmentIDs, outcomeIDs []u
 			r.class = a
 		}
 	}
+	for _, r := range records {
+		r.LastEffect = lastEffect[r.decision()]
+	}
 	return records, nil
+}
+
+// contentDecisions names the decision of every outcome on the content the
+// given outcomes judged, whichever judgment of that content holds it.
+func contentDecisions(ctx context.Context, q db.Querier, rows []*db.ListJudgmentOutcomesRow) (map[uuid.UUID]decisionKey, error) {
+	var examples []string
+	for _, row := range rows {
+		if !slices.Contains(examples, row.ExampleID) {
+			examples = append(examples, row.ExampleID)
+		}
+	}
+	judgments, err := q.ListJudgmentRows(ctx, db.ListJudgmentRowsParams{Ids: []uuid.UUID{}, ExampleIds: examples})
+	if err != nil {
+		return nil, fmt.Errorf("list content judgments: %w", err)
+	}
+	outcomes, err := q.ListJudgmentOutcomes(ctx, db.ListJudgmentOutcomesParams{
+		JudgmentIds: judgmentIDs(judgments), OutcomeIds: []uuid.UUID{},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list content outcomes: %w", err)
+	}
+	decisions := make(map[uuid.UUID]decisionKey, len(outcomes))
+	for _, o := range outcomes {
+		decisions[o.NodeID] = decisionKey{example: ExampleID(o.ExampleID), question: Question(o.Question), contact: contactOf(o.ContactID)}
+	}
+	return decisions, nil
 }
 
 func emptyIfNil[T any](s []T) []T {

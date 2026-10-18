@@ -29,34 +29,65 @@ type ClosestDecision struct {
 }
 
 // listSpec is what a list is made of: the questions whose decisions it
-// shows, and the outcome values that put a decision in it.
+// shows, the outcome values that put a decision in it (the first is the one
+// an Add to the list states), and whether it names each decision by its
+// contact.
 type listSpec struct {
 	list      ProposalList
 	questions []Question
 	values    []string
+	byContact bool
 }
 
-var (
-	iOweReplyList   = listSpec{ProposalListIOweReply, []Question{QuestionBallInCourt}, []string{string(BallInCourtIOweReply)}}
-	owesMeReplyList = listSpec{ProposalListOwesMeReply, []Question{QuestionBallInCourt}, []string{string(BallInCourtTheyOweReply)}}
-	commitmentsList = listSpec{ProposalListCommitments, []Question{QuestionCommitmentMine, QuestionCommitmentTheirs}, []string{string(CommitmentStateOpen)}}
-	bigMomentList   = listSpec{ProposalListBigMoment, []Question{QuestionBigMoment}, []string{string(BigMomentParticipant), string(BigMomentOtherPerson)}}
-)
+// listSpecs are the lists, in display order: the one mapping from a
+// question's outcome value to the list it puts an item in, which the items,
+// the pickers, the closest decisions and the nones all read.
+var listSpecs = []listSpec{
+	{ProposalListIOweReply, []Question{QuestionBallInCourt}, []string{string(BallInCourtIOweReply)}, true},
+	{ProposalListOwesMeReply, []Question{QuestionBallInCourt}, []string{string(BallInCourtTheyOweReply)}, true},
+	{ProposalListCommitments, []Question{QuestionCommitmentMine, QuestionCommitmentTheirs}, []string{string(CommitmentStateOpen)}, true},
+	{ProposalListBigMoment, []Question{QuestionBigMoment}, []string{string(BigMomentParticipant), string(BigMomentOtherPerson)}, false},
+}
+
+// specOf is the list's spec.
+func specOf(list ProposalList) listSpec {
+	i := slices.IndexFunc(listSpecs, func(spec listSpec) bool { return spec.list == list })
+	return listSpecs[i]
+}
+
+// listOf is the list an outcome value puts an item in; empty for a value with
+// no effect.
+func listOf(question Question, value string) ProposalList {
+	for _, spec := range listSpecs {
+		if slices.Contains(spec.questions, question) && slices.Contains(spec.values, value) {
+			return spec.list
+		}
+	}
+	return ""
+}
+
+// party is the contact the list names the outcome's decision by; nil for a
+// list that names none.
+func (spec listSpec) party(o *outcomeRecord) *uuid.UUID {
+	if !spec.byContact {
+		return nil
+	}
+	return o.ContactID
+}
 
 // listViews compiles each list a proposal shows, in display order: the reply
 // lists only where ball-in-court was asked.
 func listViews(replyLists bool, questions []AnsweredQuestion, outcomes []*outcomeRecord, sorted sorting, lb labels) []ProposalListView {
-	specs := []listSpec{commitmentsList, bigMomentList}
-	if replyLists {
-		specs = append([]listSpec{iOweReplyList, owesMeReplyList}, specs...)
-	}
-	views := make([]ProposalListView, len(specs))
-	for i, spec := range specs {
-		views[i] = ProposalListView{
+	views := []ProposalListView{}
+	for _, spec := range listSpecs {
+		if !replyLists && slices.Contains(spec.questions, QuestionBallInCourt) {
+			continue
+		}
+		views = append(views, ProposalListView{
 			List:          spec.list,
 			Closest:       spec.closest(questions, outcomes, sorted),
 			NonesReviewed: spec.nonesReviewed(sorted, lb),
-		}
+		})
 	}
 	return views
 }
@@ -86,11 +117,7 @@ func (spec listSpec) closest(questions []AnsweredQuestion, outcomes []*outcomeRe
 	if best == nil {
 		return nil
 	}
-	c := &ClosestDecision{Debtor: debtorOf(best.Question), Percent: int(min(max(math.Round(bestP*100), 0), 100))}
-	if spec.list != ProposalListBigMoment {
-		c.Contact = best.ContactID
-	}
-	return c
+	return &ClosestDecision{Contact: spec.party(best), Debtor: debtorOf(best.Question), Percent: int(min(max(math.Round(bestP*100), 0), 100))}
 }
 
 // probability is the probability an answered question gives the list's
