@@ -119,7 +119,9 @@ function ItemView({
   const text = itemText(item)
   const label = item.list === 'big_moment' ? 'big moment' : text
   const look = item.state ? STATE_LOOK[item.state] : null
-  const acts = Object.fromEntries(item.acts.map(act => [act.act, act]))
+  // TODO(bench-negative-decisions PR2): a reviewed item's acts are its
+  // re-review controls, shown behind "Change"; until then it offers none.
+  const acts = item.mark ? {} : Object.fromEntries(item.acts.map(act => [act.act, act]))
   const removed = item.mark === 'removed'
   return (
     <li
