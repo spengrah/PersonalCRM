@@ -152,7 +152,7 @@ func TestBenchConfirmNones(t *testing.T) {
 		}))
 		b.run(t, judgment.RunKindRerun, judgmentOf(otherMethod, th, b.day(1), "h1", judgment.Outcomes{
 			BallInCourt: []judgment.ParticipantOutcome[judgment.BallInCourt]{bic(x, judgment.BallInCourtIOweReply, 0.8)},
-			BigMoment:   moment(judgment.BigMomentParticipant, 0.9),
+			BigMoment:   moment(judgment.BigMomentNone, 0.9),
 		}))
 		b.act(t, item(t, b.proposal(t, x, otherMethod), "i_owe_reply", x), "remove")
 		require.True(t, b.proposal(t, x, prodMethod).ConfirmNones)
@@ -208,6 +208,38 @@ func TestBenchConfirmNones(t *testing.T) {
 		w := b.confirmNones(t, p)
 
 		assert.Equal(t, http.StatusConflict, w.Code)
+		again, err := b.store.ReviewRecords(b.ctx)
+		require.NoError(t, err)
+		assert.Equal(t, reviews, again)
+	})
+
+	t.Run("a negative another proposal on the same content holds as an unreviewed item gains no label, and is not offered once it is all that is left", func(t *testing.T) {
+		// spec: IXN-056.item-awaits-review, IXN-056.refuses-items, IXN-054.confirm-nones-offered
+		b := newBenchEnv(t)
+		x, th := b.oneToOne(t)
+		found := nothingFound(x)
+		found.Commitments[1].Outcome = judgment.CommitmentStateOpen
+		b.run(t, judgment.RunKindScheduled, judgmentOf(prodMethod, th, b.day(1), "h1", found))
+		b.run(t, judgment.RunKindRerun, judgmentOf(otherMethod, th, b.day(1), "h1", nothingFound(x)))
+		require.True(t, b.proposal(t, x, otherMethod).ConfirmNones)
+
+		require.Equal(t, http.StatusOK, b.confirmNones(t, b.proposal(t, x, otherMethod)).Code)
+
+		assert.Equal(t, map[string]string{
+			decision(judgment.QuestionBallInCourt, &x):    "nobody_owes",
+			decision(judgment.QuestionCommitmentMine, &x): "none",
+			decision(judgment.QuestionBigMoment, nil):     "none",
+		}, b.labels(t), "the commitment the production proposal holds as an item stays to review")
+		prod := b.proposal(t, x, prodMethod)
+		assert.Nil(t, listItem(t, prod, "commitments", "contact").Mark)
+		assert.Equal(t, 1, prod.ToReview)
+		assert.Equal(t, "to_review", prod.ReviewStatus)
+		other := b.proposal(t, x, otherMethod)
+		assert.Equal(t, "nones_to_review", other.ReviewStatus)
+		assert.False(t, other.ConfirmNones, "Confirm Nones would label nothing")
+		reviews, err := b.store.ReviewRecords(b.ctx)
+		require.NoError(t, err)
+		assert.Equal(t, http.StatusConflict, b.confirmNones(t, other).Code)
 		again, err := b.store.ReviewRecords(b.ctx)
 		require.NoError(t, err)
 		assert.Equal(t, reviews, again)
@@ -284,6 +316,52 @@ func TestBenchInference(t *testing.T) {
 			decision(judgment.QuestionBigMoment, nil):       "none",
 		}, b.labels(t), "the judged not_applicable does not replace the label")
 		assert.Equal(t, "all_reviewed", b.proposal(t, x, prodMethod).ReviewStatus)
+	})
+
+	// closeLeavesUnreviewedItem seeds content judged by two methods: the
+	// production proposal holds a reply and a commitment of theirs as items,
+	// the other proposal holds every decision as a negative. The user confirms
+	// the reply, then closes the judgments closed names.
+	closeLeavesUnreviewedItem := func(t *testing.T, closed func(b *benchEnv, x uuid.UUID) []string) {
+		b := newBenchEnv(t)
+		x, th := b.oneToOne(t)
+		found := nothingFound(x)
+		found.BallInCourt[0].Outcome = judgment.BallInCourtIOweReply
+		found.Commitments[1].Outcome = judgment.CommitmentStateOpen
+		b.run(t, judgment.RunKindScheduled, judgmentOf(prodMethod, th, b.day(1), "h1", found))
+		b.run(t, judgment.RunKindRerun, judgmentOf(otherMethod, th, b.day(1), "h1", nothingFound(x)))
+		b.act(t, item(t, b.proposal(t, x, prodMethod), "i_owe_reply", x), "confirm")
+
+		w := b.post(t, "/api/v1/judgments/close", map[string]any{"judgment_ids": closed(b, x)})
+
+		require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+		assert.Equal(t, map[string]string{
+			decision(judgment.QuestionBallInCourt, &x):    "i_owe_reply",
+			decision(judgment.QuestionCommitmentMine, &x): "none",
+			decision(judgment.QuestionBigMoment, nil):     "none",
+		}, b.labels(t), "the other proposal's negatives are labeled but for the commitment the production proposal holds as an item")
+		prod := b.proposal(t, x, prodMethod)
+		assert.Nil(t, listItem(t, prod, "commitments", "contact").Mark)
+		assert.Equal(t, 1, prod.ToReview)
+		assert.Equal(t, "to_review", prod.ReviewStatus)
+		assert.Equal(t, "nones_to_review", b.proposal(t, x, otherMethod).ReviewStatus)
+		assert.Equal(t, 1, b.row(t, x).ToReview)
+	}
+
+	t.Run("a close leaves a negative that another proposal on the row holds as an unreviewed item to review in both", func(t *testing.T) {
+		// spec: IXN-057.item-awaits-review, IXN-057.items-stay
+		closeLeavesUnreviewedItem(t, func(b *benchEnv, x uuid.UUID) []string {
+			row := b.row(t, x)
+			require.Len(t, row.Proposals, 2)
+			return []string{row.Proposals[0].JudgmentID, row.Proposals[1].JudgmentID}
+		})
+	})
+
+	t.Run("a close leaves a negative that a proposal off the row holds as an unreviewed item to review", func(t *testing.T) {
+		// spec: IXN-057.item-awaits-review
+		closeLeavesUnreviewedItem(t, func(b *benchEnv, x uuid.UUID) []string {
+			return []string{b.proposal(t, x, otherMethod).JudgmentID}
+		})
 	})
 
 	t.Run("a close naming an unknown judgment is not found and records nothing", func(t *testing.T) {

@@ -959,7 +959,7 @@ behaviors:
       - key: negative-decisions
         text: a negative decision is an answered outcome that stands for no item; a no-effect outcome that suggests removing a live item is an item, a reply its party's commitment in the same direction absorbs is neither, and a probability stored for a question that yields no outcome adds none
       - key: confirm-nones-offered
-        text: a proposal offers Confirm Nones exactly when it has no items and holds a negative decision without a label
+        text: a proposal offers Confirm Nones exactly when it has no items and holds a negative decision without a label that no proposal on the same content holds as an item without a label
     provenance: [.agents/spec/2026-10-17-bench-negative-decisions.md G3 G6 T3 A1 SC1 SC10]
 
   - id: IXN-055
@@ -988,10 +988,12 @@ behaviors:
     then:
       - key: labels-negatives
         text: every negative decision of the proposal without a label is labeled with its judged value, as an ordinary review that changes nothing live, which the scorecard counts as a reviewed decision
+      - key: item-awaits-review
+        text: a negative decision that another proposal on the same content holds as an item without a label gains no label, the item keeps no mark and still counts to review, and the proposal still reads nones to review
       - key: keeps-labels
         text: a negative decision already labeled from another proposal keeps its label
       - key: refuses-items
-        text: a proposal with an item, or with no negative decision left without a label, is refused with nothing recorded, and an unknown judgment is not found
+        text: a proposal with an item, or with no negative decision left that it would label, is refused with nothing recorded, and an unknown judgment is not found
       - key: all-or-nothing
         text: a Confirm Nones that fails records none of its labels, and the list reads as before it
     provenance: [.agents/spec/2026-10-17-bench-negative-decisions.md G3 G9 HC1 SC2 SC9 SC10]
@@ -1008,6 +1010,8 @@ behaviors:
         text: a close labels every negative decision without a label of each of the row's proposals that holds a label with its judged value
       - key: items-stay
         text: an item without a label keeps none after a close
+      - key: item-awaits-review
+        text: a negative decision that another proposal on the same content holds as an item without a label gains no label from a close, whether or not that proposal is on the row; the item keeps no mark and still counts to review, and the proposal holding the negative still reads nones to review
       - key: no-label-gains-none
         text: a proposal holding no label gains none from a close
       - key: across-proposals
@@ -1131,7 +1135,7 @@ behaviors:
       - key: nones-wait-for-close
         text: before the close, the proposal's Nones still await review, however many of its items the user reviewed
       - key: close-confirms-nones
-        text: once the row is closed and opened again, each None of the proposal reads Confirmed
+        text: once the row is closed and opened again, each None of the proposal reads Confirmed, but for one that another proposal on the same content shows as an item awaiting review
       - key: items-stay-to-review
         text: an item the user did not review still awaits review after the close
       - key: close-after-saves

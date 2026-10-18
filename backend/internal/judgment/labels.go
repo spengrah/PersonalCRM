@@ -14,7 +14,7 @@ import (
 )
 
 // ErrConfirmNonesRefused is returned for a Confirm Nones on a proposal that
-// has an item, or that holds no negative decision without a label.
+// has an item, or that holds no negative decision the labeling rule may label.
 var ErrConfirmNonesRefused = errors.New("confirm nones applies only to a proposal with no items and an unlabeled negative decision")
 
 // decisionKey names one decision: one question answered for one contact (nil
@@ -109,18 +109,21 @@ func (s *Store) recordReviewTx(ctx context.Context, tx pgx.Tx, o *outcomeRecord,
 }
 
 // labelNegativesTx is the one rule by which a negative decision gains a label
-// no user act states. With confirm set (Confirm Nones), the one judgment
-// given must have no items and a negative decision without a label, and
-// every negative decision of its proposal without a label is labeled with its
-// judged value. Otherwise (inference, on a close of the row the judgments sit
-// on), every negative decision without a label of each given proposal that
-// holds a label is labeled with its judged value, until no given proposal
-// changes, since a label shared across proposals on the same content can give
-// another proposal its first label. A label that exists is never replaced, and
-// a proposal holding no label gains none by inference. Each label is an
-// ordinary review and changes nothing live. A review of an item never runs
-// the rule. It returns how many labels it recorded, or ErrNotFound when a
-// judgment is unknown.
+// no user act states. The rule labels only a negative decision without a
+// label that no proposal on the same content holds as an item without a
+// label: that decision awaits the user's review of the item, in every
+// proposal on the content (G4). With confirm set (Confirm Nones), the one
+// judgment given must have no items and such a negative decision, and every
+// such negative decision of its proposal is labeled with its judged value.
+// Otherwise (inference,
+// on a close of the row the judgments sit on), every such negative decision
+// of each given proposal that holds a label is labeled with its judged value,
+// until no given proposal changes, since a label shared across proposals on
+// the same content can give another proposal its first label. A label that
+// exists is never replaced, and a proposal holding no label gains none by
+// inference. Each label is an ordinary review and changes nothing live. A
+// review of an item never runs the rule. It returns how many labels it
+// recorded, or ErrNotFound when a judgment is unknown.
 func (s *Store) labelNegativesTx(ctx context.Context, tx pgx.Tx, judgments []uuid.UUID, confirm bool) (int, error) {
 	// An empty ID list reads every judgment, so no judgment is no proposal.
 	if len(judgments) == 0 {
@@ -136,19 +139,7 @@ func (s *Store) labelNegativesTx(ctx context.Context, tx pgx.Tx, judgments []uui
 			return 0, ErrNotFound
 		}
 	}
-	outcomes, err := loadOutcomes(ctx, q, judgmentIDs(rows), nil)
-	if err != nil {
-		return 0, err
-	}
-	byJudgment := map[uuid.UUID][]*outcomeRecord{}
-	for _, o := range outcomes {
-		byJudgment[o.JudgmentID] = append(byJudgment[o.JudgmentID], o)
-	}
-	examples := make([]ExampleID, len(rows))
-	for i, j := range rows {
-		examples[i] = ExampleID(j.ExampleID)
-	}
-	lb, err := loadLabels(ctx, q, examples)
+	byJudgment, lb, err := loadContent(ctx, q, rows)
 	if err != nil {
 		return 0, err
 	}
@@ -167,9 +158,8 @@ func (s *Store) labelNegativesTx(ctx context.Context, tx pgx.Tx, judgments []uui
 		if len(rows) != 1 {
 			return 0, ErrConfirmNonesRefused
 		}
-		sorted := sortOutcomes(byJudgment[rows[0].ID], lb)
-		pending := sorted.unlabeledNegatives(lb)
-		if len(sorted.items) > 0 || len(pending) == 0 {
+		pending := sortOutcomes(byJudgment[rows[0].ID], lb).confirmNones(lb, unreviewedItems(byJudgment, lb))
+		if len(pending) == 0 {
 			return 0, ErrConfirmNonesRefused
 		}
 		err := labelAll(pending)
@@ -177,12 +167,13 @@ func (s *Store) labelNegativesTx(ctx context.Context, tx pgx.Tx, judgments []uui
 	}
 	for changed := true; changed; {
 		changed = false
+		unreviewed := unreviewedItems(byJudgment, lb)
 		for _, j := range rows {
 			sorted := sortOutcomes(byJudgment[j.ID], lb)
 			if !sorted.holdsLabel(lb) {
 				continue
 			}
-			pending := sorted.unlabeledNegatives(lb)
+			pending := sorted.unlabeledNegatives(lb, unreviewed)
 			if err := labelAll(pending); err != nil {
 				return 0, err
 			}
@@ -193,10 +184,11 @@ func (s *Store) labelNegativesTx(ctx context.Context, tx pgx.Tx, judgments []uui
 }
 
 // ConfirmNones labels every negative decision of the judgment's proposal that
-// has no label from any proposal, each with its judged value, in one
-// transaction. It refuses a proposal with an item, or one holding no negative
-// decision without a label, with ErrConfirmNonesRefused, and an unknown
-// judgment with ErrNotFound.
+// has no label from any proposal and that no proposal on the same content
+// holds as an item without a label, each with its judged value, in one
+// transaction. It refuses a proposal with an item, or one holding no such
+// negative decision, with ErrConfirmNonesRefused, and an unknown judgment
+// with ErrNotFound.
 func (s *Store) ConfirmNones(ctx context.Context, judgmentID uuid.UUID) error {
 	return s.inTx(ctx, func(tx pgx.Tx) error {
 		_, err := s.labelNegativesTx(ctx, tx, []uuid.UUID{judgmentID}, true)
@@ -206,7 +198,8 @@ func (s *Store) ConfirmNones(ctx context.Context, judgmentID uuid.UUID) error {
 
 // CloseRow records the user closing a row on the bench: every negative
 // decision without a label of each of the given proposals (the row's) that
-// holds a label is labeled with its judged value, all in one transaction. It
+// holds a label is labeled with its judged value, but for one a proposal on
+// the same content holds as an item without a label, all in one transaction. It
 // returns ErrNotFound, recording nothing, when a judgment is unknown.
 func (s *Store) CloseRow(ctx context.Context, judgments []uuid.UUID) error {
 	return s.inTx(ctx, func(tx pgx.Tx) error {

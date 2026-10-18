@@ -316,7 +316,7 @@ func TestInferNegativeLabels(t *testing.T) {
 	e.record(t, labelsProd, reviewed, committed)
 	e.record(t, labelsOther, reviewed, judgment.Outcomes{
 		BallInCourt: []judgment.ParticipantOutcome[judgment.BallInCourt]{{QuestionID: "ball_in_court/THEM", ContactID: reviewed.contact, Outcome: judgment.BallInCourtIOweReply, Confidence: 0.6}},
-		BigMoment:   judgment.Scored[judgment.BigMoment]{QuestionID: "big_moment", Outcome: judgment.BigMomentParticipant, Confidence: 0.6},
+		BigMoment:   judgment.Scored[judgment.BigMoment]{QuestionID: "big_moment", Outcome: judgment.BigMomentNone, Confidence: 0.6},
 	})
 	e.reviewedBefore(t, e.outcome(t, labelsProd, reviewed, judgment.QuestionCommitmentMine), "open")
 	e.reviewedBefore(t, e.outcome(t, labelsOther, reviewed, judgment.QuestionBallInCourt), "not_applicable")
@@ -326,7 +326,6 @@ func TestInferNegativeLabels(t *testing.T) {
 	e.record(t, labelsProd, itemless, nothing(itemless.contact))
 	other := nothing(itemless.contact)
 	other.BallInCourt[0].Outcome = judgment.BallInCourtTheyOweReply
-	other.BigMoment.Outcome = judgment.BigMomentParticipant
 	e.record(t, labelsOther, itemless, other)
 	e.reviewedBefore(t, e.outcome(t, labelsOther, itemless, judgment.QuestionBallInCourt), "nobody_owes")
 	// A proposal holding no label on content another method's proposal
