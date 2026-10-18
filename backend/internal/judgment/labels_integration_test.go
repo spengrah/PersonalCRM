@@ -4,6 +4,7 @@ package judgment_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -527,4 +528,114 @@ func owesAndCommits(x uuid.UUID) judgment.Outcomes {
 	o.BallInCourt[0].Outcome = judgment.BallInCourtIOweReply
 	o.Commitments[0].Outcome = judgment.CommitmentStateOpen
 	return o
+}
+
+// sameContentTwoRows seeds one thread whose content two rows hold, a message
+// from x on each of days 1 and 2, judged on each day's row by its own method
+// on the same content, each proposal owing x a reply. It returns the rows as
+// the list reads them, newest first.
+func (b *benchEnv) sameContentTwoRows(t *testing.T) (uuid.UUID, []handlers.AllInteractionItemResponse) {
+	t.Helper()
+	x, th := b.contact(t), b.thread(t)
+	for _, day := range []int{1, 2} {
+		b.message(t, th, x, false, b.day(day))
+		b.record(t, th, x, repository.InteractionDirectionInbound, b.day(day))
+	}
+	owes := nothingFound(x)
+	owes.BallInCourt[0].Outcome = judgment.BallInCourtIOweReply
+	b.run(t, judgment.RunKindScheduled, judgmentOf(prodMethod, th, b.day(1), "h1", owes))
+	b.run(t, judgment.RunKindRerun, judgmentOf(otherMethod, th, b.day(2), "h1", owes))
+	page, _ := b.list(t, "contact_id="+x.String())
+	require.Len(t, page.Items, 2)
+	for _, row := range page.Items {
+		require.Len(t, row.Proposals, 1, "each day's judgment sits on its own row")
+	}
+	return x, page.Items
+}
+
+// namedRows names rows as a save's request does: by their proposals' judgments.
+func namedRows(rows ...handlers.AllInteractionItemResponse) []handlers.BenchRowRequest {
+	out := make([]handlers.BenchRowRequest, len(rows))
+	for i, row := range rows {
+		for _, p := range row.Proposals {
+			out[i].JudgmentIDs = append(out[i].JudgmentIDs, p.JudgmentID)
+		}
+	}
+	return out
+}
+
+// listedRows reads the contact's rows from the list as a save returns rows.
+func (b *benchEnv) listedRows(t *testing.T, contact uuid.UUID) []handlers.BenchRowStateResponse {
+	t.Helper()
+	page, _ := b.list(t, "contact_id="+contact.String())
+	out := make([]handlers.BenchRowStateResponse, len(page.Items))
+	for i, row := range page.Items {
+		out[i] = handlers.BenchRowStateResponse{Proposals: row.Proposals, ToReview: row.ToReview, ReviewStatus: row.ReviewStatus}
+	}
+	return out
+}
+
+func decodeData[T any](t *testing.T, w *httptest.ResponseRecorder) T {
+	t.Helper()
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	var envelope struct {
+		Data T `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &envelope))
+	return envelope.Data
+}
+
+// A save returns the rows it names as a read of the list made after it shows
+// them, so the bench shows each row's proposals, count and status together.
+func TestBenchSaveRows(t *testing.T) {
+	t.Run("a review returns each named row as the list then reads it, a row its label reached included", func(t *testing.T) {
+		// spec: IXN-073.rows-as-listed
+		b := newBenchEnv(t)
+		x, rows := b.sameContentTwoRows(t)
+		it := item(t, rows[1].Proposals[0], "i_owe_reply", x)
+
+		got := decodeData[handlers.ReviewJudgmentOutcomeResponse](t, b.post(t, "/api/v1/judgment-outcomes/"+it.OutcomeID+"/review", map[string]any{
+			"right_outcome": acts(it)["confirm"].RightOutcome, "rows": namedRows(rows...),
+		}))
+
+		assert.Equal(t, b.listedRows(t, x), got.Rows)
+		require.Len(t, got.Rows, 2)
+		assert.Equal(t, ptr("nones_to_review"), got.Rows[0].ReviewStatus, "the label reached the other row's proposal on the same content")
+		assert.Equal(t, 0, got.Rows[0].ToReview)
+	})
+
+	t.Run("Confirm Nones and a close return each named row as the list then reads it", func(t *testing.T) {
+		// spec: IXN-073.rows-as-listed
+		b := newBenchEnv(t)
+		x, th := b.oneToOne(t)
+		b.run(t, judgment.RunKindScheduled, judgmentOf(prodMethod, th, b.day(1), "h1", nothingFound(x)))
+		row := b.row(t, x)
+
+		confirmed := decodeData[handlers.BenchRowsResponse](t, b.post(t, "/api/v1/judgments/"+row.Proposals[0].JudgmentID+"/confirm-nones", map[string]any{"rows": namedRows(row)}))
+
+		assert.Equal(t, b.listedRows(t, x), confirmed.Rows)
+		require.Len(t, confirmed.Rows, 1)
+		assert.Equal(t, ptr("all_reviewed"), confirmed.Rows[0].ReviewStatus)
+
+		closed := decodeData[handlers.BenchRowsResponse](t, b.post(t, "/api/v1/judgments/close", map[string]any{
+			"judgment_ids": []string{row.Proposals[0].JudgmentID}, "rows": namedRows(row),
+		}))
+
+		assert.Equal(t, b.listedRows(t, x), closed.Rows)
+	})
+
+	t.Run("a save naming a row with an unknown judgment is not found and records nothing", func(t *testing.T) {
+		// spec: IXN-073.unknown-judgment
+		b := newBenchEnv(t)
+		x, rows := b.sameContentTwoRows(t)
+		it := item(t, rows[1].Proposals[0], "i_owe_reply", x)
+
+		w := b.post(t, "/api/v1/judgment-outcomes/"+it.OutcomeID+"/review", map[string]any{
+			"right_outcome": acts(it)["confirm"].RightOutcome,
+			"rows":          []handlers.BenchRowRequest{{JudgmentIDs: []string{uuid.NewString()}}},
+		})
+
+		assert.Equal(t, http.StatusNotFound, w.Code)
+		assert.Empty(t, b.labels(t))
+	})
 }

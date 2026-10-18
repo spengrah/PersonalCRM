@@ -135,53 +135,65 @@ func (s *Store) ThreadProposals(ctx context.Context, thread threadctx.VenueID, r
 	return s.threadProposals(ctx, thread, rows, run)
 }
 
-// ThreadProposalsOf returns the proposals of the thread the judgment judged,
-// as ThreadProposals does: what a save on the judgment's proposal can change
-// on the bench. It returns ErrNotFound for an unknown judgment.
-func (s *Store) ThreadProposalsOf(ctx context.Context, judgment uuid.UUID, run *RunID) ([]Proposal, error) {
-	rows, err := s.queries.ListJudgmentRows(ctx, db.ListJudgmentRowsParams{Ids: []uuid.UUID{judgment}, ExampleIds: []string{}})
-	if err != nil {
-		return nil, fmt.Errorf("load judgment %s: %w", judgment, err)
-	}
-	if len(rows) == 0 {
-		return nil, ErrNotFound
-	}
-	return s.ThreadProposals(ctx, rows[0].ThreadID, run)
+// Rows are rows the bench shows, each named by the judgments of its
+// proposals, resolved to the threads those judged.
+type Rows struct {
+	judgments [][]uuid.UUID
+	threads   map[uuid.UUID]threadctx.VenueID
 }
 
-// Proposals returns the proposals of the given judgments, as the bench shows
-// them in a view narrowed to run when it is given, in no particular order. It
-// returns ErrNotFound when a judgment is unknown.
-func (s *Store) Proposals(ctx context.Context, judgments []uuid.UUID, run *RunID) ([]Proposal, error) {
-	if len(judgments) == 0 {
-		return []Proposal{}, nil
+// ResolveRows resolves rows the bench shows, each named by the judgments of
+// its proposals, for RowStates. It returns ErrNotFound when a judgment is
+// unknown.
+func (s *Store) ResolveRows(ctx context.Context, rows [][]uuid.UUID) (Rows, error) {
+	resolved := Rows{judgments: rows, threads: map[uuid.UUID]threadctx.VenueID{}}
+	ids := slices.Concat(rows...)
+	if len(ids) == 0 {
+		return resolved, nil
 	}
-	rows, err := s.queries.ListJudgmentRows(ctx, db.ListJudgmentRowsParams{Ids: judgments, ExampleIds: []string{}})
+	found, err := s.queries.ListJudgmentRows(ctx, db.ListJudgmentRowsParams{Ids: ids, ExampleIds: []string{}})
 	if err != nil {
-		return nil, fmt.Errorf("list judgments: %w", err)
+		return Rows{}, fmt.Errorf("list judgments: %w", err)
 	}
-	for _, id := range judgments {
-		if !slices.ContainsFunc(rows, func(j *db.ListJudgmentRowsRow) bool { return j.ID == id }) {
-			return nil, ErrNotFound
+	for _, j := range found {
+		resolved.threads[j.ID] = j.ThreadID
+	}
+	for _, id := range ids {
+		if _, ok := resolved.threads[id]; !ok {
+			return Rows{}, ErrNotFound
 		}
 	}
-	byThread := map[uuid.UUID][]*db.ListJudgmentRowsRow{}
-	var threads []uuid.UUID
-	for _, j := range rows {
-		if _, seen := byThread[j.ThreadID]; !seen {
-			threads = append(threads, j.ThreadID)
+	return resolved, nil
+}
+
+// RowStates returns each row as the bench shows it in a view narrowed to run
+// when it is given, in the order given: each judgment's proposal compiled with
+// the judgments of its thread, as List compiles it, so a row reads the same
+// after a save as after a read of the list.
+func (s *Store) RowStates(ctx context.Context, rows Rows, run *RunID) ([]RowState, error) {
+	compiled := map[threadctx.VenueID]map[uuid.UUID]Proposal{}
+	states := make([]RowState, len(rows.judgments))
+	for i, row := range rows.judgments {
+		var proposals []Proposal
+		for _, id := range row {
+			thread := rows.threads[id]
+			if _, done := compiled[thread]; !done {
+				ps, err := s.ThreadProposals(ctx, thread, run)
+				if err != nil {
+					return nil, err
+				}
+				compiled[thread] = map[uuid.UUID]Proposal{}
+				for _, p := range ps {
+					compiled[thread][p.JudgmentID] = p
+				}
+			}
+			if p, ok := compiled[thread][id]; ok {
+				proposals = append(proposals, p)
+			}
 		}
-		byThread[j.ThreadID] = append(byThread[j.ThreadID], j)
+		states[i] = rowState(proposals)
 	}
-	proposals := []Proposal{}
-	for _, thread := range threads {
-		ps, err := s.threadProposals(ctx, thread, byThread[thread], run)
-		if err != nil {
-			return nil, err
-		}
-		proposals = append(proposals, ps...)
-	}
-	return proposals, nil
+	return states, nil
 }
 
 // threadProposals compiles the proposals of judgments of one thread.

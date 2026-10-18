@@ -83,37 +83,52 @@ type JudgmentOutcomeReviewResponse struct {
 // ReviewJudgmentOutcomeRequest is a review: the outcome's right outcome. The
 // server derives the verdict; a client never sends one. keep_current_date,
 // allowed only with an open commitment's right outcome, keeps the
-// obligation's current date against the judged later one.
+// obligation's current date against the judged later one. rows names the
+// rows the bench shows that the review can change.
 type ReviewJudgmentOutcomeRequest struct {
-	RightOutcome    string `json:"right_outcome" binding:"required"`
-	KeepCurrentDate bool   `json:"keep_current_date,omitempty"`
+	RightOutcome    string            `json:"right_outcome" binding:"required"`
+	KeepCurrentDate bool              `json:"keep_current_date,omitempty"`
+	Rows            []BenchRowRequest `json:"rows,omitempty"`
 }
 
 // ReviewJudgmentOutcomeResponse is a recorded review: the reviewed outcome,
-// and the proposals of its thread as the bench now shows them, so the bench
+// and the rows the request named as the bench now shows them, so the bench
 // shows the recorded state without reading its whole list again.
 type ReviewJudgmentOutcomeResponse struct {
 	JudgmentOutcomeResponse `tstype:",extends"`
-	Proposals               []BenchProposalResponse `json:"proposals"`
+	Rows                    []BenchRowStateResponse `json:"rows"`
 }
 
-// BenchProposalsResponse is the proposals of a thread as the bench shows them
-// after a save on one of them.
-type BenchProposalsResponse struct {
-	Proposals []BenchProposalResponse `json:"proposals"`
+// BenchRowRequest names a row the bench shows by the judgments of the
+// proposals it shows.
+type BenchRowRequest struct {
+	JudgmentIDs []string `json:"judgment_ids"`
 }
 
-// CloseBenchRowRequest is a close of a row on the bench: the judgments of the
-// proposals the row shows.
-type CloseBenchRowRequest struct {
-	JudgmentIDs []string `json:"judgment_ids" binding:"required,min=1"`
+// BenchRowsRequest names the rows the bench shows that a save can change.
+type BenchRowsRequest struct {
+	Rows []BenchRowRequest `json:"rows,omitempty"`
 }
 
-// CloseBenchRowResponse is a recorded close: the closed row's proposals as the
-// bench now shows them, and what remains to review across them, as the row's
+// BenchRowStateResponse is a row as the bench shows it after a save: its
+// proposals, and what remains to review across them, as the list's
 // to_review and review_status read.
-type CloseBenchRowResponse struct {
+type BenchRowStateResponse struct {
 	Proposals    []BenchProposalResponse `json:"proposals"`
 	ToReview     int                     `json:"to_review"`
 	ReviewStatus *string                 `json:"review_status,omitempty" tstype:"ReviewStatus"`
+}
+
+// BenchRowsResponse is the rows a save's request named, in its order, as the
+// bench now shows them.
+type BenchRowsResponse struct {
+	Rows []BenchRowStateResponse `json:"rows"`
+}
+
+// CloseBenchRowRequest is a close of a row on the bench: the judgments of the
+// proposals the row shows, and the rows the bench shows that the close can
+// change.
+type CloseBenchRowRequest struct {
+	JudgmentIDs []string          `json:"judgment_ids" binding:"required,min=1"`
+	Rows        []BenchRowRequest `json:"rows,omitempty"`
 }

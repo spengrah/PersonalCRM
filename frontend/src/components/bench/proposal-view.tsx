@@ -19,7 +19,7 @@ import { SAVE_ERROR, formatConfidence, formatDueDate } from './format'
 
 interface ProposalViewProps {
   proposal: BenchProposalResponse
-  /** The run the view is narrowed to, so a save returns the proposals as the view shows them. */
+  /** The run the view is narrowed to, so a save returns its rows as the view shows them. */
   runId?: string
   /** Whether a close of the proposal's row is still being saved; its controls wait for it. */
   closing: boolean
@@ -475,7 +475,7 @@ export function ProposalView({
   const send = (outcomeId: string, body: ReviewJudgmentOutcomeRequest) => {
     setFailed(null)
     review.mutate(
-      { outcomeId, body, runId },
+      { outcomeId, threadId: proposal.thread_id, body, runId },
       {
         onSuccess: () => {
           setPicker(null)
@@ -553,7 +553,13 @@ export function ProposalView({
             size="sm"
             variant="outline"
             disabled={sections.pending}
-            onClick={() => confirmNones.mutate({ judgmentId: proposal.judgment_id, runId })}
+            onClick={() =>
+              confirmNones.mutate({
+                judgmentId: proposal.judgment_id,
+                threadId: proposal.thread_id,
+                runId,
+              })
+            }
             className="gap-1 text-green-800"
           >
             <Check aria-hidden="true" className="h-3.5 w-3.5" />

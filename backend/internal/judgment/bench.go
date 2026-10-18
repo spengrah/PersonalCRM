@@ -45,13 +45,18 @@ type BenchQuery struct {
 	Offset    int32
 }
 
-// BenchRow is one row with the proposals it carries, the production method's
-// first and then by method key, and how many of their items await review.
-// ReviewStatus is what remains to review across its proposals: their items
-// without a label, else their Nones to review, else nothing; nil on a row
-// carrying no proposal.
+// BenchRow is one row with what it shows of the judgments placed on it.
 type BenchRow struct {
 	service.InteractionRow
+	RowState
+}
+
+// RowState is what a row shows of the judgments placed on it: their
+// proposals, the production method's first and then by method key, and how
+// many of their items await review. ReviewStatus is what remains to review
+// across its proposals: their items without a label, else their Nones to
+// review, else nothing; nil on a row carrying no proposal.
+type RowState struct {
 	Proposals    []Proposal
 	ToReview     int
 	ReviewStatus *ReviewStatus
@@ -91,11 +96,10 @@ func (b *Bench) List(ctx context.Context, q BenchQuery) (*BenchPage, error) {
 	if err != nil {
 		return nil, err
 	}
-	rows := make([]BenchRow, len(page.Rows))
 	onPage := map[service.TimelineIdentity]int{}
+	shown := make([][]Proposal, len(page.Rows))
 	var threads []uuid.UUID
 	for i, row := range page.Rows {
-		rows[i] = BenchRow{InteractionRow: row, Proposals: []Proposal{}}
 		onPage[row.Identity] = i
 		threads = append(threads, row.Threads...)
 	}
@@ -111,45 +115,48 @@ func (b *Bench) List(ctx context.Context, q BenchQuery) (*BenchPage, error) {
 				return nil, err
 			}
 			if i, here := onPage[row]; ok && here {
-				rows[i].Proposals = append(rows[i].Proposals, p)
+				shown[i] = append(shown[i], p)
 			}
 		}
 	}
-	for i := range rows {
-		slices.SortFunc(rows[i].Proposals, func(a, b Proposal) int {
-			if a.Production != b.Production {
-				if a.Production {
-					return -1
-				}
-				return 1
-			}
-			return cmp.Or(cmp.Compare(a.Method.Key, b.Method.Key), cmp.Compare(a.Method.Version, b.Method.Version), a.CutOff.Compare(b.CutOff))
-		})
-		rows[i].ToReview, rows[i].ReviewStatus = RowStatus(rows[i].Proposals)
+	rows := make([]BenchRow, len(page.Rows))
+	for i, row := range page.Rows {
+		rows[i] = BenchRow{InteractionRow: row, RowState: rowState(shown[i])}
 	}
 	return &BenchPage{Rows: rows, Total: page.Total}, nil
 }
 
-// RowStatus is what remains to review across a row's proposals: how many of
-// their items have no label, and their items without a label, else their
-// Nones to review, else nothing; nil for a row carrying no proposal.
-func RowStatus(proposals []Proposal) (int, *ReviewStatus) {
+// rowState is the row showing the proposals: they sort the production
+// method's first, and what remains to review is summed across them.
+func rowState(proposals []Proposal) RowState {
+	row := RowState{Proposals: proposals}
 	if len(proposals) == 0 {
-		return 0, nil
+		row.Proposals = []Proposal{}
+		return row
 	}
-	toReview, nones := 0, false
-	for _, p := range proposals {
-		toReview += p.ToReview
+	slices.SortFunc(row.Proposals, func(a, b Proposal) int {
+		if a.Production != b.Production {
+			if a.Production {
+				return -1
+			}
+			return 1
+		}
+		return cmp.Or(cmp.Compare(a.Method.Key, b.Method.Key), cmp.Compare(a.Method.Version, b.Method.Version), a.CutOff.Compare(b.CutOff))
+	})
+	nones := false
+	for _, p := range row.Proposals {
+		row.ToReview += p.ToReview
 		nones = nones || p.ReviewStatus == ReviewStatusNonesToReview
 	}
 	status := ReviewStatusAllReviewed
 	switch {
-	case toReview > 0:
+	case row.ToReview > 0:
 		status = ReviewStatusToReview
 	case nones:
 		status = ReviewStatusNonesToReview
 	}
-	return toReview, &status
+	row.ReviewStatus = &status
+	return row
 }
 
 // ThreadContent is a judged thread's messages and the names of the contacts

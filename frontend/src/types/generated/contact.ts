@@ -729,41 +729,58 @@ export interface JudgmentOutcomeReviewResponse {
  * ReviewJudgmentOutcomeRequest is a review: the outcome's right outcome. The
  * server derives the verdict; a client never sends one. keep_current_date,
  * allowed only with an open commitment's right outcome, keeps the
- * obligation's current date against the judged later one.
+ * obligation's current date against the judged later one. rows names the
+ * rows the bench shows that the review can change.
  */
 export interface ReviewJudgmentOutcomeRequest {
   right_outcome: string;
   keep_current_date?: boolean;
+  rows?: BenchRowRequest[];
 }
 /**
  * ReviewJudgmentOutcomeResponse is a recorded review: the reviewed outcome,
- * and the proposals of its thread as the bench now shows them, so the bench
+ * and the rows the request named as the bench now shows them, so the bench
  * shows the recorded state without reading its whole list again.
  */
 export interface ReviewJudgmentOutcomeResponse extends JudgmentOutcomeResponse {
-  proposals: BenchProposalResponse[];
+  rows: BenchRowStateResponse[];
 }
 /**
- * BenchProposalsResponse is the proposals of a thread as the bench shows them
- * after a save on one of them.
+ * BenchRowRequest names a row the bench shows by the judgments of the
+ * proposals it shows.
  */
-export interface BenchProposalsResponse {
-  proposals: BenchProposalResponse[];
-}
-/**
- * CloseBenchRowRequest is a close of a row on the bench: the judgments of the
- * proposals the row shows.
- */
-export interface CloseBenchRowRequest {
+export interface BenchRowRequest {
   judgment_ids: string[];
 }
 /**
- * CloseBenchRowResponse is a recorded close: the closed row's proposals as the
- * bench now shows them, and what remains to review across them, as the row's
+ * BenchRowsRequest names the rows the bench shows that a save can change.
+ */
+export interface BenchRowsRequest {
+  rows?: BenchRowRequest[];
+}
+/**
+ * BenchRowStateResponse is a row as the bench shows it after a save: its
+ * proposals, and what remains to review across them, as the list's
  * to_review and review_status read.
  */
-export interface CloseBenchRowResponse {
+export interface BenchRowStateResponse {
   proposals: BenchProposalResponse[];
   to_review: number /* int */;
   review_status?: ReviewStatus;
+}
+/**
+ * BenchRowsResponse is the rows a save's request named, in its order, as the
+ * bench now shows them.
+ */
+export interface BenchRowsResponse {
+  rows: BenchRowStateResponse[];
+}
+/**
+ * CloseBenchRowRequest is a close of a row on the bench: the judgments of the
+ * proposals the row shows, and the rows the bench shows that the close can
+ * change.
+ */
+export interface CloseBenchRowRequest {
+  judgment_ids: string[];
+  rows?: BenchRowRequest[];
 }

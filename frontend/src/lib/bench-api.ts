@@ -2,9 +2,9 @@ import { apiClient } from './api-client'
 import type { ApiResponseWithMeta } from './api-client'
 import type {
   AllInteractionsResponse,
-  BenchProposalsResponse,
+  BenchRowRequest,
+  BenchRowsResponse,
   BenchThreadContentResponse,
-  CloseBenchRowResponse,
   InteractionTypeOptionResponse,
   JudgmentRunsResponse,
   ReviewJudgmentOutcomeRequest,
@@ -23,7 +23,7 @@ export interface AllInteractionsFilters {
 
 export const ALL_INTERACTIONS_PAGE_SIZE = 20
 
-/** A save's path, carrying the run the view is narrowed to, so the proposals it returns read as the view shows them. */
+/** A save's path, carrying the run the view is narrowed to, so the rows it returns read as the view shows them. */
 function inRun(path: string, runId: string | undefined): string {
   return runId ? `${path}?run_id=${encodeURIComponent(runId)}` : path
 }
@@ -52,8 +52,8 @@ export const benchApi = {
   },
 
   // Records the right outcome the user states; the server derives the
-  // verdict, so a review never carries one. It returns the proposals of the
-  // outcome's thread as the server recorded them.
+  // verdict, so a review never carries one. It returns the rows the body
+  // names as the server recorded them.
   async review(
     outcomeId: string,
     body: ReviewJudgmentOutcomeRequest,
@@ -66,18 +66,29 @@ export const benchApi = {
   },
 
   // Labels every negative decision of a proposal that has no label with its
-  // judged value; the server decides which, and refuses a proposal with an item.
-  async confirmNones(judgmentId: string, runId?: string): Promise<BenchProposalsResponse> {
-    return apiClient.post<BenchProposalsResponse>(
-      inRun(`/api/v1/judgments/${judgmentId}/confirm-nones`, runId)
+  // judged value; the server decides which, and refuses a proposal with an
+  // item. It returns the rows named as the server recorded them.
+  async confirmNones(
+    judgmentId: string,
+    rows: BenchRowRequest[],
+    runId?: string
+  ): Promise<BenchRowsResponse> {
+    return apiClient.post<BenchRowsResponse>(
+      inRun(`/api/v1/judgments/${judgmentId}/confirm-nones`, runId),
+      { rows }
     )
   },
 
   // Records the user closing a row: the server labels what a close labels and
-  // returns the row's proposals and status as it recorded them.
-  async closeRow(judgmentIds: string[], runId?: string): Promise<CloseBenchRowResponse> {
-    return apiClient.post<CloseBenchRowResponse>(inRun('/api/v1/judgments/close', runId), {
+  // returns the rows named as it recorded them.
+  async closeRow(
+    judgmentIds: string[],
+    rows: BenchRowRequest[],
+    runId?: string
+  ): Promise<BenchRowsResponse> {
+    return apiClient.post<BenchRowsResponse>(inRun('/api/v1/judgments/close', runId), {
       judgment_ids: judgmentIds,
+      rows,
     })
   },
 }

@@ -180,6 +180,48 @@ test.describe('Interactions bench close and saves @area:interactions', () => {
         name: `Confirm ${kim.name}`,
       })
     ).toBeEnabled()
+    // spec: IXN-069.row-agrees-with-proposals
+    await expect(bench.locator('[data-review-indicator]')).toHaveText('1 to review')
+    expect(list.held.length, 'the list read the save started is still held').toBeGreaterThan(0)
+    list.release()
+  })
+
+  test('after Confirm Nones the row’s status changes with its proposal, without the list read', async ({
+    page,
+    request,
+  }) => {
+    const seeded = await testApi.seedBehavior('IXN-048')
+    const [sam, kim, lee] = ['sam', 'kim', 'lee'].map(h => entity(seeded, h))
+    const { shared, latest } = await groupThread(request, seeded)
+    await seedJudgmentRun(request, {
+      judgments: [
+        {
+          thread_interaction_id: entity(seeded, 'group').id,
+          cut_off: latest.sent_at,
+          ball_in_court: [sam, kim, lee].map((contact, i) => ({
+            question_id: `ball_in_court:P${i + 2}`,
+            contact_id: contact.id,
+            outcome: 'nobody_owes',
+            confidence: 0.9,
+          })),
+          commitments: [noCommitment('mine', lee.id, 4), noCommitment('theirs', lee.id, 4)],
+          big_moment: { question_id: 'big_moment', outcome: 'none', confidence: 0.95 },
+        },
+      ],
+    })
+    await page.goto(`/interactions?contact=${sam.id}`)
+    const bench = benchRow(page, shared.item.identity.id)
+    const proposal = proposalOf(await expandRow(bench), 'bench-production')
+    await expect(bench.locator('[data-review-indicator]')).toHaveText('Nones to review')
+    const list = hold()
+    await page.route(url => url.pathname === '/api/v1/interactions', list.handler)
+
+    // spec: IXN-069.row-agrees-with-proposals
+    await proposal.getByRole('button', { name: 'Confirm Nones' }).click()
+    await expect(proposal.locator('[data-proposal-status]')).toHaveText('All reviewed', {
+      timeout: SLOW_TIMEOUT_MS,
+    })
+    await expect(bench.locator('[data-review-indicator]')).toHaveText('Reviewed')
     expect(list.held.length, 'the list read the save started is still held').toBeGreaterThan(0)
     list.release()
   })

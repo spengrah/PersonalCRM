@@ -4135,7 +4135,7 @@
         },
         "/judgment-outcomes/{id}/review": {
             "post": {
-                "description": "Records the right outcome the user states for an outcome of any state and returns the outcome with the verdict the server derives: confirmed when it equals the judged outcome, rejected when it differs and has no effect, corrected otherwise, beside the proposals of the outcome's thread as the bench now shows them, narrowed to run_id's judgments when it is given. The review is its decision's label for every proposal on the same content, and labels no other decision. A first review of an applied or claim outcome gives the thread the right outcome's effect; a review of a decision that already has a label records the label only, except an Add on a negative decision, which has the effect the same review of an unlabeled negative has. keep_current_date, with an open commitment's right outcome, keeps the obligation's current date against the judged later one, and the verdict is corrected.",
+                "description": "Records the right outcome the user states for an outcome of any state and returns the outcome with the verdict the server derives: confirmed when it equals the judged outcome, rejected when it differs and has no effect, corrected otherwise, beside the rows the request names, in its order, as the bench now shows them: each row's proposals and what remains to review across them, as a read of the list narrowed to run_id, when it is given, shows that row. A row naming an unknown judgment is not found, with nothing recorded. The review is its decision's label for every proposal on the same content, and labels no other decision. A first review of an applied or claim outcome gives the thread the right outcome's effect; a review of a decision that already has a label records the label only, except an Add on a negative decision, which has the effect the same review of an unlabeled negative has. keep_current_date, with an open commitment's right outcome, keeps the obligation's current date against the judged later one, and the verdict is corrected.",
                 "consumes": [
                     "application/json"
                 ],
@@ -4294,7 +4294,7 @@
         },
         "/judgments/close": {
             "post": {
-                "description": "Records the user closing a row: every negative decision without a label of each given proposal (the row's) that holds a label, from whichever proposal on the same content it was made in, is labeled with its judged value, as ordinary reviews that change nothing live. A decision some proposal on the same content holds as an item without a label is not labeled and stays to review; one some proposal holds as a reply its own commitment absorbs is not labeled and is no None to review in any proposal; and a proposal holding no label gains none. It records all of its labels or none, and returns the given proposals as the bench now shows them, narrowed to run_id's appearances when it is given, with what remains to review across them. An unknown judgment is not found, with nothing recorded.",
+                "description": "Records the user closing a row: every negative decision without a label of each given proposal (the row's) that holds a label, from whichever proposal on the same content it was made in, is labeled with its judged value, as ordinary reviews that change nothing live. A decision some proposal on the same content holds as an item without a label is not labeled and stays to review; one some proposal holds as a reply its own commitment absorbs is not labeled and is no None to review in any proposal; and a proposal holding no label gains none. It records all of its labels or none, and returns the rows the request names, in its order, as the bench now shows them: each row's proposals and what remains to review across them, as a read of the list narrowed to run_id, when it is given, shows that row. An unknown judgment, closed or in a row, is not found, with nothing recorded.",
                 "consumes": [
                     "application/json"
                 ],
@@ -4314,7 +4314,7 @@
                         "in": "query"
                     },
                     {
-                        "description": "The row's judgments",
+                        "description": "The row's judgments, and the rows the close can change",
                         "name": "close",
                         "in": "body",
                         "required": true,
@@ -4335,7 +4335,7 @@
                                     "type": "object",
                                     "properties": {
                                         "data": {
-                                            "$ref": "#/definitions/handlers.CloseBenchRowResponse"
+                                            "$ref": "#/definitions/handlers.BenchRowsResponse"
                                         }
                                     }
                                 }
@@ -4359,7 +4359,10 @@
         },
         "/judgments/{id}/confirm-nones": {
             "post": {
-                "description": "Labels every negative decision of the judgment's proposal that has no label from any proposal with its judged value, as ordinary reviews that change nothing live, and returns the proposals of its thread as the bench now shows them, narrowed to run_id's judgments when it is given. A decision some proposal on the same content holds as an item without a label is not labeled and stays to review; one some proposal holds as a reply its own commitment absorbs is not labeled and is no None to review in any proposal. It records all of its labels or none. A proposal with an item, or one holding no negative decision it would label, is refused.",
+                "description": "Labels every negative decision of the judgment's proposal that has no label from any proposal with its judged value, as ordinary reviews that change nothing live, and returns the rows the request names, in its order, as the bench now shows them: each row's proposals and what remains to review across them, as a read of the list narrowed to run_id, when it is given, shows that row. A decision some proposal on the same content holds as an item without a label is not labeled and stays to review; one some proposal holds as a reply its own commitment absorbs is not labeled and is no None to review in any proposal. It records all of its labels or none. A proposal with an item, or one holding no negative decision it would label, is refused. A row naming an unknown judgment is not found, with nothing recorded.",
+                "consumes": [
+                    "application/json"
+                ],
                 "produces": [
                     "application/json"
                 ],
@@ -4382,6 +4385,14 @@
                         "description": "Run the bench is narrowed to",
                         "name": "run_id",
                         "in": "query"
+                    },
+                    {
+                        "description": "The rows the bench shows that the save can change",
+                        "name": "rows",
+                        "in": "body",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.BenchRowsRequest"
+                        }
                     }
                 ],
                 "responses": {
@@ -4396,7 +4407,7 @@
                                     "type": "object",
                                     "properties": {
                                         "data": {
-                                            "$ref": "#/definitions/handlers.BenchProposalsResponse"
+                                            "$ref": "#/definitions/handlers.BenchRowsResponse"
                                         }
                                     }
                                 }
@@ -6748,13 +6759,52 @@
                 }
             }
         },
-        "handlers.BenchProposalsResponse": {
+        "handlers.BenchRowRequest": {
+            "type": "object",
+            "properties": {
+                "judgment_ids": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
+        "handlers.BenchRowStateResponse": {
             "type": "object",
             "properties": {
                 "proposals": {
                     "type": "array",
                     "items": {
                         "$ref": "#/definitions/handlers.BenchProposalResponse"
+                    }
+                },
+                "review_status": {
+                    "type": "string"
+                },
+                "to_review": {
+                    "type": "integer"
+                }
+            }
+        },
+        "handlers.BenchRowsRequest": {
+            "type": "object",
+            "properties": {
+                "rows": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/handlers.BenchRowRequest"
+                    }
+                }
+            }
+        },
+        "handlers.BenchRowsResponse": {
+            "type": "object",
+            "properties": {
+                "rows": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/handlers.BenchRowStateResponse"
                     }
                 }
             }
@@ -6953,23 +7003,12 @@
                     "items": {
                         "type": "string"
                     }
-                }
-            }
-        },
-        "handlers.CloseBenchRowResponse": {
-            "type": "object",
-            "properties": {
-                "proposals": {
+                },
+                "rows": {
                     "type": "array",
                     "items": {
-                        "$ref": "#/definitions/handlers.BenchProposalResponse"
+                        "$ref": "#/definitions/handlers.BenchRowRequest"
                     }
-                },
-                "review_status": {
-                    "type": "string"
-                },
-                "to_review": {
-                    "type": "integer"
                 }
             }
         },
@@ -8340,6 +8379,12 @@
                 },
                 "right_outcome": {
                     "type": "string"
+                },
+                "rows": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/handlers.BenchRowRequest"
+                    }
                 }
             }
         },
@@ -8361,17 +8406,17 @@
                 "outcome": {
                     "type": "string"
                 },
-                "proposals": {
-                    "type": "array",
-                    "items": {
-                        "$ref": "#/definitions/handlers.BenchProposalResponse"
-                    }
-                },
                 "question": {
                     "type": "string"
                 },
                 "review": {
                     "$ref": "#/definitions/handlers.JudgmentOutcomeReviewResponse"
+                },
+                "rows": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/handlers.BenchRowStateResponse"
+                    }
                 },
                 "state": {
                     "type": "string"

@@ -1215,7 +1215,7 @@ behaviors:
       - key: unknown-judgment
         text: a close naming an unknown judgment is not found and records nothing
     provenance: [.agents/spec/2026-10-17-bench-negative-decisions.md G4 G9 SC3 SC9]
-    notes: The close, like a review and Confirm Nones, returns the saved proposals as the server recorded them, which the bench shows in place (IXN-069).
+    notes: The close, like a review and Confirm Nones, returns the rows it can change as the server recorded them (IXN-073), which the bench shows in place (IXN-069).
 
   - id: IXN-069
     title: After a save the saved proposal shows what the server recorded before its controls work again
@@ -1223,13 +1223,15 @@ behaviors:
     status: current
     surface: ui
     given: a proposal on an open row
-    when: the user saves a review
+    when: the user saves a review or confirms the proposal's Nones
     then:
       - key: disabled-until-recorded
         text: while the save is in flight, every review control of the proposal is disabled
       - key: recorded-without-reload
         text: the recorded state shows, with its controls working again, without waiting on a read of the page's whole list
-    provenance: [.agents/spec/2026-10-17-bench-negative-decisions.md G10 SC11]
+      - key: row-agrees-with-proposals
+        text: the row's review indicator changes with its proposals, reading what they now show, without waiting on a read of the page's whole list
+    provenance: [.agents/spec/2026-10-17-bench-negative-decisions.md G6 G10 SC11]
 
   - id: IXN-070
     title: A removed commitment keeps its source message
@@ -1269,3 +1271,18 @@ behaviors:
         text: the message's sender and time share one line, and its text sits beneath them
     provenance: [.agents/spec/2026-10-17-bench-negative-decisions.md G13 SC14]
     notes: The contact history's drill-down renders messages through the same component, so it shows them the same way.
+
+  - id: IXN-073
+    title: A save on the bench returns the rows it names as a read of the list shows them
+    type: api
+    status: current
+    surface: api
+    given: rows of the bench, each named by the judgments of the proposals it shows
+    when: a review, a Confirm Nones or a close naming them is posted
+    then:
+      - key: rows-as-listed
+        text: the save returns each named row, in the order named, with the proposals, count to review and review status a read of the list made after it shows for that row
+      - key: unknown-judgment
+        text: a row naming an unknown judgment is not found, and the save records nothing
+    provenance: [.agents/spec/2026-10-17-bench-negative-decisions.md G6 G10]
+    notes: The server alone compiles a row's count and status (IXN-051); the bench applies each returned row whole (IXN-069).

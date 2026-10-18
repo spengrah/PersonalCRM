@@ -24,7 +24,7 @@ interface BenchRowProps {
   row: AllInteractionItemResponse
   actions: TimelineRowAction[]
   selection?: TimelineRowSelection
-  /** The run the view is narrowed to, so a save returns the proposals as the view shows them. */
+  /** The run the view is narrowed to, so a save returns its rows as the view shows them. */
   runId?: string
 }
 
@@ -83,11 +83,7 @@ export function BenchRow({ row, actions, selection, runId }: BenchRowProps) {
   const close = useCloseRow()
   const toggle = () => {
     if (expanded && row.proposals.length > 0) {
-      close.mutate({
-        identityId: row.item.identity.id,
-        judgmentIds: row.proposals.map(proposal => proposal.judgment_id),
-        runId,
-      })
+      close.mutate({ proposals: row.proposals, runId })
     }
     setExpanded(!expanded)
   }
