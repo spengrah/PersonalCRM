@@ -738,14 +738,14 @@ behaviors:
       - key: one-row-latest-content
         text: the judgment appears on exactly one row, the row holding the thread's latest content at or before the judgment's cut-off
       - key: collapsed-indicator
-        text: that row shows, collapsed, one review indicator, either how many items of its proposals await review or that all are reviewed
+        text: that row shows, collapsed, one review indicator from the server's review status, either how many items of its proposals await review while any does, else that their Nones await review while any of its proposals holds a negative decision without a label, else that all are reviewed
       - key: names-no-outcomes
         text: the row names none of the judgment's outcomes; the proposal appears only when the row is expanded
       - key: several-methods-production-first
         text: judgments of several methods on the same content appear together on that row, the production method's first
       - key: run-shows-its-judgments
         text: a view narrowed to a run shows only the judgments appearing in that run
-    provenance: [.agents/spec/2026-10-14-decision-model-extraction.md G9 SC1, designs/bench.md]
+    provenance: [.agents/spec/2026-10-14-decision-model-extraction.md G9 SC1, .agents/spec/2026-10-17-bench-negative-decisions.md G6 SC1 SC8, designs/bench.md]
 
   - id: IXN-045
     title: A judgment's proposal sits beneath the content it read, as of its cut-off
@@ -790,10 +790,10 @@ behaviors:
       - key: confidence-shown
         text: each item the judgment produced shows its confidence, a live item with a suggested change shows the suggestion's confidence, and a live item the judgment did not produce, such as the timestamp rule's wait, shows none of its own
       - key: states-told-apart
-        text: each item not yet reviewed shows one state of live, suggested, not acting, or live with a suggested removal or later date, and the four are told apart; an item the user removed shows its removal mark in place of a state
+        text: each item not yet reviewed shows one state of live, suggested, not acting, or live with a suggested removal or later date, and the four are told apart; an item whose removal by the user took effect shows its removal mark in place of a state, and every other reviewed item shows its live state beside its mark
       - key: no-item-hidden
         text: no item is hidden because of its confidence
-    provenance: [.agents/spec/2026-10-14-decision-model-extraction.md G3 G3b G3c G6 G9 HC7 NG3 SC4, designs/bench.md]
+    provenance: [.agents/spec/2026-10-14-decision-model-extraction.md G3 G3b G3c G6 G9 HC7 NG3 SC4, .agents/spec/2026-10-17-bench-negative-decisions.md G8, designs/bench.md]
 
   - id: IXN-047
     title: The user corrects a proposal inline, each act recorded as one outcome's review
@@ -817,13 +817,13 @@ behaviors:
         text: a commitment the user adds has no stated date and takes the timing of a commitment without one
       - key: added-flag-own-moment
         text: a flag the user adds is recorded as a participant's own moment
-      - key: additions-participants-unreviewed
-        text: an addition offers only participant contacts, and only outcomes not yet reviewed
+      - key: additions-participants-negative-or-unlabeled
+        text: an addition offers only participant contacts, and only decisions without a label or whose answer is negative, labeled or not; a positive decision with a label changes only through Change on its item
       - key: inline-no-verdict
         text: every correction happens on the proposal itself, with no modal or separate form, and the client never sends a verdict
       - key: shows-without-reload-or-error
         text: each correction shows on its item without a reload, and a failed correction leaves the item's controls in place with an error
-    provenance: [.agents/spec/2026-10-14-decision-model-extraction.md G3c G5 G7d G8 SC5 SC7, designs/bench.md]
+    provenance: [.agents/spec/2026-10-14-decision-model-extraction.md G3c G5 G7d G8 SC5 SC7, .agents/spec/2026-10-17-bench-negative-decisions.md G7, designs/bench.md]
 
   - id: IXN-048
     title: Each reviewed item shows its review in place after a reload
@@ -836,14 +836,14 @@ behaviors:
       - key: confirmed-in-place
         text: a confirmed item, a live item kept against a suggested removal, and a commitment whose date the user kept show as confirmed, in place, beside their state
       - key: removed-stays-struck
-        text: an item the user removed, or whose suggested removal the user accepted, stays in its list shown as removed by the user, never hidden
+        text: an item the user removed, or whose suggested removal the user accepted, stays in its list shown as removed by the user, never hidden, and struck through where the removal took effect
       - key: added-shown
         text: an item the user added shows as added by the user
-      - key: no-control-after-review
-        text: a reviewed item offers no review control
+      - key: change-after-review
+        text: a reviewed item offers Change as its one control
       - key: counts-exclude-reviewed
         text: the proposal's and its row's counts of items awaiting review leave out the reviewed items
-    provenance: [.agents/spec/2026-10-14-decision-model-extraction.md G5 G8 HC6, designs/bench.md]
+    provenance: [.agents/spec/2026-10-14-decision-model-extraction.md G5 G8 HC6, .agents/spec/2026-10-17-bench-negative-decisions.md G7 G8, designs/bench.md]
 
   - id: IXN-049
     title: An accepted big-moment flag shows on its thread, beneath the content it was judged on
@@ -1062,3 +1062,119 @@ behaviors:
       - key: agrees-as-before
         text: an item whose label agrees with the live state reads as before, and only a removal that took effect carries no state
     provenance: [.agents/spec/2026-10-17-bench-negative-decisions.md G8 SC7]
+
+  - id: IXN-061
+    title: Each list of a proposal names the decision the judgment came closest to making with the list's value
+    type: ux
+    status: current
+    surface: ui
+    given: thread judgments that stored each answered question's option probabilities, some of their lists holding items and some none
+    when: a proposal is shown
+    then:
+      - key: none-line-closest
+        text: a list with no item reads None beside its closest decision and that decision's probability as a whole percentage, on one line
+      - key: named-as-items
+        text: the closest decision is named as the list's items are named, a contact in a reply list, "Me → {name}" or "{name} → Me" in the commitments and "Big moment" for the flag
+      - key: heading-line-closest
+        text: a list with items shows its closest decision on its heading line, adding no row
+      - key: one-line-per-list
+        text: a list shows one closest decision however many decisions sit behind it
+      - key: no-closest-plain
+        text: a list with no closest decision reads plain None, or shows nothing on its heading line
+    provenance: [.agents/spec/2026-10-17-bench-negative-decisions.md G1 G2 SC5, designs/bench.md]
+    notes: The server chooses each list's closest decision (IXN-053); it is display only and asks for no review.
+
+  - id: IXN-062
+    title: A proposal with nothing proposed confirms its Nones in one act
+    type: ux
+    status: current
+    surface: ui
+    given: a proposal with no items whose negative decisions have no label
+    when: the user confirms its Nones
+    then:
+      - key: offered-once
+        text: the proposal offers one Confirm Nones control, where the server offers it
+      - key: no-list-control
+        text: no list offers a control of its own for its Nones beside its Add
+      - key: confirmed-without-reload
+        text: after Confirm Nones each None reads Confirmed, the proposal's header reads All reviewed and its row Reviewed, without a reload
+      - key: adds-stay-usable
+        text: every Add stays usable after Confirm Nones
+      - key: failed-leaves-as-was
+        text: a failed Confirm Nones leaves the proposal as it was, with an error, and a reload shows the same labels and counts
+    provenance: [.agents/spec/2026-10-17-bench-negative-decisions.md G3 G9 SC2 SC9 SC10 NG3, designs/bench.md]
+
+  - id: IXN-063
+    title: Each proposal's header states what remains for the user to review in that proposal
+    type: ux
+    status: current
+    surface: ui
+    given: a row holding proposals whose items await review, whose negative decisions alone await review, or which have nothing left
+    when: the row is expanded
+    then:
+      - key: proposal-status
+        text: a proposal's header reads "{n} to review" while its items await review, else "Nones to review" while its negative decisions do, else "All reviewed", from the server's review status
+      - key: describes-itself
+        text: in a row of several proposals, each header describes only its own proposal
+    provenance: [.agents/spec/2026-10-17-bench-negative-decisions.md G6 SC1 SC8, designs/bench.md]
+
+  - id: IXN-064
+    title: Reviewing a proposal's last unreviewed item confirms its Nones
+    type: ux
+    status: current
+    surface: ui
+    given: a proposal with items and negative decisions without a label
+    when: the user reviews its last unreviewed item
+    then:
+      - key: last-item-confirms-nones
+        text: every None of the proposal reads Confirmed and its header All reviewed, without a reload
+    provenance: [.agents/spec/2026-10-17-bench-negative-decisions.md G4 SC3, designs/bench.md]
+
+  - id: IXN-065
+    title: The user changes an item's review, and the item shows its live state beside the new mark
+    type: ux
+    status: current
+    surface: ui
+    given: reviewed items of a proposal that acts
+    when: the user chooses Change on one and reviews it again
+    then:
+      - key: change-restores-controls
+        text: Change restores the item's review controls in place of its mark
+      - key: new-mark-shown
+        text: the new review shows as the item's mark without a reload, and the item offers Change again
+      - key: removed-while-live
+        text: an item changed to removed while its obligation stays open keeps its Live state beside "Removed by you", not struck through
+      - key: confirmed-while-closed
+        text: an item changed to confirmed while its obligation is closed reads Not acting beside its mark
+      - key: kept-date-beside-live
+        text: a commitment changed to keep its date while its obligation stays at another date shows the obligation's date and, in its mark, the date the user kept
+      - key: struck-only-taken-effect
+        text: strikethrough marks only a removal that took effect
+    provenance: [.agents/spec/2026-10-17-bench-negative-decisions.md G7 G8 SC7, designs/bench.md]
+    notes: A change of review records the label only (IXN-058), so the live state can differ from the new mark.
+
+  - id: IXN-066
+    title: After a proposal's Nones are confirmed, Add still corrects a miss
+    type: ux
+    status: current
+    surface: ui
+    given: a proposal of the production method whose negative decisions have labels from Confirm Nones or from reviewing its items
+    when: the user adds a participant through an Add
+    then:
+      - key: offers-confirmed-none
+        text: the Add offers a participant whose None was confirmed
+      - key: add-acts-as-before
+        text: the participant then shows as Live and Added by you, as the same Add shows on an unreviewed None
+    provenance: [.agents/spec/2026-10-17-bench-negative-decisions.md G7 SC6 HC4, designs/bench.md]
+
+  - id: IXN-067
+    title: A review made in one proposal shows in every proposal on the same content
+    type: ux
+    status: current
+    surface: ui
+    given: proposals of two methods on the same judged content that answer one decision alike
+    when: the user reviews the decision's item in one proposal
+    then:
+      - key: review-shown-in-other
+        text: the other proposal's item for the same decision shows that review as its mark
+    provenance: [.agents/spec/2026-10-17-bench-negative-decisions.md G5 SC4, designs/bench.md]

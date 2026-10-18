@@ -5,17 +5,17 @@ import { clsx } from 'clsx'
 import { ArrowUp, Check, Flag, Plus, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { formatDateTime } from '@/components/timeline'
-import { useReviewOutcome } from '@/hooks/use-bench'
+import { useConfirmNones, useReviewOutcome } from '@/hooks/use-bench'
 import type {
   BenchActResponse,
   BenchAdditionResponse,
   BenchItemResponse,
+  BenchListResponse,
   BenchProposalResponse,
   ReviewJudgmentOutcomeRequest,
 } from '@/types/generated/contact'
+import type { ProposalList, ReviewStatus } from '@/types/generated/judgment'
 import { formatConfidence, formatDueDate } from './format'
-
-type ProposalList = BenchItemResponse['list']
 
 interface ProposalViewProps {
   proposal: BenchProposalResponse
@@ -25,6 +25,19 @@ interface ProposalViewProps {
 }
 
 const SAVE_ERROR = "Couldn't save. Try again."
+
+const LIST_TITLES: Record<ProposalList, string> = {
+  i_owe_reply: 'I owe a reply',
+  owes_me_reply: 'Owes me a reply',
+  commitments: 'Commitments',
+  big_moment: 'Big moment',
+}
+
+const STATUS_LOOK: Record<ReviewStatus, { attr: string; text: string }> = {
+  to_review: { attr: 'to-review', text: 'text-amber-800' },
+  nones_to_review: { attr: 'nones-to-review', text: 'text-amber-800' },
+  all_reviewed: { attr: 'reviewed', text: 'text-green-800' },
+}
 
 const STATE_LOOK: Record<
   NonNullable<BenchItemResponse['state']>,
@@ -48,7 +61,7 @@ const STATE_LOOK: Record<
   },
 }
 
-/** The words naming an item or a picker choice. */
+/** The words naming an item, a picker choice or a list's closest decision. */
 function partyText(
   list: ProposalList,
   name: string | undefined,
@@ -70,19 +83,22 @@ function reviewOf(act: BenchActResponse): ReviewJudgmentOutcomeRequest {
     : { right_outcome: act.right_outcome }
 }
 
-function Mark({ mark }: { mark: BenchItemResponse['mark'] }) {
-  if (mark === 'confirmed') {
+function Mark({ item }: { item: BenchItemResponse }) {
+  if (item.mark === 'confirmed') {
     return (
       <span
         data-review-mark="confirmed"
         className="inline-flex items-center gap-1 text-xs font-medium text-green-800"
       >
         <Check aria-hidden="true" className="h-3.5 w-3.5" />
-        Confirmed
+        {/* The server sends a live date only where it differs from the date the label kept. */}
+        {item.live_due_date && item.due_date
+          ? `Kept ${formatDueDate(item.due_date)} by you`
+          : 'Confirmed'}
       </span>
     )
   }
-  if (mark === 'added') {
+  if (item.mark === 'added') {
     return (
       <span
         data-review-mark="added"
@@ -93,7 +109,7 @@ function Mark({ mark }: { mark: BenchItemResponse['mark'] }) {
       </span>
     )
   }
-  if (mark === 'removed') {
+  if (item.mark === 'removed') {
     return (
       <span data-review-mark="removed" className="text-xs text-gray-500">
         Removed by you
@@ -103,25 +119,77 @@ function Mark({ mark }: { mark: BenchItemResponse['mark'] }) {
   return null
 }
 
+/** The mark of a list's Nones once every negative decision behind the list has a label. */
+function NonesMark() {
+  return (
+    <span
+      data-nones-mark
+      className="inline-flex items-center gap-1 text-xs font-medium text-green-800"
+    >
+      <Check aria-hidden="true" className="h-3.5 w-3.5" />
+      Confirmed
+    </span>
+  )
+}
+
 function ItemView({
   item,
+  changing,
   pending,
   failed,
   onReview,
+  onChange,
   onShowInThread,
 }: {
   item: BenchItemResponse
+  /** Whether the user chose Change on this reviewed item. */
+  changing: boolean
   pending: boolean
   failed: boolean
   onReview: (act: BenchActResponse) => void
+  onChange: (changing: boolean) => void
   onShowInThread: (contentRef: string) => void
 }) {
   const text = itemText(item)
   const label = item.list === 'big_moment' ? 'big moment' : text
   const look = item.state ? STATE_LOOK[item.state] : null
-  // A reviewed item's acts are re-review controls, which this view does not offer.
-  const acts = item.mark ? {} : Object.fromEntries(item.acts.map(act => [act.act, act]))
-  const removed = item.mark === 'removed'
+  // A reviewed item's acts are its re-review controls, offered behind Change.
+  const reviewing = !item.mark || changing
+  const acts = reviewing ? Object.fromEntries(item.acts.map(act => [act.act, act])) : {}
+  // The server sends no state only for a removal that took effect.
+  const struck = !item.state
+  const due = item.live_due_date ?? item.due_date
+  const changeActs = (
+    <>
+      {acts.accept && (
+        <Button type="button" size="sm" disabled={pending} onClick={() => onReview(acts.accept)}>
+          Accept
+        </Button>
+      )}
+      {acts.keep && (
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          disabled={pending}
+          onClick={() => onReview(acts.keep)}
+        >
+          Keep
+        </Button>
+      )}
+      {acts.keep_original && (
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          disabled={pending}
+          onClick={() => onReview(acts.keep_original)}
+        >
+          Keep original
+        </Button>
+      )}
+    </>
+  )
   return (
     <li
       data-item
@@ -134,10 +202,7 @@ function ItemView({
         <div className="min-w-0 space-y-1">
           <div
             data-item-text
-            className={clsx(
-              'font-medium',
-              removed ? 'text-gray-500 line-through' : 'text-gray-900'
-            )}
+            className={clsx('font-medium', struck ? 'text-gray-500 line-through' : 'text-gray-900')}
           >
             {item.list === 'big_moment' ? (
               <span className="inline-flex items-center gap-1 rounded border border-pink-300 bg-pink-50 px-2 py-0.5 text-pink-800">
@@ -150,7 +215,7 @@ function ItemView({
             {item.list === 'commitments' && (
               <span data-due className="font-normal text-gray-600">
                 {' · '}
-                {item.due_date ? `due ${formatDueDate(item.due_date)}` : 'no stated date'}
+                {due ? `due ${formatDueDate(due)}` : 'no stated date'}
               </span>
             )}
           </div>
@@ -160,40 +225,50 @@ function ItemView({
                 {formatConfidence(item.confidence)}
               </span>
             )}
-            {look && !removed && (
+            {look && (
               <span data-state-label className={clsx('font-medium', look.text)}>
                 {look.label}
               </span>
             )}
-            <Mark mark={item.mark} />
+            {!changing && <Mark item={item} />}
           </div>
         </div>
-        {(acts.confirm || acts.remove) && (
-          <div className="flex flex-shrink-0 items-center gap-1">
-            {acts.confirm && (
-              <button
-                type="button"
-                aria-label={`Confirm ${label}`}
-                disabled={pending}
-                onClick={() => onReview(acts.confirm)}
-                className="flex h-8 w-8 items-center justify-center rounded-md border border-gray-300 bg-white text-green-700 hover:bg-gray-50 disabled:opacity-50"
-              >
-                <Check aria-hidden="true" className="h-4 w-4" />
-              </button>
-            )}
-            {acts.remove && (
-              <button
-                type="button"
-                aria-label={`Remove ${label}`}
-                disabled={pending}
-                onClick={() => onReview(acts.remove)}
-                className="flex h-8 w-8 items-center justify-center rounded-md border border-gray-300 bg-white text-gray-600 hover:bg-gray-50 disabled:opacity-50"
-              >
-                <X aria-hidden="true" className="h-4 w-4" />
-              </button>
-            )}
-          </div>
-        )}
+        <div className="flex flex-shrink-0 items-center gap-1">
+          {acts.confirm && (
+            <button
+              type="button"
+              aria-label={`Confirm ${label}`}
+              disabled={pending}
+              onClick={() => onReview(acts.confirm)}
+              className="flex h-8 w-8 items-center justify-center rounded-md border border-gray-300 bg-white text-green-700 hover:bg-gray-50 disabled:opacity-50"
+            >
+              <Check aria-hidden="true" className="h-4 w-4" />
+            </button>
+          )}
+          {acts.remove && (
+            <button
+              type="button"
+              aria-label={`Remove ${label}`}
+              disabled={pending}
+              onClick={() => onReview(acts.remove)}
+              className="flex h-8 w-8 items-center justify-center rounded-md border border-gray-300 bg-white text-gray-600 hover:bg-gray-50 disabled:opacity-50"
+            >
+              <X aria-hidden="true" className="h-4 w-4" />
+            </button>
+          )}
+          {!item.change && changeActs}
+          {item.mark && (
+            <button
+              type="button"
+              aria-label={changing ? undefined : `Change the review of ${label}`}
+              disabled={pending}
+              onClick={() => onChange(!changing)}
+              className="rounded-md px-2 py-1 text-sm font-medium text-blue-600 hover:bg-blue-50 hover:text-blue-800 disabled:opacity-50"
+            >
+              {changing ? 'Cancel' : 'Change'}
+            </button>
+          )}
+        </div>
       </div>
       {item.change && (
         <div
@@ -209,41 +284,10 @@ function ItemView({
             <span>{formatConfidence(item.change.confidence)}</span>
           )}
           <span className="flex-1" />
-          {acts.accept && (
-            <Button
-              type="button"
-              size="sm"
-              disabled={pending}
-              onClick={() => onReview(acts.accept)}
-            >
-              Accept
-            </Button>
-          )}
-          {acts.keep && (
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              disabled={pending}
-              onClick={() => onReview(acts.keep)}
-            >
-              Keep
-            </Button>
-          )}
-          {acts.keep_original && (
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              disabled={pending}
-              onClick={() => onReview(acts.keep_original)}
-            >
-              Keep original
-            </Button>
-          )}
+          {changeActs}
         </div>
       )}
-      {item.source && !removed && (
+      {item.source && !struck && (
         <blockquote
           data-source-message={item.source.content_ref}
           className="mt-2 border-l-2 border-gray-300 pl-3 text-xs text-gray-600"
@@ -269,45 +313,76 @@ function ItemView({
 }
 
 function ListSection({
-  title,
-  list,
+  entry,
   proposal,
   picker,
   setPicker,
+  changing,
+  setChanging,
   pending,
   failed,
   onReview,
   onShowInThread,
 }: {
-  title: string
-  list: ProposalList
+  entry: BenchListResponse
   proposal: BenchProposalResponse
   picker: ProposalList | null
   setPicker: (list: ProposalList | null) => void
+  changing: string | null
+  setChanging: (outcomeId: string | null) => void
   pending: boolean
   failed: string | null
   onReview: (outcomeId: string, body: ReviewJudgmentOutcomeRequest) => void
   onShowInThread: (contentRef: string) => void
 }) {
+  const { list, closest } = entry
+  const title = LIST_TITLES[list]
   const items = proposal.items.filter(item => item.list === list)
   const additions = proposal.additions.filter(addition => addition.list === list)
   const add = (addition: BenchAdditionResponse) =>
     onReview(addition.outcome_id, { right_outcome: addition.right_outcome })
   const addFailed = additions.some(addition => addition.outcome_id === failed)
+  const closestText = closest && partyText(list, closest.contact?.name, closest.debtor)
   return (
     <div role="group" aria-label={title} data-list={list} className="min-w-0 space-y-2">
-      <h5 className="text-xs font-medium uppercase tracking-wide text-gray-500">{title}</h5>
+      <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+        <h5 className="text-xs font-medium uppercase tracking-wide text-gray-500">{title}</h5>
+        {items.length > 0 && closest && (
+          <span data-closest className="inline-flex items-center gap-1.5 text-xs text-gray-500">
+            closest None: {closestText} · {closest.percent}%{entry.nones_reviewed && <NonesMark />}
+          </span>
+        )}
+      </div>
       {items.length === 0 ? (
-        <p className="text-sm text-gray-500">None</p>
+        <div
+          data-none
+          className={clsx(
+            'flex flex-wrap items-baseline gap-x-2 gap-y-1 rounded-md bg-white px-3 py-2',
+            entry.nones_reviewed ? 'border border-gray-200' : 'border border-dashed border-gray-300'
+          )}
+        >
+          <span className="text-sm font-medium text-gray-600">None</span>{' '}
+          {closest && (
+            <>
+              <span data-closest className="text-sm text-gray-500">
+                closest: {closestText}
+              </span>{' '}
+              <span className="text-xs text-gray-600">{closest.percent}%</span>{' '}
+            </>
+          )}
+          {entry.nones_reviewed && <NonesMark />}
+        </div>
       ) : (
         <ul className="space-y-2">
           {items.map(item => (
             <ItemView
               key={item.outcome_id}
               item={item}
+              changing={changing === item.outcome_id}
               pending={pending}
               failed={failed === item.outcome_id}
               onReview={act => onReview(item.outcome_id, reviewOf(act))}
+              onChange={on => setChanging(on ? item.outcome_id : null)}
               onShowInThread={onShowInThread}
             />
           ))}
@@ -367,10 +442,15 @@ function ListSection({
   )
 }
 
+const isReplyList = (entry: BenchListResponse) =>
+  entry.list === 'i_owe_reply' || entry.list === 'owes_me_reply'
+
 /**
  * One judgment's proposal: the answers the server compiled from its question
  * tree, never the questions themselves, each item with its state and review
- * in place and corrected inline.
+ * in place and corrected inline, and each list's Nones with the decision the
+ * judgment came closest to making. The server decides every status, control
+ * and state shown here.
  */
 export function ProposalView({
   proposal,
@@ -379,25 +459,38 @@ export function ProposalView({
 }: ProposalViewProps) {
   const [collapsed, setCollapsed] = useState(startCollapsed)
   const [picker, setPicker] = useState<ProposalList | null>(null)
+  const [changing, setChanging] = useState<string | null>(null)
   const [failed, setFailed] = useState<string | null>(null)
   const review = useReviewOutcome()
+  const confirmNones = useConfirmNones()
   const send = (outcomeId: string, body: ReviewJudgmentOutcomeRequest) => {
     setFailed(null)
     review.mutate(
       { outcomeId, body },
-      { onSuccess: () => setPicker(null), onError: () => setFailed(outcomeId) }
+      {
+        onSuccess: () => {
+          setPicker(null)
+          setChanging(null)
+        },
+        onError: () => setFailed(outcomeId),
+      }
     )
   }
   const method = `${proposal.method_key} ${proposal.method_version}`
+  const status = STATUS_LOOK[proposal.review_status]
   const sections = {
     proposal,
     picker,
     setPicker,
-    pending: review.isPending,
+    changing,
+    setChanging,
+    pending: review.isPending || confirmNones.isPending,
     failed,
     onReview: send,
     onShowInThread,
   }
+  const replies = proposal.lists.filter(isReplyList)
+  const others = proposal.lists.filter(entry => !isReplyList(entry))
 
   if (collapsed) {
     return (
@@ -435,28 +528,46 @@ export function ProposalView({
           <span className="text-gray-600">Reused at {formatDateTime(proposal.reused_at)}</span>
         )}
         <span className="flex-1" />
-        {proposal.to_review > 0 ? (
-          <span data-proposal-status="to-review" className="text-sm font-medium text-amber-800">
-            {proposal.to_review} to review
-          </span>
-        ) : (
-          <span data-proposal-status="reviewed" className="text-sm font-medium text-green-800">
-            All reviewed
-          </span>
+        <span
+          data-proposal-status={status.attr}
+          className={clsx('text-sm font-medium', status.text)}
+        >
+          {proposal.review_status === 'to_review'
+            ? `${proposal.to_review} to review`
+            : proposal.review_status === 'nones_to_review'
+              ? 'Nones to review'
+              : 'All reviewed'}
+        </span>
+        {proposal.confirm_nones && (
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            disabled={sections.pending}
+            onClick={() => confirmNones.mutate(proposal.judgment_id)}
+            className="gap-1 text-green-800"
+          >
+            <Check aria-hidden="true" className="h-3.5 w-3.5" />
+            Confirm Nones
+          </Button>
         )}
       </header>
-      {proposal.reply_lists && (
+      {confirmNones.isError && <p className="text-xs text-red-700">{SAVE_ERROR}</p>}
+      {replies.length > 0 && (
         <div className="grid gap-4 sm:grid-cols-2">
-          <ListSection title="I owe a reply" list="i_owe_reply" {...sections} />
-          <ListSection title="Owes me a reply" list="owes_me_reply" {...sections} />
+          {replies.map(entry => (
+            <ListSection key={entry.list} entry={entry} {...sections} />
+          ))}
         </div>
       )}
-      <div className={clsx(proposal.reply_lists && 'border-t border-gray-200 pt-4')}>
-        <ListSection title="Commitments" list="commitments" {...sections} />
-      </div>
-      <div className="border-t border-gray-200 pt-4">
-        <ListSection title="Big moment" list="big_moment" {...sections} />
-      </div>
+      {others.map((entry, i) => (
+        <div
+          key={entry.list}
+          className={clsx((replies.length > 0 || i > 0) && 'border-t border-gray-200 pt-4')}
+        >
+          <ListSection entry={entry} {...sections} />
+        </div>
+      ))}
     </section>
   )
 }

@@ -36,3 +36,12 @@ export function useReviewOutcome() {
     onSuccess: () => invalidateFor('judgment:reviewed'),
   })
 }
+
+// The list read is refreshed after a failure too, so the bench shows what the
+// server recorded.
+export function useConfirmNones() {
+  return useMutation({
+    mutationFn: (judgmentId: string) => benchApi.confirmNones(judgmentId),
+    onSettled: () => invalidateFor('judgment:nones-confirmed'),
+  })
+}

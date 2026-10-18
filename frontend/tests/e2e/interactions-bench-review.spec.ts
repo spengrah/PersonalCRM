@@ -353,7 +353,7 @@ test.describe('Interactions bench review @area:interactions', () => {
       }
     )
 
-    // spec: IXN-047.add-by-outcome, IXN-047.additions-participants-unreviewed
+    // spec: IXN-047.add-by-outcome, IXN-047.additions-participants-negative-or-unlabeled
     await owesMe.getByRole('button', { name: 'Add', exact: true }).click()
     const owesPicker = owesMe.getByRole('group', { name: 'Add to Owes me a reply' })
     await expect(owesPicker.getByRole('button', { name: /^(?!Close)/ })).toHaveCount(2)
@@ -366,7 +366,7 @@ test.describe('Interactions bench review @area:interactions', () => {
     })
     await expect(listItem(owesMe, lee.name).locator('[data-state-label]')).toHaveText('Live')
 
-    // spec: IXN-047.add-by-outcome, IXN-047.additions-participants-unreviewed, IXN-047.added-commitment-fallback
+    // spec: IXN-047.add-by-outcome, IXN-047.additions-participants-negative-or-unlabeled, IXN-047.added-commitment-fallback
     await commitments.getByRole('button', { name: 'Add commitment' }).click()
     const commitPicker = commitments.getByRole('group', { name: 'Add to Commitments' })
     await expect(commitPicker.getByRole('button', { name: /→/ })).toHaveCount(5)
@@ -410,7 +410,7 @@ test.describe('Interactions bench review @area:interactions', () => {
     ])
     await expect(page.getByRole('dialog')).toHaveCount(0)
 
-    // spec: IXN-048.confirmed-in-place, IXN-048.removed-stays-struck, IXN-048.added-shown, IXN-048.no-control-after-review, IXN-048.counts-exclude-reviewed
+    // spec: IXN-048.confirmed-in-place, IXN-048.removed-stays-struck, IXN-048.added-shown, IXN-048.change-after-review, IXN-048.counts-exclude-reviewed
     await page.reload()
     await expect(row.locator('[data-review-indicator]')).toHaveText('Reviewed', {
       timeout: SLOW_TIMEOUT_MS,
@@ -435,7 +435,13 @@ test.describe('Interactions bench review @area:interactions', () => {
     await expect(proposalList(reloaded, 'Big moment').locator('[data-review-mark]')).toHaveText(
       'Added by you'
     )
-    await expect(reloaded.locator('[data-item]').getByRole('button')).toHaveCount(0)
+    const reviewed = reloaded.locator('[data-item]')
+    await expect(reviewed.getByRole('button', { name: /^Change the review of / })).toHaveCount(
+      await reviewed.count()
+    )
+    await expect(reviewed.getByRole('button', { name: /^(?!Change the review of )/ })).toHaveCount(
+      0
+    )
   })
 
   test('the user removes a reply item and the flag, moves a person between reply lists, and adds their own commitment', async ({
