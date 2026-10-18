@@ -92,9 +92,8 @@ type ProposalAddition struct {
 // run reused it. ReplyLists is false for a meeting, which ball-in-court is not
 // asked of. ToReview counts the items without a label. ReviewStatus is
 // what remains to review; ConfirmNones is true exactly when the proposal has
-// no items and holds a negative decision without a label that no proposal on
-// the same content holds as an item without a label, so Confirm Nones would
-// label it. Lists holds one entry per list the proposal shows, in display
+// no items and holds a negative decision the labeling rule does not spare, so
+// Confirm Nones would label it. Lists holds one entry per list the proposal shows, in display
 // order.
 type Proposal struct {
 	JudgmentID   uuid.UUID
@@ -210,7 +209,7 @@ func (s *Store) threadProposals(ctx context.Context, thread threadctx.VenueID, r
 	if err != nil {
 		return nil, err
 	}
-	pc := &proposalContext{thread: thread, live: live, labels: lb, unreviewed: unreviewedItems(outcomes, lb), messages: repository.NewThreadContentRepository(s.queries)}
+	pc := &proposalContext{thread: thread, live: live, labels: lb, spared: spared(outcomes, lb), messages: repository.NewThreadContentRepository(s.queries)}
 	proposals := make([]Proposal, len(rows))
 	for i, j := range rows {
 		p, err := s.compile(ctx, pc, j, outcomes[j.ID])
@@ -259,14 +258,13 @@ func appendContact(ids []uuid.UUID, contact *uuid.UUID, source *ThreadMessage) [
 
 // proposalContext is what compiling a thread's proposals reads besides its
 // judgments: the thread's live state, its decisions' labels, the decisions
-// awaiting review as an item in a proposal on the same content, and its
-// content.
+// the labeling rule spares, and its content.
 type proposalContext struct {
-	thread     uuid.UUID
-	live       *liveState
-	labels     labels
-	unreviewed map[decisionKey]bool
-	messages   *repository.ThreadContentRepository
+	thread   uuid.UUID
+	live     *liveState
+	labels   labels
+	spared   map[decisionKey]bool
+	messages *repository.ThreadContentRepository
 }
 
 // loadContent reads the proposals on the content the given judgments judged:
@@ -297,19 +295,25 @@ func loadContent(ctx context.Context, q db.Querier, rows []*db.ListJudgmentRowsR
 	return byJudgment, lb, nil
 }
 
-// unreviewedItems are the decisions without a label that some proposal on the
-// content holds as an item: each awaits the user's review of that item, in
-// every proposal on the content.
-func unreviewedItems(byJudgment map[uuid.UUID][]*outcomeRecord, lb labels) map[decisionKey]bool {
-	unreviewed := map[decisionKey]bool{}
+// spared are the decisions without a label the labeling rule never labels:
+// those some proposal on the content holds as an item, each awaiting the
+// user's review of that item in every proposal on the content (G4), and those
+// some proposal holds as a reply its own commitment absorbs, a positive
+// decision no negative stands for (A1).
+func spared(byJudgment map[uuid.UUID][]*outcomeRecord, lb labels) map[decisionKey]bool {
+	out := map[decisionKey]bool{}
 	for _, outcomes := range byJudgment {
-		for _, pl := range sortOutcomes(outcomes, lb).items {
+		sorted := sortOutcomes(outcomes, lb)
+		for _, pl := range sorted.items {
 			if pl.label == nil {
-				unreviewed[pl.o.decision()] = true
+				out[pl.o.decision()] = true
 			}
 		}
+		for _, o := range sorted.absorbed {
+			out[o.decision()] = true
+		}
 	}
-	return unreviewed
+	return out
 }
 
 // compile turns one judgment's outcomes into its proposal.
@@ -358,7 +362,7 @@ func (s *Store) compile(ctx context.Context, pc *proposalContext, j *db.ListJudg
 	default:
 		p.ReviewStatus = ReviewStatusAllReviewed
 	}
-	p.ConfirmNones = len(sorted.confirmNones(pc.labels, pc.unreviewed)) > 0
+	p.ConfirmNones = len(sorted.confirmNones(pc.labels, pc.spared)) > 0
 	p.Lists = listViews(p.ReplyLists, questions, outcomes, sorted, pc.labels)
 	return p, nil
 }
@@ -406,11 +410,13 @@ func place(o *outcomeRecord, l *label) (placement, bool) {
 // sorting is a judgment's outcomes sorted by what they compile into under
 // their decisions' labels: the outcomes standing for its items, and its
 // negative decisions, the answered outcomes standing for no item. A reply
-// its party's commitment in the same direction absorbs is neither: it is a
-// positive decision the commitment stands for.
+// without a label its party's commitment in the same direction absorbs is
+// neither: it is a positive decision the commitment stands for, held in
+// absorbed.
 type sorting struct {
 	items     []placement
 	negatives []*outcomeRecord
+	absorbed  []*outcomeRecord
 }
 
 // sortOutcomes sorts a judgment's outcomes into its items and its negative
@@ -435,16 +441,19 @@ func sortOutcomes(outcomes []*outcomeRecord, lb labels) sorting {
 		if pl.label != nil || pl.o.ContactID == nil {
 			return false
 		}
-		return (pl.list == ProposalListIOweReply && committed[DebtorMe][*pl.o.ContactID]) ||
+		absorbed := (pl.list == ProposalListIOweReply && committed[DebtorMe][*pl.o.ContactID]) ||
 			(pl.list == ProposalListOwesMeReply && committed[DebtorContact][*pl.o.ContactID])
+		if absorbed {
+			out.absorbed = append(out.absorbed, pl.o)
+		}
+		return absorbed
 	})
 	return out
 }
 
 // unlabeledNegatives are the negative decisions without a label, but for
 // those among except. The labeling rule labels those it returns with except
-// the decisions awaiting review as an item (G4); a proposal's status counts
-// every one.
+// the decisions it spares; a proposal's status counts every one.
 func (st sorting) unlabeledNegatives(lb labels, except map[decisionKey]bool) []*outcomeRecord {
 	var out []*outcomeRecord
 	for _, o := range st.negatives {
@@ -457,13 +466,13 @@ func (st sorting) unlabeledNegatives(lb labels, except map[decisionKey]bool) []*
 
 // confirmNones are the negative decisions Confirm Nones labels: none for a
 // proposal with an item, else its negative decisions without a label but for
-// those among unreviewed. The offer of Confirm Nones and its refusal both
-// read it.
-func (st sorting) confirmNones(lb labels, unreviewed map[decisionKey]bool) []*outcomeRecord {
+// those among spared. The offer of Confirm Nones and its refusal both read
+// it.
+func (st sorting) confirmNones(lb labels, spared map[decisionKey]bool) []*outcomeRecord {
 	if len(st.items) > 0 {
 		return nil
 	}
-	return st.unlabeledNegatives(lb, unreviewed)
+	return st.unlabeledNegatives(lb, spared)
 }
 
 // holdsLabel reports whether any decision of the proposal, an item's or a

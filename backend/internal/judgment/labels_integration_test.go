@@ -245,6 +245,23 @@ func TestBenchConfirmNones(t *testing.T) {
 		assert.Equal(t, reviews, again)
 	})
 
+	t.Run("a reply another proposal's commitment absorbs gains no label, so that proposal shows no reply item", func(t *testing.T) {
+		// spec: IXN-056.absorbed-reply-stays
+		b := newBenchEnv(t)
+		x, th := b.oneToOne(t)
+		b.run(t, judgment.RunKindScheduled, judgmentOf(prodMethod, th, b.day(1), "h1", owesAndCommits(x)))
+		b.run(t, judgment.RunKindRerun, judgmentOf(otherMethod, th, b.day(1), "h1", nothingFound(x)))
+		require.Empty(t, listContacts(b.proposal(t, x, prodMethod), "i_owe_reply"), "the commitment absorbs the reply")
+
+		require.Equal(t, http.StatusOK, b.confirmNones(t, b.proposal(t, x, otherMethod)).Code)
+
+		assert.Equal(t, map[string]string{
+			decision(judgment.QuestionCommitmentTheirs, &x): "none",
+			decision(judgment.QuestionBigMoment, nil):       "none",
+		}, b.labels(t), "the absorbed reply and the commitment absorbing it stay to review")
+		assert.Empty(t, listContacts(b.proposal(t, x, prodMethod), "i_owe_reply"), "no reply item the user never acted on")
+	})
+
 	t.Run("an unknown judgment is not found", func(t *testing.T) {
 		// spec: IXN-056.refuses-items
 		b := newBenchEnv(t)
@@ -364,6 +381,28 @@ func TestBenchInference(t *testing.T) {
 		})
 	})
 
+	t.Run("a close leaves a reply another proposal's commitment absorbs without a label, so that proposal shows no reply item", func(t *testing.T) {
+		// spec: IXN-057.absorbed-reply-stays
+		b := newBenchEnv(t)
+		x, th := b.oneToOne(t)
+		b.run(t, judgment.RunKindScheduled, judgmentOf(prodMethod, th, b.day(1), "h1", owesAndCommits(x)))
+		b.run(t, judgment.RunKindRerun, judgmentOf(otherMethod, th, b.day(1), "h1", nothingFound(x)))
+		require.Empty(t, listContacts(b.proposal(t, x, prodMethod), "i_owe_reply"), "the commitment absorbs the reply")
+		b.act(t, listItem(t, b.proposal(t, x, prodMethod), "commitments", "me"), "confirm")
+
+		require.Equal(t, http.StatusOK, b.closeRow(t, b.row(t, x)).Code)
+
+		assert.Equal(t, map[string]string{
+			decision(judgment.QuestionCommitmentMine, &x):   "open",
+			decision(judgment.QuestionCommitmentTheirs, &x): "none",
+			decision(judgment.QuestionBigMoment, nil):       "none",
+		}, b.labels(t), "the other proposal's negatives are labeled but for the reply the production proposal's commitment absorbs")
+		prod := b.proposal(t, x, prodMethod)
+		assert.Empty(t, listContacts(prod, "i_owe_reply"), "no reply item the user never acted on")
+		assert.Equal(t, "all_reviewed", prod.ReviewStatus)
+		assert.Equal(t, "nones_to_review", b.proposal(t, x, otherMethod).ReviewStatus)
+	})
+
 	t.Run("a close naming an unknown judgment is not found and records nothing", func(t *testing.T) {
 		// spec: IXN-068.unknown-judgment
 		b := newBenchEnv(t)
@@ -472,4 +511,13 @@ func TestBenchLabelsAllOrNothing(t *testing.T) {
 		assert.Equal(t, labels, b.labels(t))
 		assert.Equal(t, before, b.row(t, x))
 	})
+}
+
+// owesAndCommits is content where the user owes the contact a reply and has
+// committed to them, so the commitment absorbs the reply.
+func owesAndCommits(x uuid.UUID) judgment.Outcomes {
+	o := nothingFound(x)
+	o.BallInCourt[0].Outcome = judgment.BallInCourtIOweReply
+	o.Commitments[0].Outcome = judgment.CommitmentStateOpen
+	return o
 }

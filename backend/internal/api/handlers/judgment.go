@@ -160,7 +160,7 @@ func (h *JudgmentHandler) ReviewJudgmentOutcome(c *gin.Context) {
 
 // ConfirmNones labels a proposal's negative decisions.
 // @Summary Confirm a proposal's Nones
-// @Description Labels every negative decision of the judgment's proposal that has no label from any proposal with its judged value, as ordinary reviews that change nothing live, and returns the proposals of its thread as the bench now shows them, narrowed to run_id's judgments when it is given. It records all of its labels or none. A proposal with an item, or one holding no negative decision without a label, is refused.
+// @Description Labels every negative decision of the judgment's proposal that has no label from any proposal with its judged value, as ordinary reviews that change nothing live, and returns the proposals of its thread as the bench now shows them, narrowed to run_id's judgments when it is given. A decision some proposal on the same content holds as an item without a label, or as a reply its own commitment absorbs without a label, is not labeled and stays to review. It records all of its labels or none. A proposal with an item, or one holding no negative decision it would label, is refused.
 // @Tags judgments
 // @Produce json
 // @Param id path string true "Judgment ID" format(uuid)
@@ -182,7 +182,7 @@ func (h *JudgmentHandler) ConfirmNones(c *gin.Context) {
 	if err := h.store.ConfirmNones(c.Request.Context(), id); err != nil {
 		switch {
 		case errors.Is(err, judgment.ErrConfirmNonesRefused):
-			api.SendConflict(c, "The proposal has an item or no negative decision without a label")
+			api.SendConflict(c, "The proposal has an item or no negative decision Confirm Nones would label")
 		case errors.Is(err, judgment.ErrNotFound):
 			api.SendNotFound(c, "Judgment")
 		default:
@@ -200,7 +200,7 @@ func (h *JudgmentHandler) ConfirmNones(c *gin.Context) {
 
 // CloseBenchRow records the user closing a row on the bench.
 // @Summary Close a bench row
-// @Description Records the user closing a row: every negative decision without a label of each given proposal (the row's) that holds a label, from whichever proposal on the same content it was made in, is labeled with its judged value, as ordinary reviews that change nothing live. Items without a label stay to review, and a proposal holding no label gains none. It records all of its labels or none, and returns the given proposals as the bench now shows them, narrowed to run_id's appearances when it is given, with what remains to review across them. An unknown judgment is not found, with nothing recorded.
+// @Description Records the user closing a row: every negative decision without a label of each given proposal (the row's) that holds a label, from whichever proposal on the same content it was made in, is labeled with its judged value, as ordinary reviews that change nothing live. A decision some proposal on the same content holds as an item without a label, or as a reply its own commitment absorbs without a label, is not labeled and stays to review, and a proposal holding no label gains none. It records all of its labels or none, and returns the given proposals as the bench now shows them, narrowed to run_id's appearances when it is given, with what remains to review across them. An unknown judgment is not found, with nothing recorded.
 // @Tags judgments
 // @Accept json
 // @Produce json

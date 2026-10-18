@@ -110,20 +110,21 @@ func (s *Store) recordReviewTx(ctx context.Context, tx pgx.Tx, o *outcomeRecord,
 
 // labelNegativesTx is the one rule by which a negative decision gains a label
 // no user act states. The rule labels only a negative decision without a
-// label that no proposal on the same content holds as an item without a
-// label: that decision awaits the user's review of the item, in every
-// proposal on the content (G4). With confirm set (Confirm Nones), the one
-// judgment given must have no items and such a negative decision, and every
-// such negative decision of its proposal is labeled with its judged value.
-// Otherwise (inference,
-// on a close of the row the judgments sit on), every such negative decision
-// of each given proposal that holds a label is labeled with its judged value,
-// until no given proposal changes, since a label shared across proposals on
-// the same content can give another proposal its first label. A label that
-// exists is never replaced, and a proposal holding no label gains none by
-// inference. Each label is an ordinary review and changes nothing live. A
-// review of an item never runs the rule. It returns how many labels it
-// recorded, or ErrNotFound when a judgment is unknown.
+// label that it does not spare: it spares a decision some proposal on the
+// same content holds as an item without a label, which awaits the user's
+// review of the item in every proposal on the content (G4), and one some
+// proposal holds as a reply its own commitment absorbs, a positive decision
+// (A1). With confirm set (Confirm Nones), the one judgment given must have no
+// items and such a negative decision, and every such negative decision of its
+// proposal is labeled with its judged value. Otherwise (inference, on a close
+// of the row the judgments sit on), every such negative decision of each
+// given proposal that holds a label is labeled with its judged value, until
+// no given proposal changes, since a label shared across proposals on the
+// same content can give another proposal its first label. A label that exists
+// is never replaced, and a proposal holding no label gains none by inference.
+// Each label is an ordinary review and changes nothing live. A review of an
+// item never runs the rule. It returns how many labels it recorded, or
+// ErrNotFound when a judgment is unknown.
 func (s *Store) labelNegativesTx(ctx context.Context, tx pgx.Tx, judgments []uuid.UUID, confirm bool) (int, error) {
 	// An empty ID list reads every judgment, so no judgment is no proposal.
 	if len(judgments) == 0 {
@@ -158,7 +159,7 @@ func (s *Store) labelNegativesTx(ctx context.Context, tx pgx.Tx, judgments []uui
 		if len(rows) != 1 {
 			return 0, ErrConfirmNonesRefused
 		}
-		pending := sortOutcomes(byJudgment[rows[0].ID], lb).confirmNones(lb, unreviewedItems(byJudgment, lb))
+		pending := sortOutcomes(byJudgment[rows[0].ID], lb).confirmNones(lb, spared(byJudgment, lb))
 		if len(pending) == 0 {
 			return 0, ErrConfirmNonesRefused
 		}
@@ -167,13 +168,13 @@ func (s *Store) labelNegativesTx(ctx context.Context, tx pgx.Tx, judgments []uui
 	}
 	for changed := true; changed; {
 		changed = false
-		unreviewed := unreviewedItems(byJudgment, lb)
+		spare := spared(byJudgment, lb)
 		for _, j := range rows {
 			sorted := sortOutcomes(byJudgment[j.ID], lb)
 			if !sorted.holdsLabel(lb) {
 				continue
 			}
-			pending := sorted.unlabeledNegatives(lb, unreviewed)
+			pending := sorted.unlabeledNegatives(lb, spare)
 			if err := labelAll(pending); err != nil {
 				return 0, err
 			}
@@ -185,8 +186,8 @@ func (s *Store) labelNegativesTx(ctx context.Context, tx pgx.Tx, judgments []uui
 
 // ConfirmNones labels every negative decision of the judgment's proposal that
 // has no label from any proposal and that no proposal on the same content
-// holds as an item without a label, each with its judged value, in one
-// transaction. It refuses a proposal with an item, or one holding no such
+// holds as an item without a label, or as a reply its own commitment absorbs,
+// each with its judged value, in one transaction. It refuses a proposal with an item, or one holding no such
 // negative decision, with ErrConfirmNonesRefused, and an unknown judgment
 // with ErrNotFound.
 func (s *Store) ConfirmNones(ctx context.Context, judgmentID uuid.UUID) error {
@@ -199,8 +200,9 @@ func (s *Store) ConfirmNones(ctx context.Context, judgmentID uuid.UUID) error {
 // CloseRow records the user closing a row on the bench: every negative
 // decision without a label of each of the given proposals (the row's) that
 // holds a label is labeled with its judged value, but for one a proposal on
-// the same content holds as an item without a label, all in one transaction. It
-// returns ErrNotFound, recording nothing, when a judgment is unknown.
+// the same content holds as an item without a label, or as a reply its own
+// commitment absorbs, all in one transaction. It returns ErrNotFound,
+// recording nothing, when a judgment is unknown.
 func (s *Store) CloseRow(ctx context.Context, judgments []uuid.UUID) error {
 	return s.inTx(ctx, func(tx pgx.Tx) error {
 		_, err := s.labelNegativesTx(ctx, tx, judgments, false)
