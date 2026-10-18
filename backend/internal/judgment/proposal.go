@@ -56,9 +56,9 @@ type ThreadMessage struct {
 // live state, beside its mark where the two disagree; empty only for a
 // removal that took effect. Acts are its review controls; on an item with a
 // mark they are its re-review controls, which record the label only.
-// LiveDueDate is the obligation's live date, set only for a commitment whose
-// label states its date (a later date accepted or the current one kept) and
-// whose live obligation holds another.
+// LiveDueDate is the obligation's live date, set only for a live commitment
+// with a label whose obligation holds a date other than the one the item
+// shows, whatever change its outcome suggested.
 type ProposalItem struct {
 	OutcomeID   uuid.UUID
 	List        ProposalList
@@ -416,20 +416,22 @@ func (pc *proposalContext) itemOf(ctx context.Context, pl placement) (ProposalIt
 	}
 
 	if item.List == ProposalListCommitments {
+		live := pc.live.obligationDue(o)
 		switch {
 		case pl.added:
+		case change == ChangeKindLaterDate && l != nil && l.keepsDate:
+			item.DueDate = cmp.Or(o.KeptDueDate, live)
 		case change == ChangeKindLaterDate && l != nil:
 			item.DueDate = o.DueDate
-			if l.keepsDate {
-				item.DueDate = cmp.Or(o.KeptDueDate, pc.live.obligationDue(o))
-			}
-			if live := pc.live.obligationDue(o); item.State == ItemStateLive && live != nil && (item.DueDate == nil || !live.Equal(*item.DueDate)) {
-				item.LiveDueDate = live
-			}
 		case change != "":
-			item.DueDate = pc.live.obligationDue(o)
+			item.DueDate = live
 		default:
 			item.DueDate = o.DueDate
+		}
+		// A label states the date its item shows; where the live obligation
+		// holds another, the item carries the live date beside it.
+		if l != nil && item.State == ItemStateLive && item.DueDate != nil && live != nil && !live.Equal(*item.DueDate) {
+			item.LiveDueDate = live
 		}
 	}
 	item.Contact = specOf(item.List).party(o)

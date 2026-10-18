@@ -24,11 +24,14 @@ import (
 // contact that one now is after any contact merges, the one live state acts
 // on. Example is the content its judgment judged, which with Question and
 // ContactID names the decision the outcome answers. KeptDueDate is the date
-// its obligation held when the user first reviewed the later date it suggests.
-// LastEffect is the right outcome of the latest review of the outcome's
-// decision that had an effect, from whichever outcome it was made on, the
-// label's earlier reviews included; empty when no review of the decision had
-// one. A label with no effect removes the item that review stood for.
+// the decision's obligation held when the user first reviewed the later date
+// an outcome of the decision suggests, from whichever outcome that review was
+// made on, so a label that keeps the date keeps the same date in every
+// proposal. LastEffect is the right outcome of the latest review of the
+// outcome's decision that had an effect, from whichever outcome it was made
+// on, the label's earlier reviews included; empty when no review of the
+// decision had one. A label with no effect removes the item that review stood
+// for.
 type outcomeRecord struct {
 	ID               uuid.UUID
 	JudgmentID       uuid.UUID
@@ -185,7 +188,6 @@ func loadOutcomes(ctx context.Context, q db.Querier, judgmentIDs, outcomeIDs []u
 			ContactID:        row.ContactID,
 			LiveContactID:    row.ContactID,
 			DueDate:          row.DueDate,
-			KeptDueDate:      row.KeptDueDate,
 			Confidence:       row.Confidence,
 			ObligationTaskID: row.ObligationTaskID,
 		}
@@ -216,7 +218,7 @@ func loadOutcomes(ctx context.Context, q db.Querier, judgmentIDs, outcomeIDs []u
 			r.LiveContactID = &to
 		}
 	}
-	decisions, err := contentDecisions(ctx, q, rows)
+	decisions, kept, err := contentDecisions(ctx, q, rows)
 	if err != nil {
 		return nil, err
 	}
@@ -261,13 +263,16 @@ func loadOutcomes(ctx context.Context, q db.Querier, judgmentIDs, outcomeIDs []u
 	}
 	for _, r := range records {
 		r.LastEffect = lastEffect[r.decision()]
+		r.KeptDueDate = kept[r.decision()]
 	}
 	return records, nil
 }
 
 // contentDecisions names the decision of every outcome on the content the
-// given outcomes judged, whichever judgment of that content holds it.
-func contentDecisions(ctx context.Context, q db.Querier, rows []*db.ListJudgmentOutcomesRow) (map[uuid.UUID]decisionKey, error) {
+// given outcomes judged, whichever judgment of that content holds it, and the
+// date each decision's first review of a later date kept, recorded on the
+// outcome that review was made on.
+func contentDecisions(ctx context.Context, q db.Querier, rows []*db.ListJudgmentOutcomesRow) (map[uuid.UUID]decisionKey, map[decisionKey]*time.Time, error) {
 	var examples []string
 	for _, row := range rows {
 		if !slices.Contains(examples, row.ExampleID) {
@@ -276,19 +281,24 @@ func contentDecisions(ctx context.Context, q db.Querier, rows []*db.ListJudgment
 	}
 	judgments, err := q.ListJudgmentRows(ctx, db.ListJudgmentRowsParams{Ids: []uuid.UUID{}, ExampleIds: examples})
 	if err != nil {
-		return nil, fmt.Errorf("list content judgments: %w", err)
+		return nil, nil, fmt.Errorf("list content judgments: %w", err)
 	}
 	outcomes, err := q.ListJudgmentOutcomes(ctx, db.ListJudgmentOutcomesParams{
 		JudgmentIds: judgmentIDs(judgments), OutcomeIds: []uuid.UUID{},
 	})
 	if err != nil {
-		return nil, fmt.Errorf("list content outcomes: %w", err)
+		return nil, nil, fmt.Errorf("list content outcomes: %w", err)
 	}
 	decisions := make(map[uuid.UUID]decisionKey, len(outcomes))
+	kept := map[decisionKey]*time.Time{}
 	for _, o := range outcomes {
-		decisions[o.NodeID] = decisionKey{example: ExampleID(o.ExampleID), question: Question(o.Question), contact: contactOf(o.ContactID)}
+		d := decisionKey{example: ExampleID(o.ExampleID), question: Question(o.Question), contact: contactOf(o.ContactID)}
+		decisions[o.NodeID] = d
+		if o.KeptDueDate != nil && kept[d] == nil {
+			kept[d] = o.KeptDueDate
+		}
 	}
-	return decisions, nil
+	return decisions, kept, nil
 }
 
 func emptyIfNil[T any](s []T) []T {

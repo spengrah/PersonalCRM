@@ -152,6 +152,96 @@ func TestBenchReReview(t *testing.T) {
 		assert.Equal(t, ptr(later.Format("2006-01-02")), kept.LiveDueDate, "the obligation's live date")
 	})
 
+	t.Run("a Keep original made through another proposal on the same content shows the kept date and the live date in both", func(t *testing.T) {
+		// spec: IXN-055.label-everywhere, IXN-060.kept-date-moved
+		b := newBenchEnv(t)
+		x, th := b.oneToOne(t)
+		first, later := date(b.day(20)), date(b.day(30))
+		b.run(t, judgment.RunKindScheduled, judgmentOf(prodMethod, th, b.day(1), "h1", judgment.Outcomes{
+			Commitments: []judgment.CommitmentOutcome{commitment(x, judgment.CommitmentDirectionMine, judgment.CommitmentStateOpen, 0.9, first)},
+		}))
+		b.message(t, th, x, false, b.day(2))
+		b.record(t, th, x, repository.InteractionDirectionInbound, b.day(2))
+		nextVersion := judgment.MethodRef{Key: production, Version: "v2", WordingVersion: "w1"}
+		for _, m := range []judgment.MethodRef{prodMethod, nextVersion} {
+			b.run(t, judgment.RunKindScheduled, judgmentOf(m, th, b.day(2), "h2", judgment.Outcomes{
+				Commitments: []judgment.CommitmentOutcome{commitment(x, judgment.CommitmentDirectionMine, judgment.CommitmentStateOpen, 0.9, later)},
+			}))
+		}
+		moving := func(m judgment.MethodRef) handlers.BenchItemResponse {
+			page, _ := b.list(t, "contact_id="+x.String())
+			for _, row := range page.Items {
+				for _, p := range row.Proposals {
+					if b.day(2).Equal(p.CutOff) && p.MethodVersion == m.Version {
+						return item(t, p, "commitments", x)
+					}
+				}
+			}
+			require.FailNow(t, "no proposal at day 2", "method version %s", m.Version)
+			return handlers.BenchItemResponse{}
+		}
+		for _, m := range []judgment.MethodRef{prodMethod, nextVersion} {
+			require.NotNil(t, moving(m).Change)
+			require.Equal(t, "later_date", moving(m).Change.Kind)
+		}
+		b.act(t, moving(prodMethod), "accept")
+		moved := b.openObligations(t, th)
+		require.Len(t, moved, 1)
+		require.True(t, later.Equal(moved[0].DueDate), "accepting moves the obligation")
+
+		b.act(t, moving(nextVersion), "keep_original")
+
+		assert.Equal(t, moved, b.openObligations(t, th), "the re-review moves no date back")
+		for _, m := range []judgment.MethodRef{prodMethod, nextVersion} {
+			kept := moving(m)
+			assert.Equal(t, ptr("confirmed"), kept.Mark, m.Version)
+			assert.Equal(t, ptr("live"), kept.State, m.Version)
+			assert.Equal(t, ptr(first.Format("2006-01-02")), kept.DueDate, "%s: the date the label kept", m.Version)
+			assert.Equal(t, ptr(later.Format("2006-01-02")), kept.LiveDueDate, "%s: the obligation's live date", m.Version)
+		}
+	})
+
+	t.Run("a confirmed commitment whose obligation a later proposal moved shows the live date beside its own", func(t *testing.T) {
+		// spec: IXN-060.kept-date-moved
+		b := newBenchEnv(t)
+		x, th := b.oneToOne(t)
+		first, later := date(b.day(20)), date(b.day(30))
+		b.run(t, judgment.RunKindScheduled, judgmentOf(prodMethod, th, b.day(1), "h1", judgment.Outcomes{
+			Commitments: []judgment.CommitmentOutcome{commitment(x, judgment.CommitmentDirectionMine, judgment.CommitmentStateOpen, 0.9, first)},
+		}))
+		b.message(t, th, x, false, b.day(2))
+		b.record(t, th, x, repository.InteractionDirectionInbound, b.day(2))
+		b.run(t, judgment.RunKindScheduled, judgmentOf(prodMethod, th, b.day(2), "h2", judgment.Outcomes{
+			Commitments: []judgment.CommitmentOutcome{commitment(x, judgment.CommitmentDirectionMine, judgment.CommitmentStateOpen, 0.9, later)},
+		}))
+		at := func(cutOff time.Time) handlers.BenchItemResponse {
+			page, _ := b.list(t, "contact_id="+x.String())
+			for _, row := range page.Items {
+				for _, p := range row.Proposals {
+					if cutOff.Equal(p.CutOff) {
+						return item(t, p, "commitments", x)
+					}
+				}
+			}
+			require.FailNow(t, "no proposal", "cut-off %s", cutOff)
+			return handlers.BenchItemResponse{}
+		}
+		b.act(t, at(b.day(1)), "confirm")
+		confirmed := at(b.day(1))
+		require.Nil(t, confirmed.LiveDueDate, "a confirmed date the obligation holds shows no other date")
+
+		b.act(t, at(b.day(2)), "accept")
+
+		moved := b.openObligations(t, th)
+		require.Len(t, moved, 1)
+		require.True(t, later.Equal(moved[0].DueDate), "accepting moves the obligation")
+		earlier := at(b.day(1))
+		assert.Equal(t, ptr("confirmed"), earlier.Mark)
+		assert.Equal(t, ptr("live"), earlier.State)
+		assert.Equal(t, ptr(first.Format("2006-01-02")), earlier.DueDate, "the date the label confirmed")
+		assert.Equal(t, ptr(later.Format("2006-01-02")), earlier.LiveDueDate, "the obligation's live date")
+	})
+
 	t.Run("a settled claim is not re-settled", func(t *testing.T) {
 		// spec: IXN-058.label-only
 		b := newBenchEnv(t)
