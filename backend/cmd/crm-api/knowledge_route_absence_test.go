@@ -64,13 +64,14 @@ const assertionStoreRead = "GET /api/v1/timeline-items/:kind/:id/assertions"
 
 // judgmentRoutes are the bench's routes over judgments: the runs and
 // judgments reads, the review of one outcome, Confirm Nones on one proposal,
-// and the all-interactions list, whose rows carry their thread judgments
+// the close of a row's proposals, and the all-interactions list, whose rows carry their thread judgments
 // compiled for review.
 var judgmentRoutes = []string{
 	"GET /api/v1/judgment-runs",
 	"GET /api/v1/judgments",
 	"POST /api/v1/judgment-outcomes/:id/review",
 	"POST /api/v1/judgments/:id/confirm-nones",
+	"POST /api/v1/judgments/close",
 	"GET /api/v1/interactions",
 }
 

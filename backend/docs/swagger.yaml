@@ -209,6 +209,13 @@ definitions:
       to_review:
         type: integer
     type: object
+  handlers.BenchProposalsResponse:
+    properties:
+      proposals:
+        items:
+          $ref: '#/definitions/handlers.BenchProposalResponse'
+        type: array
+    type: object
   handlers.BenchSourceMessageResponse:
     properties:
       content_ref:
@@ -334,6 +341,27 @@ definitions:
         additionalProperties:
           $ref: '#/definitions/handlers.NamespaceCleanupResponse'
         type: object
+    type: object
+  handlers.CloseBenchRowRequest:
+    properties:
+      judgment_ids:
+        items:
+          type: string
+        minItems: 1
+        type: array
+    required:
+    - judgment_ids
+    type: object
+  handlers.CloseBenchRowResponse:
+    properties:
+      proposals:
+        items:
+          $ref: '#/definitions/handlers.BenchProposalResponse'
+        type: array
+      review_status:
+        type: string
+      to_review:
+        type: integer
     type: object
   handlers.ContactMethodOperation:
     description: A single contact-method operation
@@ -1317,6 +1345,29 @@ definitions:
         type: string
     required:
     - right_outcome
+    type: object
+  handlers.ReviewJudgmentOutcomeResponse:
+    properties:
+      confidence:
+        type: number
+      contact_id:
+        type: string
+      due_date:
+        type: string
+      id:
+        type: string
+      outcome:
+        type: string
+      proposals:
+        items:
+          $ref: '#/definitions/handlers.BenchProposalResponse'
+        type: array
+      question:
+        type: string
+      review:
+        $ref: '#/definitions/handlers.JudgmentOutcomeReviewResponse'
+      state:
+        type: string
     type: object
   handlers.SaveNoteRequest:
     properties:
@@ -4570,22 +4621,26 @@ paths:
       description: 'Records the right outcome the user states for an outcome of any
         state and returns the outcome with the verdict the server derives: confirmed
         when it equals the judged outcome, rejected when it differs and has no effect,
-        corrected otherwise. The review is its decision''s label for every proposal
-        on the same content. A first review of an applied or claim outcome gives the
-        thread the right outcome''s effect; a review of a decision that already has
-        a label records the label only, except an Add on a negative decision, which
-        has the effect the same review of an unlabeled negative has. A review that
-        gives a proposal''s last unlabeled item its label also labels that proposal''s
-        negative decisions with their judged values; the review records all of its
-        labels or none. keep_current_date, with an open commitment''s right outcome,
-        keeps the obligation''s current date against the judged later one, and the
-        verdict is corrected.'
+        corrected otherwise, beside the proposals of the outcome''s thread as the
+        bench now shows them, narrowed to run_id''s judgments when it is given. The
+        review is its decision''s label for every proposal on the same content, and
+        labels no other decision. A first review of an applied or claim outcome gives
+        the thread the right outcome''s effect; a review of a decision that already
+        has a label records the label only, except an Add on a negative decision,
+        which has the effect the same review of an unlabeled negative has. keep_current_date,
+        with an open commitment''s right outcome, keeps the obligation''s current
+        date against the judged later one, and the verdict is corrected.'
       parameters:
       - description: Outcome ID
         format: uuid
         in: path
         name: id
         required: true
+        type: string
+      - description: Run the bench is narrowed to
+        format: uuid
+        in: query
+        name: run_id
         type: string
       - description: The right outcome
         in: body
@@ -4603,7 +4658,7 @@ paths:
             - $ref: '#/definitions/api.APIResponse'
             - properties:
                 data:
-                  $ref: '#/definitions/handlers.JudgmentOutcomeResponse'
+                  $ref: '#/definitions/handlers.ReviewJudgmentOutcomeResponse'
               type: object
         "400":
           description: Bad Request
@@ -4674,10 +4729,10 @@ paths:
     post:
       description: Labels every negative decision of the judgment's proposal that
         has no label from any proposal with its judged value, as ordinary reviews
-        that change nothing live, and then labels the negative decisions of every
-        other proposal on the same content whose items those labels leave all labeled.
-        It records all of its labels or none. A proposal with an item, or one holding
-        no negative decision without a label, is refused.
+        that change nothing live, and returns the proposals of its thread as the bench
+        now shows them, narrowed to run_id's judgments when it is given. It records
+        all of its labels or none. A proposal with an item, or one holding no negative
+        decision without a label, is refused.
       parameters:
       - description: Judgment ID
         format: uuid
@@ -4685,9 +4740,23 @@ paths:
         name: id
         required: true
         type: string
+      - description: Run the bench is narrowed to
+        format: uuid
+        in: query
+        name: run_id
+        type: string
+      produces:
+      - application/json
       responses:
-        "204":
-          description: Every label recorded
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                data:
+                  $ref: '#/definitions/handlers.BenchProposalsResponse'
+              type: object
         "400":
           description: Bad Request
           schema:
@@ -4701,6 +4770,53 @@ paths:
           schema:
             $ref: '#/definitions/api.APIResponse'
       summary: Confirm a proposal's Nones
+      tags:
+      - judgments
+  /judgments/close:
+    post:
+      consumes:
+      - application/json
+      description: 'Records the user closing a row: every negative decision without
+        a label of each given proposal (the row''s) that holds a label, from whichever
+        proposal on the same content it was made in, is labeled with its judged value,
+        as ordinary reviews that change nothing live. Items without a label stay to
+        review, and a proposal holding no label gains none. It records all of its
+        labels or none, and returns the given proposals as the bench now shows them,
+        narrowed to run_id''s appearances when it is given, with what remains to review
+        across them. An unknown judgment is not found, with nothing recorded.'
+      parameters:
+      - description: Run the bench is narrowed to
+        format: uuid
+        in: query
+        name: run_id
+        type: string
+      - description: The row's judgments
+        in: body
+        name: close
+        required: true
+        schema:
+          $ref: '#/definitions/handlers.CloseBenchRowRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                data:
+                  $ref: '#/definitions/handlers.CloseBenchRowResponse'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.APIResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.APIResponse'
+      summary: Close a bench row
       tags:
       - judgments
   /rematch/contacts/{id}/rescan:

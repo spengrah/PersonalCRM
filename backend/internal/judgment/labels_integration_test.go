@@ -6,9 +6,11 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"net/http/httptest"
 	"sync"
 	"testing"
 
+	"personal-crm/backend/internal/api/handlers"
 	"personal-crm/backend/internal/judgment"
 	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/service"
@@ -74,7 +76,7 @@ func TestBenchSharedLabels(t *testing.T) {
 		b.run(t, judgment.RunKindScheduled, judgmentOf(prodMethod, th, b.day(1), "h1", nothingFound(x)))
 		b.run(t, judgment.RunKindRerun, judgmentOf(otherMethod, th, b.day(1), "h1", nothingFound(x)))
 		before := b.proposal(t, x, prodMethod)
-		require.Equal(t, http.StatusNoContent, b.confirmNones(t, b.proposal(t, x, otherMethod)).Code)
+		require.Equal(t, http.StatusOK, b.confirmNones(t, b.proposal(t, x, otherMethod)).Code)
 
 		p := b.proposal(t, x, prodMethod)
 
@@ -104,6 +106,7 @@ func TestBenchSharedLabels(t *testing.T) {
 				b.act(t, it, "confirm")
 			}
 		}
+		require.Equal(t, http.StatusOK, b.closeRow(t, b.row(t, x)).Code)
 
 		p := b.proposal(t, x, prodMethod)
 
@@ -126,7 +129,7 @@ func TestBenchConfirmNones(t *testing.T) {
 
 		w := b.confirmNones(t, b.proposal(t, x, prodMethod))
 
-		require.Equal(t, http.StatusNoContent, w.Code, w.Body.String())
+		require.Equal(t, http.StatusOK, w.Code, w.Body.String())
 		assert.Equal(t, map[string]string{
 			decision(judgment.QuestionBallInCourt, &x):      "nobody_owes",
 			decision(judgment.QuestionCommitmentMine, &x):   "none",
@@ -154,7 +157,7 @@ func TestBenchConfirmNones(t *testing.T) {
 		b.act(t, item(t, b.proposal(t, x, otherMethod), "i_owe_reply", x), "remove")
 		require.True(t, b.proposal(t, x, prodMethod).ConfirmNones)
 
-		require.Equal(t, http.StatusNoContent, b.confirmNones(t, b.proposal(t, x, prodMethod)).Code)
+		require.Equal(t, http.StatusOK, b.confirmNones(t, b.proposal(t, x, prodMethod)).Code)
 
 		assert.Equal(t, map[string]string{
 			decision(judgment.QuestionBallInCourt, &x): "nobody_owes",
@@ -184,7 +187,7 @@ func TestBenchConfirmNones(t *testing.T) {
 		x, th := b.oneToOne(t)
 		b.run(t, judgment.RunKindScheduled, judgmentOf(prodMethod, th, b.day(1), "h1", nothingFound(x)))
 		before := b.proposal(t, x, prodMethod)
-		require.Equal(t, http.StatusNoContent, b.confirmNones(t, before).Code)
+		require.Equal(t, http.StatusOK, b.confirmNones(t, before).Code)
 
 		after := b.proposal(t, x, prodMethod)
 
@@ -198,7 +201,7 @@ func TestBenchConfirmNones(t *testing.T) {
 		x, th := b.oneToOne(t)
 		b.run(t, judgment.RunKindScheduled, judgmentOf(prodMethod, th, b.day(1), "h1", nothingFound(x)))
 		p := b.proposal(t, x, prodMethod)
-		require.Equal(t, http.StatusNoContent, b.confirmNones(t, p).Code)
+		require.Equal(t, http.StatusOK, b.confirmNones(t, p).Code)
 		reviews, err := b.store.ReviewRecords(b.ctx)
 		require.NoError(t, err)
 
@@ -218,120 +221,101 @@ func TestBenchConfirmNones(t *testing.T) {
 	})
 }
 
-// Once every item of a proposal has a label, its negative decisions are
-// labeled with their judged values, with no further act.
+// closeRow posts a close of the row: the judgments of its proposals.
+func (b *benchEnv) closeRow(t *testing.T, row handlers.AllInteractionItemResponse) *httptest.ResponseRecorder {
+	t.Helper()
+	ids := make([]string, len(row.Proposals))
+	for i, p := range row.Proposals {
+		ids[i] = p.JudgmentID
+	}
+	return b.post(t, "/api/v1/judgments/close", map[string]any{"judgment_ids": ids})
+}
+
+// A close of a row labels the negative decisions of each of its proposals
+// that holds a label; reviewing items labels none.
 func TestBenchInference(t *testing.T) {
-	t.Run("the review giving a proposal's last unlabeled item its label labels its negative decisions", func(t *testing.T) {
-		// spec: IXN-057.last-item-labels-negatives
+	t.Run("a close labels the negatives of a proposal holding a label, leaving its unlabeled item and a proposal with no label as they were", func(t *testing.T) {
+		// spec: IXN-057.close-labels-negatives, IXN-057.items-stay, IXN-057.no-label-gains-none, IXN-068.labels-row
 		b := newBenchEnv(t)
 		x, th := b.oneToOne(t)
 		found := nothingFound(x)
 		found.BallInCourt[0].Outcome = judgment.BallInCourtIOweReply
-		found.BigMoment = moment(judgment.BigMomentParticipant, 0.9)
+		found.Commitments[1].Outcome = judgment.CommitmentStateOpen
 		b.run(t, judgment.RunKindScheduled, judgmentOf(prodMethod, th, b.day(1), "h1", found))
-		p := b.proposal(t, x, prodMethod)
-		for _, it := range p.Items {
-			if it.List == "big_moment" {
-				b.act(t, it, "confirm")
-			}
-		}
-		afterFirst := b.labels(t)
+		b.run(t, judgment.RunKindRerun, judgmentOf(otherMethod, th, b.day(1), "h2", nothingFound(x)))
 		b.act(t, item(t, b.proposal(t, x, prodMethod), "i_owe_reply", x), "confirm")
+		open := b.openObligations(t, th)
 
-		assert.Equal(t, map[string]string{decision(judgment.QuestionBigMoment, nil): "participant_moment"}, afterFirst, "an item awaits review, so no negative is labeled")
+		w := b.closeRow(t, b.row(t, x))
+
+		require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+		assert.Equal(t, open, b.openObligations(t, th), "the labels change nothing live")
 		assert.Equal(t, map[string]string{
-			decision(judgment.QuestionBallInCourt, &x):      "i_owe_reply",
-			decision(judgment.QuestionBigMoment, nil):       "participant_moment",
+			decision(judgment.QuestionBallInCourt, &x):    "i_owe_reply",
+			decision(judgment.QuestionCommitmentMine, &x): "none",
+			decision(judgment.QuestionBigMoment, nil):     "none",
+		}, b.labels(t), "the unlabeled commitment stays to review, and the other content's proposal gains nothing")
+		prod := b.proposal(t, x, prodMethod)
+		assert.Nil(t, listItem(t, prod, "commitments", "contact").Mark)
+		assert.Equal(t, "to_review", prod.ReviewStatus)
+		other := b.proposal(t, x, otherMethod)
+		assert.Equal(t, "nones_to_review", other.ReviewStatus)
+		assert.True(t, other.ConfirmNones)
+	})
+
+	t.Run("a label made in another proposal on the same content counts, and a close never replaces a label", func(t *testing.T) {
+		// spec: IXN-057.across-proposals, IXN-057.never-replaces
+		b := newBenchEnv(t)
+		x, th := b.oneToOne(t)
+		nothing := nothingFound(x)
+		nothing.BallInCourt[0].Outcome = judgment.BallInCourtNotApplicable
+		b.run(t, judgment.RunKindScheduled, judgmentOf(prodMethod, th, b.day(1), "h1", nothing))
+		b.run(t, judgment.RunKindRerun, judgmentOf(otherMethod, th, b.day(1), "h1", judgment.Outcomes{
+			BallInCourt: []judgment.ParticipantOutcome[judgment.BallInCourt]{bic(x, judgment.BallInCourtIOweReply, 0.8)},
+		}))
+		b.act(t, item(t, b.proposal(t, x, otherMethod), "i_owe_reply", x), "remove")
+
+		require.Equal(t, http.StatusOK, b.closeRow(t, b.row(t, x)).Code)
+
+		assert.Equal(t, map[string]string{
+			decision(judgment.QuestionBallInCourt, &x):      "nobody_owes",
 			decision(judgment.QuestionCommitmentMine, &x):   "none",
 			decision(judgment.QuestionCommitmentTheirs, &x): "none",
-		}, b.labels(t))
+			decision(judgment.QuestionBigMoment, nil):       "none",
+		}, b.labels(t), "the judged not_applicable does not replace the label")
 		assert.Equal(t, "all_reviewed", b.proposal(t, x, prodMethod).ReviewStatus)
 	})
 
-	t.Run("a review in one proposal that labels another proposal's last item labels that proposal's negatives", func(t *testing.T) {
-		// spec: IXN-057.across-proposals
+	t.Run("a close naming an unknown judgment is not found and records nothing", func(t *testing.T) {
+		// spec: IXN-068.unknown-judgment
 		b := newBenchEnv(t)
 		x, th := b.oneToOne(t)
-		b.run(t, judgment.RunKindScheduled, judgmentOf(prodMethod, th, b.day(1), "h1", judgment.Outcomes{
-			BallInCourt: []judgment.ParticipantOutcome[judgment.BallInCourt]{bic(x, judgment.BallInCourtIOweReply, 0.9)},
-			Commitments: []judgment.CommitmentOutcome{commitment(x, judgment.CommitmentDirectionTheirs, judgment.CommitmentStateNone, 0.9, nil)},
-		}))
-		b.run(t, judgment.RunKindRerun, judgmentOf(otherMethod, th, b.day(1), "h1", judgment.Outcomes{
-			BallInCourt: []judgment.ParticipantOutcome[judgment.BallInCourt]{bic(x, judgment.BallInCourtIOweReply, 0.9)},
-			BigMoment:   moment(judgment.BigMomentParticipant, 0.9),
-		}))
+		found := nothingFound(x)
+		found.BallInCourt[0].Outcome = judgment.BallInCourtIOweReply
+		b.run(t, judgment.RunKindScheduled, judgmentOf(prodMethod, th, b.day(1), "h1", found))
+		b.act(t, item(t, b.proposal(t, x, prodMethod), "i_owe_reply", x), "confirm")
+		labels := b.labels(t)
 
-		b.act(t, item(t, b.proposal(t, x, otherMethod), "i_owe_reply", x), "confirm")
+		w := b.post(t, "/api/v1/judgments/close", map[string]any{
+			"judgment_ids": []string{b.proposal(t, x, prodMethod).JudgmentID, uuid.NewString()},
+		})
 
-		assert.Equal(t, "none", b.labels(t)[decision(judgment.QuestionCommitmentTheirs, &x)])
-		assert.Equal(t, "all_reviewed", b.proposal(t, x, prodMethod).ReviewStatus)
-		assert.Equal(t, "to_review", b.proposal(t, x, otherMethod).ReviewStatus)
+		assert.Equal(t, http.StatusNotFound, w.Code)
+		assert.Equal(t, labels, b.labels(t))
 	})
 
-	t.Run("a Confirm Nones that labels another proposal's last item labels that proposal's negatives", func(t *testing.T) {
-		// spec: IXN-057.across-proposals
+	t.Run("reviewing a proposal's last unlabeled item labels no negative decision", func(t *testing.T) {
+		// spec: IXN-057.review-labels-no-negative
 		b := newBenchEnv(t)
 		x, th := b.oneToOne(t)
-		b.run(t, judgment.RunKindScheduled, judgmentOf(prodMethod, th, b.day(1), "h1", judgment.Outcomes{
-			BallInCourt: []judgment.ParticipantOutcome[judgment.BallInCourt]{bic(x, judgment.BallInCourtNotApplicable, 0.8)},
-			BigMoment:   moment(judgment.BigMomentNone, 0.9),
-		}))
-		b.run(t, judgment.RunKindRerun, judgmentOf(otherMethod, th, b.day(1), "h1", judgment.Outcomes{
-			BallInCourt: []judgment.ParticipantOutcome[judgment.BallInCourt]{bic(x, judgment.BallInCourtIOweReply, 0.8)},
-			Commitments: []judgment.CommitmentOutcome{commitment(x, judgment.CommitmentDirectionMine, judgment.CommitmentStateNone, 0.9, nil)},
-			BigMoment:   moment(judgment.BigMomentParticipant, 0.9),
-		}))
+		found := nothingFound(x)
+		found.BallInCourt[0].Outcome = judgment.BallInCourtIOweReply
+		b.run(t, judgment.RunKindScheduled, judgmentOf(prodMethod, th, b.day(1), "h1", found))
 
-		require.Equal(t, http.StatusNoContent, b.confirmNones(t, b.proposal(t, x, prodMethod)).Code)
+		b.act(t, item(t, b.proposal(t, x, prodMethod), "i_owe_reply", x), "confirm")
 
-		assert.Equal(t, "none", b.labels(t)[decision(judgment.QuestionCommitmentMine, &x)])
-		other := b.proposal(t, x, otherMethod)
-		assert.Equal(t, ptr("removed"), item(t, other, "i_owe_reply", x).Mark)
-		assert.Equal(t, "all_reviewed", other.ReviewStatus)
-	})
-
-	t.Run("inference never replaces a label", func(t *testing.T) {
-		// spec: IXN-057.never-replaces
-		b := newBenchEnv(t)
-		x, th := b.oneToOne(t)
-		b.run(t, judgment.RunKindScheduled, judgmentOf(prodMethod, th, b.day(1), "h1", judgment.Outcomes{
-			BallInCourt: []judgment.ParticipantOutcome[judgment.BallInCourt]{bic(x, judgment.BallInCourtNotApplicable, 0.8)},
-			BigMoment:   moment(judgment.BigMomentParticipant, 0.9),
-		}))
-		b.run(t, judgment.RunKindRerun, judgmentOf(otherMethod, th, b.day(1), "h1", judgment.Outcomes{
-			BallInCourt: []judgment.ParticipantOutcome[judgment.BallInCourt]{bic(x, judgment.BallInCourtIOweReply, 0.8)},
-			BigMoment:   moment(judgment.BigMomentParticipant, 0.9),
-		}))
-		b.act(t, item(t, b.proposal(t, x, otherMethod), "i_owe_reply", x), "remove")
-
-		for _, it := range b.proposal(t, x, prodMethod).Items {
-			if it.List == "big_moment" {
-				b.act(t, it, "confirm")
-			}
-		}
-
-		assert.Equal(t, "nobody_owes", b.labels(t)[decision(judgment.QuestionBallInCourt, &x)], "the judged not_applicable does not replace the label")
-		assert.Equal(t, "all_reviewed", b.proposal(t, x, prodMethod).ReviewStatus)
-	})
-
-	t.Run("a proposal with no items never gains a label by inference", func(t *testing.T) {
-		// spec: IXN-057.item-less-never
-		b := newBenchEnv(t)
-		x, th := b.oneToOne(t)
-		b.run(t, judgment.RunKindScheduled, judgmentOf(prodMethod, th, b.day(1), "h1", judgment.Outcomes{
-			BallInCourt: []judgment.ParticipantOutcome[judgment.BallInCourt]{bic(x, judgment.BallInCourtNobodyOwes, 0.8)},
-			BigMoment:   moment(judgment.BigMomentNone, 0.9),
-		}))
-		b.run(t, judgment.RunKindRerun, judgmentOf(otherMethod, th, b.day(1), "h1", judgment.Outcomes{
-			BallInCourt: []judgment.ParticipantOutcome[judgment.BallInCourt]{bic(x, judgment.BallInCourtIOweReply, 0.8)},
-		}))
-
-		b.act(t, item(t, b.proposal(t, x, otherMethod), "i_owe_reply", x), "remove")
-
-		assert.Equal(t, map[string]string{decision(judgment.QuestionBallInCourt, &x): "nobody_owes"}, b.labels(t))
-		p := b.proposal(t, x, prodMethod)
-		assert.Empty(t, p.Items)
-		assert.Equal(t, "nones_to_review", p.ReviewStatus)
+		assert.Equal(t, map[string]string{decision(judgment.QuestionBallInCourt, &x): "i_owe_reply"}, b.labels(t))
+		assert.Equal(t, "nones_to_review", b.proposal(t, x, prodMethod).ReviewStatus)
 	})
 }
 
@@ -365,7 +349,7 @@ func (f *failingReviews) AssertTx(ctx context.Context, tx pgx.Tx, req service.As
 	return f.Asserter.AssertTx(ctx, tx, req)
 }
 
-// Confirm Nones, and a review that triggers inference, record all of their
+// Confirm Nones, and a close that triggers inference, record all of their
 // labels or none.
 func TestBenchLabelsAllOrNothing(t *testing.T) {
 	newFailing := func(t *testing.T) (*benchEnv, *failingReviews) {
@@ -393,21 +377,21 @@ func TestBenchLabelsAllOrNothing(t *testing.T) {
 		assert.Equal(t, before, b.row(t, x))
 	})
 
-	t.Run("a review whose inference fails records nothing, its own label included", func(t *testing.T) {
-		// spec: IXN-057.all-or-nothing
+	t.Run("a close that fails after recording some labels records none", func(t *testing.T) {
+		// spec: IXN-068.all-or-nothing
 		b, f := newFailing(t)
 		x, th := b.oneToOne(t)
 		found := nothingFound(x)
 		found.BallInCourt[0].Outcome = judgment.BallInCourtIOweReply
 		b.run(t, judgment.RunKindScheduled, judgmentOf(prodMethod, th, b.day(1), "h1", found))
-		before := b.row(t, x)
-		owed := item(t, before.Proposals[0], "i_owe_reply", x)
+		b.act(t, item(t, b.proposal(t, x, prodMethod), "i_owe_reply", x), "confirm")
+		before, labels := b.row(t, x), b.labels(t)
 		f.failOn(2)
 
-		w := b.post(t, "/api/v1/judgment-outcomes/"+owed.OutcomeID+"/review", map[string]any{"right_outcome": "i_owe_reply"})
+		w := b.closeRow(t, before)
 
 		assert.Equal(t, http.StatusInternalServerError, w.Code)
-		assert.Empty(t, b.labels(t))
+		assert.Equal(t, labels, b.labels(t))
 		assert.Equal(t, before, b.row(t, x))
 	})
 }

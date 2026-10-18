@@ -88,3 +88,32 @@ type ReviewJudgmentOutcomeRequest struct {
 	RightOutcome    string `json:"right_outcome" binding:"required"`
 	KeepCurrentDate bool   `json:"keep_current_date,omitempty"`
 }
+
+// ReviewJudgmentOutcomeResponse is a recorded review: the reviewed outcome,
+// and the proposals of its thread as the bench now shows them, so the bench
+// shows the recorded state without reading its whole list again.
+type ReviewJudgmentOutcomeResponse struct {
+	JudgmentOutcomeResponse `tstype:",extends"`
+	Proposals               []BenchProposalResponse `json:"proposals"`
+}
+
+// BenchProposalsResponse is the proposals of a thread as the bench shows them
+// after a save on one of them.
+type BenchProposalsResponse struct {
+	Proposals []BenchProposalResponse `json:"proposals"`
+}
+
+// CloseBenchRowRequest is a close of a row on the bench: the judgments of the
+// proposals the row shows.
+type CloseBenchRowRequest struct {
+	JudgmentIDs []string `json:"judgment_ids" binding:"required,min=1"`
+}
+
+// CloseBenchRowResponse is a recorded close: the closed row's proposals as the
+// bench now shows them, and what remains to review across them, as the row's
+// to_review and review_status read.
+type CloseBenchRowResponse struct {
+	Proposals    []BenchProposalResponse `json:"proposals"`
+	ToReview     int                     `json:"to_review"`
+	ReviewStatus *string                 `json:"review_status,omitempty" tstype:"ReviewStatus"`
+}

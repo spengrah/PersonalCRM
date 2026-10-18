@@ -157,6 +157,7 @@ function InteractionsPageContent() {
                 <BenchRow
                   key={`${row.item.identity.kind}:${row.item.identity.id}`}
                   row={row}
+                  runId={filters.run_id}
                   actions={actions}
                   selection={
                     mergeSelection

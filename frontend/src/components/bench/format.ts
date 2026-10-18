@@ -1,6 +1,9 @@
 import type { IncompleteReason, RunKind } from '@/types/generated/judgment'
 import type { JudgmentRunResponse } from '@/types/generated/contact'
 
+/** What the bench says when a save fails. */
+export const SAVE_ERROR = "Couldn't save. Try again."
+
 const RUN_KIND_LABELS: Record<RunKind, string> = {
   scheduled: 'Scheduled',
   historical: 'Historical',

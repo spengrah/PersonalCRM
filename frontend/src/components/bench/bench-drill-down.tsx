@@ -21,6 +21,10 @@ import { ProposalView } from './proposal-view'
 interface BenchDrillDownProps {
   row: AllInteractionItemResponse
   context: ParticipationContext
+  /** The run the view is narrowed to, which a save on a proposal carries. */
+  runId?: string
+  /** Whether the row's last close is still being saved, which its proposals wait on. */
+  closing: boolean
 }
 
 /** Proposals of one thread judged up to one cut-off, and the content they read. */
@@ -53,7 +57,7 @@ function CutOffRule({ cutOff }: { cutOff: string }) {
  * cut-off follows, subdued and marked as after the judgment. A meeting's
  * content is its notes, which the row's content holds.
  */
-export function BenchDrillDown({ row, context }: BenchDrillDownProps) {
+export function BenchDrillDown({ row, context, runId, closing }: BenchDrillDownProps) {
   const content = useTimelineContent(row.item.identity, context.contactId)
   const threadIds = [...new Set(row.proposals.map(proposal => proposal.thread_id))]
   const threads = useThreadContents(threadIds)
@@ -134,6 +138,8 @@ export function BenchDrillDown({ row, context }: BenchDrillDownProps) {
             <ProposalView
               key={proposal.judgment_id}
               proposal={proposal}
+              runId={runId}
+              closing={closing}
               collapsed={i > 0}
               onShowInThread={showInThread}
             />

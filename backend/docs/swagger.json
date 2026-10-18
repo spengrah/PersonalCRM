@@ -4135,7 +4135,7 @@
         },
         "/judgment-outcomes/{id}/review": {
             "post": {
-                "description": "Records the right outcome the user states for an outcome of any state and returns the outcome with the verdict the server derives: confirmed when it equals the judged outcome, rejected when it differs and has no effect, corrected otherwise. The review is its decision's label for every proposal on the same content. A first review of an applied or claim outcome gives the thread the right outcome's effect; a review of a decision that already has a label records the label only, except an Add on a negative decision, which has the effect the same review of an unlabeled negative has. A review that gives a proposal's last unlabeled item its label also labels that proposal's negative decisions with their judged values; the review records all of its labels or none. keep_current_date, with an open commitment's right outcome, keeps the obligation's current date against the judged later one, and the verdict is corrected.",
+                "description": "Records the right outcome the user states for an outcome of any state and returns the outcome with the verdict the server derives: confirmed when it equals the judged outcome, rejected when it differs and has no effect, corrected otherwise, beside the proposals of the outcome's thread as the bench now shows them, narrowed to run_id's judgments when it is given. The review is its decision's label for every proposal on the same content, and labels no other decision. A first review of an applied or claim outcome gives the thread the right outcome's effect; a review of a decision that already has a label records the label only, except an Add on a negative decision, which has the effect the same review of an unlabeled negative has. keep_current_date, with an open commitment's right outcome, keeps the obligation's current date against the judged later one, and the verdict is corrected.",
                 "consumes": [
                     "application/json"
                 ],
@@ -4154,6 +4154,13 @@
                         "name": "id",
                         "in": "path",
                         "required": true
+                    },
+                    {
+                        "type": "string",
+                        "format": "uuid",
+                        "description": "Run the bench is narrowed to",
+                        "name": "run_id",
+                        "in": "query"
                     },
                     {
                         "description": "The right outcome",
@@ -4177,7 +4184,7 @@
                                     "type": "object",
                                     "properties": {
                                         "data": {
-                                            "$ref": "#/definitions/handlers.JudgmentOutcomeResponse"
+                                            "$ref": "#/definitions/handlers.ReviewJudgmentOutcomeResponse"
                                         }
                                     }
                                 }
@@ -4285,9 +4292,77 @@
                 }
             }
         },
+        "/judgments/close": {
+            "post": {
+                "description": "Records the user closing a row: every negative decision without a label of each given proposal (the row's) that holds a label, from whichever proposal on the same content it was made in, is labeled with its judged value, as ordinary reviews that change nothing live. Items without a label stay to review, and a proposal holding no label gains none. It records all of its labels or none, and returns the given proposals as the bench now shows them, narrowed to run_id's appearances when it is given, with what remains to review across them. An unknown judgment is not found, with nothing recorded.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "judgments"
+                ],
+                "summary": "Close a bench row",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "format": "uuid",
+                        "description": "Run the bench is narrowed to",
+                        "name": "run_id",
+                        "in": "query"
+                    },
+                    {
+                        "description": "The row's judgments",
+                        "name": "close",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/handlers.CloseBenchRowRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/api.APIResponse"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/handlers.CloseBenchRowResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/api.APIResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/api.APIResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/judgments/{id}/confirm-nones": {
             "post": {
-                "description": "Labels every negative decision of the judgment's proposal that has no label from any proposal with its judged value, as ordinary reviews that change nothing live, and then labels the negative decisions of every other proposal on the same content whose items those labels leave all labeled. It records all of its labels or none. A proposal with an item, or one holding no negative decision without a label, is refused.",
+                "description": "Labels every negative decision of the judgment's proposal that has no label from any proposal with its judged value, as ordinary reviews that change nothing live, and returns the proposals of its thread as the bench now shows them, narrowed to run_id's judgments when it is given. It records all of its labels or none. A proposal with an item, or one holding no negative decision without a label, is refused.",
+                "produces": [
+                    "application/json"
+                ],
                 "tags": [
                     "judgments"
                 ],
@@ -4300,11 +4375,33 @@
                         "name": "id",
                         "in": "path",
                         "required": true
+                    },
+                    {
+                        "type": "string",
+                        "format": "uuid",
+                        "description": "Run the bench is narrowed to",
+                        "name": "run_id",
+                        "in": "query"
                     }
                 ],
                 "responses": {
-                    "204": {
-                        "description": "Every label recorded"
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/api.APIResponse"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/handlers.BenchProposalsResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
                     },
                     "400": {
                         "description": "Bad Request",
@@ -6651,6 +6748,17 @@
                 }
             }
         },
+        "handlers.BenchProposalsResponse": {
+            "type": "object",
+            "properties": {
+                "proposals": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/handlers.BenchProposalResponse"
+                    }
+                }
+            }
+        },
         "handlers.BenchSourceMessageResponse": {
             "type": "object",
             "properties": {
@@ -6830,6 +6938,38 @@
                     "additionalProperties": {
                         "$ref": "#/definitions/handlers.NamespaceCleanupResponse"
                     }
+                }
+            }
+        },
+        "handlers.CloseBenchRowRequest": {
+            "type": "object",
+            "required": [
+                "judgment_ids"
+            ],
+            "properties": {
+                "judgment_ids": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
+        "handlers.CloseBenchRowResponse": {
+            "type": "object",
+            "properties": {
+                "proposals": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/handlers.BenchProposalResponse"
+                    }
+                },
+                "review_status": {
+                    "type": "string"
+                },
+                "to_review": {
+                    "type": "integer"
                 }
             }
         },
@@ -8199,6 +8339,41 @@
                     "type": "boolean"
                 },
                 "right_outcome": {
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.ReviewJudgmentOutcomeResponse": {
+            "type": "object",
+            "properties": {
+                "confidence": {
+                    "type": "number"
+                },
+                "contact_id": {
+                    "type": "string"
+                },
+                "due_date": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "outcome": {
+                    "type": "string"
+                },
+                "proposals": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/handlers.BenchProposalResponse"
+                    }
+                },
+                "question": {
+                    "type": "string"
+                },
+                "review": {
+                    "$ref": "#/definitions/handlers.JudgmentOutcomeReviewResponse"
+                },
+                "state": {
                     "type": "string"
                 }
             }

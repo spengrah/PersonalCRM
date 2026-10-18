@@ -107,18 +107,23 @@ func (h *JudgmentHandler) ListJudgments(c *gin.Context) {
 
 // ReviewJudgmentOutcome records the user's review of an outcome.
 // @Summary Review a judgment outcome
-// @Description Records the right outcome the user states for an outcome of any state and returns the outcome with the verdict the server derives: confirmed when it equals the judged outcome, rejected when it differs and has no effect, corrected otherwise. The review is its decision's label for every proposal on the same content. A first review of an applied or claim outcome gives the thread the right outcome's effect; a review of a decision that already has a label records the label only, except an Add on a negative decision, which has the effect the same review of an unlabeled negative has. A review that gives a proposal's last unlabeled item its label also labels that proposal's negative decisions with their judged values; the review records all of its labels or none. keep_current_date, with an open commitment's right outcome, keeps the obligation's current date against the judged later one, and the verdict is corrected.
+// @Description Records the right outcome the user states for an outcome of any state and returns the outcome with the verdict the server derives: confirmed when it equals the judged outcome, rejected when it differs and has no effect, corrected otherwise, beside the proposals of the outcome's thread as the bench now shows them, narrowed to run_id's judgments when it is given. The review is its decision's label for every proposal on the same content, and labels no other decision. A first review of an applied or claim outcome gives the thread the right outcome's effect; a review of a decision that already has a label records the label only, except an Add on a negative decision, which has the effect the same review of an unlabeled negative has. keep_current_date, with an open commitment's right outcome, keeps the obligation's current date against the judged later one, and the verdict is corrected.
 // @Tags judgments
 // @Accept json
 // @Produce json
 // @Param id path string true "Outcome ID" format(uuid)
+// @Param run_id query string false "Run the bench is narrowed to" format(uuid)
 // @Param review body ReviewJudgmentOutcomeRequest true "The right outcome"
-// @Success 200 {object} api.APIResponse{data=JudgmentOutcomeResponse}
+// @Success 200 {object} api.APIResponse{data=ReviewJudgmentOutcomeResponse}
 // @Failure 400 {object} api.APIResponse
 // @Failure 404 {object} api.APIResponse
 // @Router /judgment-outcomes/{id}/review [post]
 func (h *JudgmentHandler) ReviewJudgmentOutcome(c *gin.Context) {
 	id, ok := api.ParseUUIDParam(c, "id", "judgment outcome")
+	if !ok {
+		return
+	}
+	run, ok := runQuery(c)
 	if !ok {
 		return
 	}
@@ -143,21 +148,34 @@ func (h *JudgmentHandler) ReviewJudgmentOutcome(c *gin.Context) {
 		}
 		return
 	}
-	api.SendSuccess(c, http.StatusOK, outcomeResponse(view), nil)
+	proposals, err := h.store.ThreadProposalsOf(c.Request.Context(), view.JudgmentID, run)
+	if err != nil {
+		api.RespondInternal(c, err)
+		return
+	}
+	api.SendSuccess(c, http.StatusOK, ReviewJudgmentOutcomeResponse{
+		JudgmentOutcomeResponse: outcomeResponse(view), Proposals: benchProposalResponses(proposals),
+	}, nil)
 }
 
 // ConfirmNones labels a proposal's negative decisions.
 // @Summary Confirm a proposal's Nones
-// @Description Labels every negative decision of the judgment's proposal that has no label from any proposal with its judged value, as ordinary reviews that change nothing live, and then labels the negative decisions of every other proposal on the same content whose items those labels leave all labeled. It records all of its labels or none. A proposal with an item, or one holding no negative decision without a label, is refused.
+// @Description Labels every negative decision of the judgment's proposal that has no label from any proposal with its judged value, as ordinary reviews that change nothing live, and returns the proposals of its thread as the bench now shows them, narrowed to run_id's judgments when it is given. It records all of its labels or none. A proposal with an item, or one holding no negative decision without a label, is refused.
 // @Tags judgments
+// @Produce json
 // @Param id path string true "Judgment ID" format(uuid)
-// @Success 204 "Every label recorded"
+// @Param run_id query string false "Run the bench is narrowed to" format(uuid)
+// @Success 200 {object} api.APIResponse{data=BenchProposalsResponse}
 // @Failure 400 {object} api.APIResponse
 // @Failure 404 {object} api.APIResponse
 // @Failure 409 {object} api.APIResponse
 // @Router /judgments/{id}/confirm-nones [post]
 func (h *JudgmentHandler) ConfirmNones(c *gin.Context) {
 	id, ok := api.ParseUUIDParam(c, "id", "judgment")
+	if !ok {
+		return
+	}
+	run, ok := runQuery(c)
 	if !ok {
 		return
 	}
@@ -172,7 +190,88 @@ func (h *JudgmentHandler) ConfirmNones(c *gin.Context) {
 		}
 		return
 	}
-	c.Status(http.StatusNoContent)
+	proposals, err := h.store.ThreadProposalsOf(c.Request.Context(), id, run)
+	if err != nil {
+		api.RespondInternal(c, err)
+		return
+	}
+	api.SendSuccess(c, http.StatusOK, BenchProposalsResponse{Proposals: benchProposalResponses(proposals)}, nil)
+}
+
+// CloseBenchRow records the user closing a row on the bench.
+// @Summary Close a bench row
+// @Description Records the user closing a row: every negative decision without a label of each given proposal (the row's) that holds a label, from whichever proposal on the same content it was made in, is labeled with its judged value, as ordinary reviews that change nothing live. Items without a label stay to review, and a proposal holding no label gains none. It records all of its labels or none, and returns the given proposals as the bench now shows them, narrowed to run_id's appearances when it is given, with what remains to review across them. An unknown judgment is not found, with nothing recorded.
+// @Tags judgments
+// @Accept json
+// @Produce json
+// @Param run_id query string false "Run the bench is narrowed to" format(uuid)
+// @Param close body CloseBenchRowRequest true "The row's judgments"
+// @Success 200 {object} api.APIResponse{data=CloseBenchRowResponse}
+// @Failure 400 {object} api.APIResponse
+// @Failure 404 {object} api.APIResponse
+// @Router /judgments/close [post]
+func (h *JudgmentHandler) CloseBenchRow(c *gin.Context) {
+	run, ok := runQuery(c)
+	if !ok {
+		return
+	}
+	var req CloseBenchRowRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		api.SendValidationError(c, "Invalid close", "judgment_ids must name at least one judgment")
+		return
+	}
+	ids := make([]uuid.UUID, len(req.JudgmentIDs))
+	for i, raw := range req.JudgmentIDs {
+		id, err := uuid.Parse(raw)
+		if err != nil {
+			api.SendValidationError(c, "Invalid judgment_ids", "each judgment ID must be a UUID")
+			return
+		}
+		ids[i] = id
+	}
+	if err := h.store.CloseRow(c.Request.Context(), ids); err != nil {
+		if errors.Is(err, judgment.ErrNotFound) {
+			api.SendNotFound(c, "Judgment")
+			return
+		}
+		api.RespondInternal(c, err)
+		return
+	}
+	proposals, err := h.store.Proposals(c.Request.Context(), ids, run)
+	if err != nil {
+		api.RespondInternal(c, err)
+		return
+	}
+	toReview, status := judgment.RowStatus(proposals)
+	out := CloseBenchRowResponse{Proposals: benchProposalResponses(proposals), ToReview: toReview}
+	if status != nil {
+		s := string(*status)
+		out.ReviewStatus = &s
+	}
+	api.SendSuccess(c, http.StatusOK, out, nil)
+}
+
+// runQuery parses the optional run_id a save carries for the run the bench is
+// narrowed to; it answers a validation error and false for a malformed one.
+func runQuery(c *gin.Context) (*judgment.RunID, bool) {
+	raw, ok := c.GetQuery("run_id")
+	if !ok {
+		return nil, true
+	}
+	id, err := uuid.Parse(raw)
+	if err != nil {
+		api.SendValidationError(c, "Invalid run_id", "run_id must be a UUID")
+		return nil, false
+	}
+	return &id, true
+}
+
+func benchProposalResponses(proposals []judgment.Proposal) []BenchProposalResponse {
+	out := make([]BenchProposalResponse, len(proposals))
+	for i, p := range proposals {
+		out[i] = benchProposalResponse(p)
+	}
+	return out
 }
 
 func outcomeResponse(o judgment.OutcomeView) JudgmentOutcomeResponse {

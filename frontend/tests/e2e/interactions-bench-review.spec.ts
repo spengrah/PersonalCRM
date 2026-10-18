@@ -411,6 +411,9 @@ test.describe('Interactions bench review @area:interactions', () => {
     await expect(page.getByRole('dialog')).toHaveCount(0)
 
     // spec: IXN-048.confirmed-in-place, IXN-048.removed-stays-struck, IXN-048.added-shown, IXN-048.change-after-review, IXN-048.counts-exclude-reviewed
+    const closed = page.waitForResponse(response => response.url().includes('/judgments/close'))
+    await row.getByRole('button', { name: 'Collapse content', exact: true }).click()
+    expect((await closed).status()).toBe(200)
     await page.reload()
     await expect(row.locator('[data-review-indicator]')).toHaveText('Reviewed', {
       timeout: SLOW_TIMEOUT_MS,

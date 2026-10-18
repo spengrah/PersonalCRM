@@ -130,6 +130,60 @@ func (s *Store) ThreadProposals(ctx context.Context, thread threadctx.VenueID, r
 	if err != nil {
 		return nil, fmt.Errorf("list thread judgments: %w", err)
 	}
+	return s.threadProposals(ctx, thread, rows, run)
+}
+
+// ThreadProposalsOf returns the proposals of the thread the judgment judged,
+// as ThreadProposals does: what a save on the judgment's proposal can change
+// on the bench. It returns ErrNotFound for an unknown judgment.
+func (s *Store) ThreadProposalsOf(ctx context.Context, judgment uuid.UUID, run *RunID) ([]Proposal, error) {
+	rows, err := s.queries.ListJudgmentRows(ctx, db.ListJudgmentRowsParams{Ids: []uuid.UUID{judgment}, ExampleIds: []string{}})
+	if err != nil {
+		return nil, fmt.Errorf("load judgment %s: %w", judgment, err)
+	}
+	if len(rows) == 0 {
+		return nil, ErrNotFound
+	}
+	return s.ThreadProposals(ctx, rows[0].ThreadID, run)
+}
+
+// Proposals returns the proposals of the given judgments, as the bench shows
+// them in a view narrowed to run when it is given, in no particular order. It
+// returns ErrNotFound when a judgment is unknown.
+func (s *Store) Proposals(ctx context.Context, judgments []uuid.UUID, run *RunID) ([]Proposal, error) {
+	if len(judgments) == 0 {
+		return []Proposal{}, nil
+	}
+	rows, err := s.queries.ListJudgmentRows(ctx, db.ListJudgmentRowsParams{Ids: judgments, ExampleIds: []string{}})
+	if err != nil {
+		return nil, fmt.Errorf("list judgments: %w", err)
+	}
+	for _, id := range judgments {
+		if !slices.ContainsFunc(rows, func(j *db.ListJudgmentRowsRow) bool { return j.ID == id }) {
+			return nil, ErrNotFound
+		}
+	}
+	byThread := map[uuid.UUID][]*db.ListJudgmentRowsRow{}
+	var threads []uuid.UUID
+	for _, j := range rows {
+		if _, seen := byThread[j.ThreadID]; !seen {
+			threads = append(threads, j.ThreadID)
+		}
+		byThread[j.ThreadID] = append(byThread[j.ThreadID], j)
+	}
+	proposals := []Proposal{}
+	for _, thread := range threads {
+		ps, err := s.threadProposals(ctx, thread, byThread[thread], run)
+		if err != nil {
+			return nil, err
+		}
+		proposals = append(proposals, ps...)
+	}
+	return proposals, nil
+}
+
+// threadProposals compiles the proposals of judgments of one thread.
+func (s *Store) threadProposals(ctx context.Context, thread threadctx.VenueID, rows []*db.ListJudgmentRowsRow, run *RunID) ([]Proposal, error) {
 	if len(rows) == 0 {
 		return []Proposal{}, nil
 	}
@@ -356,6 +410,13 @@ func (st sorting) unlabeledNegatives(lb labels) []*outcomeRecord {
 		}
 	}
 	return out
+}
+
+// holdsLabel reports whether any decision of the proposal, an item's or a
+// negative one, has a label, from whichever proposal it was made in.
+func (st sorting) holdsLabel(lb labels) bool {
+	return slices.ContainsFunc(st.items, func(pl placement) bool { return pl.label != nil }) ||
+		slices.ContainsFunc(st.negatives, func(o *outcomeRecord) bool { return lb.of(o) != nil })
 }
 
 func (c *ItemChange) kind() ChangeKind {

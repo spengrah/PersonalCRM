@@ -733,3 +733,35 @@ export interface ReviewJudgmentOutcomeRequest {
   right_outcome: string;
   keep_current_date?: boolean;
 }
+/**
+ * ReviewJudgmentOutcomeResponse is a recorded review: the reviewed outcome,
+ * and the proposals of its thread as the bench now shows them, so the bench
+ * shows the recorded state without reading its whole list again.
+ */
+export interface ReviewJudgmentOutcomeResponse extends JudgmentOutcomeResponse {
+  proposals: BenchProposalResponse[];
+}
+/**
+ * BenchProposalsResponse is the proposals of a thread as the bench shows them
+ * after a save on one of them.
+ */
+export interface BenchProposalsResponse {
+  proposals: BenchProposalResponse[];
+}
+/**
+ * CloseBenchRowRequest is a close of a row on the bench: the judgments of the
+ * proposals the row shows.
+ */
+export interface CloseBenchRowRequest {
+  judgment_ids: string[];
+}
+/**
+ * CloseBenchRowResponse is a recorded close: the closed row's proposals as the
+ * bench now shows them, and what remains to review across them, as the row's
+ * to_review and review_status read.
+ */
+export interface CloseBenchRowResponse {
+  proposals: BenchProposalResponse[];
+  to_review: number /* int */;
+  review_status?: ReviewStatus;
+}

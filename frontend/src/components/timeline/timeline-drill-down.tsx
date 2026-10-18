@@ -32,7 +32,10 @@ function Annotation({ node }: { node: ReactNode | undefined }) {
   return <div data-annotation>{node}</div>
 }
 
-/** One message as the drill-down shows it; the user's own sender name is blue. */
+/**
+ * One message as the drill-down shows it: its sender and its time on one line,
+ * the time lighter, and its text beneath; the user's own sender name is blue.
+ */
 export function TimelineMessage({
   message,
   annotations,
@@ -42,10 +45,14 @@ export function TimelineMessage({
 }) {
   return (
     <div data-message-id={message.id} data-content-ref={message.content_ref} className="space-y-1">
-      <div data-message-sender className={message.is_outgoing ? 'text-blue-700' : undefined}>
-        {message.sender}
+      <div className="flex flex-wrap items-baseline gap-x-2">
+        <span data-message-sender className={message.is_outgoing ? 'text-blue-700' : undefined}>
+          {message.sender}
+        </span>
+        <span data-message-timestamp className="text-xs text-gray-500">
+          {formatDateTime(message.sent_at)}
+        </span>
       </div>
-      <div data-message-timestamp>{formatDateTime(message.sent_at)}</div>
       <Channel channel={message.channel} />
       <div data-message-body className="whitespace-pre-wrap">
         {message.body}

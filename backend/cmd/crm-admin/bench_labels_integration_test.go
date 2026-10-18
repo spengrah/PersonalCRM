@@ -1,9 +1,9 @@
 //go:build integration_testdb
 
 // End-to-end coverage of the bench's negative-decision labels as crm-admin
-// reads them: --scorecard counts labels Confirm Nones, inference and an Add
-// after a Confirm Nones recorded, and --infer-negative-labels brings
-// proposals reviewed before the labeling rule existed under it.
+// reads them: --scorecard counts labels Confirm Nones, inference on a close
+// and an Add after a Confirm Nones recorded, and --infer-negative-labels
+// brings proposals reviewed before the labeling rule existed under it.
 package main
 
 import (
@@ -266,17 +266,19 @@ func confusion(out, outcome string) []string {
 	return lines
 }
 
-// The scorecard counts the labels Confirm Nones, inference and an Add after a
-// Confirm Nones record as reviewed decisions, as it counts clicked labels.
+// The scorecard counts the labels Confirm Nones, inference on a close and an
+// Add after a Confirm Nones record as reviewed decisions, as it counts clicked
+// labels.
 func TestScorecardCountsNegativeLabels(t *testing.T) {
 	e := newLabelsEnv(t)
 	confirmed, inferred, added := e.thread(t, 1), e.thread(t, 2), e.thread(t, 3)
 	require.NoError(t, e.store.ConfirmNones(e.ctx, e.record(t, labelsProd, confirmed, nothing(confirmed.contact))))
 	owed := nothing(inferred.contact)
 	owed.BallInCourt[0].Outcome = judgment.BallInCourtIOweReply
-	e.record(t, labelsProd, inferred, owed)
+	inferredJudgment := e.record(t, labelsProd, inferred, owed)
 	_, err := e.store.ReviewOutcome(e.ctx, e.outcome(t, labelsProd, inferred, judgment.QuestionBallInCourt), judgment.ReviewRequest{RightOutcome: "i_owe_reply"})
 	require.NoError(t, err)
+	require.NoError(t, e.store.CloseRow(e.ctx, []uuid.UUID{inferredJudgment}))
 	require.NoError(t, e.store.ConfirmNones(e.ctx, e.record(t, labelsProd, added, nothing(added.contact))))
 	_, err = e.store.ReviewOutcome(e.ctx, e.outcome(t, labelsProd, added, judgment.QuestionBallInCourt), judgment.ReviewRequest{RightOutcome: "i_owe_reply"})
 	require.NoError(t, err)
@@ -302,8 +304,8 @@ func TestScorecardCountsNegativeLabels(t *testing.T) {
 }
 
 // --infer-negative-labels labels the negative decisions of every proposal
-// whose items all had labels before the labeling rule existed, and nothing
-// else.
+// that held a label before the labeling rule existed, as a close of its row
+// would, and nothing else.
 func TestInferNegativeLabels(t *testing.T) {
 	e := newLabelsEnv(t)
 	// A proposal whose one item was labeled before the rule, beside another
@@ -318,7 +320,8 @@ func TestInferNegativeLabels(t *testing.T) {
 	})
 	e.reviewedBefore(t, e.outcome(t, labelsProd, reviewed, judgment.QuestionCommitmentMine), "open")
 	e.reviewedBefore(t, e.outcome(t, labelsOther, reviewed, judgment.QuestionBallInCourt), "not_applicable")
-	// A proposal with no items on labeled content.
+	// A proposal with no items whose negative decision another method's
+	// proposal labeled.
 	itemless := e.thread(t, 2)
 	e.record(t, labelsProd, itemless, nothing(itemless.contact))
 	other := nothing(itemless.contact)
@@ -326,6 +329,14 @@ func TestInferNegativeLabels(t *testing.T) {
 	other.BigMoment.Outcome = judgment.BigMomentParticipant
 	e.record(t, labelsOther, itemless, other)
 	e.reviewedBefore(t, e.outcome(t, labelsOther, itemless, judgment.QuestionBallInCourt), "nobody_owes")
+	// A proposal holding no label on content another method's proposal
+	// labeled a decision of.
+	unlabeled := e.thread(t, 3)
+	e.record(t, labelsProd, unlabeled, nothing(unlabeled.contact))
+	e.record(t, labelsOther, unlabeled, judgment.Outcomes{Commitments: []judgment.CommitmentOutcome{
+		{QuestionID: "commitment_theirs/THEM", ContactID: unlabeled.contact, Direction: judgment.CommitmentDirectionTheirs, Outcome: judgment.CommitmentStateOpen, Confidence: 0.9},
+	}})
+	e.reviewedBefore(t, e.outcome(t, labelsOther, unlabeled, judgment.QuestionCommitmentTheirs), "open")
 	before := e.labels(t)
 	infer := func() string {
 		var stdout bytes.Buffer
@@ -337,16 +348,24 @@ func TestInferNegativeLabels(t *testing.T) {
 	after := e.labels(t)
 	second := infer()
 
-	x := reviewed.contact
-	assert.Equal(t, "infer-negative-labels: labeled=1\n", first)
+	x, y, z := reviewed.contact, itemless.contact, unlabeled.contact
+	assert.Equal(t, "infer-negative-labels: labeled=3\n", first)
 	for key, right := range before {
 		assert.Equal(t, right, after[key], "an existing label never changes: %s", key)
 	}
 	assert.Equal(t, "none", after[labelKey(reviewed, judgment.QuestionBigMoment, nil)], "the reviewed proposal's unlabeled negative")
 	assert.Equal(t, "not_applicable", after[labelKey(reviewed, judgment.QuestionBallInCourt, &x)], "labeled differently in another proposal, and kept")
 	assert.Equal(t, "open", after[labelKey(reviewed, judgment.QuestionCommitmentMine, &x)])
-	assert.NotContains(t, after, labelKey(itemless, judgment.QuestionBigMoment, nil), "a proposal with no items gains no label")
-	assert.Len(t, after, len(before)+1)
+	assert.Equal(t, "none", after[labelKey(itemless, judgment.QuestionCommitmentMine, &y)], "a proposal holding another proposal's label")
+	assert.Equal(t, "none", after[labelKey(itemless, judgment.QuestionBigMoment, nil)])
+	for _, key := range []string{
+		labelKey(unlabeled, judgment.QuestionBallInCourt, &z),
+		labelKey(unlabeled, judgment.QuestionCommitmentMine, &z),
+		labelKey(unlabeled, judgment.QuestionBigMoment, nil),
+	} {
+		assert.NotContains(t, after, key, "a proposal holding no label gains none")
+	}
+	assert.Len(t, after, len(before)+3)
 	assert.Equal(t, "infer-negative-labels: labeled=0\n", second)
 	assert.Equal(t, after, e.labels(t))
 }

@@ -997,25 +997,27 @@ behaviors:
     provenance: [.agents/spec/2026-10-17-bench-negative-decisions.md G3 G9 HC1 SC2 SC9 SC10]
 
   - id: IXN-057
-    title: Once a proposal's items all have labels, its negative decisions are labeled with no further act
+    title: Closing a row labels the negative decisions of each of its proposals that holds a label; reviewing an item labels no other decision
     type: api
     status: current
     surface: api
-    given: proposals with items and negative decisions on the same judged content
-    when: a review or a Confirm Nones gives a proposal's last unlabeled item a label
+    given: proposals on a bench row with items and negative decisions, some holding a label from a review, an Add or a Confirm Nones in any proposal on the same content
+    when: a close of the row is posted, or an item is reviewed
     then:
-      - key: last-item-labels-negatives
-        text: every negative decision of that proposal without a label is labeled with its judged value
+      - key: close-labels-negatives
+        text: a close labels every negative decision without a label of each of the row's proposals that holds a label with its judged value
+      - key: items-stay
+        text: an item without a label keeps none after a close
+      - key: no-label-gains-none
+        text: a proposal holding no label gains none from a close
       - key: across-proposals
-        text: this holds when the label is made in another proposal on the same content, by a review or by a Confirm Nones
+        text: a label made in another proposal on the same content counts as one the proposal holds
       - key: never-replaces
         text: a label that exists is never replaced
-      - key: item-less-never
-        text: a proposal with no items never gains a label this way
-      - key: all-or-nothing
-        text: a review whose labeling fails records nothing, its own label included, and the list reads as before it
-    provenance: [.agents/spec/2026-10-17-bench-negative-decisions.md G4 G9 SC3 SC9]
-    notes: The rule runs on review writes only, never when a judgment is recorded, so a scorecard rerun never labels the rerun method's own answers (ruling R3). crm-admin --infer-negative-labels runs it once over proposals reviewed before it existed.
+      - key: review-labels-no-negative
+        text: a review of an item, a proposal's last unlabeled item included, labels its own decision and no negative decision
+    provenance: [.agents/spec/2026-10-17-bench-negative-decisions.md G4 SC3 HC1 HC3]
+    notes: The rule runs on Confirm Nones (IXN-056), on a close (IXN-068) and once in crm-admin --infer-negative-labels, which brings every labeled content under it as a close of its row would; never when a judgment is recorded, so a scorecard rerun never labels the rerun method's own answers (ruling R3).
 
   - id: IXN-058
     title: A review of a decision that already has a label changes the label and nothing live
@@ -1119,16 +1121,25 @@ behaviors:
     provenance: [.agents/spec/2026-10-17-bench-negative-decisions.md G6 SC1 SC8, designs/bench.md]
 
   - id: IXN-064
-    title: Reviewing a proposal's last unreviewed item confirms its Nones
+    title: Closing a row confirms the Nones of each proposal the user reviewed in it
     type: ux
     status: current
     surface: ui
     given: a proposal with items and negative decisions without a label
-    when: the user reviews its last unreviewed item
+    when: the user reviews one of its items and closes the row
     then:
-      - key: last-item-confirms-nones
-        text: every None of the proposal reads Confirmed and its header All reviewed, without a reload
-    provenance: [.agents/spec/2026-10-17-bench-negative-decisions.md G4 SC3, designs/bench.md]
+      - key: nones-wait-for-close
+        text: before the close, the proposal's Nones still await review, however many of its items the user reviewed
+      - key: close-confirms-nones
+        text: once the row is closed and opened again, each None of the proposal reads Confirmed
+      - key: items-stay-to-review
+        text: an item the user did not review still awaits review after the close
+      - key: close-after-saves
+        text: a close made while a review on the row is still being saved takes effect after the review is recorded
+      - key: nones-mark-copy
+        text: a list with items whose Nones are confirmed reads "Nones confirmed" on its heading line, and a None line reads "Confirmed"
+    provenance: [.agents/spec/2026-10-17-bench-negative-decisions.md G4 G14 SC3 T5, designs/bench.md]
+    notes: Leaving the page, changing page or reloading is not a close. The server decides what a close labels (IXN-057, IXN-068).
 
   - id: IXN-065
     title: The user changes an item's review, and the item shows its live state beside the new mark
@@ -1178,3 +1189,73 @@ behaviors:
       - key: review-shown-in-other
         text: the other proposal's item for the same decision shows that review as its mark
     provenance: [.agents/spec/2026-10-17-bench-negative-decisions.md G5 SC4, designs/bench.md]
+
+  - id: IXN-068
+    title: A close of a bench row records its labels all or nothing
+    type: api
+    status: current
+    surface: api
+    given: the judgments of the proposals a bench row shows
+    when: a close naming them is posted
+    then:
+      - key: labels-row
+        text: the labels IXN-057 states are recorded as ordinary reviews that change nothing live
+      - key: all-or-nothing
+        text: a close that fails records none of its labels, and the list reads as before it
+      - key: unknown-judgment
+        text: a close naming an unknown judgment is not found and records nothing
+    provenance: [.agents/spec/2026-10-17-bench-negative-decisions.md G4 G9 SC3 SC9]
+    notes: The close, like a review and Confirm Nones, returns the saved proposals as the server recorded them, which the bench shows in place (IXN-069).
+
+  - id: IXN-069
+    title: After a save the saved proposal shows what the server recorded before its controls work again
+    type: ux
+    status: current
+    surface: ui
+    given: a proposal on an open row
+    when: the user saves a review
+    then:
+      - key: disabled-until-recorded
+        text: while the save is in flight, every review control of the proposal is disabled
+      - key: recorded-without-reload
+        text: the recorded state shows, with its controls working again, without waiting on a read of the page's whole list
+    provenance: [.agents/spec/2026-10-17-bench-negative-decisions.md G10 SC11]
+
+  - id: IXN-070
+    title: A removed commitment keeps its source message
+    type: ux
+    status: current
+    surface: ui
+    given: a commitment whose judgment names the message stating it
+    when: the user removes it
+    then:
+      - key: removed-keeps-source
+        text: the commitment shows its source message, whether or not its removal took effect
+      - key: kept-during-change
+        text: the source message still shows while the user changes its review
+    provenance: [.agents/spec/2026-10-17-bench-negative-decisions.md G11 SC12]
+
+  - id: IXN-071
+    title: An open row's header stays in view while the user scrolls its drill-down
+    type: ux
+    status: current
+    surface: ui
+    given: an open row whose drill-down is taller than the window
+    when: the user scrolls to the end of its drill-down
+    then:
+      - key: header-stays-visible
+        text: the row's header, with its collapse control, stays at the top of the window, and the user closes the row from it without scrolling back
+    provenance: [.agents/spec/2026-10-17-bench-negative-decisions.md G12 SC13]
+
+  - id: IXN-072
+    title: A drill-down message shows its sender and time on one line
+    type: ux
+    status: current
+    surface: ui
+    given: an open row's drill-down
+    when: it shows a message
+    then:
+      - key: sender-and-time-one-line
+        text: the message's sender and time share one line, and its text sits beneath them
+    provenance: [.agents/spec/2026-10-17-bench-negative-decisions.md G13 SC14]
+    notes: The contact history's drill-down renders messages through the same component, so it shows them the same way.

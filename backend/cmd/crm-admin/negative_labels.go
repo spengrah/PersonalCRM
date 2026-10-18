@@ -12,8 +12,8 @@ type negativeLabeler interface {
 }
 
 // runInferNegativeLabels runs the bench's labeling rule once over every
-// labeled content, so a proposal whose items all had labels before the rule
-// existed holds no unlabeled negative decision, and prints how many labels it
+// labeled content, so a proposal holding a label before the rule existed
+// holds no unlabeled negative decision, and prints how many labels it
 // recorded.
 func runInferNegativeLabels(ctx context.Context, deps adminDeps) error {
 	n, err := deps.negativeLabels.InferNegativeLabels(ctx)

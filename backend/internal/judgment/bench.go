@@ -125,24 +125,32 @@ func (b *Bench) List(ctx context.Context, q BenchQuery) (*BenchPage, error) {
 			}
 			return cmp.Or(cmp.Compare(a.Method.Key, b.Method.Key), cmp.Compare(a.Method.Version, b.Method.Version), a.CutOff.Compare(b.CutOff))
 		})
-		nones := false
-		for _, p := range rows[i].Proposals {
-			rows[i].ToReview += p.ToReview
-			nones = nones || p.ReviewStatus == ReviewStatusNonesToReview
-		}
-		if len(rows[i].Proposals) == 0 {
-			continue
-		}
-		status := ReviewStatusAllReviewed
-		switch {
-		case rows[i].ToReview > 0:
-			status = ReviewStatusToReview
-		case nones:
-			status = ReviewStatusNonesToReview
-		}
-		rows[i].ReviewStatus = &status
+		rows[i].ToReview, rows[i].ReviewStatus = RowStatus(rows[i].Proposals)
 	}
 	return &BenchPage{Rows: rows, Total: page.Total}, nil
+}
+
+// RowStatus is what remains to review across a row's proposals: how many of
+// their items have no label, and their items without a label, else their
+// negative decisions without a label, else nothing; nil for a row carrying no
+// proposal.
+func RowStatus(proposals []Proposal) (int, *ReviewStatus) {
+	if len(proposals) == 0 {
+		return 0, nil
+	}
+	toReview, nones := 0, false
+	for _, p := range proposals {
+		toReview += p.ToReview
+		nones = nones || p.ReviewStatus == ReviewStatusNonesToReview
+	}
+	status := ReviewStatusAllReviewed
+	switch {
+	case toReview > 0:
+		status = ReviewStatusToReview
+	case nones:
+		status = ReviewStatusNonesToReview
+	}
+	return toReview, &status
 }
 
 // ThreadContent is a judged thread's messages and the names of the contacts

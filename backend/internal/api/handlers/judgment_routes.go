@@ -9,9 +9,11 @@ import "github.com/gin-gonic/gin"
 //   - GET  /api/v1/judgments
 //   - POST /api/v1/judgment-outcomes/:id/review
 //   - POST /api/v1/judgments/:id/confirm-nones
+//   - POST /api/v1/judgments/close
 func RegisterJudgmentRoutes(v1 *gin.RouterGroup, handler *JudgmentHandler) {
 	v1.GET("/judgment-runs", handler.ListJudgmentRuns)
 	v1.GET("/judgments", handler.ListJudgments)
 	v1.POST("/judgment-outcomes/:id/review", handler.ReviewJudgmentOutcome)
 	v1.POST("/judgments/:id/confirm-nones", handler.ConfirmNones)
+	v1.POST("/judgments/close", handler.CloseBenchRow)
 }

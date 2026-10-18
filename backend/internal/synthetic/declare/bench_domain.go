@@ -78,15 +78,19 @@ func init() {
 		GroupChat("shared-chat", []string{"subject", "other"}, AgoDays(3), Said("subject", -20), Said("other", -10), ISaid(0)),
 	}})
 
-	// IXN-061 to IXN-067: their citing tests record judgments on the proposal
+	// IXN-061 to IXN-072: their citing tests record judgments on the proposal
 	// and review worlds above, which already hold every thread they judge.
 	RegisterNone("IXN-061", "its citing tests seed the IXN-046, IXN-047 and IXN-048 worlds and record their judgments through the testing route")
 	RegisterNone("IXN-062", "its citing tests seed the IXN-047 and IXN-048 worlds and record their judgments through the testing route")
 	RegisterNone("IXN-063", "its citing tests seed the IXN-048 world and record their judgments through the testing route")
-	RegisterNone("IXN-064", "its citing test seeds the IXN-048 world and records its judgments through the testing route")
+	RegisterNone("IXN-064", "its citing tests seed the IXN-048 world and record their judgments through the testing route")
 	RegisterNone("IXN-065", "its citing tests seed the IXN-047 and IXN-048 worlds and record their judgments through the testing route")
 	RegisterNone("IXN-066", "its citing test seeds the IXN-048 world and records its judgments through the testing route")
 	RegisterNone("IXN-067", "its citing test seeds the IXN-048 world and records its judgments through the testing route")
+	RegisterNone("IXN-069", "its citing test seeds the IXN-048 world and records its judgment through the testing route")
+	RegisterNone("IXN-070", "its citing test seeds the IXN-048 world and records its judgment through the testing route")
+	RegisterNone("IXN-071", "its citing test seeds the IXN-048 world and records its judgment through the testing route")
+	RegisterNone("IXN-072", "its citing test seeds the IXN-048 world and records its judgment through the testing route")
 }
 
 func listWorld() []Entity {
