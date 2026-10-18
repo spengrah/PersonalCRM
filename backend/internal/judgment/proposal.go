@@ -418,9 +418,11 @@ func (pc *proposalContext) itemOf(ctx context.Context, pl placement) (ProposalIt
 	if item.List == ProposalListCommitments {
 		live := pc.live.obligationDue(o)
 		switch {
-		case pl.added:
-		case change == ChangeKindLaterDate && l != nil && l.keepsDate:
+		// A label that keeps the date keeps the decision's kept date in every
+		// proposal, however its outcome landed.
+		case l != nil && l.keepsDate:
 			item.DueDate = cmp.Or(o.KeptDueDate, live)
+		case pl.added:
 		case change == ChangeKindLaterDate && l != nil:
 			item.DueDate = o.DueDate
 		case change != "":

@@ -201,6 +201,48 @@ func TestBenchReReview(t *testing.T) {
 		}
 	})
 
+	t.Run("a Keep original shows the kept date in a proposal whose outcome suggested no later date", func(t *testing.T) {
+		// spec: IXN-055.label-everywhere
+		b := newBenchEnv(t)
+		x, th := b.oneToOne(t)
+		first, later := date(b.day(20)), date(b.day(30))
+		b.run(t, judgment.RunKindScheduled, judgmentOf(prodMethod, th, b.day(1), "h1", judgment.Outcomes{
+			Commitments: []judgment.CommitmentOutcome{commitment(x, judgment.CommitmentDirectionMine, judgment.CommitmentStateOpen, 0.9, first)},
+		}))
+		b.message(t, th, x, false, b.day(2))
+		b.record(t, th, x, repository.InteractionDirectionInbound, b.day(2))
+		moving := judgment.Outcomes{
+			Commitments: []judgment.CommitmentOutcome{commitment(x, judgment.CommitmentDirectionMine, judgment.CommitmentStateOpen, 0.9, later)},
+		}
+		b.run(t, judgment.RunKindScheduled, judgmentOf(prodMethod, th, b.day(2), "h2", moving))
+		b.run(t, judgment.RunKindRerun, judgmentOf(otherMethod, th, b.day(2), "h2", moving))
+		at := func(m judgment.MethodRef) handlers.BenchItemResponse {
+			page, _ := b.list(t, "contact_id="+x.String())
+			for _, row := range page.Items {
+				for _, p := range row.Proposals {
+					if b.day(2).Equal(p.CutOff) && p.MethodKey == m.Key {
+						return item(t, p, "commitments", x)
+					}
+				}
+			}
+			require.FailNow(t, "no proposal at day 2", "method %s", m.Key)
+			return handlers.BenchItemResponse{}
+		}
+		require.Nil(t, at(otherMethod).Change, "the comparison proposal suggests no later date")
+		b.act(t, at(prodMethod), "accept")
+		b.act(t, at(prodMethod), "keep_original")
+
+		moved := b.openObligations(t, th)
+		require.Len(t, moved, 1)
+		require.True(t, later.Equal(moved[0].DueDate), "the re-review moves no date back")
+		for _, m := range []judgment.MethodRef{prodMethod, otherMethod} {
+			kept := at(m)
+			assert.Equal(t, ptr("confirmed"), kept.Mark, m.Key)
+			assert.Equal(t, ptr(first.Format("2006-01-02")), kept.DueDate, "%s: the date the label kept", m.Key)
+		}
+		assert.Equal(t, ptr("not_acting"), at(otherMethod).State, "the comparison proposal acts on nothing")
+	})
+
 	t.Run("a confirmed commitment whose obligation a later proposal moved shows the live date beside its own", func(t *testing.T) {
 		// spec: IXN-060.kept-date-moved
 		b := newBenchEnv(t)
