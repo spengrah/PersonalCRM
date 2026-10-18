@@ -51,20 +51,27 @@ type ThreadMessage struct {
 // ProposalItem is one item of a proposal, standing for exactly one judged
 // outcome; every act on it reviews that outcome. Contact is the participant
 // of a reply item and the counterparty of a commitment; nil for the flag.
-// State is empty for an item the user removed. Acts is empty once the item is
-// reviewed.
+// Mark is how the decision's label, from whichever proposal it was made in,
+// left the item; empty while the decision has no label. State is the item's
+// live state, beside its mark where the two disagree; empty only for a
+// removal that took effect. Acts are its review controls; on an item with a
+// mark they are its re-review controls, which record the label only.
+// LiveDueDate is the obligation's live date, set only for a live commitment
+// with a label whose obligation holds a date other than the one the item
+// shows, whatever change its outcome suggested.
 type ProposalItem struct {
-	OutcomeID  uuid.UUID
-	List       ProposalList
-	Contact    *uuid.UUID
-	Debtor     Debtor
-	State      ItemState
-	Confidence *float64
-	DueDate    *time.Time
-	Change     *ItemChange
-	Source     *ThreadMessage
-	Mark       ItemMark
-	Acts       []ItemAct
+	OutcomeID   uuid.UUID
+	List        ProposalList
+	Contact     *uuid.UUID
+	Debtor      Debtor
+	State       ItemState
+	Confidence  *float64
+	DueDate     *time.Time
+	Change      *ItemChange
+	Source      *ThreadMessage
+	Mark        ItemMark
+	Acts        []ItemAct
+	LiveDueDate *time.Time
 }
 
 // ProposalAddition is one choice of a proposal's pickers: adding Contact to a
@@ -83,19 +90,25 @@ type ProposalAddition struct {
 // judgment's first appearance, as of which its content is shown; ReusedAt is
 // the cut-off of its appearance in the run a view is narrowed to, when that
 // run reused it. ReplyLists is false for a meeting, which ball-in-court is not
-// asked of. ToReview counts the items without a review.
+// asked of. ToReview counts the items without a label. ReviewStatus is
+// what remains to review; ConfirmNones is true exactly when the proposal has
+// no items and holds a negative decision without a label. Lists holds one
+// entry per list the proposal shows, in display order.
 type Proposal struct {
-	JudgmentID uuid.UUID
-	Thread     threadctx.VenueID
-	Method     MethodRef
-	Production bool
-	Kind       threadctx.ContextKind
-	CutOff     time.Time
-	ReusedAt   *time.Time
-	ReplyLists bool
-	Items      []ProposalItem
-	Additions  []ProposalAddition
-	ToReview   int
+	JudgmentID   uuid.UUID
+	Thread       threadctx.VenueID
+	Method       MethodRef
+	Production   bool
+	Kind         threadctx.ContextKind
+	CutOff       time.Time
+	ReusedAt     *time.Time
+	ReplyLists   bool
+	Items        []ProposalItem
+	Additions    []ProposalAddition
+	ToReview     int
+	ReviewStatus ReviewStatus
+	ConfirmNones bool
+	Lists        []ProposalListView
 	// Names holds the name of every contact the proposal names.
 	Names map[uuid.UUID]string
 }
@@ -125,6 +138,14 @@ func (s *Store) ThreadProposals(ctx context.Context, thread threadctx.VenueID, r
 	if err != nil {
 		return nil, err
 	}
+	examples := make([]ExampleID, len(rows))
+	for i, j := range rows {
+		examples[i] = ExampleID(j.ExampleID)
+	}
+	lb, err := loadLabels(ctx, s.queries, examples)
+	if err != nil {
+		return nil, err
+	}
 	reused := map[uuid.UUID]time.Time{}
 	if run != nil {
 		appearances, err := s.appearances(ctx, ids, run)
@@ -141,7 +162,7 @@ func (s *Store) ThreadProposals(ctx context.Context, thread threadctx.VenueID, r
 	if err != nil {
 		return nil, err
 	}
-	pc := &proposalContext{thread: thread, live: live, messages: repository.NewThreadContentRepository(s.queries)}
+	pc := &proposalContext{thread: thread, live: live, labels: lb, messages: repository.NewThreadContentRepository(s.queries)}
 	proposals := make([]Proposal, len(rows))
 	for i, j := range rows {
 		p, err := s.compile(ctx, pc, j, outcomes[j.ID])
@@ -160,6 +181,11 @@ func (s *Store) ThreadProposals(ctx context.Context, thread threadctx.VenueID, r
 		}
 		for _, a := range p.Additions {
 			named = appendContact(named, a.Contact, nil)
+		}
+		for _, l := range p.Lists {
+			if l.Closest != nil {
+				named = appendContact(named, l.Closest.Contact, nil)
+			}
 		}
 	}
 	names, err := s.contacts.ListContactNamesByIDs(ctx, named)
@@ -184,10 +210,11 @@ func appendContact(ids []uuid.UUID, contact *uuid.UUID, source *ThreadMessage) [
 }
 
 // proposalContext is what compiling a thread's proposals reads besides its
-// judgments: the thread's live state and content.
+// judgments: the thread's live state, its decisions' labels and its content.
 type proposalContext struct {
 	thread   uuid.UUID
 	live     *liveState
+	labels   labels
 	messages *repository.ThreadContentRepository
 }
 
@@ -211,29 +238,124 @@ func (s *Store) compile(ctx context.Context, pc *proposalContext, j *db.ListJudg
 		Items:      []ProposalItem{},
 		Additions:  []ProposalAddition{},
 	}
-	for _, o := range outcomes {
-		item, ok, err := pc.itemOf(ctx, o)
+	sorted := sortOutcomes(outcomes, pc.labels)
+	for _, pl := range sorted.items {
+		item, err := pc.itemOf(ctx, pl)
 		if err != nil {
 			return Proposal{}, err
 		}
-		if !ok {
-			continue
-		}
-		if item.List == ProposalListCommitments && item.Mark != ItemMarkAdded && item.Change.kind() != ChangeKindRemove {
-			if item.Source, err = s.sourceMessage(ctx, pc, questions, o.QuestionID); err != nil {
+		if item.List == ProposalListCommitments && !pl.added && item.Change.kind() != ChangeKindRemove {
+			if item.Source, err = s.sourceMessage(ctx, pc, questions, pl.o.QuestionID); err != nil {
 				return Proposal{}, err
 			}
 		}
-		p.Items = append(p.Items, item)
-	}
-	p.Items = absorbReplies(p.Items)
-	p.Additions = additions(outcomes, p.Items)
-	for _, item := range p.Items {
 		if item.Mark == "" {
 			p.ToReview++
 		}
+		p.Items = append(p.Items, item)
 	}
+	p.Additions = additions(outcomes, sorted, pc.labels)
+	nones := len(sorted.unlabeledNegatives(pc.labels)) > 0
+	switch {
+	case p.ToReview > 0:
+		p.ReviewStatus = ReviewStatusToReview
+	case nones:
+		p.ReviewStatus = ReviewStatusNonesToReview
+	default:
+		p.ReviewStatus = ReviewStatusAllReviewed
+	}
+	p.ConfirmNones = len(sorted.items) == 0 && nones
+	p.Lists = listViews(p.ReplyLists, questions, outcomes, sorted, pc.labels)
 	return p, nil
+}
+
+// placement is an outcome standing for an item of its proposal: the value
+// the item stands for and the list that value puts it in, whether the user
+// added that value, the decision's label and the mark it gives the item.
+type placement struct {
+	o     *outcomeRecord
+	value string
+	list  ProposalList
+	added bool
+	label *label
+	mark  ItemMark
+}
+
+// place is where an outcome sits under its decision's label: an item in a
+// list, or none for an outcome whose value has no effect, unless it would
+// remove a live item, and unless the label gives it one. A label with no
+// effect removes the item the decision's last review with an effect stood
+// for, so the item keeps the list that review put it in.
+func place(o *outcomeRecord, l *label) (placement, bool) {
+	// The item stands, before any label, for the judged value, or for a
+	// suggested change the live value it would take away.
+	pl := placement{o: o, label: l, value: o.value()}
+	if changeOf(o) != "" {
+		pl.value = o.kept()
+	}
+	switch {
+	case l == nil:
+	case isNoEffectValue(l.right):
+		pl.mark = ItemMarkRemoved
+		if o.LastEffect != "" && o.adds(o.LastEffect) {
+			pl.value, pl.added = o.LastEffect, true
+		}
+	case o.adds(l.right):
+		pl.value, pl.added, pl.mark = l.right, true, ItemMarkAdded
+	default:
+		pl.value, pl.mark = l.right, ItemMarkConfirmed
+	}
+	pl.list = listOf(o.Question, pl.value)
+	return pl, pl.list != ""
+}
+
+// sorting is a judgment's outcomes sorted by what they compile into under
+// their decisions' labels: the outcomes standing for its items, and its
+// negative decisions, the answered outcomes standing for no item. A reply
+// its party's commitment in the same direction absorbs is neither: it is a
+// positive decision the commitment stands for.
+type sorting struct {
+	items     []placement
+	negatives []*outcomeRecord
+}
+
+// sortOutcomes sorts a judgment's outcomes into its items and its negative
+// decisions. The bench's compile and the labeling rule both read a proposal
+// through it.
+func sortOutcomes(outcomes []*outcomeRecord, lb labels) sorting {
+	var out sorting
+	committed := map[Debtor]map[uuid.UUID]bool{DebtorMe: {}, DebtorContact: {}}
+	for _, o := range outcomes {
+		pl, ok := place(o, lb.of(o))
+		switch {
+		case ok:
+			out.items = append(out.items, pl)
+			if pl.list == ProposalListCommitments && pl.mark != ItemMarkRemoved && o.ContactID != nil {
+				committed[debtorOf(o.Question)][*o.ContactID] = true
+			}
+		case o.QuestionID != "":
+			out.negatives = append(out.negatives, o)
+		}
+	}
+	out.items = slices.DeleteFunc(out.items, func(pl placement) bool {
+		if pl.label != nil || pl.o.ContactID == nil {
+			return false
+		}
+		return (pl.list == ProposalListIOweReply && committed[DebtorMe][*pl.o.ContactID]) ||
+			(pl.list == ProposalListOwesMeReply && committed[DebtorContact][*pl.o.ContactID])
+	})
+	return out
+}
+
+// unlabeledNegatives are the negative decisions without a label.
+func (st sorting) unlabeledNegatives(lb labels) []*outcomeRecord {
+	var out []*outcomeRecord
+	for _, o := range st.negatives {
+		if lb.of(o) == nil {
+			out = append(out, o)
+		}
+	}
+	return out
 }
 
 func (c *ItemChange) kind() ChangeKind {
@@ -243,84 +365,79 @@ func (c *ItemChange) kind() ChangeKind {
 	return c.Kind
 }
 
-// itemOf is the item an outcome stands for, and false when it stands for
-// none: an outcome whose value has no effect, unless it would remove a live
-// item, and unless the user's review gave it one. An item whose live effect
-// no longer holds acts no more, so it is not acting.
-func (pc *proposalContext) itemOf(ctx context.Context, o *outcomeRecord) (ProposalItem, bool, error) {
-	change := changeOf(o)
-	// before is the list the item sits in before any review: the judged
-	// value's, or for a suggested change the list of the live value it would
-	// take away.
-	before := listOf(o.Question, o.value())
-	if change != "" {
-		before = listOf(o.Question, o.kept())
+// itemOf is the item a placement stands for. An item without a label shows
+// how its outcome landed; an item whose live effect no longer holds acts no
+// more, so it is not acting. An item with a label shows its live state beside
+// its mark: live while the effect of the value the item stands for holds,
+// else not acting, or for a removal no state at all, since the removal took
+// effect.
+func (pc *proposalContext) itemOf(ctx context.Context, pl placement) (ProposalItem, error) {
+	o, l, change := pl.o, pl.label, changeOf(pl.o)
+	item := ProposalItem{
+		OutcomeID: o.ID, List: pl.list, Contact: o.ContactID, Debtor: debtorOf(o.Question),
+		Mark: pl.mark, Acts: actsOf(pl, change),
 	}
-
-	item := ProposalItem{OutcomeID: o.ID, Contact: o.ContactID, Debtor: debtorOf(o.Question)}
-	if o.review == nil {
-		if before == "" {
-			return ProposalItem{}, false, nil
+	if l == nil {
+		gone, err := pc.live.effectGone(ctx, o)
+		if err != nil {
+			return ProposalItem{}, err
 		}
-		item.List = before
-		item.Acts = actsOf(o, change)
-	} else {
-		right := *o.review.ValueText
 		switch {
-		case isNoEffectValue(right) && before == "":
-			return ProposalItem{}, false, nil
-		case isNoEffectValue(right):
-			item.List, item.Mark = before, ItemMarkRemoved
-		case o.adds(right):
-			item.List, item.Mark = listOf(o.Question, right), ItemMarkAdded
+		case o.state() == OutcomeStateEvidence, gone:
+			item.State = ItemStateNotActing
+		case change != "":
+			item.State = ItemStateLiveWithChange
+		case o.state() == OutcomeStateClaim:
+			item.State = ItemStateSuggested
 		default:
-			item.List, item.Mark = listOf(o.Question, right), ItemMarkConfirmed
+			item.State = ItemStateLive
+		}
+	} else {
+		holds, err := pc.live.holds(ctx, o, pl.value)
+		if err != nil {
+			return ProposalItem{}, err
+		}
+		switch {
+		case holds:
+			item.State = ItemStateLive
+		case pl.mark != ItemMarkRemoved:
+			item.State = ItemStateNotActing
 		}
 	}
 
-	gone, err := pc.live.effectGone(ctx, o)
-	if err != nil {
-		return ProposalItem{}, false, err
-	}
 	switch {
-	case item.Mark == ItemMarkRemoved:
-	case o.state() == OutcomeStateEvidence, gone:
-		item.State = ItemStateNotActing
-	case o.review != nil:
-		item.State = ItemStateLive
-	case change != "":
-		item.State = ItemStateLiveWithChange
-	case o.state() == OutcomeStateClaim:
-		item.State = ItemStateSuggested
-	default:
-		item.State = ItemStateLive
-	}
-
-	switch {
-	case change != "" && o.review == nil:
+	case change != "" && l == nil:
 		item.Change = &ItemChange{Kind: change, Confidence: o.Confidence}
 		if change == ChangeKindLaterDate {
 			item.Change.DueDate = o.DueDate
 		}
-	case change == "" && item.Mark != ItemMarkAdded:
+	case change == "" && !pl.added:
 		item.Confidence = o.Confidence
 	}
 
 	if item.List == ProposalListCommitments {
+		live := pc.live.obligationDue(o)
 		switch {
-		case item.Mark == ItemMarkAdded:
-		case change == ChangeKindLaterDate && o.review != nil && !o.keepsCurrentDate():
+		// A label that keeps the date keeps the decision's kept date in every
+		// proposal, however its outcome landed.
+		case l != nil && l.keepsDate:
+			item.DueDate = cmp.Or(o.KeptDueDate, live)
+		case pl.added:
+		case change == ChangeKindLaterDate && l != nil:
 			item.DueDate = o.DueDate
 		case change != "":
-			item.DueDate = pc.live.obligationDue(o)
+			item.DueDate = live
 		default:
 			item.DueDate = o.DueDate
 		}
+		// A label states the date its item shows; where the live obligation
+		// holds another, the item carries the live date beside it.
+		if l != nil && item.State == ItemStateLive && item.DueDate != nil && live != nil && !live.Equal(*item.DueDate) {
+			item.LiveDueDate = live
+		}
 	}
-	if item.List == ProposalListBigMoment {
-		item.Contact = nil
-	}
-	return item, true, nil
+	item.Contact = specOf(item.List).party(o)
+	return item, nil
 }
 
 // changeOf is the change an outcome landed as a removal suggests to a live
@@ -338,31 +455,6 @@ func changeOf(o *outcomeRecord) ChangeKind {
 	default:
 		return ""
 	}
-}
-
-// listOf is the list an outcome value puts an item in; empty for a value with
-// no effect.
-func listOf(question Question, value string) ProposalList {
-	switch {
-	case value == string(BallInCourtIOweReply):
-		return ProposalListIOweReply
-	case value == string(BallInCourtTheyOweReply):
-		return ProposalListOwesMeReply
-	case question == QuestionBigMoment && !isNoEffectValue(value):
-		return ProposalListBigMoment
-	case (question == QuestionCommitmentMine || question == QuestionCommitmentTheirs) && value == string(CommitmentStateOpen):
-		return ProposalListCommitments
-	default:
-		return ""
-	}
-}
-
-// replyValue is the ball-in-court value that puts a contact in a reply list.
-func replyValue(list ProposalList) string {
-	if list == ProposalListIOweReply {
-		return string(BallInCourtIOweReply)
-	}
-	return string(BallInCourtTheyOweReply)
 }
 
 // noEffectValue is the value that removes a question's item.
@@ -384,17 +476,26 @@ func debtorOf(question Question) Debtor {
 	}
 }
 
-// actsOf are an unreviewed item's review controls. Keep states the live
-// value the suggested removal would take away.
-func actsOf(o *outcomeRecord, change ChangeKind) []ItemAct {
-	judged := o.value()
-	switch change {
-	case ChangeKindRemove:
+// actsOf are an item's review controls, the same before and after a label:
+// confirm states the value the item stands for (for an item the user added,
+// the value the user added), and remove the question's no-effect value; for
+// a suggested change, accept states the judged outcome and keep the live
+// value the suggested removal would take away, or keep original the judged
+// outcome with the current date kept.
+func actsOf(pl placement, change ChangeKind) []ItemAct {
+	o, judged := pl.o, pl.o.value()
+	switch {
+	case pl.added:
+		return []ItemAct{
+			{Act: ActKindConfirm, Review: ReviewRequest{RightOutcome: pl.value}},
+			{Act: ActKindRemove, Review: ReviewRequest{RightOutcome: noEffectValue(o.Question)}},
+		}
+	case change == ChangeKindRemove:
 		return []ItemAct{
 			{Act: ActKindAccept, Review: ReviewRequest{RightOutcome: judged}},
 			{Act: ActKindKeep, Review: ReviewRequest{RightOutcome: o.kept()}},
 		}
-	case ChangeKindLaterDate:
+	case change == ChangeKindLaterDate:
 		return []ItemAct{
 			{Act: ActKindAccept, Review: ReviewRequest{RightOutcome: judged}},
 			{Act: ActKindKeepOriginal, Review: ReviewRequest{RightOutcome: judged, KeepCurrentDate: true}},
@@ -407,56 +508,31 @@ func actsOf(o *outcomeRecord, change ChangeKind) []ItemAct {
 	}
 }
 
-// absorbReplies drops each unreviewed reply item whose party has a commitment
-// in the same direction: the reply that states a commitment and the
-// commitment are one obligation.
-func absorbReplies(items []ProposalItem) []ProposalItem {
-	committed := map[Debtor]map[uuid.UUID]bool{DebtorMe: {}, DebtorContact: {}}
-	for _, item := range items {
-		if item.List == ProposalListCommitments && item.Mark != ItemMarkRemoved && item.Contact != nil {
-			committed[item.Debtor][*item.Contact] = true
-		}
-	}
-	return slices.DeleteFunc(items, func(item ProposalItem) bool {
-		if item.Mark != "" || item.Contact == nil {
-			return false
-		}
-		return (item.List == ProposalListIOweReply && committed[DebtorMe][*item.Contact]) ||
-			(item.List == ProposalListOwesMeReply && committed[DebtorContact][*item.Contact])
-	})
-}
-
-// additions are the pickers' choices: each participant not already in a
-// reply list whose ball-in-court outcome has no review, each commitment not
-// already an item whose outcome has no review, and the flag while the thread
-// has none and its big-moment outcome has no review.
-func additions(outcomes []*outcomeRecord, items []ProposalItem) []ProposalAddition {
+// additions are the pickers' choices: for each answered outcome whose
+// decision has no label or is a negative decision, labeled or not, each list
+// of its question that does not already hold an item of the same debtor and
+// the party the list names it by (any item, for a list that names none). A
+// decision that is positive and has a label is changed only through its
+// item's controls.
+func additions(outcomes []*outcomeRecord, sorted sorting, lb labels) []ProposalAddition {
 	has := func(list ProposalList, debtor Debtor, contact *uuid.UUID) bool {
-		return slices.ContainsFunc(items, func(item ProposalItem) bool {
-			return item.List == list && item.Debtor == debtor &&
-				(contact == nil || (item.Contact != nil && *item.Contact == *contact))
+		return slices.ContainsFunc(sorted.items, func(pl placement) bool {
+			return pl.list == list && debtorOf(pl.o.Question) == debtor &&
+				(contact == nil || (pl.o.ContactID != nil && *pl.o.ContactID == *contact))
 		})
 	}
 	out := []ProposalAddition{}
 	for _, o := range outcomes {
-		if o.review != nil || o.QuestionID == "" {
+		if o.QuestionID == "" || (lb.of(o) != nil && !slices.Contains(sorted.negatives, o)) {
 			continue
 		}
-		switch o.Question {
-		case QuestionBallInCourt:
-			for _, list := range []ProposalList{ProposalListIOweReply, ProposalListOwesMeReply} {
-				if !has(list, "", o.ContactID) {
-					out = append(out, ProposalAddition{List: list, Contact: o.ContactID, OutcomeID: o.ID, Review: ReviewRequest{RightOutcome: replyValue(list)}})
-				}
+		for _, spec := range listSpecs {
+			if !slices.Contains(spec.questions, o.Question) {
+				continue
 			}
-		case QuestionCommitmentMine, QuestionCommitmentTheirs:
-			debtor := debtorOf(o.Question)
-			if !has(ProposalListCommitments, debtor, o.ContactID) {
-				out = append(out, ProposalAddition{List: ProposalListCommitments, Contact: o.ContactID, Debtor: debtor, OutcomeID: o.ID, Review: ReviewRequest{RightOutcome: string(CommitmentStateOpen)}})
-			}
-		case QuestionBigMoment:
-			if !has(ProposalListBigMoment, "", nil) {
-				out = append(out, ProposalAddition{List: ProposalListBigMoment, OutcomeID: o.ID, Review: ReviewRequest{RightOutcome: string(BigMomentParticipant)}})
+			contact, debtor := spec.party(o), debtorOf(o.Question)
+			if !has(spec.list, debtor, contact) {
+				out = append(out, ProposalAddition{List: spec.list, Contact: contact, Debtor: debtor, OutcomeID: o.ID, Review: ReviewRequest{RightOutcome: spec.values[0]}})
 			}
 		}
 	}
@@ -506,11 +582,13 @@ func sortProposal(p *Proposal, names map[uuid.UUID]string) {
 		}
 		return c[:]
 	}
-	listRank := map[ProposalList]int{ProposalListIOweReply: 0, ProposalListOwesMeReply: 1, ProposalListCommitments: 2, ProposalListBigMoment: 3}
+	listRank := func(list ProposalList) int {
+		return slices.IndexFunc(listSpecs, func(spec listSpec) bool { return spec.list == list })
+	}
 	debtorRank := map[Debtor]int{"": 0, DebtorMe: 0, DebtorContact: 1}
 	slices.SortStableFunc(p.Items, func(a, b ProposalItem) int {
 		return cmp.Or(
-			cmp.Compare(listRank[a.List], listRank[b.List]),
+			cmp.Compare(listRank(a.List), listRank(b.List)),
 			strings.Compare(name(a.Contact), name(b.Contact)),
 			bytes.Compare(id(a.Contact), id(b.Contact)),
 			cmp.Compare(debtorRank[a.Debtor], debtorRank[b.Debtor]),
@@ -518,7 +596,7 @@ func sortProposal(p *Proposal, names map[uuid.UUID]string) {
 	})
 	slices.SortStableFunc(p.Additions, func(a, b ProposalAddition) int {
 		return cmp.Or(
-			cmp.Compare(listRank[a.List], listRank[b.List]),
+			cmp.Compare(listRank(a.List), listRank(b.List)),
 			strings.Compare(name(a.Contact), name(b.Contact)),
 			bytes.Compare(id(a.Contact), id(b.Contact)),
 			cmp.Compare(debtorRank[a.Debtor], debtorRank[b.Debtor]),

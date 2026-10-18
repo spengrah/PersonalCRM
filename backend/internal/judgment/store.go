@@ -19,13 +19,22 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
+// Asserter is the assertion write path the store records claims, reviews and
+// flags through. *service.AssertService is the one implementation.
+type Asserter interface {
+	AssertTx(ctx context.Context, tx pgx.Tx, req service.AssertRequest) (*repository.Assertion, error)
+	AcceptTx(ctx context.Context, tx pgx.Tx, assertionID uuid.UUID) (*repository.Assertion, error)
+	RejectTx(ctx context.Context, tx pgx.Tx, assertionID uuid.UUID) (*repository.Assertion, error)
+	RetractTx(ctx context.Context, tx pgx.Tx, assertionID uuid.UUID) (*repository.Assertion, error)
+}
+
 // StoreDeps are the store's dependencies. Pool, Queries, Assert, Contexts,
 // Cadence and Jobs are required; an empty ProductionMethod designates no
 // production method, so no judgment changes live state.
 type StoreDeps struct {
 	Pool             *pgxpool.Pool
 	Queries          *db.Queries
-	Assert           *service.AssertService
+	Assert           Asserter
 	Contexts         *threadctx.Builder
 	Cadence          Cadence
 	Jobs             repository.JobEnqueuer
@@ -37,7 +46,7 @@ type StoreDeps struct {
 type Store struct {
 	pool       *pgxpool.Pool
 	queries    *db.Queries
-	assert     *service.AssertService
+	assert     Asserter
 	contexts   *threadctx.Builder
 	cadence    Cadence
 	jobs       repository.JobEnqueuer

@@ -123,7 +123,7 @@ INSERT INTO judgment_outcome (node_id, judgment_id, question, question_id, conta
 SELECT outcome_node.id, $1, $2, $3,
        $4, $5, $6
 FROM outcome_node
-RETURNING node_id, judgment_id, question, question_id, contact_id, due_date, confidence, obligation_task_id
+RETURNING node_id, judgment_id, question, question_id, contact_id, due_date, confidence, obligation_task_id, kept_due_date
 `
 
 type CreateJudgmentOutcomeParams struct {
@@ -155,6 +155,7 @@ func (q *Queries) CreateJudgmentOutcome(ctx context.Context, arg CreateJudgmentO
 		&i.DueDate,
 		&i.Confidence,
 		&i.ObligationTaskID,
+		&i.KeptDueDate,
 	)
 	return &i, err
 }
@@ -447,10 +448,12 @@ func (q *Queries) ListJudgmentIncomplete(ctx context.Context) ([]*JudgmentIncomp
 }
 
 const ListJudgmentOutcomes = `-- name: ListJudgmentOutcomes :many
-SELECT node_id, judgment_id, question, question_id, contact_id, due_date, confidence, obligation_task_id FROM judgment_outcome
-WHERE judgment_id = ANY($1::uuid[])
-   OR node_id = ANY($2::uuid[])
-ORDER BY judgment_id, question, question_id NULLS LAST, contact_id, node_id
+SELECT o.node_id, o.judgment_id, o.question, o.question_id, o.contact_id, o.due_date, o.confidence, o.obligation_task_id, o.kept_due_date, j.example_id
+FROM judgment_outcome o
+JOIN judgment j ON j.id = o.judgment_id
+WHERE o.judgment_id = ANY($1::uuid[])
+   OR o.node_id = ANY($2::uuid[])
+ORDER BY o.judgment_id, o.question, o.question_id NULLS LAST, o.contact_id, o.node_id
 `
 
 type ListJudgmentOutcomesParams struct {
@@ -458,16 +461,30 @@ type ListJudgmentOutcomesParams struct {
 	OutcomeIds  []uuid.UUID `json:"outcome_ids"`
 }
 
-// The outcomes of the given judgments, or the given outcomes.
-func (q *Queries) ListJudgmentOutcomes(ctx context.Context, arg ListJudgmentOutcomesParams) ([]*JudgmentOutcome, error) {
+type ListJudgmentOutcomesRow struct {
+	NodeID           uuid.UUID  `json:"node_id"`
+	JudgmentID       uuid.UUID  `json:"judgment_id"`
+	Question         string     `json:"question"`
+	QuestionID       *string    `json:"question_id"`
+	ContactID        *uuid.UUID `json:"contact_id"`
+	DueDate          *time.Time `json:"due_date"`
+	Confidence       *float64   `json:"confidence"`
+	ObligationTaskID *uuid.UUID `json:"obligation_task_id"`
+	KeptDueDate      *time.Time `json:"kept_due_date"`
+	ExampleID        string     `json:"example_id"`
+}
+
+// The outcomes of the given judgments, or the given outcomes, each with the
+// example its judgment judged.
+func (q *Queries) ListJudgmentOutcomes(ctx context.Context, arg ListJudgmentOutcomesParams) ([]*ListJudgmentOutcomesRow, error) {
 	rows, err := q.db.Query(ctx, ListJudgmentOutcomes, arg.JudgmentIds, arg.OutcomeIds)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []*JudgmentOutcome{}
+	items := []*ListJudgmentOutcomesRow{}
 	for rows.Next() {
-		var i JudgmentOutcome
+		var i ListJudgmentOutcomesRow
 		if err := rows.Scan(
 			&i.NodeID,
 			&i.JudgmentID,
@@ -477,6 +494,8 @@ func (q *Queries) ListJudgmentOutcomes(ctx context.Context, arg ListJudgmentOutc
 			&i.DueDate,
 			&i.Confidence,
 			&i.ObligationTaskID,
+			&i.KeptDueDate,
+			&i.ExampleID,
 		); err != nil {
 			return nil, err
 		}
@@ -661,20 +680,28 @@ SELECT DISTINCT ON (e.id, o.question, o.contact_id)
     e.id AS example_id, e.thread_id, e.input_hash,
     (SELECT min(j2.cut_off) FROM judgment j2 WHERE j2.example_id = e.id)::timestamptz AS cut_off,
     o.question, o.contact_id,
-    a.value_text AS right_outcome
+    a.value_text AS right_outcome,
+    COALESCE(kd.value_bool, FALSE)::boolean AS keeps_date
 FROM assertion a
 JOIN judgment_outcome o ON o.node_id = a.subject_node_id
 JOIN judgment j ON j.id = o.judgment_id
 JOIN judgment_example e ON e.id = j.example_id
-WHERE a.predicate_key = $1::text
+LEFT JOIN LATERAL (
+    SELECT x.value_bool FROM assertion x
+    WHERE x.subject_node_id = o.node_id AND x.predicate_key = $1::text
+      AND x.status = 'accepted'
+    ORDER BY x.created_at DESC LIMIT 1
+) kd ON TRUE
+WHERE a.predicate_key = $2::text
   AND a.status = 'accepted'
-  AND (cardinality($2::text[]) = 0 OR e.id = ANY($2::text[]))
-ORDER BY e.id, o.question, o.contact_id, a.created_at DESC
+  AND (cardinality($3::text[]) = 0 OR e.id = ANY($3::text[]))
+ORDER BY e.id, o.question, o.contact_id, a.created_at DESC, a.id DESC
 `
 
 type ListLatestExampleReviewsParams struct {
-	ReviewPredicate string   `json:"review_predicate"`
-	ExampleIds      []string `json:"example_ids"`
+	KeepsDatePredicate string   `json:"keeps_date_predicate"`
+	ReviewPredicate    string   `json:"review_predicate"`
+	ExampleIds         []string `json:"example_ids"`
 }
 
 type ListLatestExampleReviewsRow struct {
@@ -685,14 +712,17 @@ type ListLatestExampleReviewsRow struct {
 	Question     string     `json:"question"`
 	ContactID    *uuid.UUID `json:"contact_id"`
 	RightOutcome *string    `json:"right_outcome"`
+	KeepsDate    bool       `json:"keeps_date"`
 }
 
 // The user's latest review of each question and contact on each example,
 // whichever method's outcome it reviewed, ordered by example, question and
-// contact. cut_off is the example's earliest judgment cut-off. Restricted to
-// the given examples when any are named.
+// contact: the one definition of a decision and its label. keeps_date is
+// whether that review kept an open commitment's current date. cut_off is the
+// example's earliest judgment cut-off. Restricted to the given examples when
+// any are named.
 func (q *Queries) ListLatestExampleReviews(ctx context.Context, arg ListLatestExampleReviewsParams) ([]*ListLatestExampleReviewsRow, error) {
-	rows, err := q.db.Query(ctx, ListLatestExampleReviews, arg.ReviewPredicate, arg.ExampleIds)
+	rows, err := q.db.Query(ctx, ListLatestExampleReviews, arg.KeepsDatePredicate, arg.ReviewPredicate, arg.ExampleIds)
 	if err != nil {
 		return nil, err
 	}
@@ -708,6 +738,7 @@ func (q *Queries) ListLatestExampleReviews(ctx context.Context, arg ListLatestEx
 			&i.Question,
 			&i.ContactID,
 			&i.RightOutcome,
+			&i.KeepsDate,
 		); err != nil {
 			return nil, err
 		}
@@ -936,6 +967,24 @@ func (q *Queries) SetJudgmentAppearanceEffects(ctx context.Context, arg SetJudgm
 		arg.JudgmentID,
 		arg.CutOff,
 	)
+	return err
+}
+
+const SetJudgmentOutcomeKeptDueDate = `-- name: SetJudgmentOutcomeKeptDueDate :exec
+UPDATE judgment_outcome
+SET kept_due_date = $1
+WHERE node_id = $2
+`
+
+type SetJudgmentOutcomeKeptDueDateParams struct {
+	KeptDueDate *time.Time `json:"kept_due_date"`
+	NodeID      uuid.UUID  `json:"node_id"`
+}
+
+// Records the date an outcome's obligation held when the user first reviewed
+// the later date the outcome suggests.
+func (q *Queries) SetJudgmentOutcomeKeptDueDate(ctx context.Context, arg SetJudgmentOutcomeKeptDueDateParams) error {
+	_, err := q.db.Exec(ctx, SetJudgmentOutcomeKeptDueDate, arg.KeptDueDate, arg.NodeID)
 	return err
 }
 

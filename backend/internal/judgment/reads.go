@@ -250,7 +250,7 @@ func (s *Store) ThreadsJudgedInRun(ctx context.Context, run RunID) ([]ThreadCutO
 // latest right outcome per question and contact.
 func (s *Store) ReviewedExamples(ctx context.Context) ([]Example, error) {
 	rows, err := s.queries.ListLatestExampleReviews(ctx, db.ListLatestExampleReviewsParams{
-		ReviewPredicate: predicateReview, ExampleIds: []string{},
+		ReviewPredicate: predicateReview, KeepsDatePredicate: predicateReviewKeepsDate, ExampleIds: []string{},
 	})
 	if err != nil {
 		return nil, fmt.Errorf("list reviewed examples: %w", err)

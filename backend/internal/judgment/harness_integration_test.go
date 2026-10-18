@@ -63,6 +63,7 @@ type envOption func(*envWiring)
 type envWiring struct {
 	followUp    bool
 	ownDatabase bool
+	assert      func(judgment.Asserter) judgment.Asserter
 }
 
 // withFollowUp wires the follow-up manager into the recording path, so an
@@ -72,6 +73,12 @@ func withFollowUp() envOption { return func(w *envWiring) { w.followUp = true } 
 // withOwnDatabase runs the env on a database clone of its own, so reads
 // across every contact see only what the test seeds.
 func withOwnDatabase() envOption { return func(w *envWiring) { w.ownDatabase = true } }
+
+// withAsserter wraps the store's assertion write path, to inject a failure
+// the real one cannot produce on demand.
+func withAsserter(wrap func(judgment.Asserter) judgment.Asserter) envOption {
+	return func(w *envWiring) { w.assert = wrap }
+}
 
 // newEnv builds an env whose store designates productionMethod ("" for none).
 func newEnv(t *testing.T, productionMethod string, opts ...envOption) *env {
@@ -101,10 +108,14 @@ func newEnv(t *testing.T, productionMethod string, opts ...envOption) *env {
 	cadence := consumer.NewCadenceUpdater(repository.NewEventConsumerClaimRepository(database.Queries), contactRepo,
 		database.Queries, consumer.CadenceModeCutover, false, config.TestConfig().Watchdog)
 	venues := repository.NewVenueRepository(database.Queries)
+	var asserter judgment.Asserter = asserts
+	if wiring.assert != nil {
+		asserter = wiring.assert(asserts)
+	}
 	store := judgment.NewStore(judgment.StoreDeps{
 		Pool:             database.Pool,
 		Queries:          database.Queries,
-		Assert:           asserts,
+		Assert:           asserter,
 		Contexts:         threadctx.NewBuilder(repository.NewThreadContentRepository(database.Queries), venues),
 		Cadence:          cadence,
 		Jobs:             jobs,

@@ -69,6 +69,8 @@ definitions:
         items:
           $ref: '#/definitions/handlers.BenchProposalResponse'
         type: array
+      review_status:
+        type: string
       to_review:
         type: integer
     type: object
@@ -105,6 +107,15 @@ definitions:
       right_outcome:
         type: string
     type: object
+  handlers.BenchClosestResponse:
+    properties:
+      contact:
+        $ref: '#/definitions/handlers.BenchPartyResponse'
+      debtor:
+        type: string
+      percent:
+        type: integer
+    type: object
   handlers.BenchItemChangeResponse:
     properties:
       confidence:
@@ -132,6 +143,8 @@ definitions:
         type: string
       list:
         type: string
+      live_due_date:
+        type: string
       mark:
         type: string
       outcome_id:
@@ -140,6 +153,15 @@ definitions:
         $ref: '#/definitions/handlers.BenchSourceMessageResponse'
       state:
         type: string
+    type: object
+  handlers.BenchListResponse:
+    properties:
+      closest:
+        $ref: '#/definitions/handlers.BenchClosestResponse'
+      list:
+        type: string
+      nones_reviewed:
+        type: boolean
     type: object
   handlers.BenchPartyResponse:
     properties:
@@ -154,6 +176,8 @@ definitions:
         items:
           $ref: '#/definitions/handlers.BenchAdditionResponse'
         type: array
+      confirm_nones:
+        type: boolean
       context_kind:
         type: string
       cut_off:
@@ -164,6 +188,10 @@ definitions:
         type: array
       judgment_id:
         type: string
+      lists:
+        items:
+          $ref: '#/definitions/handlers.BenchListResponse'
+        type: array
       method_key:
         type: string
       method_version:
@@ -173,6 +201,8 @@ definitions:
       reply_lists:
         type: boolean
       reused_at:
+        type: string
+      review_status:
         type: string
       thread_id:
         type: string
@@ -4540,10 +4570,16 @@ paths:
       description: 'Records the right outcome the user states for an outcome of any
         state and returns the outcome with the verdict the server derives: confirmed
         when it equals the judged outcome, rejected when it differs and has no effect,
-        corrected otherwise. Reviewing an applied or claim outcome gives the thread
-        the right outcome''s effect. keep_current_date, with an open commitment''s
-        right outcome, keeps the obligation''s current date against the judged later
-        one, and the verdict is corrected.'
+        corrected otherwise. The review is its decision''s label for every proposal
+        on the same content. A first review of an applied or claim outcome gives the
+        thread the right outcome''s effect; a review of a decision that already has
+        a label records the label only, except an Add on a negative decision, which
+        has the effect the same review of an unlabeled negative has. A review that
+        gives a proposal''s last unlabeled item its label also labels that proposal''s
+        negative decisions with their judged values; the review records all of its
+        labels or none. keep_current_date, with an open commitment''s right outcome,
+        keeps the obligation''s current date against the judged later one, and the
+        verdict is corrected.'
       parameters:
       - description: Outcome ID
         format: uuid
@@ -4632,6 +4668,39 @@ paths:
           schema:
             $ref: '#/definitions/api.APIResponse'
       summary: List judgments
+      tags:
+      - judgments
+  /judgments/{id}/confirm-nones:
+    post:
+      description: Labels every negative decision of the judgment's proposal that
+        has no label from any proposal with its judged value, as ordinary reviews
+        that change nothing live, and then labels the negative decisions of every
+        other proposal on the same content whose items those labels leave all labeled.
+        It records all of its labels or none. A proposal with an item, or one holding
+        no negative decision without a label, is refused.
+      parameters:
+      - description: Judgment ID
+        format: uuid
+        in: path
+        name: id
+        required: true
+        type: string
+      responses:
+        "204":
+          description: Every label recorded
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.APIResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.APIResponse'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/api.APIResponse'
+      summary: Confirm a proposal's Nones
       tags:
       - judgments
   /rematch/contacts/{id}/rescan:

@@ -109,7 +109,8 @@ export const ItemMarkRemoved = "removed";
 export const ItemMarkAdded = "added";
 export type ItemMark = typeof ItemMarkConfirmed | typeof ItemMarkRemoved | typeof ItemMarkAdded;
 /**
- * ActKind names a review control of an unreviewed item.
+ * ActKind names a review control of an item; on a reviewed item it is a
+ * re-review control.
  */
 export const ActKindConfirm = "confirm";
 export const ActKindRemove = "remove";
@@ -123,3 +124,12 @@ export type ActKind = typeof ActKindConfirm | typeof ActKindRemove | typeof ActK
 export const DebtorMe = "me";
 export const DebtorContact = "contact";
 export type Debtor = typeof DebtorMe | typeof DebtorContact;
+/**
+ * ReviewStatus is what remains for the user to review in a proposal or a
+ * row: items without a label (to review), else negative decisions without a
+ * label (nones to review), else nothing (all reviewed).
+ */
+export const ReviewStatusToReview = "to_review";
+export const ReviewStatusNonesToReview = "nones_to_review";
+export const ReviewStatusAllReviewed = "all_reviewed";
+export type ReviewStatus = typeof ReviewStatusToReview | typeof ReviewStatusNonesToReview | typeof ReviewStatusAllReviewed;

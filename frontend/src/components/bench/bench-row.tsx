@@ -39,15 +39,17 @@ function Count({ row }: { row: AllInteractionItemResponse }) {
   return null
 }
 
+/** The row's review status as the server compiled it; a row with no proposal has none. */
 function ReviewIndicator({ row }: { row: AllInteractionItemResponse }) {
-  if (row.proposals.length === 0) return null
-  if (row.to_review > 0) {
+  if (!row.review_status) return null
+  if (row.review_status !== 'all_reviewed') {
+    const toReview = row.review_status === 'to_review'
     return (
       <span
-        data-review-indicator="to-review"
-        className="inline-flex rounded-full border border-amber-300 bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-800"
+        data-review-indicator={toReview ? 'to-review' : 'nones-to-review'}
+        className="inline-flex whitespace-nowrap rounded-full border border-amber-300 bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-800"
       >
-        {row.to_review} to review
+        {toReview ? `${row.to_review} to review` : 'Nones to review'}
       </span>
     )
   }

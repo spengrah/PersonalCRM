@@ -1527,8 +1527,9 @@ type Querier interface {
 	// each judgment. Oldest recorded first.
 	ListJudgmentAppearances(ctx context.Context, arg ListJudgmentAppearancesParams) ([]*ListJudgmentAppearancesRow, error)
 	ListJudgmentIncomplete(ctx context.Context) ([]*JudgmentIncomplete, error)
-	// The outcomes of the given judgments, or the given outcomes.
-	ListJudgmentOutcomes(ctx context.Context, arg ListJudgmentOutcomesParams) ([]*JudgmentOutcome, error)
+	// The outcomes of the given judgments, or the given outcomes, each with the
+	// example its judgment judged.
+	ListJudgmentOutcomes(ctx context.Context, arg ListJudgmentOutcomesParams) ([]*ListJudgmentOutcomesRow, error)
 	// Judgments with their example, by ID, or for a thread, a run or both (a run
 	// matches every judgment appearing in it).
 	ListJudgmentRows(ctx context.Context, arg ListJudgmentRowsParams) ([]*ListJudgmentRowsRow, error)
@@ -1558,8 +1559,10 @@ type Querier interface {
 	ListKnownMeetingNoteIDsByHost(ctx context.Context, macHostID *uuid.UUID) ([]*ListKnownMeetingNoteIDsByHostRow, error)
 	// The user's latest review of each question and contact on each example,
 	// whichever method's outcome it reviewed, ordered by example, question and
-	// contact. cut_off is the example's earliest judgment cut-off. Restricted to
-	// the given examples when any are named.
+	// contact: the one definition of a decision and its label. keeps_date is
+	// whether that review kept an open commitment's current date. cut_off is the
+	// example's earliest judgment cut-off. Restricted to the given examples when
+	// any are named.
 	ListLatestExampleReviews(ctx context.Context, arg ListLatestExampleReviewsParams) ([]*ListLatestExampleReviewsRow, error)
 	// The contact's latest effective participation at or before the cut-off, one
 	// row per direction. Which directions set which cadence timestamp is
@@ -2197,6 +2200,9 @@ type Querier interface {
 	// nil bytes → SQL NULL.
 	SetExternalContactPendingAndDismissed(ctx context.Context, arg SetExternalContactPendingAndDismissedParams) (*ExternalContact, error)
 	SetJudgmentAppearanceEffects(ctx context.Context, arg SetJudgmentAppearanceEffectsParams) error
+	// Records the date an outcome's obligation held when the user first reviewed
+	// the later date the outcome suggests.
+	SetJudgmentOutcomeKeptDueDate(ctx context.Context, arg SetJudgmentOutcomeKeptDueDateParams) error
 	// Records the obligation task an outcome's live effect is; NULL when its
 	// effect is no obligation.
 	SetJudgmentOutcomeObligation(ctx context.Context, arg SetJudgmentOutcomeObligationParams) error

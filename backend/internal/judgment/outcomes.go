@@ -3,6 +3,8 @@ package judgment
 import (
 	"context"
 	"fmt"
+	"maps"
+	"slices"
 	"time"
 
 	"personal-crm/backend/internal/db"
@@ -20,17 +22,29 @@ import (
 // when it landed or was reviewed. ContactID is the contact the judgment
 // answered about, kept as the judgment's evidence; LiveContactID is the
 // contact that one now is after any contact merges, the one live state acts
-// on.
+// on. Example is the content its judgment judged, which with Question and
+// ContactID names the decision the outcome answers. KeptDueDate is the date
+// the decision's obligation held when the user first reviewed the later date
+// an outcome of the decision suggests, from whichever outcome that review was
+// made on, so a label that keeps the date keeps the same date in every
+// proposal. LastEffect is the right outcome of the latest review of the
+// outcome's decision that had an effect, from whichever outcome it was made
+// on, the label's earlier reviews included; empty when no review of the
+// decision had one. A label with no effect removes the item that review stood
+// for.
 type outcomeRecord struct {
 	ID               uuid.UUID
 	JudgmentID       uuid.UUID
+	Example          ExampleID
 	Question         Question
 	QuestionID       string
 	ContactID        *uuid.UUID
 	LiveContactID    *uuid.UUID
 	DueDate          *time.Time
+	KeptDueDate      *time.Time
 	Confidence       *float64
 	ObligationTaskID *uuid.UUID
+	LastEffect       string
 	answer           *db.Assertion
 	class            *db.Assertion
 	target           *db.Assertion
@@ -138,15 +152,11 @@ func (o *outcomeRecord) view() OutcomeView {
 	}
 }
 
-// key names the question and contact an outcome answers, the unit a review
+// decision names the decision the outcome answers: its judged content, its
+// question and the contact the judgment answered about, the unit a review
 // labels and the user's verdict governs.
-func (o *outcomeRecord) key() outcomeKey {
-	return outcomeKey{question: o.Question, contact: contactOf(o.ContactID)}
-}
-
-type outcomeKey struct {
-	question Question
-	contact  uuid.UUID
+func (o *outcomeRecord) decision() decisionKey {
+	return decisionKey{example: o.Example, question: o.Question, contact: contactOf(o.ContactID)}
 }
 
 func contactOf(id *uuid.UUID) uuid.UUID {
@@ -173,6 +183,7 @@ func loadOutcomes(ctx context.Context, q db.Querier, judgmentIDs, outcomeIDs []u
 		r := &outcomeRecord{
 			ID:               row.NodeID,
 			JudgmentID:       row.JudgmentID,
+			Example:          ExampleID(row.ExampleID),
 			Question:         Question(row.Question),
 			ContactID:        row.ContactID,
 			LiveContactID:    row.ContactID,
@@ -207,16 +218,28 @@ func loadOutcomes(ctx context.Context, q db.Querier, judgmentIDs, outcomeIDs []u
 			r.LiveContactID = &to
 		}
 	}
+	decisions, kept, err := contentDecisions(ctx, q, rows)
+	if err != nil {
+		return nil, err
+	}
 	assertions, err := q.ListOutcomeAssertions(ctx, db.ListOutcomeAssertionsParams{
-		OutcomeIds: ids,
+		OutcomeIds: slices.Collect(maps.Keys(decisions)),
 		Predicates: append([]string{predicateAnswer, predicateReview, predicateReviewKeepsDate, predicateRemovalTarget}, classPredicates...),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("list outcome assertions: %w", err)
 	}
-	// Assertions arrive oldest first, so the last of each role wins.
+	// Assertions arrive oldest first, so the last of each role wins. Every
+	// review of a decision, retracted or not, counts toward its last effect.
+	lastEffect := map[decisionKey]string{}
 	for _, a := range assertions {
-		r := byID[a.SubjectNodeID]
+		if a.PredicateKey == predicateReview && a.ValueText != nil && !isNoEffectValue(*a.ValueText) {
+			lastEffect[decisions[a.SubjectNodeID]] = *a.ValueText
+		}
+		r, ok := byID[a.SubjectNodeID]
+		if !ok {
+			continue
+		}
 		switch a.PredicateKey {
 		case predicateAnswer:
 			if a.Status == repository.AssertionStatusAccepted {
@@ -238,7 +261,44 @@ func loadOutcomes(ctx context.Context, q db.Querier, judgmentIDs, outcomeIDs []u
 			r.class = a
 		}
 	}
+	for _, r := range records {
+		r.LastEffect = lastEffect[r.decision()]
+		r.KeptDueDate = kept[r.decision()]
+	}
 	return records, nil
+}
+
+// contentDecisions names the decision of every outcome on the content the
+// given outcomes judged, whichever judgment of that content holds it, and the
+// date each decision's first review of a later date kept, recorded on the
+// outcome that review was made on.
+func contentDecisions(ctx context.Context, q db.Querier, rows []*db.ListJudgmentOutcomesRow) (map[uuid.UUID]decisionKey, map[decisionKey]*time.Time, error) {
+	var examples []string
+	for _, row := range rows {
+		if !slices.Contains(examples, row.ExampleID) {
+			examples = append(examples, row.ExampleID)
+		}
+	}
+	judgments, err := q.ListJudgmentRows(ctx, db.ListJudgmentRowsParams{Ids: []uuid.UUID{}, ExampleIds: examples})
+	if err != nil {
+		return nil, nil, fmt.Errorf("list content judgments: %w", err)
+	}
+	outcomes, err := q.ListJudgmentOutcomes(ctx, db.ListJudgmentOutcomesParams{
+		JudgmentIds: judgmentIDs(judgments), OutcomeIds: []uuid.UUID{},
+	})
+	if err != nil {
+		return nil, nil, fmt.Errorf("list content outcomes: %w", err)
+	}
+	decisions := make(map[uuid.UUID]decisionKey, len(outcomes))
+	kept := map[decisionKey]*time.Time{}
+	for _, o := range outcomes {
+		d := decisionKey{example: ExampleID(o.ExampleID), question: Question(o.Question), contact: contactOf(o.ContactID)}
+		decisions[o.NodeID] = d
+		if o.KeptDueDate != nil && kept[d] == nil {
+			kept[d] = o.KeptDueDate
+		}
+	}
+	return decisions, kept, nil
 }
 
 func emptyIfNil[T any](s []T) []T {

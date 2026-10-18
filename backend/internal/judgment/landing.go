@@ -47,7 +47,8 @@ func (s *Store) landTx(ctx context.Context, tx pgx.Tx, judgmentID uuid.UUID, thr
 	if err != nil {
 		return Effects{}, err
 	}
-	reviewed, err := exampleReviews(ctx, q, j.ExampleID)
+	example := ExampleID(j.ExampleID)
+	reviewed, err := loadLabels(ctx, q, []ExampleID{example})
 	if err != nil {
 		return Effects{}, err
 	}
@@ -56,8 +57,8 @@ func (s *Store) landTx(ctx context.Context, tx pgx.Tx, judgmentID uuid.UUID, thr
 	var pending []*outcomeRecord
 	for _, o := range outcomes {
 		value := o.value()
-		if right, ok := reviewed[o.key()]; ok {
-			value = right
+		if l := reviewed.of(o); l != nil {
+			value = l.right
 		} else if o.class == nil && o.QuestionID != "" {
 			pending = append(pending, o)
 		}
@@ -110,7 +111,7 @@ func (s *Store) landTx(ctx context.Context, tx pgx.Tx, judgmentID uuid.UUID, thr
 	}
 	for _, task := range open {
 		question, value := omissionOf(task)
-		key := outcomeKey{question, task.ContactID}
+		key := decisionKey{example, question, task.ContactID}
 		if _, ok := reviewed[key]; ok || mentions(outcomes, task) {
 			continue
 		}
@@ -194,24 +195,6 @@ func mentions(outcomes []*outcomeRecord, task repository.ContactTask) bool {
 	return slices.ContainsFunc(outcomes, func(o *outcomeRecord) bool {
 		return o.Question == question && (user || contactOf(o.LiveContactID) == task.ContactID)
 	})
-}
-
-// exampleReviews returns the user's latest right outcome per question and
-// contact on an example, whichever method's outcome the user reviewed.
-func exampleReviews(ctx context.Context, q db.Querier, exampleID string) (map[outcomeKey]string, error) {
-	rows, err := q.ListLatestExampleReviews(ctx, db.ListLatestExampleReviewsParams{
-		ReviewPredicate: predicateReview, ExampleIds: []string{exampleID},
-	})
-	if err != nil {
-		return nil, fmt.Errorf("list example reviews: %w", err)
-	}
-	reviewed := make(map[outcomeKey]string, len(rows))
-	for _, r := range rows {
-		if r.RightOutcome != nil {
-			reviewed[outcomeKey{Question(r.Question), contactOf(r.ContactID)}] = *r.RightOutcome
-		}
-	}
-	return reviewed, nil
 }
 
 // assertClassTx records how an outcome landed and reports whether the catalog

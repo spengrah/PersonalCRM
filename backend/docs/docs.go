@@ -4137,7 +4137,7 @@ const docTemplate = `{
         },
         "/judgment-outcomes/{id}/review": {
             "post": {
-                "description": "Records the right outcome the user states for an outcome of any state and returns the outcome with the verdict the server derives: confirmed when it equals the judged outcome, rejected when it differs and has no effect, corrected otherwise. Reviewing an applied or claim outcome gives the thread the right outcome's effect. keep_current_date, with an open commitment's right outcome, keeps the obligation's current date against the judged later one, and the verdict is corrected.",
+                "description": "Records the right outcome the user states for an outcome of any state and returns the outcome with the verdict the server derives: confirmed when it equals the judged outcome, rejected when it differs and has no effect, corrected otherwise. The review is its decision's label for every proposal on the same content. A first review of an applied or claim outcome gives the thread the right outcome's effect; a review of a decision that already has a label records the label only, except an Add on a negative decision, which has the effect the same review of an unlabeled negative has. A review that gives a proposal's last unlabeled item its label also labels that proposal's negative decisions with their judged values; the review records all of its labels or none. keep_current_date, with an open commitment's right outcome, keeps the obligation's current date against the judged later one, and the verdict is corrected.",
                 "consumes": [
                     "application/json"
                 ],
@@ -4280,6 +4280,48 @@ const docTemplate = `{
                     },
                     "400": {
                         "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/api.APIResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/judgments/{id}/confirm-nones": {
+            "post": {
+                "description": "Labels every negative decision of the judgment's proposal that has no label from any proposal with its judged value, as ordinary reviews that change nothing live, and then labels the negative decisions of every other proposal on the same content whose items those labels leave all labeled. It records all of its labels or none. A proposal with an item, or one holding no negative decision without a label, is refused.",
+                "tags": [
+                    "judgments"
+                ],
+                "summary": "Confirm a proposal's Nones",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "format": "uuid",
+                        "description": "Judgment ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "Every label recorded"
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/api.APIResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/api.APIResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
                         "schema": {
                             "$ref": "#/definitions/api.APIResponse"
                         }
@@ -6396,6 +6438,9 @@ const docTemplate = `{
                         "$ref": "#/definitions/handlers.BenchProposalResponse"
                     }
                 },
+                "review_status": {
+                    "type": "string"
+                },
                 "to_review": {
                     "type": "integer"
                 }
@@ -6452,6 +6497,20 @@ const docTemplate = `{
                 }
             }
         },
+        "handlers.BenchClosestResponse": {
+            "type": "object",
+            "properties": {
+                "contact": {
+                    "$ref": "#/definitions/handlers.BenchPartyResponse"
+                },
+                "debtor": {
+                    "type": "string"
+                },
+                "percent": {
+                    "type": "integer"
+                }
+            }
+        },
         "handlers.BenchItemChangeResponse": {
             "type": "object",
             "properties": {
@@ -6493,6 +6552,9 @@ const docTemplate = `{
                 "list": {
                     "type": "string"
                 },
+                "live_due_date": {
+                    "type": "string"
+                },
                 "mark": {
                     "type": "string"
                 },
@@ -6504,6 +6566,20 @@ const docTemplate = `{
                 },
                 "state": {
                     "type": "string"
+                }
+            }
+        },
+        "handlers.BenchListResponse": {
+            "type": "object",
+            "properties": {
+                "closest": {
+                    "$ref": "#/definitions/handlers.BenchClosestResponse"
+                },
+                "list": {
+                    "type": "string"
+                },
+                "nones_reviewed": {
+                    "type": "boolean"
                 }
             }
         },
@@ -6527,6 +6603,9 @@ const docTemplate = `{
                         "$ref": "#/definitions/handlers.BenchAdditionResponse"
                     }
                 },
+                "confirm_nones": {
+                    "type": "boolean"
+                },
                 "context_kind": {
                     "type": "string"
                 },
@@ -6542,6 +6621,12 @@ const docTemplate = `{
                 "judgment_id": {
                     "type": "string"
                 },
+                "lists": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/handlers.BenchListResponse"
+                    }
+                },
                 "method_key": {
                     "type": "string"
                 },
@@ -6555,6 +6640,9 @@ const docTemplate = `{
                     "type": "boolean"
                 },
                 "reused_at": {
+                    "type": "string"
+                },
+                "review_status": {
                     "type": "string"
                 },
                 "thread_id": {

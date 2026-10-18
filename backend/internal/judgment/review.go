@@ -3,11 +3,11 @@ package judgment
 import (
 	"context"
 	"fmt"
+	"slices"
 	"time"
 
 	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/repository"
-	"personal-crm/backend/internal/service"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -15,18 +15,32 @@ import (
 
 // ReviewOutcome records the user's review of an outcome, whatever its state,
 // as an assertion with user provenance holding the right outcome, and returns
-// the outcome with the verdict derived from it. Reviewing an applied or claim
-// outcome gives the thread the right outcome's live effect: confirming a claim
-// applies it, and rejecting an applied addition withdraws it. That effect acts
-// on the obligation the outcome's live effect is, followed through the tasks
-// that continue it (a superseding commitment, the task a contact merge kept),
-// and on the contact the judged contact now is after any merge; a review
-// closes no other obligation, whatever opened it. Reviewing an evidence
-// outcome records the label only, and so does any review of an outcome whose
-// live effect no longer holds (not acting), so a review never reopens a closed
-// obligation or touches one that replaced it. The review labels the outcome's
-// input for every method: a later judgment of that input leaves its question
-// to the user's verdict.
+// the outcome with the verdict derived from it. The review labels the
+// outcome's decision for every method: a later judgment of that input leaves
+// its question to the user's verdict.
+//
+// A first review of a decision gives the thread the right outcome's live
+// effect when the outcome is applied or a claim: confirming a claim applies
+// it, and rejecting an applied addition withdraws it. That effect acts on the
+// obligation the outcome's live effect is, followed through the tasks that
+// continue it (a superseding commitment, the task a contact merge kept), and
+// on the contact the judged contact now is after any merge; a review closes
+// no other obligation, whatever opened it. Reviewing an evidence outcome
+// records the label only, and so does any review of an outcome whose live
+// effect no longer holds (not acting), so a review never reopens a closed
+// obligation or touches one that replaced it.
+//
+// A review of a decision that already has a label, from any proposal on the
+// same content, is a re-review: it records the new label and changes nothing
+// live. The exception is an Add on a negative decision, a positive right
+// outcome for an outcome that stands for no item: it has the live effect the
+// same review of an unlabeled negative has, since a negative has no live
+// effect to undo.
+//
+// The review then runs the labeling rule (labelNegativesTx) on the outcome's
+// content, in the same transaction, so a review that gives a proposal's last
+// unlabeled item its label labels that proposal's negative decisions, or
+// records nothing at all.
 //
 // A review stating an open commitment may keep the obligation's current date:
 // the commitment is kept, its judged date is not taken, and the verdict
@@ -53,32 +67,23 @@ func (s *Store) ReviewOutcome(ctx context.Context, outcomeID uuid.UUID, review R
 		if keep && !keepsDateApplies(o.Question, right) {
 			return ErrInvalidKeepCurrentDate
 		}
-		locator := userLocator()
-		if _, err := s.assert.AssertTx(ctx, tx, service.AssertRequest{
-			SubjectNodeID: o.ID,
-			PredicateKey:  predicateReview,
-			ValueText:     &right,
-			Confidence:    100,
-			Locators:      []service.ProvenanceLocator{locator},
-		}); err != nil {
-			return fmt.Errorf("assert review: %w", err)
+		live, err := takesEffect(ctx, q, o, right)
+		if err != nil {
+			return err
 		}
-		if _, err := s.assert.AssertTx(ctx, tx, service.AssertRequest{
-			SubjectNodeID: o.ID,
-			PredicateKey:  predicateReviewKeepsDate,
-			ValueBool:     &keep,
-			Confidence:    100,
-			Locators:      []service.ProvenanceLocator{locator},
-		}); err != nil {
-			return fmt.Errorf("assert review keeps date: %w", err)
+		if err := s.recordReviewTx(ctx, tx, o, right, keep); err != nil {
+			return err
 		}
-		if o.state() != OutcomeStateEvidence {
+		if live && o.state() != OutcomeStateEvidence {
 			if err := s.settleLandingTx(ctx, tx, o, o.value() == right && !keep); err != nil {
 				return err
 			}
 			if err := s.applyReviewTx(ctx, tx, o, right, keep); err != nil {
 				return err
 			}
+		}
+		if _, err := s.labelNegativesTx(ctx, tx, o.Example, uuid.Nil); err != nil {
+			return err
 		}
 		records, err = loadOutcomes(ctx, q, nil, []uuid.UUID{outcomeID})
 		if err != nil {
@@ -88,6 +93,28 @@ func (s *Store) ReviewOutcome(ctx context.Context, outcomeID uuid.UUID, review R
 		return nil
 	})
 	return view, err
+}
+
+// takesEffect reports whether a review of the outcome stating right is one
+// that may change live state: the first review of its decision, or an Add on
+// a negative decision. Any other review is a re-review, which records the
+// label only.
+func takesEffect(ctx context.Context, q db.Querier, o *outcomeRecord, right string) (bool, error) {
+	lb, err := loadLabels(ctx, q, []ExampleID{o.Example})
+	if err != nil {
+		return false, err
+	}
+	if lb.of(o) == nil {
+		return true, nil
+	}
+	if isNoEffectValue(right) {
+		return false, nil
+	}
+	siblings, err := loadOutcomes(ctx, q, []uuid.UUID{o.JudgmentID}, nil)
+	if err != nil {
+		return false, err
+	}
+	return slices.ContainsFunc(sortOutcomes(siblings, lb).negatives, func(n *outcomeRecord) bool { return n.ID == o.ID }), nil
 }
 
 // settleLandingTx closes the outcome's landing as the review decides it: a
@@ -129,6 +156,13 @@ func (s *Store) applyReviewTx(ctx context.Context, tx pgx.Tx, o *outcomeRecord, 
 	if err != nil || gone {
 		return err
 	}
+	if changeOf(o) == ChangeKindLaterDate {
+		if err := q.SetJudgmentOutcomeKeptDueDate(ctx, db.SetJudgmentOutcomeKeptDueDateParams{
+			NodeID: o.ID, KeptDueDate: live.obligationDue(o),
+		}); err != nil {
+			return fmt.Errorf("record kept due date: %w", err)
+		}
+	}
 	due, err := s.reviewDueTx(ctx, tx, o, right, keep)
 	if err != nil {
 		return err
@@ -137,17 +171,18 @@ func (s *Store) applyReviewTx(ctx context.Context, tx pgx.Tx, o *outcomeRecord, 
 	if err != nil {
 		return err
 	}
-	reviewed, err := exampleReviews(ctx, q, j.ExampleID)
+	reviewed, err := loadLabels(ctx, q, []ExampleID{o.Example})
 	if err != nil {
 		return err
 	}
 	siblings := make([]sibling, 0, len(outcomes))
 	for _, x := range outcomes {
-		value, ok := reviewed[x.key()]
-		switch {
+		var value string
+		switch l := reviewed.of(x); {
 		case x.ID == o.ID:
 			value = right
-		case ok:
+		case l != nil:
+			value = l.right
 		case x.state() == OutcomeStateApplied:
 			value = x.value()
 		default:

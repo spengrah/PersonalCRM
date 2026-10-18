@@ -22,16 +22,17 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// benchEnv serves GET /api/v1/interactions over an env on a database of its
-// own, so the list across every contact holds only what the test seeds.
+// benchEnv serves GET /api/v1/interactions and the judgment routes over an
+// env on a database of its own, so the list across every contact holds only
+// what the test seeds.
 type benchEnv struct {
 	*env
 	router *gin.Engine
 }
 
-func newBenchEnv(t *testing.T) *benchEnv {
+func newBenchEnv(t *testing.T, opts ...envOption) *benchEnv {
 	t.Helper()
-	e := newEnv(t, production, withOwnDatabase())
+	e := newEnv(t, production, append([]envOption{withOwnDatabase()}, opts...)...)
 	q := e.database.Queries
 	content := service.NewInteractionContentService(
 		repository.NewInteractionRepository(q), repository.NewCommsMessageRepository(q),
@@ -42,6 +43,7 @@ func newBenchEnv(t *testing.T) *benchEnv {
 	router := gin.New()
 	router.Use(api.RequestIDMiddleware())
 	handlers.RegisterBenchRoutes(router.Group("/api/v1"), handlers.NewBenchHandler(judgment.NewBench(e.store, content)))
+	handlers.RegisterJudgmentRoutes(router.Group("/api/v1"), handlers.NewJudgmentHandler(e.store))
 	return &benchEnv{env: e, router: router}
 }
 
