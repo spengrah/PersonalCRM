@@ -15,16 +15,18 @@ import type {
   ReviewJudgmentOutcomeRequest,
 } from '@/types/generated/contact'
 import type { ProposalList, ReviewStatus } from '@/types/generated/judgment'
-import { formatConfidence, formatDueDate } from './format'
+import { SAVE_ERROR, formatConfidence, formatDueDate } from './format'
 
 interface ProposalViewProps {
   proposal: BenchProposalResponse
+  /** The run the view is narrowed to, so a save returns its rows as the view shows them. */
+  runId?: string
+  /** Whether a close of the proposal's row is still being saved; its controls wait for it. */
+  closing: boolean
   /** A proposal of another method on the same content starts collapsed. */
   collapsed: boolean
   onShowInThread: (contentRef: string) => void
 }
-
-const SAVE_ERROR = "Couldn't save. Try again."
 
 const LIST_TITLES: Record<ProposalList, string> = {
   i_owe_reply: 'I owe a reply',
@@ -119,15 +121,19 @@ function Mark({ item }: { item: BenchItemResponse }) {
   return null
 }
 
-/** The mark of a list's Nones once every negative decision behind the list has a label. */
-function NonesMark() {
+/**
+ * The mark of a list's Nones once every negative decision behind the list has
+ * a label: "Confirmed" on a None line, and on a heading line, above the list's
+ * items, "Nones confirmed", so it cannot be read as the mark of an item.
+ */
+function NonesMark({ heading = false }: { heading?: boolean }) {
   return (
     <span
       data-nones-mark
       className="inline-flex items-center gap-1 text-xs font-medium text-green-800"
     >
       <Check aria-hidden="true" className="h-3.5 w-3.5" />
-      Confirmed
+      {heading ? 'Nones confirmed' : 'Confirmed'}
     </span>
   )
 }
@@ -287,7 +293,7 @@ function ItemView({
           {changeActs}
         </div>
       )}
-      {item.source && !struck && (
+      {item.source && (
         <blockquote
           data-source-message={item.source.content_ref}
           className="mt-2 border-l-2 border-gray-300 pl-3 text-xs text-gray-600"
@@ -349,7 +355,8 @@ function ListSection({
         <h5 className="text-xs font-medium uppercase tracking-wide text-gray-500">{title}</h5>
         {items.length > 0 && closest && (
           <span data-closest className="inline-flex items-center gap-1.5 text-xs text-gray-500">
-            closest None: {closestText} · {closest.percent}%{entry.nones_reviewed && <NonesMark />}
+            closest None: {closestText} · {closest.percent}%
+            {entry.nones_reviewed && <NonesMark heading />}
           </span>
         )}
       </div>
@@ -454,6 +461,8 @@ const isReplyList = (entry: BenchListResponse) =>
  */
 export function ProposalView({
   proposal,
+  runId,
+  closing,
   collapsed: startCollapsed,
   onShowInThread,
 }: ProposalViewProps) {
@@ -466,7 +475,7 @@ export function ProposalView({
   const send = (outcomeId: string, body: ReviewJudgmentOutcomeRequest) => {
     setFailed(null)
     review.mutate(
-      { outcomeId, body },
+      { outcomeId, threadId: proposal.thread_id, body, runId },
       {
         onSuccess: () => {
           setPicker(null)
@@ -484,7 +493,7 @@ export function ProposalView({
     setPicker,
     changing,
     setChanging,
-    pending: review.isPending || confirmNones.isPending,
+    pending: review.isPending || confirmNones.isPending || closing,
     failed,
     onReview: send,
     onShowInThread,
@@ -544,7 +553,13 @@ export function ProposalView({
             size="sm"
             variant="outline"
             disabled={sections.pending}
-            onClick={() => confirmNones.mutate(proposal.judgment_id)}
+            onClick={() =>
+              confirmNones.mutate({
+                judgmentId: proposal.judgment_id,
+                threadId: proposal.thread_id,
+                runId,
+              })
+            }
             className="gap-1 text-green-800"
           >
             <Check aria-hidden="true" className="h-3.5 w-3.5" />

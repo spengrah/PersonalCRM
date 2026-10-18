@@ -30,15 +30,47 @@ function proposalOf(region: Locator, method: string): Locator {
   return region.locator('[data-proposal]').filter({ hasText: method })
 }
 
-/** Records every review the page posts. */
+/** The whole bodies the page posted, keyed by the reviews recordReviews returned. */
+const postedBodies = new WeakMap<Record<string, unknown>[], Record<string, unknown>[]>()
+
+/**
+ * Records every review the page posts, each without the rows it names for
+ * the save to return; posted gives the whole bodies.
+ */
 function recordReviews(page: Page): Record<string, unknown>[] {
+  const reviews: Record<string, unknown>[] = []
   const bodies: Record<string, unknown>[] = []
+  postedBodies.set(reviews, bodies)
   page.on('request', request => {
     if (request.method() === 'POST' && request.url().includes('/judgment-outcomes/')) {
-      bodies.push(request.postDataJSON())
+      const body = request.postDataJSON()
+      const review = { ...body }
+      delete review.rows
+      bodies.push(body)
+      reviews.push(review)
     }
   })
-  return bodies
+  return reviews
+}
+
+/** The whole bodies of the recorded reviews. */
+function posted(reviews: Record<string, unknown>[]): Record<string, unknown>[] {
+  return postedBodies.get(reviews) ?? []
+}
+
+/** Whether a posted body holds only a review's fields and the rows it names by judgment ID. */
+function onlyReviewFields(body: Record<string, unknown>): boolean {
+  const rows = body.rows
+  return (
+    Object.keys(body).every(key => ['right_outcome', 'keep_current_date', 'rows'].includes(key)) &&
+    (rows === undefined ||
+      (Array.isArray(rows) &&
+        rows.every(
+          row =>
+            Object.keys(row).join() === 'judgment_ids' &&
+            (row.judgment_ids as unknown[]).every(id => typeof id === 'string')
+        )))
+  )
 }
 
 /** The group world's shared row: the user's message, held once per member, and its messages. */
@@ -408,9 +440,13 @@ test.describe('Interactions bench review @area:interactions', () => {
       { right_outcome: 'open' },
       { right_outcome: 'participant_moment' },
     ])
+    expect(posted(reviews).filter(body => !onlyReviewFields(body))).toEqual([])
     await expect(page.getByRole('dialog')).toHaveCount(0)
 
     // spec: IXN-048.confirmed-in-place, IXN-048.removed-stays-struck, IXN-048.added-shown, IXN-048.change-after-review, IXN-048.counts-exclude-reviewed
+    const closed = page.waitForResponse(response => response.url().includes('/judgments/close'))
+    await row.getByRole('button', { name: 'Collapse content', exact: true }).click()
+    expect((await closed).status()).toBe(200)
     await page.reload()
     await expect(row.locator('[data-review-indicator]')).toHaveText('Reviewed', {
       timeout: SLOW_TIMEOUT_MS,
@@ -553,6 +589,7 @@ test.describe('Interactions bench review @area:interactions', () => {
       { right_outcome: 'i_owe_reply' },
       { right_outcome: 'open' },
     ])
+    expect(posted(reviews).filter(body => !onlyReviewFields(body))).toEqual([])
 
     // spec: IXN-048.removed-stays-struck, IXN-048.added-shown
     await page.reload()

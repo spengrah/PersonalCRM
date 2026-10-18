@@ -4,7 +4,7 @@ The bench is one new page, the all-interactions view at `/interactions`, where t
 
 The canvas is "Judgment Bench" (https://claude.ai/artifact/1d1TcFH9iXtdtRABK6n4iX), a Design canvas of fourteen artboards. Every artboard after the two lists shows one thread. Where an artboard shows several states of one proposal, each state is labeled as a step of that proposal ("Step 1 of 3 · The proposal as judged"). Every person, message and date on it is synthetic.
 
-The user approved this design on 2026-10-16, with the rulings on the four options from the reference artifacts recorded below (see "Options from the reference artifacts"). PR5 builds against this note. Artboards 11 to 14 draw the approved states of `.agents/spec/2026-10-17-bench-negative-decisions.md`: the closest decision behind each None, honest review counts, Confirm Nones, Change and the live state beside a mark. Artboard 4, drawn before that spec, reads "All reviewed" over Nones without a label; that state is correct, because its one item has a label and the bench then labels the proposal's Nones (see "Nones").
+The user approved this design on 2026-10-16, with the rulings on the four options from the reference artifacts recorded below (see "Options from the reference artifacts"). PR5 builds against this note. Artboards 11 to 14 draw the approved states of `.agents/spec/2026-10-17-bench-negative-decisions.md`: the closest decision behind each None, honest review counts, Confirm Nones, Change and the live state beside a mark. Artboard 4, drawn before that spec, reads "All reviewed" over Nones without a label; that state is correct once the user has closed the row, because its one item has a label and a close then labels the proposal's Nones (see "Nones"). Artboard 13 likewise draws the Nones confirmed right after both items are reviewed; they read "Confirmed" once the user closes the row and opens it again.
 
 Sources: `.agents/spec/2026-10-14-decision-model-extraction.md` (G3, G5, G7f, G8, G9, G11, SC1, SC4, SC5, SC7, SC10, NG3, NG4, rabbit hole 4), the bench routes of the decision-model foundation plan (S4): `GET /api/v1/judgment-runs`, `GET /api/v1/judgments` and `POST /api/v1/judgment-outcomes/:id/review`, PR5's `GET /api/v1/interactions`, and the bench read PR5 adds, which returns each judged thread's proposal already compiled, each commitment with its source message when the judgment holds one. Wire fields are snake_case (`right_outcome`, `cut_off`, `run_id`, `contact_id`).
 
@@ -27,7 +27,7 @@ Each item stands for exactly one judged outcome, and each user act on an item re
 
 ### A commitment's source message
 
-Each commitment carries the message that states it. The judgment names that message by answering a choice question whose options are the thread's messages, so no text is generated (NG3). Under the commitment's text the item quotes the message: its sender, its time, the message text in quotation marks, and a "Show in thread ↑" link that scrolls the drill-down to that message and highlights it. A commitment whose judgment holds no source-message answer shows no quote, and neither does a commitment the user added.
+Each commitment carries the message that states it. The judgment names that message by answering a choice question whose options are the thread's messages, so no text is generated (NG3). Under the commitment's text the item quotes the message: its sender, its time, the message text in quotation marks, and a "Show in thread ↑" link that scrolls the drill-down to that message and highlights it. A commitment whose judgment holds no source-message answer shows no quote, and neither does a commitment the user added. A removed commitment keeps its quote, whether or not its removal took effect and while the user changes its review, so the user can review it again against its evidence.
 
 ### A commitment's date
 
@@ -38,11 +38,11 @@ A commitment reads "due {date}" when the judgment selected a stated date, and "n
 A list's None is every negative decision behind it, and the bench shows them as one line, however many there are. The server names each list's closest decision: among the decisions no item of the list represents, the one the judgment gave the highest probability of the list's value, which may be a decision another list holds as an item. The closest decision is display only and asks for no review.
 
 - A list with no item reads "None", "closest: {name}" in gray-500 and "{n}%", on one line in a white box, the name in the form of the list's items ("Rosa Delgado", "Me → Rosa Delgado", "Rosa Delgado → Me", "Big moment"). The box's border is dashed gray-300 while a negative decision behind the list has no label, and solid gray-200 once all have one.
-- A list with items shows "closest None: {name} · {n}%" in gray-500 at the right of its heading line, adding no row.
+- A list with items shows "closest None: {name} · {n}%" in gray-500 at the right of its heading line, adding no row. Once every negative decision behind the list has a label, the heading line adds "Nones confirmed", so the mark cannot be read as the mark of the item beneath it; a None line's mark reads "Confirmed".
 - A list with no closest decision reads plain "None", or shows nothing on its heading line.
 - Once every negative decision behind a list has a label, its None line or heading line adds "Confirmed", green-800 with a check.
 
-A proposal with no items whose negative decisions have no label offers one "Confirm Nones" button, an outline button with a green-800 check, at the right of its header beside "Nones to review". It labels every negative decision of the proposal that has no label with its judged value; then each None reads "Confirmed", the header "All reviewed" and the row "Reviewed", and every Add stays usable. In a proposal with items, the review that gives its last item a label labels its Nones the same way, with no further act. No list offers a control of its own for its Nones. If Confirm Nones fails, the proposal stays as it was and shows "Couldn't save. Try again." under its header.
+A proposal with no items whose negative decisions have no label offers one "Confirm Nones" button, an outline button with a green-800 check, at the right of its header beside "Nones to review". It labels every negative decision of the proposal that has no label with its judged value; then each None reads "Confirmed", the header "All reviewed" and the row "Reviewed", and every Add stays usable. Closing a row (its collapse control) labels the Nones of each of its proposals that holds a label, from any review, Add or Confirm Nones in any proposal on the same content, the same way; its items without a label stay to review, and a proposal holding no label gains none. Reviewing items, the last one included, labels no None. A close takes effect after every save the user made on the row is recorded; leaving the page, changing page or reloading is not a close. No list offers a control of its own for its Nones. If Confirm Nones fails, the proposal stays as it was and shows "Couldn't save. Try again." under its header.
 
 A decision has one label, shared by every proposal on the same content: a review made in one proposal shows on the same decision's item in every other, and counts as reviewed there.
 
@@ -119,6 +119,8 @@ Each row is one line of a grid across the card's full width, in this order:
 5. Review indicator, right-aligned, from the server's review status: "{n} to review", amber-800 on an amber-50 pill with an amber-300 border, while {n} items of the proposals the row shows have no label; else "Nones to review" on the same pill while a negative decision of any of its proposals has no label; else the quiet settled mark, a gray-500 check and "Reviewed" in gray-500. A row that holds no judgment leaves the cell empty.
 6. Actions: the expand button for a row with content, and the "More actions" menu with the actions its kind offers.
 
+While a row is open, its row line, with the collapse button, stays at the top of the window under the navigation bar however far the user scrolls its drill-down, so the user can close the row from anywhere in it. After any save (a review, an Add, Confirm Nones or a close), the saved proposal's controls stay disabled until it shows the state the server recorded, which the save's response carries, so the bench never waits on a read of the whole list to show it.
+
 The grid's fixed columns are 170 px, 200 px, the preview, 168 px, 104 px and 72 px, with 16 px gaps. The row names no judgment, outcome or flag; those appear only in the drill-down.
 
 ## States the canvas shows
@@ -145,7 +147,7 @@ Rows follow, newest first, as "The list row" describes. The artboard draws six: 
 
 Expanding a judged row opens the drill-down, laid out in content order:
 
-1. A frame with a blue-200 border holding, in order, the messages the judgment read, as the shipped drill-down shows them, with the user's own sender name "Me" in blue-700; the cut-off rule; and the proposal, directly under the rule.
+1. A frame with a blue-200 border holding, in order, the messages the judgment read, as the shipped drill-down shows them, with the user's own sender name "Me" in blue-700; the cut-off rule; and the proposal, directly under the rule. Each message shows its sender and its time on one line, the time in gray-500 at text-xs, with the message text beneath; the contact history's drill-down shows messages the same way.
 2. The cut-off rule: a blue line across the thread, broken by an up arrow and "judged up to {cut-off date and time}", so the arrow points at the content the judgment read.
 3. The proposal's header: "Proposal", the method key and version, "production method" when it is the designated one, and at its right what remains to review in that proposal alone: "{n} to review" in amber while its items have no label, else "Nones to review" in amber with the "Confirm Nones" button where the proposal has no items, else "All reviewed" in green. Under it the proposal's three sections stack, each across the proposal's full width: the replies section, with "I owe a reply" and "Owes me a reply" side by side in two equal columns; Commitments; and Big moment. A gray-200 rule separates each section from the one above it. Each list's items stack in it, with its Add control at its foot.
 4. Each other judgment of the same content, by another method, inside the same frame under the first proposal, collapsed to one line: "Proposal", its method and version, "Not acting · {n} items", and a "Show proposal" button. Opened, it shows its lists as the first proposal does, each item still reviewable.
@@ -159,7 +161,7 @@ The artboard shows the thread's row, a line "↑ judged up to {cut-off}" naming 
 
 - Step 1 of 3, the proposal as judged, as on artboard 2.
 - Step 2 of 3: the user confirmed the suggested reply item, which now reads Live and Confirmed, and opened the "Add commitment" picker, which offers "Me → {name}" for each participant contact.
-- Step 3 of 3, after more corrections and a reload: the reply item reads Live and Confirmed; a person the user added to "I owe a reply" reads Live and Added by you; one commitment reads Confirmed; the suggested commitment the user removed is struck through and reads Removed by you, without its quote; one live commitment still offers its controls; the commitment the user added reads "Me → {name} · no stated date", Live and Added by you, with no quote; the flag reads Live and Confirmed. The header counts the one item left to review, and so does the row.
+- Step 3 of 3, after more corrections and a reload: the reply item reads Live and Confirmed; a person the user added to "I owe a reply" reads Live and Added by you; one commitment reads Confirmed; the suggested commitment the user removed is struck through and reads Removed by you, keeping its quote; one live commitment still offers its controls; the commitment the user added reads "Me → {name} · no stated date", Live and Added by you, with no quote; the flag reads Live and Confirmed. The header counts the one item left to review, and so does the row.
 
 ### 4. "thanks, sounds good!": a suggested removal, step by step
 
@@ -257,10 +259,14 @@ Each behavior of the bench is one row in `spec/interactions.yaml`, cited by the 
 | IXN-061 | Each list names the decision the judgment came closest to making | 11, 12, 13 |
 | IXN-062 | Confirm Nones labels a proposal's Nones in one act | 11, 12 |
 | IXN-063 | Each proposal's header states what remains to review in it | 11, 13 |
-| IXN-064 | Reviewing a proposal's last item confirms its Nones | 13 |
+| IXN-064 | Closing a row confirms the Nones of each proposal the user reviewed in it | 13 |
 | IXN-065 | Change re-reviews an item, which shows its live state beside the new mark | 13, 14 |
 | IXN-066 | Add still corrects a miss after the Nones are confirmed | 11, 13 |
 | IXN-067 | A review shows in every proposal on the same content | 13 |
+| IXN-069 | After a save, the saved proposal shows what the server recorded before its controls work again | none |
+| IXN-070 | A removed commitment keeps its source message | 3 |
+| IXN-071 | An open row's header stays in view while the user scrolls its drill-down | none |
+| IXN-072 | A drill-down message shows its sender and time on one line | none |
 
 ## Not designed
 

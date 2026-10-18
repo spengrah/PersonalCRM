@@ -282,7 +282,7 @@ test.describe('Interactions bench nones @area:interactions', () => {
     await expect(proposal.getByRole('button', { name: 'Confirm Nones' })).toHaveCount(1)
   })
 
-  test('a proposal with items shows its closest None on a list’s heading line, and confirming its last item confirms its Nones', async ({
+  test('a proposal with items shows its closest None on a list’s heading line, and closing its row confirms its Nones', async ({
     page,
     request,
   }) => {
@@ -370,20 +370,29 @@ test.describe('Interactions bench nones @area:interactions', () => {
     await expect(iOwe.locator('[data-closest]')).toHaveCount(0)
     await expect(owesMe.locator('[data-none]')).toHaveText('None')
 
-    // spec: IXN-064.last-item-confirms-nones
+    // spec: IXN-064.nones-wait-for-close
     await iOwe.getByRole('button', { name: `Confirm ${sam.name}` }).click()
     await expect(listItem(iOwe, sam.name)).toHaveAttribute('data-mark', 'confirmed', {
       timeout: SLOW_TIMEOUT_MS,
     })
+    await expect(proposal.locator('[data-proposal-status]')).toHaveText('1 to review')
     await expect(proposal.locator('[data-nones-mark]')).toHaveCount(0)
-    await commitments.getByRole('button', { name: `Confirm ${kim.name} → Me` }).click()
-    await expect(proposal.locator('[data-proposal-status]')).toHaveText('All reviewed', {
+
+    // spec: IXN-064.close-confirms-nones, IXN-064.items-stay-to-review, IXN-064.nones-mark-copy
+    await bench.getByRole('button', { name: 'Collapse content', exact: true }).click()
+    await expect(bench.locator('[data-review-indicator]')).toHaveText('1 to review', {
       timeout: SLOW_TIMEOUT_MS,
     })
-    await expect(bench.locator('[data-review-indicator]')).toHaveText('Reviewed')
-    await expect(owesMe.locator('[data-none] [data-nones-mark]')).toHaveText('Confirmed')
-    await expect(commitments.locator('[data-closest] [data-nones-mark]')).toHaveText('Confirmed')
+    await expandRow(bench)
+    await expect(owesMe.locator('[data-none] [data-nones-mark]')).toHaveText('Confirmed', {
+      timeout: SLOW_TIMEOUT_MS,
+    })
     await expect(flag.locator('[data-none] [data-nones-mark]')).toHaveText('Confirmed')
+    await expect(commitments.locator('[data-closest] [data-nones-mark]')).toHaveText(
+      'Nones confirmed'
+    )
+    await expect(listItem(commitments, `${kim.name} → Me`)).not.toHaveAttribute('data-mark')
+    await expect(proposal.locator('[data-proposal-status]')).toHaveText('1 to review')
 
     // spec: IXN-066.offers-confirmed-none, IXN-066.add-acts-as-before
     await owesMe.getByRole('button', { name: 'Add', exact: true }).click()

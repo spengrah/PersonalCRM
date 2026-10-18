@@ -37,10 +37,9 @@ import (
 // same review of an unlabeled negative has, since a negative has no live
 // effect to undo.
 //
-// The review then runs the labeling rule (labelNegativesTx) on the outcome's
-// content, in the same transaction, so a review that gives a proposal's last
-// unlabeled item its label labels that proposal's negative decisions, or
-// records nothing at all.
+// A review labels its own decision only: it never runs the labeling rule
+// (labelNegativesTx), so a proposal's negative decisions gain labels only
+// from Confirm Nones or a close of its row.
 //
 // A review stating an open commitment may keep the obligation's current date:
 // the commitment is kept, its judged date is not taken, and the verdict
@@ -81,9 +80,6 @@ func (s *Store) ReviewOutcome(ctx context.Context, outcomeID uuid.UUID, review R
 			if err := s.applyReviewTx(ctx, tx, o, right, keep); err != nil {
 				return err
 			}
-		}
-		if _, err := s.labelNegativesTx(ctx, tx, o.Example, uuid.Nil); err != nil {
-			return err
 		}
 		records, err = loadOutcomes(ctx, q, nil, []uuid.UUID{outcomeID})
 		if err != nil {

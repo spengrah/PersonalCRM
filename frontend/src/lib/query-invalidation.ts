@@ -39,6 +39,7 @@ export type DomainEvent =
   // Judgment events
   | 'judgment:reviewed' // the user reviewed a judgment outcome on the bench
   | 'judgment:nones-confirmed' // the user confirmed a proposal's Nones on the bench
+  | 'judgment:row-closed' // the user closed a row on the bench
   // Import events
   | 'import:imported' // imported as new contact
   | 'import:linked' // linked to existing contact
@@ -124,6 +125,8 @@ const invalidationRules: Record<DomainEvent, InvalidationKey[]> = {
   // Confirming Nones records labels only, changing nothing live; its labels
   // show in every proposal on the same content.
   'judgment:nones-confirmed': [interactionKeys.allLists(), judgmentKeys.all],
+  // A close records labels only, like Confirm Nones.
+  'judgment:row-closed': [interactionKeys.allLists(), judgmentKeys.all],
 
   // Import events
   // Importing creates a new contact, so invalidate both imports and contacts.

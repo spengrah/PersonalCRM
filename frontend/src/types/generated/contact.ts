@@ -472,8 +472,9 @@ export interface InteractionTypeOptionResponse {
  * judgments whose latest content the row holds; to_review counts their items
  * awaiting review. review_status, present on a row carrying a proposal, is
  * to_review while any of its proposals' items has no label, else
- * nones_to_review while any holds a negative decision without a label, else
- * all_reviewed.
+ * nones_to_review while any holds a None to review, else all_reviewed. A None
+ * to review is a negative decision without a label, unless another proposal on
+ * the same content holds it as a reply its own commitment absorbs.
  */
 export interface AllInteractionItemResponse {
   item: InteractionListItemResponse;
@@ -501,9 +502,10 @@ export interface InteractionPreviewResponse {
  * the run the view is narrowed to, when that run reused it. reply_lists is
  * false for a meeting. to_review counts its items without a label;
  * review_status is to_review while it has one, else nones_to_review while it
- * holds a negative decision without a label, else all_reviewed. confirm_nones
- * is true exactly when it has no items and holds a negative decision without
- * a label, and /judgments/{judgment_id}/confirm-nones labels them. lists has
+ * holds a None to review, else all_reviewed. confirm_nones is true exactly
+ * when it has no items and holds a negative decision without a label that no
+ * proposal on the same content holds as an unreviewed item or an absorbed
+ * reply; /judgments/{judgment_id}/confirm-nones labels those. lists has
  * one entry per list it shows, in display order; a meeting's carries no reply
  * lists.
  */
@@ -529,7 +531,7 @@ export interface BenchProposalResponse {
  * judgment came closest to answering with the list's value among the
  * decisions no item of the list represents, absent when the list has no
  * candidate. nones_reviewed is true exactly when at least one negative
- * decision sits behind the list and every one has a label.
+ * decision sits behind the list and none is a None to review.
  */
 export interface BenchListResponse {
   list: ProposalList;
@@ -727,9 +729,58 @@ export interface JudgmentOutcomeReviewResponse {
  * ReviewJudgmentOutcomeRequest is a review: the outcome's right outcome. The
  * server derives the verdict; a client never sends one. keep_current_date,
  * allowed only with an open commitment's right outcome, keeps the
- * obligation's current date against the judged later one.
+ * obligation's current date against the judged later one. rows names the
+ * rows the bench shows that the review can change.
  */
 export interface ReviewJudgmentOutcomeRequest {
   right_outcome: string;
   keep_current_date?: boolean;
+  rows?: BenchRowRequest[];
+}
+/**
+ * ReviewJudgmentOutcomeResponse is a recorded review: the reviewed outcome,
+ * and the rows the request named as the bench now shows them, so the bench
+ * shows the recorded state without reading its whole list again.
+ */
+export interface ReviewJudgmentOutcomeResponse extends JudgmentOutcomeResponse {
+  rows: BenchRowStateResponse[];
+}
+/**
+ * BenchRowRequest names a row the bench shows by the judgments of the
+ * proposals it shows.
+ */
+export interface BenchRowRequest {
+  judgment_ids: string[];
+}
+/**
+ * BenchRowsRequest names the rows the bench shows that a save can change.
+ */
+export interface BenchRowsRequest {
+  rows?: BenchRowRequest[];
+}
+/**
+ * BenchRowStateResponse is a row as the bench shows it after a save: its
+ * proposals, and what remains to review across them, as the list's
+ * to_review and review_status read.
+ */
+export interface BenchRowStateResponse {
+  proposals: BenchProposalResponse[];
+  to_review: number /* int */;
+  review_status?: ReviewStatus;
+}
+/**
+ * BenchRowsResponse is the rows a save's request named, in its order, as the
+ * bench now shows them.
+ */
+export interface BenchRowsResponse {
+  rows: BenchRowStateResponse[];
+}
+/**
+ * CloseBenchRowRequest is a close of a row on the bench: the judgments of the
+ * proposals the row shows, and the rows the bench shows that the close can
+ * change.
+ */
+export interface CloseBenchRowRequest {
+  judgment_ids: string[];
+  rows?: BenchRowRequest[];
 }

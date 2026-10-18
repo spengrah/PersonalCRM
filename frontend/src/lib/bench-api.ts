@@ -2,11 +2,13 @@ import { apiClient } from './api-client'
 import type { ApiResponseWithMeta } from './api-client'
 import type {
   AllInteractionsResponse,
+  BenchRowRequest,
+  BenchRowsResponse,
   BenchThreadContentResponse,
   InteractionTypeOptionResponse,
-  JudgmentOutcomeResponse,
   JudgmentRunsResponse,
   ReviewJudgmentOutcomeRequest,
+  ReviewJudgmentOutcomeResponse,
 } from '@/types/generated/contact'
 
 export type InteractionType = InteractionTypeOptionResponse['key']
@@ -20,6 +22,11 @@ export interface AllInteractionsFilters {
 }
 
 export const ALL_INTERACTIONS_PAGE_SIZE = 20
+
+/** A save's path, carrying the run the view is narrowed to, so the rows it returns read as the view shows them. */
+function inRun(path: string, runId: string | undefined): string {
+  return runId ? `${path}?run_id=${encodeURIComponent(runId)}` : path
+}
 
 export const benchApi = {
   // One page of every interaction across contacts, each row with the
@@ -45,20 +52,43 @@ export const benchApi = {
   },
 
   // Records the right outcome the user states; the server derives the
-  // verdict, so a review never carries one.
+  // verdict, so a review never carries one. It returns the rows the body
+  // names as the server recorded them.
   async review(
     outcomeId: string,
-    body: ReviewJudgmentOutcomeRequest
-  ): Promise<JudgmentOutcomeResponse> {
-    return apiClient.post<JudgmentOutcomeResponse>(
-      `/api/v1/judgment-outcomes/${outcomeId}/review`,
+    body: ReviewJudgmentOutcomeRequest,
+    runId?: string
+  ): Promise<ReviewJudgmentOutcomeResponse> {
+    return apiClient.post<ReviewJudgmentOutcomeResponse>(
+      inRun(`/api/v1/judgment-outcomes/${outcomeId}/review`, runId),
       body
     )
   },
 
   // Labels every negative decision of a proposal that has no label with its
-  // judged value; the server decides which, and refuses a proposal with an item.
-  async confirmNones(judgmentId: string): Promise<void> {
-    await apiClient.post<void>(`/api/v1/judgments/${judgmentId}/confirm-nones`)
+  // judged value; the server decides which, and refuses a proposal with an
+  // item. It returns the rows named as the server recorded them.
+  async confirmNones(
+    judgmentId: string,
+    rows: BenchRowRequest[],
+    runId?: string
+  ): Promise<BenchRowsResponse> {
+    return apiClient.post<BenchRowsResponse>(
+      inRun(`/api/v1/judgments/${judgmentId}/confirm-nones`, runId),
+      { rows }
+    )
+  },
+
+  // Records the user closing a row: the server labels what a close labels and
+  // returns the rows named as it recorded them.
+  async closeRow(
+    judgmentIds: string[],
+    rows: BenchRowRequest[],
+    runId?: string
+  ): Promise<BenchRowsResponse> {
+    return apiClient.post<BenchRowsResponse>(inRun('/api/v1/judgments/close', runId), {
+      judgment_ids: judgmentIds,
+      rows,
+    })
   },
 }

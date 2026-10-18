@@ -217,10 +217,10 @@
 //
 //	--infer-negative-labels       One-time catchup for the judgment bench:
 //	                              label, with its judged value, every negative
-//	                              decision of a proposal whose items all have
-//	                              labels, as a review on the bench would have.
+//	                              decision of a proposal holding a label, as a
+//	                              close of its row on the bench would have.
 //	                              Never replaces a label and labels nothing in
-//	                              a proposal with no items; a second run
+//	                              a proposal holding no label; a second run
 //	                              records nothing. Prints the count recorded.
 //	                              SAFE with crm-api running.
 //
@@ -876,8 +876,8 @@ func parseArgs(args []string) (runOptions, error) {
 			"unset, send nothing and say so.")
 	fs.BoolVar(&opts.inferNegativeLabels, "infer-negative-labels", false,
 		"One-time catchup for the judgment bench: label, with its judged value, every negative decision of a "+
-			"proposal whose items all have labels. Never replaces a label; a second run records nothing. Prints "+
-			"the count recorded.")
+			"proposal holding a label, as a close of its row would. Never replaces a label; a second run records "+
+			"nothing. Prints the count recorded.")
 	if err := fs.Parse(args); err != nil {
 		return runOptions{}, err
 	}

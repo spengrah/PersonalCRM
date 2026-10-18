@@ -141,6 +141,7 @@ func (o *outcomeRecord) keepsCurrentDate() bool {
 func (o *outcomeRecord) view() OutcomeView {
 	return OutcomeView{
 		ID:         o.ID,
+		JudgmentID: o.JudgmentID,
 		QuestionID: o.QuestionID,
 		Question:   o.Question,
 		ContactID:  o.ContactID,

@@ -14,7 +14,7 @@ import (
 )
 
 // ErrConfirmNonesRefused is returned for a Confirm Nones on a proposal that
-// has an item, or that holds no negative decision without a label.
+// has an item, or that holds no negative decision the labeling rule may label.
 var ErrConfirmNonesRefused = errors.New("confirm nones applies only to a proposal with no items and an unlabeled negative decision")
 
 // decisionKey names one decision: one question answered for one contact (nil
@@ -109,32 +109,38 @@ func (s *Store) recordReviewTx(ctx context.Context, tx pgx.Tx, o *outcomeRecord,
 }
 
 // labelNegativesTx is the one rule by which a negative decision gains a label
-// no user act states, and every path that records a review runs it before its
-// transaction commits. In the proposal confirm names (Confirm Nones; uuid.Nil
-// for none), which must have no items and a negative decision without a
-// label, every negative decision without a label is labeled with its judged
-// value. Then, in every proposal on the same content with at least one item
-// whose items all have labels (inference), every negative decision without a
-// label is labeled with its judged value, until no proposal on the content
-// changes, since a label shared across proposals can give another proposal's
-// last item its label. A label that exists is never replaced, and a proposal
-// with no items gains no label by inference. Each label is an ordinary review
-// and changes nothing live. It returns how many labels it recorded.
-func (s *Store) labelNegativesTx(ctx context.Context, tx pgx.Tx, example ExampleID, confirm uuid.UUID) (int, error) {
+// no user act states. The rule labels only a negative decision without a
+// label that it does not spare: it spares a decision some proposal on the
+// same content holds as an item without a label, which awaits the user's
+// review of the item in every proposal on the content (G4), and one some
+// proposal holds as a reply its own commitment absorbs, a positive decision
+// (A1). With confirm set (Confirm Nones), the one judgment given must have no
+// items and such a negative decision, and every such negative decision of its
+// proposal is labeled with its judged value. Otherwise (inference, on a close
+// of the row the judgments sit on), every such negative decision of each
+// given proposal that holds a label is labeled with its judged value, until
+// no given proposal changes, since a label shared across proposals on the
+// same content can give another proposal its first label. A label that exists
+// is never replaced, and a proposal holding no label gains none by inference.
+// Each label is an ordinary review and changes nothing live. A review of an
+// item never runs the rule. It returns how many labels it recorded, or
+// ErrNotFound when a judgment is unknown.
+func (s *Store) labelNegativesTx(ctx context.Context, tx pgx.Tx, judgments []uuid.UUID, confirm bool) (int, error) {
+	// An empty ID list reads every judgment, so no judgment is no proposal.
+	if len(judgments) == 0 {
+		return 0, nil
+	}
 	q := db.New(tx)
-	rows, err := q.ListJudgmentRows(ctx, db.ListJudgmentRowsParams{Ids: []uuid.UUID{}, ExampleIds: []string{string(example)}})
+	rows, err := q.ListJudgmentRows(ctx, db.ListJudgmentRowsParams{Ids: judgments, ExampleIds: []string{}})
 	if err != nil {
-		return 0, fmt.Errorf("list content judgments: %w", err)
+		return 0, fmt.Errorf("list judgments: %w", err)
 	}
-	outcomes, err := loadOutcomes(ctx, q, judgmentIDs(rows), nil)
-	if err != nil {
-		return 0, err
+	for _, id := range judgments {
+		if !slices.ContainsFunc(rows, func(j *db.ListJudgmentRowsRow) bool { return j.ID == id }) {
+			return 0, ErrNotFound
+		}
 	}
-	byJudgment := map[uuid.UUID][]*outcomeRecord{}
-	for _, o := range outcomes {
-		byJudgment[o.JudgmentID] = append(byJudgment[o.JudgmentID], o)
-	}
-	lb, err := loadLabels(ctx, q, []ExampleID{example})
+	byJudgment, lb, err := loadContent(ctx, q, rows)
 	if err != nil {
 		return 0, err
 	}
@@ -149,27 +155,26 @@ func (s *Store) labelNegativesTx(ctx context.Context, tx pgx.Tx, example Example
 		}
 		return nil
 	}
-	if confirm != uuid.Nil {
-		if !slices.ContainsFunc(rows, func(j *db.ListJudgmentRowsRow) bool { return j.ID == confirm }) {
-			return 0, ErrNotFound
-		}
-		sorted := sortOutcomes(byJudgment[confirm], lb)
-		pending := sorted.unlabeledNegatives(lb)
-		if len(sorted.items) > 0 || len(pending) == 0 {
+	if confirm {
+		if len(rows) != 1 {
 			return 0, ErrConfirmNonesRefused
 		}
-		if err := labelAll(pending); err != nil {
-			return 0, err
+		pending := sortOutcomes(byJudgment[rows[0].ID], lb).confirmNones(lb, spared(byJudgment, lb))
+		if len(pending) == 0 {
+			return 0, ErrConfirmNonesRefused
 		}
+		err := labelAll(pending)
+		return recorded, err
 	}
 	for changed := true; changed; {
 		changed = false
+		sp := spared(byJudgment, lb)
 		for _, j := range rows {
 			sorted := sortOutcomes(byJudgment[j.ID], lb)
-			if len(sorted.items) == 0 || slices.ContainsFunc(sorted.items, func(it placement) bool { return it.label == nil }) {
+			if !sorted.holdsLabel(lb) {
 				continue
 			}
-			pending := sorted.unlabeledNegatives(lb)
+			pending := sorted.unlabeledNegatives(lb, sp.spares)
 			if err := labelAll(pending); err != nil {
 				return 0, err
 			}
@@ -180,31 +185,38 @@ func (s *Store) labelNegativesTx(ctx context.Context, tx pgx.Tx, example Example
 }
 
 // ConfirmNones labels every negative decision of the judgment's proposal that
-// has no label from any proposal, each with its judged value, and then
-// whatever inference those labels complete on the same content, all in one
-// transaction. It refuses a proposal with an item, or one holding no negative
-// decision without a label, with ErrConfirmNonesRefused, and an unknown
-// judgment with ErrNotFound.
+// has no label from any proposal and that no proposal on the same content
+// holds as an item without a label, or as a reply its own commitment absorbs,
+// each with its judged value, in one transaction. It refuses a proposal with an item, or one holding no such
+// negative decision, with ErrConfirmNonesRefused, and an unknown judgment
+// with ErrNotFound.
 func (s *Store) ConfirmNones(ctx context.Context, judgmentID uuid.UUID) error {
 	return s.inTx(ctx, func(tx pgx.Tx) error {
-		rows, err := db.New(tx).ListJudgmentRows(ctx, db.ListJudgmentRowsParams{Ids: []uuid.UUID{judgmentID}, ExampleIds: []string{}})
-		if err != nil {
-			return fmt.Errorf("load judgment %s: %w", judgmentID, err)
-		}
-		if len(rows) == 0 {
-			return ErrNotFound
-		}
-		_, err = s.labelNegativesTx(ctx, tx, ExampleID(rows[0].ExampleID), judgmentID)
+		_, err := s.labelNegativesTx(ctx, tx, []uuid.UUID{judgmentID}, true)
 		return err
 	})
 }
 
-// InferNegativeLabels runs the labeling rule once over every content the user
-// has labeled, each content in its own transaction, so a proposal whose items
-// all had labels before the rule existed holds no unlabeled negative decision.
-// Only content with a label can hold such a proposal. It never replaces a
-// label and labels nothing in a proposal with no items; a second run records
-// nothing. It returns how many labels it recorded.
+// CloseRow records the user closing a row on the bench: every negative
+// decision without a label of each of the given proposals (the row's) that
+// holds a label is labeled with its judged value, but for one a proposal on
+// the same content holds as an item without a label, or as a reply its own
+// commitment absorbs, all in one transaction. It returns ErrNotFound,
+// recording nothing, when a judgment is unknown.
+func (s *Store) CloseRow(ctx context.Context, judgments []uuid.UUID) error {
+	return s.inTx(ctx, func(tx pgx.Tx) error {
+		_, err := s.labelNegativesTx(ctx, tx, judgments, false)
+		return err
+	})
+}
+
+// InferNegativeLabels runs the labeling rule's inference once over every
+// content the user has labeled, each content's proposals together and in a
+// transaction of their own, as a close of their row would, so a proposal
+// holding a label before the rule existed holds no unlabeled negative
+// decision. Only content with a label can hold such a proposal. It never
+// replaces a label and labels nothing in a proposal holding no label; a second
+// run records nothing. It returns how many labels it recorded.
 func (s *Store) InferNegativeLabels(ctx context.Context) (int, error) {
 	rows, err := s.queries.ListLatestExampleReviews(ctx, db.ListLatestExampleReviewsParams{
 		ReviewPredicate: predicateReview, KeepsDatePredicate: predicateReviewKeepsDate, ExampleIds: []string{},
@@ -212,17 +224,21 @@ func (s *Store) InferNegativeLabels(ctx context.Context) (int, error) {
 	if err != nil {
 		return 0, fmt.Errorf("list labeled content: %w", err)
 	}
-	var examples []ExampleID
+	var examples []string
 	for _, r := range rows {
-		if e := ExampleID(r.ExampleID); len(examples) == 0 || examples[len(examples)-1] != e {
-			examples = append(examples, e)
+		if len(examples) == 0 || examples[len(examples)-1] != r.ExampleID {
+			examples = append(examples, r.ExampleID)
 		}
 	}
 	total := 0
 	for _, e := range examples {
 		var n int
-		if err := s.inTx(ctx, func(tx pgx.Tx) (err error) {
-			n, err = s.labelNegativesTx(ctx, tx, e, uuid.Nil)
+		if err := s.inTx(ctx, func(tx pgx.Tx) error {
+			judgments, err := db.New(tx).ListJudgmentRows(ctx, db.ListJudgmentRowsParams{Ids: []uuid.UUID{}, ExampleIds: []string{e}})
+			if err != nil {
+				return fmt.Errorf("list content judgments: %w", err)
+			}
+			n, err = s.labelNegativesTx(ctx, tx, judgmentIDs(judgments), false)
 			return err
 		}); err != nil {
 			return total, err

@@ -367,6 +367,7 @@ func TestBenchReviewStatus(t *testing.T) {
 		found.BallInCourt[0].Outcome = judgment.BallInCourtIOweReply
 		b.run(t, judgment.RunKindScheduled, judgmentOf(prodMethod, th, b.day(1), "h1", found))
 		b.act(t, item(t, b.proposal(t, x, prodMethod), "i_owe_reply", x), "confirm")
+		require.Equal(t, http.StatusOK, b.closeRow(t, b.row(t, x)).Code)
 
 		row := b.row(t, x)
 
@@ -420,7 +421,7 @@ func TestBenchReviewStatus(t *testing.T) {
 			answered(bx.QuestionID, map[string]float64{"not_applicable": 0.9, "nobody_owes": 0.1}),
 			answered("commitment_mine/THEM", map[string]float64{"open": 0.4, "none": 0.6}),
 		))
-		require.Equal(t, http.StatusNoContent, b.confirmNones(t, b.proposal(t, x, prodMethod)).Code)
+		require.Equal(t, http.StatusOK, b.confirmNones(t, b.proposal(t, x, prodMethod)).Code)
 
 		p := b.proposal(t, x, prodMethod)
 
@@ -466,7 +467,7 @@ func TestBenchReviewStatus(t *testing.T) {
 		x := twoContents(t, b, nothingFound, nothingFound)
 		require.Equal(t, ptr("nones_to_review"), b.row(t, x).ReviewStatus)
 
-		require.Equal(t, http.StatusNoContent, b.confirmNones(t, b.row(t, x).Proposals[0]).Code)
+		require.Equal(t, http.StatusOK, b.confirmNones(t, b.row(t, x).Proposals[0]).Code)
 		between := b.row(t, x)
 		var rest handlers.BenchProposalResponse
 		for _, p := range between.Proposals {
@@ -474,7 +475,7 @@ func TestBenchReviewStatus(t *testing.T) {
 				rest = p
 			}
 		}
-		require.Equal(t, http.StatusNoContent, b.confirmNones(t, rest).Code)
+		require.Equal(t, http.StatusOK, b.confirmNones(t, rest).Code)
 		after := b.row(t, x)
 
 		assert.Equal(t, ptr("nones_to_review"), between.ReviewStatus, "one proposal still awaits its nones")

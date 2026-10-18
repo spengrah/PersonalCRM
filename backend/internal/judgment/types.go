@@ -262,11 +262,12 @@ type RunAppearance struct {
 	CutOff time.Time
 }
 
-// OutcomeView is one outcome with its state and review. QuestionID is the
-// method's question ID, empty for an omission the store raised; Question is
-// the question it answers.
+// OutcomeView is one outcome with its state and review. JudgmentID is the
+// judgment holding it. QuestionID is the method's question ID, empty for an
+// omission the store raised; Question is the question it answers.
 type OutcomeView struct {
 	ID         uuid.UUID
+	JudgmentID uuid.UUID
 	QuestionID string
 	Question   Question
 	ContactID  *uuid.UUID

@@ -360,7 +360,7 @@ func TestBenchAddAfterLabels(t *testing.T) {
 		t.Helper()
 		x, th := b.oneToOne(t)
 		b.run(t, kind, judgmentOf(m, th, b.day(1), "h1", nothingFound(x)))
-		require.Equal(t, http.StatusNoContent, b.confirmNones(t, b.proposal(t, x, m)).Code)
+		require.Equal(t, http.StatusOK, b.confirmNones(t, b.proposal(t, x, m)).Code)
 		return x, th
 	}
 
@@ -413,7 +413,7 @@ func TestBenchAddAfterLabels(t *testing.T) {
 		x, th := b.oneToOne(t)
 		b.run(t, judgment.RunKindScheduled, judgmentOf(prodMethod, th, b.day(1), "h1", nothingFound(x)))
 		b.run(t, judgment.RunKindRerun, judgmentOf(otherMethod, th, b.day(1), "h1", nothingFound(x)))
-		require.Equal(t, http.StatusNoContent, b.confirmNones(t, b.proposal(t, x, prodMethod)).Code)
+		require.Equal(t, http.StatusOK, b.confirmNones(t, b.proposal(t, x, prodMethod)).Code)
 		b.add(t, addition(t, b.proposal(t, x, prodMethod), "i_owe_reply", x))
 
 		b.act(t, item(t, b.proposal(t, x, otherMethod), "i_owe_reply", x), "remove")

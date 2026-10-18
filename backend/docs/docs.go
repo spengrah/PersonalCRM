@@ -4137,7 +4137,7 @@ const docTemplate = `{
         },
         "/judgment-outcomes/{id}/review": {
             "post": {
-                "description": "Records the right outcome the user states for an outcome of any state and returns the outcome with the verdict the server derives: confirmed when it equals the judged outcome, rejected when it differs and has no effect, corrected otherwise. The review is its decision's label for every proposal on the same content. A first review of an applied or claim outcome gives the thread the right outcome's effect; a review of a decision that already has a label records the label only, except an Add on a negative decision, which has the effect the same review of an unlabeled negative has. A review that gives a proposal's last unlabeled item its label also labels that proposal's negative decisions with their judged values; the review records all of its labels or none. keep_current_date, with an open commitment's right outcome, keeps the obligation's current date against the judged later one, and the verdict is corrected.",
+                "description": "Records the right outcome the user states for an outcome of any state and returns the outcome with the verdict the server derives: confirmed when it equals the judged outcome, rejected when it differs and has no effect, corrected otherwise, beside the rows the request names, in its order, as the bench now shows them: each row's proposals and what remains to review across them, as a read of the list narrowed to run_id, when it is given, shows that row. A row naming an unknown judgment is not found, with nothing recorded. The review is its decision's label for every proposal on the same content, and labels no other decision. A first review of an applied or claim outcome gives the thread the right outcome's effect; a review of a decision that already has a label records the label only, except an Add on a negative decision, which has the effect the same review of an unlabeled negative has. keep_current_date, with an open commitment's right outcome, keeps the obligation's current date against the judged later one, and the verdict is corrected.",
                 "consumes": [
                     "application/json"
                 ],
@@ -4156,6 +4156,13 @@ const docTemplate = `{
                         "name": "id",
                         "in": "path",
                         "required": true
+                    },
+                    {
+                        "type": "string",
+                        "format": "uuid",
+                        "description": "Run the bench is narrowed to",
+                        "name": "run_id",
+                        "in": "query"
                     },
                     {
                         "description": "The right outcome",
@@ -4179,7 +4186,7 @@ const docTemplate = `{
                                     "type": "object",
                                     "properties": {
                                         "data": {
-                                            "$ref": "#/definitions/handlers.JudgmentOutcomeResponse"
+                                            "$ref": "#/definitions/handlers.ReviewJudgmentOutcomeResponse"
                                         }
                                     }
                                 }
@@ -4287,9 +4294,80 @@ const docTemplate = `{
                 }
             }
         },
+        "/judgments/close": {
+            "post": {
+                "description": "Records the user closing a row: every negative decision without a label of each given proposal (the row's) that holds a label, from whichever proposal on the same content it was made in, is labeled with its judged value, as ordinary reviews that change nothing live. A decision some proposal on the same content holds as an item without a label is not labeled and stays to review; one some proposal holds as a reply its own commitment absorbs is not labeled and is no None to review in any proposal; and a proposal holding no label gains none. It records all of its labels or none, and returns the rows the request names, in its order, as the bench now shows them: each row's proposals and what remains to review across them, as a read of the list narrowed to run_id, when it is given, shows that row. An unknown judgment, closed or in a row, is not found, with nothing recorded.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "judgments"
+                ],
+                "summary": "Close a bench row",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "format": "uuid",
+                        "description": "Run the bench is narrowed to",
+                        "name": "run_id",
+                        "in": "query"
+                    },
+                    {
+                        "description": "The row's judgments, and the rows the close can change",
+                        "name": "close",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/handlers.CloseBenchRowRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/api.APIResponse"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/handlers.BenchRowsResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/api.APIResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/api.APIResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/judgments/{id}/confirm-nones": {
             "post": {
-                "description": "Labels every negative decision of the judgment's proposal that has no label from any proposal with its judged value, as ordinary reviews that change nothing live, and then labels the negative decisions of every other proposal on the same content whose items those labels leave all labeled. It records all of its labels or none. A proposal with an item, or one holding no negative decision without a label, is refused.",
+                "description": "Labels every negative decision of the judgment's proposal that has no label from any proposal with its judged value, as ordinary reviews that change nothing live, and returns the rows the request names, in its order, as the bench now shows them: each row's proposals and what remains to review across them, as a read of the list narrowed to run_id, when it is given, shows that row. A decision some proposal on the same content holds as an item without a label is not labeled and stays to review; one some proposal holds as a reply its own commitment absorbs is not labeled and is no None to review in any proposal. It records all of its labels or none. A proposal with an item, or one holding no negative decision it would label, is refused. A row naming an unknown judgment is not found, with nothing recorded.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
                 "tags": [
                     "judgments"
                 ],
@@ -4302,11 +4380,41 @@ const docTemplate = `{
                         "name": "id",
                         "in": "path",
                         "required": true
+                    },
+                    {
+                        "type": "string",
+                        "format": "uuid",
+                        "description": "Run the bench is narrowed to",
+                        "name": "run_id",
+                        "in": "query"
+                    },
+                    {
+                        "description": "The rows the bench shows that the save can change",
+                        "name": "rows",
+                        "in": "body",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.BenchRowsRequest"
+                        }
                     }
                 ],
                 "responses": {
-                    "204": {
-                        "description": "Every label recorded"
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/api.APIResponse"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/handlers.BenchRowsResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
                     },
                     "400": {
                         "description": "Bad Request",
@@ -6653,6 +6761,56 @@ const docTemplate = `{
                 }
             }
         },
+        "handlers.BenchRowRequest": {
+            "type": "object",
+            "properties": {
+                "judgment_ids": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
+        "handlers.BenchRowStateResponse": {
+            "type": "object",
+            "properties": {
+                "proposals": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/handlers.BenchProposalResponse"
+                    }
+                },
+                "review_status": {
+                    "type": "string"
+                },
+                "to_review": {
+                    "type": "integer"
+                }
+            }
+        },
+        "handlers.BenchRowsRequest": {
+            "type": "object",
+            "properties": {
+                "rows": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/handlers.BenchRowRequest"
+                    }
+                }
+            }
+        },
+        "handlers.BenchRowsResponse": {
+            "type": "object",
+            "properties": {
+                "rows": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/handlers.BenchRowStateResponse"
+                    }
+                }
+            }
+        },
         "handlers.BenchSourceMessageResponse": {
             "type": "object",
             "properties": {
@@ -6831,6 +6989,27 @@ const docTemplate = `{
                     "type": "object",
                     "additionalProperties": {
                         "$ref": "#/definitions/handlers.NamespaceCleanupResponse"
+                    }
+                }
+            }
+        },
+        "handlers.CloseBenchRowRequest": {
+            "type": "object",
+            "required": [
+                "judgment_ids"
+            ],
+            "properties": {
+                "judgment_ids": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "rows": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/handlers.BenchRowRequest"
                     }
                 }
             }
@@ -8201,6 +8380,47 @@ const docTemplate = `{
                     "type": "boolean"
                 },
                 "right_outcome": {
+                    "type": "string"
+                },
+                "rows": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/handlers.BenchRowRequest"
+                    }
+                }
+            }
+        },
+        "handlers.ReviewJudgmentOutcomeResponse": {
+            "type": "object",
+            "properties": {
+                "confidence": {
+                    "type": "number"
+                },
+                "contact_id": {
+                    "type": "string"
+                },
+                "due_date": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "outcome": {
+                    "type": "string"
+                },
+                "question": {
+                    "type": "string"
+                },
+                "review": {
+                    "$ref": "#/definitions/handlers.JudgmentOutcomeReviewResponse"
+                },
+                "rows": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/handlers.BenchRowStateResponse"
+                    }
+                },
+                "state": {
                     "type": "string"
                 }
             }
