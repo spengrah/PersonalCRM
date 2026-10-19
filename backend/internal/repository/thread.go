@@ -41,12 +41,6 @@ type ThreadParticipant struct {
 	Name      string
 }
 
-// ThreadMessageRef names one message of a thread in thread order.
-type ThreadMessageRef struct {
-	Key    string
-	SentAt time.Time
-}
-
 // ThreadRepository reads the threads of the Threads tab.
 type ThreadRepository struct {
 	queries db.Querier
@@ -110,20 +104,6 @@ func (r *ThreadRepository) ListThreadParticipants(ctx context.Context, threads [
 	out := map[uuid.UUID][]ThreadParticipant{}
 	for _, row := range rows {
 		out[row.VenueID] = append(out[row.VenueID], ThreadParticipant{ContactID: row.ParticipantID, Name: row.ParticipantName})
-	}
-	return out, nil
-}
-
-// ListThreadMessageRefs returns each message of the given threads once, in
-// thread order: by time, then message key.
-func (r *ThreadRepository) ListThreadMessageRefs(ctx context.Context, threads []uuid.UUID) (map[uuid.UUID][]ThreadMessageRef, error) {
-	rows, err := r.queries.ListThreadMessageKeys(ctx, nonNilUUIDs(threads))
-	if err != nil {
-		return nil, fmt.Errorf("list thread message keys: %w", err)
-	}
-	out := map[uuid.UUID][]ThreadMessageRef{}
-	for _, row := range rows {
-		out[row.VenueID] = append(out[row.VenueID], ThreadMessageRef{Key: row.MessageKey, SentAt: row.SentAt})
 	}
 	return out, nil
 }
