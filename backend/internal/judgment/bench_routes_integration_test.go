@@ -286,8 +286,8 @@ func TestBenchReadCompilesProposals(t *testing.T) {
 		assert.Equal(t, 2, page.Items[0].ToReview)
 	})
 
-	t.Run("a commitment supersedes a reply for the same party and carries its source message", func(t *testing.T) {
-		// spec: IXN-052.commitment-absorbs-reply, IXN-052.commitment-source-message
+	t.Run("a commitment carries its source message and stands in for no reply", func(t *testing.T) {
+		// spec: IXN-052.commitment-source-message, IXN-052.reply-beside-commitment
 		b := newBenchEnv(t)
 		x := b.contact(t)
 		th := b.thread(t)
@@ -309,7 +309,7 @@ func TestBenchReadCompilesProposals(t *testing.T) {
 
 		require.Len(t, page.Items, 1)
 		p := page.Items[0].Proposals[0]
-		assert.Empty(t, listContacts(p, "i_owe_reply"), "the reply that states a commitment is the commitment's obligation")
+		assert.Equal(t, []string{x.String()}, listContacts(p, "i_owe_reply"), "the commitment leaves the reply item in its list")
 		c := item(t, p, "commitments", x)
 		assert.Equal(t, ptr("me"), c.Debtor)
 		assert.Equal(t, ptr(due.Format("2006-01-02")), c.DueDate)
@@ -317,6 +317,25 @@ func TestBenchReadCompilesProposals(t *testing.T) {
 		assert.Equal(t, key, c.Source.ContentRef)
 		assert.Equal(t, "synthetic message body", c.Source.Text)
 		assert.True(t, b.day(1).Equal(c.Source.SentAt))
+	})
+
+	t.Run("a participant's commitment stands in for no reply they owe", func(t *testing.T) {
+		// spec: IXN-052.reply-beside-commitment
+		b := newBenchEnv(t)
+		x := b.contact(t)
+		th := b.thread(t)
+		b.message(t, th, x, true, b.day(1))
+		b.record(t, th, x, repository.InteractionDirectionOutbound, b.day(1))
+		b.run(t, judgment.RunKindScheduled, judgmentOf(prodMethod, th, b.day(1), "h1", judgment.Outcomes{
+			BallInCourt: []judgment.ParticipantOutcome[judgment.BallInCourt]{bic(x, judgment.BallInCourtTheyOweReply, 0.9)},
+			Commitments: []judgment.CommitmentOutcome{commitment(x, judgment.CommitmentDirectionTheirs, judgment.CommitmentStateOpen, 0.9, nil)},
+		}))
+
+		page, _ := b.list(t, "contact_id="+x.String())
+
+		p := page.Items[0].Proposals[0]
+		assert.Equal(t, []string{x.String()}, listContacts(p, "owes_me_reply"), "the commitment leaves the reply item in its list")
+		assert.Equal(t, ptr("contact"), item(t, p, "commitments", x).Debtor)
 	})
 
 	t.Run("a non-production method's judgment is not acting", func(t *testing.T) {

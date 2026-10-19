@@ -330,7 +330,7 @@ func TestBenchClosestDecision(t *testing.T) {
 // label, else negative decisions without a label, else nothing.
 func TestBenchReviewStatus(t *testing.T) {
 	t.Run("a proposal whose answers are all negative and unlabeled awaits its nones", func(t *testing.T) {
-		// spec: IXN-054.proposal-status, IXN-051.row-review-status
+		// spec: IXN-054.proposal-status, IXN-054.nones-to-review, IXN-051.row-review-status
 		b := newBenchEnv(t)
 		x, th := b.oneToOne(t)
 		b.run(t, judgment.RunKindScheduled, judgmentOf(prodMethod, th, b.day(1), "h1", nothingFound(x)))
@@ -395,8 +395,8 @@ func TestBenchReviewStatus(t *testing.T) {
 		assert.False(t, p.ConfirmNones)
 	})
 
-	t.Run("a reply its party's commitment absorbs is not a negative decision", func(t *testing.T) {
-		// spec: IXN-054.negative-decisions
+	t.Run("a reply beside its party's commitment is an item that awaits its review", func(t *testing.T) {
+		// spec: IXN-054.negative-decisions, IXN-052.reply-beside-commitment
 		b := newBenchEnv(t)
 		x, th := b.oneToOne(t)
 		b.run(t, judgment.RunKindScheduled, judgmentOf(prodMethod, th, b.day(1), "h1", judgment.Outcomes{
@@ -407,8 +407,9 @@ func TestBenchReviewStatus(t *testing.T) {
 
 		p := b.proposal(t, x, prodMethod)
 
-		assert.Equal(t, "all_reviewed", p.ReviewStatus, "the absorbed reply awaits no review")
-		assert.NotContains(t, b.labels(t), decision(judgment.QuestionBallInCourt, &x), "no rule labels the absorbed reply")
+		assert.Equal(t, "to_review", p.ReviewStatus, "the reply still awaits review")
+		assert.Equal(t, 1, p.ToReview)
+		assert.Equal(t, ptr("live"), item(t, p, "i_owe_reply", x).State)
 	})
 
 	t.Run("a probability stored for a sub-question that yields no outcome adds no negative", func(t *testing.T) {

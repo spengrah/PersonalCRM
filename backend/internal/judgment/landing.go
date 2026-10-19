@@ -15,6 +15,7 @@ import (
 	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/service"
+	"personal-crm/backend/internal/threadctx"
 	"personal-crm/backend/internal/todoist"
 
 	"github.com/google/uuid"
@@ -32,8 +33,10 @@ const dateFormat = "2006-01-02"
 // and not on a question the user already reviewed for this input, is planned
 // against live state, asserted under the class its plan has (addition,
 // removal or no effect), and applied when the catalog lands it accepted. An
-// open obligation the judgment does not mention raises an omission. An outcome
-// that landed before is never landed again. Each landed outcome records the
+// open obligation the judgment does not mention raises an omission. A judgment
+// that read a window speaks only to the reply obligations whose evidence lies
+// inside it (CAD-061). An outcome that landed before is never landed again.
+// Each landed outcome records the
 // obligation its live effect is: the one it opened or found when applied, or
 // the one a removal would take away.
 func (s *Store) landTx(ctx context.Context, tx pgx.Tx, judgmentID uuid.UUID, thread uuid.UUID, cutOff time.Time) (Effects, error) {
@@ -66,7 +69,13 @@ func (s *Store) landTx(ctx context.Context, tx pgx.Tx, judgmentID uuid.UUID, thr
 	}
 	slices.SortStableFunc(pending, landingOrder)
 
-	p := &planner{s: s, tx: tx, thread: thread, cutOff: cutOff, wants: wantsOf(siblings), closable: anyObligation, openedNow: map[uuid.UUID]bool{}}
+	closable := anyObligation
+	if j.WindowStart != nil {
+		if closable, err = s.evidenceInWindow(ctx, tx, thread, cutOff, *j.WindowStart); err != nil {
+			return Effects{}, err
+		}
+	}
+	p := &planner{s: s, tx: tx, thread: thread, cutOff: cutOff, wants: wantsOf(siblings), closable: closable, openedNow: map[uuid.UUID]bool{}}
 	locator := judgmentLocator(j.ID, MethodRef{j.MethodKey, j.MethodVersion, j.WordingVersion}, j.InputHash)
 	var effects Effects
 	land := func(outcomeID uuid.UUID, question Question, contact *uuid.UUID, pl plan, value string, confidence int16) error {
@@ -112,7 +121,7 @@ func (s *Store) landTx(ctx context.Context, tx pgx.Tx, judgmentID uuid.UUID, thr
 	for _, task := range open {
 		question, value := omissionOf(task)
 		key := decisionKey{example, question, task.ContactID}
-		if _, ok := reviewed[key]; ok || mentions(outcomes, task) {
+		if _, ok := reviewed[key]; ok || mentions(outcomes, task) || !p.closable(&task) {
 			continue
 		}
 		contact := task.ContactID
@@ -134,6 +143,34 @@ func (s *Store) landTx(ctx context.Context, tx pgx.Tx, judgmentID uuid.UUID, thr
 		}
 	}
 	return effects, nil
+}
+
+// evidenceInWindow returns whether a landing may close an obligation, for a
+// judgment whose window starts at the message windowStart: a reply obligation
+// only when its evidence, the thread's newest message at the cut-off that
+// opened it, lies inside the window, a window starting at the evidence message
+// included. An obligation whose evidence is unknown is preserved, and so is one
+// when the window start is not among the thread's messages. Any other
+// obligation may be closed as before.
+func (s *Store) evidenceInWindow(ctx context.Context, tx pgx.Tx, thread uuid.UUID, cutOff time.Time, windowStart string) (func(*repository.ContactTask) bool, error) {
+	c, err := s.contexts.WithTx(tx).Build(ctx, thread, cutOff)
+	if err != nil {
+		return nil, fmt.Errorf("build thread %s: %w", thread, err)
+	}
+	start := slices.IndexFunc(c.Entries, func(e threadctx.Entry) bool { return e.Key == windowStart })
+	return func(task *repository.ContactTask) bool {
+		if task.Obligation.Basis != repository.ObligationBasisReply {
+			return true
+		}
+		evidence := -1
+		for i, e := range c.Entries {
+			if e.SentAt.After(task.Obligation.CutOff) {
+				break
+			}
+			evidence = i
+		}
+		return start >= 0 && evidence >= start
+	}, nil
 }
 
 // landingOrder lands what opens an obligation before what only keeps one:

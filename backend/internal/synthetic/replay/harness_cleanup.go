@@ -240,6 +240,15 @@ func (h *Harness) cleanup(ctx context.Context) error {
 		_, err := h.support.DeleteExternalContactsByIds(ctx, c.externalContactIDs)
 		return err
 	})
+	// 9b. judgments of the tracked venue nodes' threads, with their outcomes,
+	// flag and clearing decisions and unjudged messages. They reference the venue
+	// nodes the venue step below deletes, and a judgment's outcomes reference the
+	// contacts, whose delete would cascade the outcome rows away from the nodes and
+	// assertions this step finds them by.
+	step("judgment", func() error {
+		_, err := h.support.DeleteJudgmentsForThreads(ctx, c.venueNodeIDs)
+		return err
+	})
 	// 10. contact_task (by contact, hard delete — no deleted_at), plus the
 	// Todoist-reconcile delta rows tracked by id (which may attach to
 	// cadence-bearing contacts this run did not seed).

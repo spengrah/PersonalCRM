@@ -415,6 +415,9 @@ type Judgment struct {
 	LatencyNs      int64     `json:"latency_ns"`
 	Questions      []byte    `json:"questions"`
 	CreatedAt      time.Time `json:"created_at"`
+	WindowStart    *string   `json:"window_start"`
+	NewMessages    []string  `json:"new_messages"`
+	ReadDigest     string    `json:"read_digest"`
 }
 
 type JudgmentAppearance struct {
@@ -428,10 +431,38 @@ type JudgmentAppearance struct {
 	CreatedAt         time.Time `json:"created_at"`
 }
 
+type JudgmentClearing struct {
+	JudgmentID           uuid.UUID `json:"judgment_id"`
+	CommitmentMessageKey string    `json:"commitment_message_key"`
+	CommitmentJudgmentID uuid.UUID `json:"commitment_judgment_id"`
+	CommitmentKind       string    `json:"commitment_kind"`
+	Done                 bool      `json:"done"`
+	Probability          float64   `json:"probability"`
+}
+
 type JudgmentExample struct {
 	ID        string    `json:"id"`
 	ThreadID  uuid.UUID `json:"thread_id"`
 	InputHash string    `json:"input_hash"`
+}
+
+type JudgmentFlag struct {
+	JudgmentID  uuid.UUID `json:"judgment_id"`
+	MessageKey  string    `json:"message_key"`
+	Kind        string    `json:"kind"`
+	Probability float64   `json:"probability"`
+}
+
+type JudgmentFlagMethod struct {
+	MethodKey     string  `json:"method_key"`
+	ClearingFloor float64 `json:"clearing_floor"`
+}
+
+type JudgmentFlagThreshold struct {
+	MethodKey        string  `json:"method_key"`
+	Kind             string  `json:"kind"`
+	DisplayThreshold float64 `json:"display_threshold"`
+	ClearingFloor    float64 `json:"clearing_floor"`
 }
 
 type JudgmentIncomplete struct {
@@ -464,6 +495,15 @@ type JudgmentRun struct {
 	WindowTo       *time.Time `json:"window_to"`
 	StartedAt      time.Time  `json:"started_at"`
 	FinishedAt     *time.Time `json:"finished_at"`
+}
+
+type JudgmentUnjudged struct {
+	RunID      uuid.UUID `json:"run_id"`
+	ThreadID   uuid.UUID `json:"thread_id"`
+	CutOff     time.Time `json:"cut_off"`
+	MessageKey string    `json:"message_key"`
+	Reason     string    `json:"reason"`
+	CreatedAt  time.Time `json:"created_at"`
 }
 
 type LiveContact struct {

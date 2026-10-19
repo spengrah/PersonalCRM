@@ -1,4 +1,4 @@
--- Judgment store queries (migrations 092-094). Predicate keys are arguments, so
+-- Judgment store queries (migrations 092-094, 099). Predicate keys are arguments, so
 -- the judgment package's constants stay their one definition.
 
 -- name: CreateJudgmentRun :one
@@ -32,6 +32,18 @@ FROM judgment_run r
 WHERE (NOT sqlc.arg('finished_only')::boolean OR r.finished_at IS NOT NULL)
 ORDER BY r.started_at, r.id;
 
+-- name: CreateJudgmentUnjudged :exec
+-- Records the messages no judgment of the run answered at a cut-off, each with
+-- its reason; recording a message again keeps one record with the newer reason.
+INSERT INTO judgment_unjudged (run_id, thread_id, cut_off, message_key, reason)
+SELECT sqlc.arg('run_id')::uuid, sqlc.arg('thread_id')::uuid, sqlc.arg('cut_off')::timestamptz,
+       unnest(sqlc.arg('message_keys')::text[])::text,
+       unnest(sqlc.arg('reasons')::text[])::text
+ON CONFLICT (run_id, thread_id, cut_off, message_key) DO UPDATE SET reason = EXCLUDED.reason;
+
+-- name: ListJudgmentUnjudged :many
+SELECT * FROM judgment_unjudged ORDER BY run_id, cut_off, thread_id, message_key;
+
 -- name: CreateJudgmentIncomplete :exec
 INSERT INTO judgment_incomplete (run_id, thread_id, cut_off, reason)
 VALUES (sqlc.arg('run_id'), sqlc.arg('thread_id'), sqlc.arg('cut_off'), sqlc.arg('reason'))
@@ -56,21 +68,78 @@ WHERE j.method_key = sqlc.arg('method_key')
   AND j.method_version = sqlc.arg('method_version')
   AND j.wording_version = sqlc.arg('wording_version')
   AND e.thread_id = sqlc.arg('thread_id')
-  AND e.input_hash = sqlc.arg('input_hash');
+  AND e.input_hash = sqlc.arg('input_hash')
+  AND j.read_digest = sqlc.arg('read_digest');
 
 -- name: CreateJudgment :one
 INSERT INTO judgment (
     method_key, method_version, wording_version, example_id, context_kind,
     cut_off, judged_at, context_tokens, question_count, billed_tokens,
-    cost_usd, latency_ns, questions
+    cost_usd, latency_ns, questions, window_start, new_messages, read_digest
 ) VALUES (
     sqlc.arg('method_key'), sqlc.arg('method_version'), sqlc.arg('wording_version'),
     sqlc.arg('example_id'), sqlc.arg('context_kind'), sqlc.arg('cut_off'),
     sqlc.arg('judged_at'), sqlc.arg('context_tokens'), sqlc.arg('question_count'),
     sqlc.narg('billed_tokens'), sqlc.narg('cost_usd'), sqlc.arg('latency_ns'),
-    sqlc.arg('questions')
+    sqlc.arg('questions'), sqlc.narg('window_start'), sqlc.arg('new_messages')::text[],
+    sqlc.arg('read_digest')
 )
 RETURNING id;
+
+-- name: CreateJudgmentFlags :exec
+-- Records a judgment's flag decisions: one message key, kind and probability
+-- per position of the three arrays.
+INSERT INTO judgment_flag (judgment_id, message_key, kind, probability)
+SELECT sqlc.arg('judgment_id')::uuid,
+       unnest(sqlc.arg('message_keys')::text[])::text,
+       unnest(sqlc.arg('kinds')::text[])::text,
+       unnest(sqlc.arg('probabilities')::float8[])::float8;
+
+-- name: CreateJudgmentClearings :exec
+-- Records a judgment's clearing decisions: one commitment's message key and
+-- earlier judgment, the answer and its probability of done per position of the
+-- four arrays.
+INSERT INTO judgment_clearing (judgment_id, commitment_message_key, commitment_judgment_id, done, probability)
+SELECT sqlc.arg('judgment_id')::uuid,
+       unnest(sqlc.arg('message_keys')::text[])::text,
+       unnest(sqlc.arg('commitment_judgment_ids')::uuid[])::uuid,
+       unnest(sqlc.arg('dones')::boolean[])::boolean,
+       unnest(sqlc.arg('probabilities')::float8[])::float8;
+
+-- name: ListJudgmentFlags :many
+SELECT * FROM judgment_flag
+WHERE judgment_id = ANY(sqlc.arg('judgment_ids')::uuid[])
+ORDER BY judgment_id, message_key, kind;
+
+-- name: ListJudgmentClearings :many
+SELECT * FROM judgment_clearing
+WHERE judgment_id = ANY(sqlc.arg('judgment_ids')::uuid[])
+ORDER BY judgment_id, commitment_message_key;
+
+-- name: ListJudgmentFirstMessages :many
+-- The key of the first message of the thread context each given judgment read
+-- when it read the whole context (a judgment before migration 099): the
+-- thread's first message at the judgment's cut-off. A judgment whose thread
+-- held no content then has no row.
+SELECT j.id AS judgment_id, first.message_key
+FROM judgment j
+JOIN judgment_example e ON e.id = j.example_id
+CROSS JOIN LATERAL (
+    SELECT tc.message_key
+    FROM thread_content tc
+    WHERE tc.venue_id = e.thread_id AND tc.sent_at <= j.cut_off
+    ORDER BY tc.sent_at, tc.message_key
+    LIMIT 1
+) first
+WHERE j.id = ANY(sqlc.arg('judgment_ids')::uuid[]);
+
+-- name: GetFlagDisplayThreshold :one
+SELECT display_threshold FROM judgment_flag_threshold
+WHERE method_key = sqlc.arg('method_key') AND kind = sqlc.arg('kind');
+
+-- name: GetFlagClearingFloor :one
+SELECT clearing_floor FROM judgment_flag_method
+WHERE method_key = sqlc.arg('method_key');
 
 -- name: ListJudgmentRows :many
 -- Judgments with their example, by ID, or for a thread, a run or both (a run

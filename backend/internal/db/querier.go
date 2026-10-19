@@ -444,12 +444,22 @@ type Querier interface {
 	CreateInteraction(ctx context.Context, arg CreateInteractionParams) (*Interaction, error)
 	CreateJudgment(ctx context.Context, arg CreateJudgmentParams) (uuid.UUID, error)
 	CreateJudgmentAppearance(ctx context.Context, arg CreateJudgmentAppearanceParams) (int64, error)
+	// Records a judgment's clearing decisions: one commitment's message key and
+	// earlier judgment, the answer and its probability of done per position of the
+	// four arrays.
+	CreateJudgmentClearings(ctx context.Context, arg CreateJudgmentClearingsParams) error
+	// Records a judgment's flag decisions: one message key, kind and probability
+	// per position of the three arrays.
+	CreateJudgmentFlags(ctx context.Context, arg CreateJudgmentFlagsParams) error
 	CreateJudgmentIncomplete(ctx context.Context, arg CreateJudgmentIncompleteParams) error
 	// Creates an outcome's node and its judgment_outcome row together.
 	CreateJudgmentOutcome(ctx context.Context, arg CreateJudgmentOutcomeParams) (*JudgmentOutcome, error)
-	// Judgment store queries (migrations 092-094). Predicate keys are arguments, so
+	// Judgment store queries (migrations 092-094, 099). Predicate keys are arguments, so
 	// the judgment package's constants stay their one definition.
 	CreateJudgmentRun(ctx context.Context, arg CreateJudgmentRunParams) (*JudgmentRun, error)
+	// Records the messages no judgment of the run answered at a cut-off, each with
+	// its reason; recording a message again keeps one record with the newer reason.
+	CreateJudgmentUnjudged(ctx context.Context, arg CreateJudgmentUnjudgedParams) error
 	// mac_host queries.
 	CreateMacHost(ctx context.Context, arg CreateMacHostParams) (*MacHost, error)
 	// Node registry queries (graph foundation).
@@ -939,6 +949,8 @@ type Querier interface {
 	// pgx.Tx so each action's own read-modify-write is atomic (a single
 	// action cannot half-clobber its own suggestion columns).
 	GetExternalContactForUpdate(ctx context.Context, id uuid.UUID) (*ExternalContact, error)
+	GetFlagClearingFloor(ctx context.Context, methodKey string) (float64, error)
+	GetFlagDisplayThreshold(ctx context.Context, arg GetFlagDisplayThresholdParams) (float64, error)
 	// External identity queries for cross-platform contact identity matching
 	GetIdentityByID(ctx context.Context, id uuid.UUID) (*ExternalIdentity, error)
 	GetIdentityByIdentifier(ctx context.Context, arg GetIdentityByIdentifierParams) (*ExternalIdentity, error)
@@ -1526,6 +1538,13 @@ type Querier interface {
 	// of every judgment; fresh_only keeps only the appearance whose call produced
 	// each judgment. Oldest recorded first.
 	ListJudgmentAppearances(ctx context.Context, arg ListJudgmentAppearancesParams) ([]*ListJudgmentAppearancesRow, error)
+	ListJudgmentClearings(ctx context.Context, judgmentIds []uuid.UUID) ([]*JudgmentClearing, error)
+	// The key of the first message of the thread context each given judgment read
+	// when it read the whole context (a judgment before migration 099): the
+	// thread's first message at the judgment's cut-off. A judgment whose thread
+	// held no content then has no row.
+	ListJudgmentFirstMessages(ctx context.Context, judgmentIds []uuid.UUID) ([]*ListJudgmentFirstMessagesRow, error)
+	ListJudgmentFlags(ctx context.Context, judgmentIds []uuid.UUID) ([]*JudgmentFlag, error)
 	ListJudgmentIncomplete(ctx context.Context) ([]*JudgmentIncomplete, error)
 	// The outcomes of the given judgments, or the given outcomes, each with the
 	// example its judgment judged.
@@ -1537,6 +1556,7 @@ type Querier interface {
 	// its appearances changed, and the cost summed over the calls it made (its
 	// fresh appearances); cost_reported is false when none of them reported one.
 	ListJudgmentRunSummaries(ctx context.Context, finishedOnly bool) ([]*ListJudgmentRunSummariesRow, error)
+	ListJudgmentUnjudged(ctx context.Context) ([]*JudgmentUnjudged, error)
 	// Returns (source_id, last_content_hash) for every live
 	// external_contact row owned by the given (host_id, source). Powers
 	// GET /api/v1/host/:id/sync/:source/known-ids. Tombstoned rows are
@@ -2603,10 +2623,15 @@ type Querier interface {
 	SyntheticDeleteInteractionsByIds(ctx context.Context, interactionIds []uuid.UUID) (int64, error)
 	SyntheticDeleteJudgmentAppearancesForThreads(ctx context.Context, threadIds []uuid.UUID) (int64, error)
 	SyntheticDeleteJudgmentAssertionsForThreads(ctx context.Context, threadIds []uuid.UUID) (int64, error)
+	// The clearing decisions of the threads' judgments, which name the threads' own
+	// earlier judgments.
+	SyntheticDeleteJudgmentClearingsForThreads(ctx context.Context, threadIds []uuid.UUID) (int64, error)
 	SyntheticDeleteJudgmentExamplesForThreads(ctx context.Context, threadIds []uuid.UUID) (int64, error)
+	SyntheticDeleteJudgmentFlagsForThreads(ctx context.Context, threadIds []uuid.UUID) (int64, error)
 	SyntheticDeleteJudgmentIncompleteForThreads(ctx context.Context, threadIds []uuid.UUID) (int64, error)
 	// The outcome subtype rows cascade from their nodes.
 	SyntheticDeleteJudgmentOutcomeNodesForThreads(ctx context.Context, threadIds []uuid.UUID) (int64, error)
+	SyntheticDeleteJudgmentUnjudgedForThreads(ctx context.Context, threadIds []uuid.UUID) (int64, error)
 	SyntheticDeleteJudgmentsForThreads(ctx context.Context, threadIds []uuid.UUID) (int64, error)
 	// Cleanup step 14: the seeded revoked synthetic mac_host by id.
 	SyntheticDeleteMacHostById(ctx context.Context, id uuid.UUID) (int64, error)

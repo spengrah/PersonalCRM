@@ -836,3 +836,21 @@ behaviors:
       - key: cadence-task-proceeds
         text: the next task reconciliation creates the due cadence task (CAD-042)
     provenance: [CadenceUpdater.EndAwaitingReplyTx, judgment.Store.endWaitTx, .agents/spec/2026-10-14-decision-model-extraction.md SC7]
+
+  - id: CAD-061
+    title: A windowed judgment keeps or removes a reply obligation only when its evidence lies inside the window
+    type: business-logic
+    status: current
+    surface: none
+    given: an open reply obligation and a judgment of its thread over a window
+    when: the judgment is applied
+    then:
+      - key: evidence-is-newest-message-at-opening
+        text: a reply obligation's evidence is the thread's newest message at the cut-off that opened it
+      - key: window-after-evidence-neither-keeps-nor-removes
+        text: a judgment whose window starts after that message neither keeps nor removes the obligation
+      - key: window-at-evidence-counts-inside
+        text: a window starting exactly at that message counts as inside
+      - key: unknown-evidence-preserved
+        text: under a windowed judgment an obligation whose evidence is unknown is preserved
+    provenance: [.agents/spec/2026-10-18-message-flags-and-threads.md G4]

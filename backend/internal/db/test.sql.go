@@ -1702,6 +1702,7 @@ DELETE FROM judgment_run r
 WHERE r.id = ANY($1::uuid[])
   AND NOT EXISTS (SELECT 1 FROM judgment_appearance a WHERE a.run_id = r.id)
   AND NOT EXISTS (SELECT 1 FROM judgment_incomplete i WHERE i.run_id = r.id)
+  AND NOT EXISTS (SELECT 1 FROM judgment_unjudged u WHERE u.run_id = r.id)
 `
 
 func (q *Queries) SyntheticDeleteEmptyJudgmentRuns(ctx context.Context, runIds []uuid.UUID) (int64, error) {
@@ -1906,12 +1907,46 @@ func (q *Queries) SyntheticDeleteJudgmentAssertionsForThreads(ctx context.Contex
 	return result.RowsAffected(), nil
 }
 
+const SyntheticDeleteJudgmentClearingsForThreads = `-- name: SyntheticDeleteJudgmentClearingsForThreads :execrows
+DELETE FROM judgment_clearing
+WHERE judgment_id IN (
+    SELECT j.id FROM judgment j
+    JOIN judgment_example e ON e.id = j.example_id
+    WHERE e.thread_id = ANY($1::uuid[]))
+`
+
+// The clearing decisions of the threads' judgments, which name the threads' own
+// earlier judgments.
+func (q *Queries) SyntheticDeleteJudgmentClearingsForThreads(ctx context.Context, threadIds []uuid.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, SyntheticDeleteJudgmentClearingsForThreads, threadIds)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const SyntheticDeleteJudgmentExamplesForThreads = `-- name: SyntheticDeleteJudgmentExamplesForThreads :execrows
 DELETE FROM judgment_example WHERE thread_id = ANY($1::uuid[])
 `
 
 func (q *Queries) SyntheticDeleteJudgmentExamplesForThreads(ctx context.Context, threadIds []uuid.UUID) (int64, error) {
 	result, err := q.db.Exec(ctx, SyntheticDeleteJudgmentExamplesForThreads, threadIds)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const SyntheticDeleteJudgmentFlagsForThreads = `-- name: SyntheticDeleteJudgmentFlagsForThreads :execrows
+DELETE FROM judgment_flag
+WHERE judgment_id IN (
+    SELECT j.id FROM judgment j
+    JOIN judgment_example e ON e.id = j.example_id
+    WHERE e.thread_id = ANY($1::uuid[]))
+`
+
+func (q *Queries) SyntheticDeleteJudgmentFlagsForThreads(ctx context.Context, threadIds []uuid.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, SyntheticDeleteJudgmentFlagsForThreads, threadIds)
 	if err != nil {
 		return 0, err
 	}
@@ -1943,6 +1978,18 @@ WHERE type = 'judgment_outcome'
 // The outcome subtype rows cascade from their nodes.
 func (q *Queries) SyntheticDeleteJudgmentOutcomeNodesForThreads(ctx context.Context, threadIds []uuid.UUID) (int64, error) {
 	result, err := q.db.Exec(ctx, SyntheticDeleteJudgmentOutcomeNodesForThreads, threadIds)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const SyntheticDeleteJudgmentUnjudgedForThreads = `-- name: SyntheticDeleteJudgmentUnjudgedForThreads :execrows
+DELETE FROM judgment_unjudged WHERE thread_id = ANY($1::uuid[])
+`
+
+func (q *Queries) SyntheticDeleteJudgmentUnjudgedForThreads(ctx context.Context, threadIds []uuid.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, SyntheticDeleteJudgmentUnjudgedForThreads, threadIds)
 	if err != nil {
 		return 0, err
 	}
@@ -2419,6 +2466,8 @@ JOIN judgment_example e ON e.id = j.example_id
 WHERE e.thread_id = ANY($1::uuid[])
 UNION
 SELECT DISTINCT run_id FROM judgment_incomplete WHERE thread_id = ANY($1::uuid[])
+UNION
+SELECT DISTINCT run_id FROM judgment_unjudged WHERE thread_id = ANY($1::uuid[])
 `
 
 // Cleanup of the judgments of a namespace's threads (the bench's browser

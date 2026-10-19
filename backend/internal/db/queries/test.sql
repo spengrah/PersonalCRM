@@ -1700,7 +1700,9 @@ JOIN judgment j ON j.id = a.judgment_id
 JOIN judgment_example e ON e.id = j.example_id
 WHERE e.thread_id = ANY(@thread_ids::uuid[])
 UNION
-SELECT DISTINCT run_id FROM judgment_incomplete WHERE thread_id = ANY(@thread_ids::uuid[]);
+SELECT DISTINCT run_id FROM judgment_incomplete WHERE thread_id = ANY(@thread_ids::uuid[])
+UNION
+SELECT DISTINCT run_id FROM judgment_unjudged WHERE thread_id = ANY(@thread_ids::uuid[]);
 
 -- name: SyntheticDeleteJudgmentAssertionsForThreads :execrows
 DELETE FROM assertion
@@ -1714,6 +1716,22 @@ WHERE subject_node_id = ANY(@thread_ids::uuid[])
 
 -- name: SyntheticDeleteJudgmentAppearancesForThreads :execrows
 DELETE FROM judgment_appearance
+WHERE judgment_id IN (
+    SELECT j.id FROM judgment j
+    JOIN judgment_example e ON e.id = j.example_id
+    WHERE e.thread_id = ANY(@thread_ids::uuid[]));
+
+-- name: SyntheticDeleteJudgmentClearingsForThreads :execrows
+-- The clearing decisions of the threads' judgments, which name the threads' own
+-- earlier judgments.
+DELETE FROM judgment_clearing
+WHERE judgment_id IN (
+    SELECT j.id FROM judgment j
+    JOIN judgment_example e ON e.id = j.example_id
+    WHERE e.thread_id = ANY(@thread_ids::uuid[]));
+
+-- name: SyntheticDeleteJudgmentFlagsForThreads :execrows
+DELETE FROM judgment_flag
 WHERE judgment_id IN (
     SELECT j.id FROM judgment j
     JOIN judgment_example e ON e.id = j.example_id
@@ -1739,8 +1757,12 @@ DELETE FROM judgment_example WHERE thread_id = ANY(@thread_ids::uuid[]);
 -- name: SyntheticDeleteJudgmentIncompleteForThreads :execrows
 DELETE FROM judgment_incomplete WHERE thread_id = ANY(@thread_ids::uuid[]);
 
+-- name: SyntheticDeleteJudgmentUnjudgedForThreads :execrows
+DELETE FROM judgment_unjudged WHERE thread_id = ANY(@thread_ids::uuid[]);
+
 -- name: SyntheticDeleteEmptyJudgmentRuns :execrows
 DELETE FROM judgment_run r
 WHERE r.id = ANY(@run_ids::uuid[])
   AND NOT EXISTS (SELECT 1 FROM judgment_appearance a WHERE a.run_id = r.id)
-  AND NOT EXISTS (SELECT 1 FROM judgment_incomplete i WHERE i.run_id = r.id);
+  AND NOT EXISTS (SELECT 1 FROM judgment_incomplete i WHERE i.run_id = r.id)
+  AND NOT EXISTS (SELECT 1 FROM judgment_unjudged u WHERE u.run_id = r.id);

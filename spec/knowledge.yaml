@@ -545,7 +545,7 @@ behaviors:
   # --- Decision-model judgments ---
 
   - id: KNW-043
-    title: A judgment is recorded as SP1 assertions with extractor provenance, once per method version and input
+    title: A judgment is recorded as SP1 assertions with extractor provenance, once per method version, input and what it read
     type: data
     status: current
     surface: none
@@ -561,7 +561,7 @@ behaviors:
       - key: agreeing-methods-stay-two
         text: two methods agreeing on one input stay two judgments, and the accepted fact (an obligation's task, a flag) is a record apart from the judgments behind it
       - key: one-per-method-version-and-input
-        text: a method version holds at most one judgment per thread and input hash; a run that meets it again records it at its own cut-off and lists it among its threads, sending nothing
+        text: a method version holds at most one judgment per thread, input hash and what it read (KNW-062); a run that meets it again records it at its own cut-off and lists it among its threads, sending nothing
     provenance: [judgment.Store.RecordJudgment, judgment.Store.ReuseJudgment, 092_judgment_store.up.sql, .agents/spec/2026-10-14-decision-model-extraction.md G4 HC4 HC10]
 
   - id: KNW-044
@@ -579,7 +579,7 @@ behaviors:
       - key: removal-always-claim
         text: a removal (it would close an obligation, end an awaiting-reply wait or move a date later) always lands as a claim and leaves the obligation, the wait and the date as they were
       - key: omission-is-claim
-        text: a judgment that omits a party's open obligation raises a claim for it and leaves it open
+        text: a judgment that omits a party's open obligation whose evidence lies inside the judgment's window (CAD-061) raises a claim for it and leaves it open
       - key: no-effect-applied
         text: an outcome that changes nothing reads applied at any confidence
       - key: big-moment-flags-distinguishable
@@ -709,7 +709,7 @@ behaviors:
       - key: gained-content-eligible
         text: a thread is judged at a cut-off exactly when it has content after the previous cut-off and up to and including this one, the first window opening at the month's start, so a thread with content on two nights is judged at both and a thread whose only content precedes the month is not judged
       - key: whole-content-context
-        text: each judgment reads the thread's whole content up to its cut-off, content from before the month included
+        text: each judgment reads its window of the thread's content up to its cut-off (KNW-055), content from before the month included
       - key: writes-as-production
         text: each judgment and incomplete report is recorded through the judgment store as a production run's would be, so the production method's current judgments change live state
     provenance: [judgerun.Runner.Historical, judgerun.eachEligible, judgerun.Month.CutOffs, crm-admin --judge-month, .agents/spec/2026-10-14-decision-model-extraction.md G10 SC1 "historical runs simulate the production schedule"]
@@ -723,9 +723,13 @@ behaviors:
     when: the run judges it
     then:
       - key: judged-or-incomplete
-        text: the thread ends with a recorded judgment or an incomplete report naming its reason; none is truncated or skipped, and a failure the run cannot report stops the run with an error
+        text: the thread ends with a recorded judgment or an incomplete report naming its reason; none is skipped, and a failure the run cannot report stops the run with an error
       - key: failed-calls-retried
-        text: a failed call is asked again, three attempts in all, before the thread is reported call_failed; an over-limit context is reported over_limit without being sent
+        text: a failed call is asked again, three attempts in all, before the thread is reported call_failed
+      - key: over-limit-context-windowed
+        text: a context over the method's limits is judged over its window (KNW-055) and is not reported incomplete for its size
+      - key: message-over-limit-unsent
+        text: a context whose newest message alone exceeds the method's limits is reported message_over_limit without being sent
       - key: summary-counts-both
         text: the run's summary counts the eligible thread contexts and how each ended, judged, reused or incomplete by reason
     provenance: [judgerun.Runner.judge, judgerun.judgeWithRetries, .agents/spec/2026-10-14-decision-model-extraction.md G11 HC11 SC1]
@@ -736,14 +740,14 @@ behaviors:
     status: current
     surface: none
     given: a thread context a run would send to its method
-    when: the run's method version already holds a judgment of that thread and input hash
+    when: the run's method version already holds a judgment of that thread and input hash that read the same (KNW-062)
     then:
       - key: reused-not-sent
         text: the run reuses that judgment through the store and sends nothing, so repeating a month sends nothing
       - key: group-once-per-cut-off
         text: a group thread is sent once per cut-off per method, never once per member
       - key: rerun-reviewed-examples
-        text: a rerun judges each reviewed example's thread at the example's cut-off as an evidence-only run, reusing any judgment of that input, and reports an example whose rebuilt input differs as input_changed
+        text: a rerun replays each reviewed example's thread, as an evidence-only run, from the start of the run the reviewed judgment appeared in (KNW-062), in place of judging it at the example's cut-off alone, reusing any judgment that read the same, and reports an example whose rebuilt input differs as input_changed
     provenance: [judgerun.Runner.judge, judgerun.Runner.Rerun, judgment.Store.ReuseJudgment, .agents/spec/2026-10-14-decision-model-extraction.md HC10 SC9]
 
   - id: KNW-054
@@ -760,6 +764,218 @@ behaviors:
         text: a measuring run builds every context a historical run of the month would judge, with the method's question tree, sends nothing, writes no judgment, run or live state, and reports how many contexts it built, the distribution of their token and question counts against the method's limits and how many exceed a limit
       - key: summary-reports-live-effects
         text: a historical run's summary reports the obligations it opened, the flags it raised and the claims it raised
+      - key: summary-counts-unjudged
+        text: a historical run's summary counts the new messages left unjudged, by reason (KNW-058)
       - key: content-free-never-blocking
-        text: run output holds only IDs, counts and reasons, and no run refuses or stops on a size or a count
+        text: run output holds only IDs, counts, probabilities and reasons, and no run refuses or stops on a size or a count
     provenance: [judgerun.New, judgerun.Runner.Measure, judgerun.Summary, crm-admin --judge-month --measure, .agents/spec/2026-10-14-decision-model-extraction.md HC1 HC7 G15 "Assumptions & deferred questions"]
+
+  # --- Message flags and windows ---
+
+  - id: KNW-055
+    title: A thread context over a method's limits is judged over its window
+    type: business-logic
+    status: current
+    surface: none
+    given: a thread context built for a method at a cut-off
+    when: the method judges it
+    then:
+      - key: fits-whole-sent-whole
+        text: a context that fits the method's limits is its own window and is sent whole
+      - key: over-limit-judged-over-window
+        text: a context over the limits is judged over its window, the newest whole messages ending at the cut-off whose text and every question fit the method's limits
+      - key: no-message-split
+        text: no message is split, so a window starts at a message boundary
+      - key: newest-message-over-limit-incomplete
+        text: a context whose newest message alone exceeds the limits is reported incomplete with reason message_over_limit and nothing is sent
+    provenance: [.agents/spec/2026-10-18-message-flags-and-threads.md G1 T1]
+
+  - id: KNW-056
+    title: A cut-off's content leaves once per thread context per method
+    type: business-logic
+    status: current
+    surface: none
+    given: a thread context a method judges at a cut-off
+    when: the method asks its questions
+    then:
+      - key: one-call-carries-every-question
+        text: the cut-off's content leaves in one call that carries every flag, clearing and ball-in-court question
+      - key: over-question-limit-fewest-further-calls
+        text: when the questions exceed the method's question limit, the fewest further calls over the same window carry the rest
+    provenance: [.agents/spec/2026-10-18-message-flags-and-threads.md G1 HC1]
+
+  - id: KNW-057
+    title: A judgment flags each new message once per flag kind
+    type: business-logic
+    status: current
+    surface: none
+    given: a method judging a thread context at a cut-off
+    when: the judgment is recorded
+    then:
+      - key: decision-per-kind-per-new-message
+        text: the judgment holds one flag decision per flag kind (commitment, big moment, claim) for each new message in its window, with its probability whatever the display threshold
+      - key: none-for-earlier-new-message
+        text: the judgment holds no flag decision for a message that was new at an earlier cut-off
+      - key: first-judged-cut-off-all-new
+        text: at a thread's first judged cut-off in the method version's history, a cut-off with no judgment of the thread by that version, judged or reused, at an earlier cut-off, every message in the window is new
+      - key: failed-first-cut-off-carries-forward
+        text: a cut-off reported incomplete records no judgment, so when a thread's first cut-off fails, every message in the window of the next cut-off judged is new there
+      - key: later-cut-off-new-since-previous-scheduled
+        text: at any later cut-off the new messages are those after the previous scheduled cut-off (the nightly cut-off immediately before) and at or before this one
+      - key: meeting-notes-flagged-no-ball-in-court
+        text: meeting notes are flagged and asked no ball-in-court question
+    provenance: [.agents/spec/2026-10-18-message-flags-and-threads.md G2 T2 T3 T4 A1]
+
+  - id: KNW-058
+    title: A new message no judgment answered is recorded unjudged, never as a no
+    type: business-logic
+    status: current
+    surface: none
+    given: a new message that no judgment of a method answered
+    when: the cut-off's run ends
+    then:
+      - key: recorded-unjudged-with-reason
+        text: the message is recorded unjudged with its reason, call_failed, message_over_limit or before_window
+      - key: counted-unjudged-never-no
+        text: the message is counted as unjudged and never as a no
+      - key: rerun-judges-it
+        text: rerunning its cut-off judges it
+    provenance: [.agents/spec/2026-10-18-message-flags-and-threads.md G2 T5b SC10]
+
+  - id: KNW-059
+    title: A method re-checks its own earlier commitments and clears the done ones
+    type: business-logic
+    status: current
+    surface: none
+    given: a commitment flag decision of the method's own, above the method's clearing floor, whose message lies inside the window of a later cut-off's judgment and which the method has not cleared
+    when: the method judges that later cut-off
+    then:
+      - key: rechecked-and-recorded
+        text: the method re-checks the commitment and records its answer as a clearing decision
+      - key: cleared-once-answered-done
+        text: a commitment is cleared once one of its clearing decisions answers done
+      - key: outside-window-neither-cleared-nor-kept
+        text: a commitment whose message lies before the window is not re-checked, and that judgment neither clears nor keeps it
+    provenance: [.agents/spec/2026-10-18-message-flags-and-threads.md G3 T5a A2]
+
+  - id: KNW-060
+    title: Flag decisions, clearing decisions and unjudged messages change no live state
+    type: business-logic
+    status: current
+    surface: none
+    given: a flag decision, a clearing decision or an unjudged message, whatever its probability
+    when: it is recorded
+    then:
+      - key: opens-nothing
+        text: it opens no task or obligation and raises no flag or claim on live state
+      - key: closes-and-changes-nothing
+        text: it closes or changes no task, obligation or live flag
+      - key: reply-obligations-keep-apply-rule
+        text: ball-in-court's reply obligations still follow the apply rule (KNW-044) within the window rules (CAD-061)
+    provenance: [.agents/spec/2026-10-18-message-flags-and-threads.md G5 HC2]
+
+  - id: KNW-061
+    title: A new method version asks only flag, clearing and ball-in-court questions
+    type: business-logic
+    status: current
+    surface: none
+    given: a new method version
+    when: it judges a thread context
+    then:
+      - key: asks-only-flag-clearing-ball-in-court
+        text: it asks only flag, clearing and ball-in-court questions
+      - key: no-whole-thread-questions
+        text: it asks no whole-thread commitment, date, source-message or big-moment question
+    provenance: [.agents/spec/2026-10-18-message-flags-and-threads.md G7]
+
+  - id: KNW-062
+    title: A run replays cut-offs in order and reuses a judgment only when what it read is the same
+    type: business-logic
+    status: current
+    surface: none
+    given: a run of a method, the scorecard's rerun included
+    when: the run judges its cut-offs
+    then:
+      - key: cut-offs-in-order-from-start
+        text: the run judges its cut-offs in order from the run's start
+      - key: reuse-only-when-read-same
+        text: the run reuses a recorded judgment only when what it read is the same, meaning its window, its new messages and the earlier judgments it re-checked
+      - key: different-read-judged-anew
+        text: a context whose recorded judgments all read something different is judged anew
+    provenance: [.agents/spec/2026-10-18-message-flags-and-threads.md AD4]
+
+  - id: KNW-063
+    title: The store's reads return window starts, new messages, flag decisions, clearing decisions and unjudged counts
+    type: data
+    status: current
+    surface: none
+    given: judgments and runs recorded in the store
+    when: the judgment reads and the run read run
+    then:
+      - key: judgment-reads-carry-window-and-decisions
+        text: the judgment reads return each judgment's window start, new messages, flag decisions and clearing decisions
+      - key: earlier-version-reads-back-empty
+        text: a judgment of a method version from before windows and flags reads back with no new messages, flag decisions or clearing decisions, and its window starting at its context's first message
+      - key: run-read-counts-unjudged-by-reason
+        text: the run read returns each run's unjudged messages, counted by reason
+    provenance: [.agents/spec/2026-10-18-message-flags-and-threads.md AD1 G6 S1]
+
+  - id: KNW-064
+    title: The display threshold and the clearing floor are stored data with one source each
+    type: data
+    status: current
+    surface: none
+    given: the display threshold per method and flag kind and the clearing floor per method
+    when: a threshold or a floor is read or changed
+    then:
+      - key: stored-with-one-source
+        text: each is stored data with one source, and nothing else holds a copy
+      - key: threshold-strictly-above-floor
+        text: a method's display threshold is strictly above its clearing floor
+      - key: threshold-change-needs-no-rerun
+        text: changing a display threshold needs no rerun, since every probability is stored
+    provenance: [.agents/spec/2026-10-18-message-flags-and-threads.md AD3 S2]
+
+  - id: KNW-065
+    title: Every method's judgment of one thread context records the same example
+    type: data
+    status: current
+    surface: none
+    given: methods judging one thread context at one cut-off
+    when: each records its judgment
+    then:
+      - key: one-example-per-context
+        text: every method's judgment records one example, naming the thread and the full context's input hash
+      - key: hash-of-full-context-whatever-window
+        text: the input hash is that of the full context, whatever window the method read
+    provenance: [.agents/spec/2026-10-18-message-flags-and-threads.md G1]
+
+  - id: KNW-066
+    title: The Langfuse export of window starts, flag decisions, clearing decisions and unjudged messages is content-free
+    type: data
+    status: current
+    surface: none
+    given: window starts, flag decisions, clearing decisions and unjudged messages recorded in the store
+    when: the export sends them to Langfuse
+    then:
+      - key: new-records-exported
+        text: the export sends window starts, flag decisions, clearing decisions and unjudged messages
+      - key: no-text-sender-or-contact-identity
+        text: they carry no message text, sender or contact identity
+      - key: message-keys-opaque-candidates
+        text: message keys travel as opaque candidates
+    provenance: [.agents/spec/2026-10-18-message-flags-and-threads.md G6 HC3]
+
+  - id: KNW-067
+    title: A method reads only its window and its own earlier judgments
+    type: business-logic
+    status: current
+    surface: none
+    given: a method judging a thread context at a cut-off
+    when: its inputs are built
+    then:
+      - key: inputs-are-window-and-own-earlier-judgments
+        text: its inputs are its window and its own earlier judgments
+      - key: reads-no-review-or-label
+        text: no method reads a review or a label, so methods stay comparable
+    provenance: [.agents/spec/2026-10-18-message-flags-and-threads.md HC4 A2]
