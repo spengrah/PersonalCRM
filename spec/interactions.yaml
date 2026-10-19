@@ -1723,6 +1723,8 @@ behaviors:
         text: a label on a flag decision or a clearing decision opens, closes or changes no task, obligation, big-moment flag or claim
       - key: reply-review-keeps-effect
         text: a review of a reply item takes its live effect on a first review and records the label only on a re-review, as IXN-058 and IXN-059 state
+      - key: stale-effect-label-only
+        text: a review of a reply item whose live effect no longer holds records the label only and changes no obligation
     provenance: [.agents/spec/2026-10-18-message-flags-and-threads.md HC2 G5]
 
   - id: IXN-096

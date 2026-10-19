@@ -58,7 +58,7 @@ func owedAndNone(x, y uuid.UUID) judgment.Outcomes {
 // nothing.
 func TestCloseThread(t *testing.T) {
 	t.Run("a night whose only label is on a reply item labels its unflagged judged messages and its reply negatives", func(t *testing.T) {
-		// spec: IXN-092.flag-decisions-labeled-no, IXN-092.reply-negatives-labeled
+		// spec: IXN-092.flag-decisions-labeled-no, IXN-092.reply-negatives-labeled, IXN-092.answers-review-state, IXN-094.returned-with-every-answer
 		b := newBenchEnv(t)
 		x, y := b.contact(t), b.contact(t)
 		th, keys := b.chat(t, 2, x, y)
@@ -83,7 +83,9 @@ func TestCloseThread(t *testing.T) {
 		}
 		assert.Equal(t, "nobody_owes", b.labels(t)[decision(judgment.QuestionBallInCourt, &y)], "the reply negative gains its judged value")
 		assert.Equal(t, "i_owe_reply", b.labels(t)[decision(judgment.QuestionBallInCourt, &x)], "the item keeps its label")
-		night := decodeData[handlers.ThreadReviewResponse](t, w).Nights[0]
+		answer := decodeData[handlers.ThreadReviewResponse](t, w)
+		assert.Equal(t, "reviewed", answer.Status, "the answer carries the thread's status")
+		night := answer.Nights[0]
 		assert.Equal(t, 2, night.LabeledNone, "the answer reports how many unflagged messages the close labeled")
 		assert.Equal(t, 2, b.reviewOf(t, th, run).Nights[0].LabeledNone, "and so does every later read")
 	})
@@ -230,7 +232,7 @@ func TestCloseThread(t *testing.T) {
 // Confirm Nones labels a night that shows nothing and holds no label.
 func TestConfirmNones(t *testing.T) {
 	t.Run("a night that shows nothing labels its judged messages and its reply negatives", func(t *testing.T) {
-		// spec: IXN-093.labels-the-night
+		// spec: IXN-093.labels-the-night, IXN-093.answers-review-state, IXN-094.returned-with-every-answer
 		b := newBenchEnv(t)
 		x := b.contact(t)
 		th, keys := b.conversation(t, 2)
@@ -451,7 +453,7 @@ func TestThreadStatus(t *testing.T) {
 	})
 
 	t.Run("a thread whose shown items all hold labels and whose one empty night offers Confirm Nones is to review with 1", func(t *testing.T) {
-		// spec: IXN-094.thread-to-review
+		// spec: IXN-094.thread-to-review, IXN-094.returned-with-every-answer
 		b := newBenchEnv(t)
 		hot := b.threshold(t, b.compared(0), judgment.FlagKindClaim) + 0.2
 		s, _ := threeNights(t, b, map[int][3]float64{0: {0, 0, hot}, 2: {hot, 0, 0}})
@@ -536,7 +538,7 @@ func TestLabelsChangeNothingLive(t *testing.T) {
 // The review route, given a run, answers with the thread's review state in it.
 func TestReviewRouteAnswersReviewState(t *testing.T) {
 	t.Run("a review of a reply item with run_id carries the night's new status", func(t *testing.T) {
-		// spec: IXN-096.run-answers-review-state
+		// spec: IXN-096.run-answers-review-state, IXN-094.returned-with-every-answer
 		b := newBenchEnv(t)
 		x := b.contact(t)
 		th, keys := b.chat(t, 1, x)
@@ -612,8 +614,8 @@ func TestLabelsByThread(t *testing.T) {
 		other, err := b.store.LabelsByThread(b.ctx, closed.th.id)
 		require.NoError(t, err)
 
-		assert.Len(t, one.Flags, 9)
-		assert.Len(t, other.Flags, 9)
+		require.Len(t, one.Flags, 9)
+		require.Len(t, other.Flags, 9)
 		for i := range one.Flags {
 			assert.Equal(t, one.Flags[i].Kind, other.Flags[i].Kind)
 			assert.Equal(t, one.Flags[i].Holds, other.Flags[i].Holds)

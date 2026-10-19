@@ -370,7 +370,7 @@ func (b *benchEnv) contactNameOfSender(t *testing.T, s scenario, key string) str
 // The flag label route records whether a message holds a kind.
 func TestLabelFlag(t *testing.T) {
 	t.Run("a confirm on a shown flag reads confirmed, a remove removed, and a second label replaces the first", func(t *testing.T) {
-		// spec: IXN-090.label-recorded
+		// spec: IXN-090.label-recorded, IXN-090.answers-review-state
 		b := newBenchEnv(t)
 		hot := b.threshold(t, b.compared(0), judgment.FlagKindClaim) + 0.2
 		s := b.judgedNight(t, [3]float64{0, 0, hot})
@@ -499,13 +499,16 @@ func TestLabelClearing(t *testing.T) {
 		{"a not-done answer confirmed", false, false, "confirmed", ""},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			// spec: IXN-091.label-recorded
+			// spec: IXN-091.label-recorded, IXN-091.answers-review-state, IXN-094.returned-with-every-answer
 			s := seed(t, c.answer, 0)
 
 			w := s.b.labelClearing(t, s.th, s.runs[0], s.keys[0], s.cutOff, c.label)
 
 			require.Equal(t, http.StatusOK, w.Code, w.Body.String())
-			assert.Equal(t, c.want, decodeData[handlers.ThreadReviewResponse](t, w).Nights[1].Clearings[0].Label, "the answer is the thread's review state")
+			answer := decodeData[handlers.ThreadReviewResponse](t, w)
+			assert.Equal(t, c.want, answer.Nights[1].Clearings[0].Label, "the answer is the thread's review state")
+			assert.Equal(t, "to_review", answer.Status, "the first night's commitment chip still awaits review")
+			assert.Equal(t, 1, answer.ToReview)
 			assert.Equal(t, c.want, label(t, s, 0))
 		})
 	}

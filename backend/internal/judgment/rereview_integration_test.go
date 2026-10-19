@@ -92,7 +92,7 @@ func TestBenchReReview(t *testing.T) {
 	})
 
 	t.Run("a removal that took effect changed to confirmed reopens nothing and reads not acting", func(t *testing.T) {
-		// spec: IXN-058.label-only, IXN-060.closed-not-acting, IXN-060.agrees-as-before
+		// spec: IXN-058.label-only, IXN-060.closed-not-acting, IXN-060.agrees-as-before, IXN-095.reply-review-keeps-effect
 		b := newBenchEnv(t)
 		x, th := owedReply(t, b, 0.9)
 		b.act(t, item(t, b.proposal(t, x, prodMethod), "i_owe_reply", x), "remove")

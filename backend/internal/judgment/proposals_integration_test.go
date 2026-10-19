@@ -22,7 +22,7 @@ import (
 // offers, so the client applies no judgment rule.
 func TestBenchReadCompilesProposals(t *testing.T) {
 	t.Run("a group thread where two participants owe the user a reply", func(t *testing.T) {
-		// spec: IXN-052.answers-not-questions, IXN-052.state-and-acts
+		// spec: IXN-089.night-contents
 		b := newBenchEnv(t)
 		bea, cy := b.contact(t), b.contact(t)
 		th := b.thread(t)
@@ -52,7 +52,7 @@ func TestBenchReadCompilesProposals(t *testing.T) {
 	})
 
 	t.Run("a commitment carries its source message and stands in for no reply", func(t *testing.T) {
-		// spec: IXN-052.commitment-source-message, IXN-052.reply-beside-commitment
+		// spec: IXN-089.night-contents
 		b := newBenchEnv(t)
 		x := b.contact(t)
 		th := b.thread(t)
@@ -85,7 +85,7 @@ func TestBenchReadCompilesProposals(t *testing.T) {
 	})
 
 	t.Run("a participant's commitment stands in for no reply they owe", func(t *testing.T) {
-		// spec: IXN-052.reply-beside-commitment
+		// spec: IXN-089.night-contents
 		b := newBenchEnv(t)
 		x := b.contact(t)
 		th := b.thread(t)
@@ -104,7 +104,7 @@ func TestBenchReadCompilesProposals(t *testing.T) {
 	})
 
 	t.Run("a non-production method's judgment is not acting", func(t *testing.T) {
-		// spec: IXN-052.state-and-acts
+		// spec: IXN-089.night-contents, KNW-045.others-are-evidence
 		b := newBenchEnv(t)
 		x := b.contact(t)
 		th := b.thread(t)
@@ -124,7 +124,7 @@ func TestBenchReadCompilesProposals(t *testing.T) {
 	})
 
 	t.Run("a live item with a suggested removal", func(t *testing.T) {
-		// spec: IXN-052.state-and-acts
+		// spec: IXN-089.night-contents
 		b := newBenchEnv(t)
 		x, th := b.contact(t, "weekly"), b.thread(t)
 		sent := accelerated.GetCurrentTime().UTC().Add(-2 * time.Hour).Truncate(time.Second)
@@ -150,7 +150,7 @@ func TestBenchReadCompilesProposals(t *testing.T) {
 	})
 
 	t.Run("a suggested removal sits under the live obligation it targets, after the user's own reply obligation closed", func(t *testing.T) {
-		// spec: IXN-052.removal-keeps-its-target
+		// spec: IXN-089.night-contents, KNW-046.live-review-gives-right-effect
 		b := newBenchEnv(t)
 		x, th := b.contact(t), b.thread(t)
 		b.message(t, th, x, false, b.day(1))
@@ -196,7 +196,7 @@ func TestBenchReadCompilesProposals(t *testing.T) {
 	})
 
 	t.Run("an item whose obligation closed is not acting, and confirming it reopens nothing", func(t *testing.T) {
-		// spec: IXN-052.state-is-live-effect
+		// spec: IXN-060.closed-not-acting
 		b := newBenchEnv(t)
 		x, th := b.contact(t), b.thread(t)
 		b.message(t, th, x, false, b.day(1))
@@ -224,7 +224,7 @@ func TestBenchReadCompilesProposals(t *testing.T) {
 	})
 
 	t.Run("a confirmed reply stays live once a commitment the user adds supersedes its obligation", func(t *testing.T) {
-		// spec: IXN-052.state-is-live-effect
+		// spec: IXN-060.agrees-as-before
 		b := newBenchEnv(t)
 		x, th := b.contact(t), b.thread(t)
 		b.message(t, th, x, false, b.day(1))
@@ -291,7 +291,7 @@ func TestBenchReadCompilesProposals(t *testing.T) {
 	} {
 		for _, r := range replacements {
 			t.Run("a completed "+tc.name+" commitment stays not acting beside "+r.name+", and confirming it keeps that reply", func(t *testing.T) {
-				// spec: IXN-052.state-is-live-effect
+				// spec: IXN-089.night-contents, KNW-046.live-review-gives-right-effect
 				b := newBenchEnv(t)
 				x, th := b.contact(t), b.thread(t)
 				b.message(t, th, x, false, b.day(1))
@@ -348,7 +348,7 @@ func TestBenchReviewActsOnItsOwnObligation(t *testing.T) {
 		{"theirs", judgment.CommitmentDirectionTheirs, repository.ObligationDebtorContact},
 	} {
 		t.Run("removing a completed "+tc.name+" commitment leaves a later judgment's commitment open", func(t *testing.T) {
-			// spec: IXN-052.state-is-live-effect
+			// spec: KNW-046.live-review-gives-right-effect
 			b := newBenchEnv(t)
 			x, th := b.contact(t), b.thread(t)
 			b.message(t, th, x, false, b.day(1))
@@ -390,7 +390,7 @@ func TestBenchReviewActsOnItsOwnObligation(t *testing.T) {
 	}
 
 	t.Run("rejecting an earlier suggested reply leaves a later judgment's reply obligation open", func(t *testing.T) {
-		// spec: IXN-052.state-is-live-effect, KNW-046.live-review-gives-right-effect
+		// spec: KNW-046.live-review-gives-right-effect
 		b := newBenchEnv(t)
 		x, th := b.contact(t), b.thread(t)
 		b.message(t, th, x, false, b.day(1))
@@ -415,7 +415,7 @@ func TestBenchReviewActsOnItsOwnObligation(t *testing.T) {
 	})
 
 	t.Run("moving a completed reply item to the other reply list records the label only", func(t *testing.T) {
-		// spec: IXN-052.state-is-live-effect
+		// spec: IXN-095.stale-effect-label-only
 		b := newBenchEnv(t)
 		x, th := b.contact(t), b.thread(t)
 		b.message(t, th, x, false, b.day(1))
@@ -454,7 +454,7 @@ func TestBenchReviewActsOnItsOwnObligation(t *testing.T) {
 	}
 
 	t.Run("removing a participant's commitment after a contact merge closes the obligation the merge moved", func(t *testing.T) {
-		// spec: IXN-052.state-is-live-effect, KNW-046.live-review-gives-right-effect
+		// spec: KNW-046.live-review-gives-right-effect
 		b := newBenchEnv(t)
 		th := b.thread(t)
 		_, survivor := merged(t, b, th, func(retired uuid.UUID) judgment.Outcomes {

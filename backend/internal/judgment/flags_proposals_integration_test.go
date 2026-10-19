@@ -15,7 +15,7 @@ import (
 // outcomes alone.
 func TestBenchReadCompilesNewVersionProposals(t *testing.T) {
 	t.Run("a conversation judgment with flags and ball-in-court outcomes", func(t *testing.T) {
-		// spec: IXN-052.answers-not-questions
+		// spec: IXN-053.lists-shown
 		b := newBenchEnv(t)
 		m := judgment.MethodRef{Key: b.methods.Keys()[0], Version: "v1", WordingVersion: "w1"}
 		x, th := b.oneToOne(t)
