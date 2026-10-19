@@ -177,13 +177,23 @@ test.describe('Thread page timeline with Review on @area:interactions', () => {
   })
 
   test('a first night whose window spans two days is dated by both', async ({ page, request }) => {
-    // Messages 8 and 9 are the first day's last; 10 and 11 the second day's first.
-    const { messages } = await openBoard(page, request, all => nightsOf(all, [{ from: 8, to: 11 }]))
+    // The seed's times follow the clock, so the night is the first pair of
+    // consecutive messages that fall on two days in the run's time zone, which
+    // the browser shares.
+    let last = -1
+    const { messages } = await openBoard(page, request, all => {
+      last = all.findIndex(
+        (m, i) =>
+          i > 0 && day.format(new Date(all[i - 1].sent_at)) !== day.format(new Date(m.sent_at))
+      )
+      expect(last, 'the board chat crosses a day boundary').toBeGreaterThan(0)
+      return nightsOf(all, [{ from: last - 1, to: last }])
+    })
 
     // spec: IXN-080.night-divider
-    const label = days(messages[8].sent_at, messages[11].sent_at)
+    const label = days(messages[last - 1].sent_at, messages[last].sent_at)
     expect(label).toContain('–')
-    await expect(page.locator('[data-night-divider]')).toHaveText(`${label} · 4 new messages`)
+    await expect(page.locator('[data-night-divider]')).toHaveText(`${label} · 2 new messages`)
   })
 
   test('a night after a failed cut-off shows the failed cut-off’s messages unjudged, uncounted by its divider', async ({
