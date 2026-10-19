@@ -160,6 +160,33 @@ func TestReadThreadNights(t *testing.T) {
 		assert.Equal(t, 1, night.NewMessageCount, "the message new at the failed cut-off is not counted")
 	})
 
+	t.Run("a cut-off the run recorded as failed before its first judged night leaves its messages unjudged in that night, not in the context", func(t *testing.T) {
+		// spec: IXN-089.run-nights
+		b := newBenchEnv(t)
+		th, keys := b.conversation(t, 3)
+		m := b.compared(0)
+		earlier := b.startRun(t, judgment.RunKindHistorical, m)
+		b.judged(t, earlier, m, th, b.cutAfter(1), keys[0], keys[:1], nil)
+		run := b.startRun(t, judgment.RunKindHistorical, m)
+		failed := b.cutAfter(2)
+		require.NoError(t, b.store.RecordIncomplete(b.ctx, run, th.id, failed, judgment.IncompleteReasonCallFailed))
+		require.NoError(t, b.store.RecordUnjudged(b.ctx, run, []judgment.UnjudgedMessage{
+			{Thread: th.id, CutOff: failed, MessageKey: keys[1], Reason: judgment.UnjudgedReasonCallFailed},
+		}))
+		b.judged(t, run, m, th, b.cutAfter(3), keys[0], keys[2:], nil)
+
+		review := b.reviewOf(t, th, run)
+
+		assert.Equal(t, keys[:1], review.ContextMessages, "only the message an earlier run judged is context")
+		require.Len(t, review.Nights, 1)
+		assert.Equal(t, keys[1:], nightKeys(review.Nights[0]))
+		skipped := nightMessage(t, review.Nights[0], keys[1])
+		assert.False(t, skipped.Judged)
+		require.NotNil(t, skipped.Reason)
+		assert.Equal(t, "call_failed", *skipped.Reason)
+		assert.Equal(t, 1, review.Nights[0].NewMessageCount)
+	})
+
 	t.Run("messages after the run's last cut-off are returned as later messages", func(t *testing.T) {
 		// spec: IXN-089.run-nights
 		b := newBenchEnv(t)

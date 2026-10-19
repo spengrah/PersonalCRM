@@ -403,21 +403,27 @@ func (d *reviewData) place(review *ThreadReview, refs []refMessage, index map[st
 	if at, ok := index[first.WindowStart]; ok {
 		start = at
 	}
-	if len(first.newKeys) > 0 {
-		earliest := -1
-		for _, k := range first.newKeys {
-			if at, ok := index[k]; ok && (earliest < 0 || at < earliest) {
-				earliest = at
-			}
-		}
-		if earliest > start {
-			for _, r := range refs[start:earliest] {
-				review.ContextMessages = append(review.ContextMessages, r.key)
-			}
-			start = earliest
+	// The messages the first night's window read before its new messages are
+	// context, except those the run recorded unjudged: they sit in the night.
+	contextEnd := start
+	earliest := -1
+	for _, k := range first.newKeys {
+		if at, ok := index[k]; ok && (earliest < 0 || at < earliest) {
+			earliest = at
 		}
 	}
+	if earliest > start {
+		contextEnd = earliest
+	}
+	unjudged := map[string]bool{}
+	for _, u := range d.unjudged[review.Thread] {
+		unjudged[u.MessageKey] = true
+	}
 	for ri := start; ri < len(refs); ri++ {
+		if ri < contextEnd && !unjudged[refs[ri].key] {
+			review.ContextMessages = append(review.ContextMessages, refs[ri].key)
+			continue
+		}
 		at := slices.IndexFunc(nights, func(n Night) bool { return !refs[ri].sentAt.After(n.CutOff) })
 		if at < 0 {
 			review.LaterMessages = append(review.LaterMessages, refs[ri].key)
