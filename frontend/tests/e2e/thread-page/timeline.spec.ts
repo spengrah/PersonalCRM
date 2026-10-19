@@ -250,9 +250,9 @@ test.describe('Thread page timeline with Review on @area:interactions', () => {
     // spec: IXN-080.one-timeline-each-message-once
     const seq = await outline(page)
     const firstDivider = seq.indexOf('divider')
-    const before = seq.slice(0, firstDivider)
+    // Only the run's context messages sit above the first night: messages 0 and 1 lie outside its window.
+    expect(seq.slice(0, firstDivider)).toEqual(review.context_messages)
     for (const key of review.context_messages) {
-      expect(before).toContain(key)
       const message = page.locator(`[data-message-key="${key}"]`)
       await expect(message.locator('[data-message-flags]')).toHaveCount(0)
       await expect(message.getByRole('button', { name: '+ Flag' })).toHaveCount(0)

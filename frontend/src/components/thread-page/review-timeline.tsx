@@ -48,9 +48,10 @@ function NightDivider({
 
 /**
  * The thread as the run's nights read it, each message once in thread order:
- * the messages before the first night plain; for each night a divider, its new
- * messages with their chips and "+ Flag", and its judgment box; the messages
- * after the last night behind a toggle. The server places every message.
+ * the run's context messages before the first night plain; for each night a
+ * divider, its new messages with their chips and "+ Flag", and its judgment box;
+ * the messages after the last night behind a toggle. The server places every
+ * message; messages it places nowhere (history before the run's window) are not shown.
  */
 export function ReviewTimeline({
   threadId,
@@ -60,12 +61,9 @@ export function ReviewTimeline({
   onShow,
 }: ReviewTimelineProps) {
   const byKey = new Map(messages.map(message => [message.message_key, message]))
-  const inNight = new Set(review.nights.flatMap(night => night.messages.map(m => m.message_key)))
-  const later = new Set(review.later_messages)
-  const before = messages.filter(
-    message => !inNight.has(message.message_key) && !later.has(message.message_key)
-  )
-  const after = messages.filter(message => later.has(message.message_key))
+  const placedAt = (keys: string[]) => keys.flatMap(key => byKey.get(key) ?? [])
+  const before = placedAt(review.context_messages)
+  const after = placedAt(review.later_messages)
 
   return (
     <div data-review-timeline className="rounded-lg bg-white p-4 shadow">
