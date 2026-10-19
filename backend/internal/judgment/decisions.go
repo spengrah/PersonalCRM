@@ -133,10 +133,10 @@ type EarlierJudgment struct {
 	Clearings   []ClearingDecision
 }
 
-// EarlierJudgments returns the method version's judgments of the thread whose
-// cut-off is before cutOff, oldest first. A judgment of a version before
+// JudgmentsThrough returns the method version's judgments of the thread whose
+// cut-off is at or before through, oldest first. A judgment of a version before
 // migration 099 records no decision.
-func (s *Store) EarlierJudgments(ctx context.Context, method MethodRef, thread threadctx.VenueID, cutOff time.Time) ([]EarlierJudgment, error) {
+func (s *Store) JudgmentsThrough(ctx context.Context, method MethodRef, thread threadctx.VenueID, through time.Time) ([]EarlierJudgment, error) {
 	rows, err := s.queries.ListJudgmentRows(ctx, db.ListJudgmentRowsParams{
 		Ids: []uuid.UUID{}, ThreadID: &thread, ExampleIds: []string{},
 		MethodKey: &method.Key, MethodVersion: &method.Version, WordingVersion: &method.WordingVersion,
@@ -144,7 +144,7 @@ func (s *Store) EarlierJudgments(ctx context.Context, method MethodRef, thread t
 	if err != nil {
 		return nil, fmt.Errorf("list earlier judgments: %w", err)
 	}
-	rows = slices.DeleteFunc(rows, func(j *db.ListJudgmentRowsRow) bool { return !j.CutOff.Before(cutOff) })
+	rows = slices.DeleteFunc(rows, func(j *db.ListJudgmentRowsRow) bool { return j.CutOff.After(through) })
 	reads, err := readsOf(ctx, s.queries, rows)
 	if err != nil {
 		return nil, err

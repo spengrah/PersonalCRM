@@ -186,4 +186,25 @@ func TestJudgeMonthRechecksEarlierCommitments(t *testing.T) {
 		assert.Equal(t, january.ID, february.Clearings[0].CommitmentJudgment)
 		assert.True(t, february.Clearings[0].Done)
 	})
+
+	t.Run("a commitment judged at the previous month's final cut-off, asked at the next month's cut-off without flagging the earlier message again", func(t *testing.T) {
+		e := newFlagsEnv(t, "")
+		th := e.newThread(t)
+		th.say(t, jan(31, 9), true, promise)
+		th.say(t, time.Date(2026, time.February, 2, 9, 0, 0, 0, time.Local), true, kept)
+		keys := th.keys(t)
+		v := vendorFlagging(t, false, 0.9)
+		m := e.method(jevKey, v, roomy)
+		set := methods{jevKey: m}
+
+		e.judgeMonth(t, set, jevKey)
+		january := th.judgmentAt(t, m.Ref(), time.Date(2026, time.February, 1, 0, 0, 0, 0, time.Local))
+		e.judgeMonthOf(t, "2026-02", set, jevKey)
+
+		february := th.judgmentAt(t, m.Ref(), time.Date(2026, time.February, 3, 0, 0, 0, 0, time.Local))
+		assert.Equal(t, keys[1:], february.NewMessages, "the earlier message is not new again")
+		require.Len(t, february.Clearings, 1)
+		assert.Equal(t, january.ID, february.Clearings[0].CommitmentJudgment)
+		assert.True(t, february.Clearings[0].Done)
+	})
 }

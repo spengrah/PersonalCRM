@@ -331,10 +331,11 @@ func (r *Runner) replay(ctx context.Context, s *Summary, m decision.Method, mont
 	return nil
 }
 
-// priorHistory is the method version's judgments of the thread at cut-offs
-// before start, one per cut-off.
+// priorHistory is the method version's judgments of the thread at cut-offs up
+// to and including start, one per cut-off. A month's start is the previous
+// month's final cut-off, so a judgment there is part of the month's history.
 func (r *Runner) priorHistory(ctx context.Context, m decision.Method, thread threadctx.VenueID, start time.Time) (*history, error) {
-	prior, err := r.store.EarlierJudgments(ctx, m.Ref(), thread, start)
+	prior, err := r.store.JudgmentsThrough(ctx, m.Ref(), thread, start)
 	if err != nil {
 		return nil, err
 	}
