@@ -99,5 +99,11 @@ func countTokens(w wireRequest) int {
 	return n
 }
 
+// countTokensPerQuestion is countTokens for a vendor that bills the state
+// once for each question.
+func countTokensPerQuestion(w wireRequest) int {
+	return len(w.State)*(max(len(w.Questions), 1)-1) + countTokens(w)
+}
+
 // questionFraming is the allowance per question for a vendor's framing.
 const questionFraming = 64

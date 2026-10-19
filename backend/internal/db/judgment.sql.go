@@ -16,13 +16,14 @@ const CreateJudgment = `-- name: CreateJudgment :one
 INSERT INTO judgment (
     method_key, method_version, wording_version, example_id, context_kind,
     cut_off, judged_at, context_tokens, question_count, billed_tokens,
-    cost_usd, latency_ns, questions
+    cost_usd, latency_ns, questions, window_start, new_messages, read_digest
 ) VALUES (
     $1, $2, $3,
     $4, $5, $6,
     $7, $8, $9,
     $10, $11, $12,
-    $13
+    $13, $14, $15::text[],
+    $16
 )
 RETURNING id
 `
@@ -41,6 +42,9 @@ type CreateJudgmentParams struct {
 	CostUsd        *float64  `json:"cost_usd"`
 	LatencyNs      int64     `json:"latency_ns"`
 	Questions      []byte    `json:"questions"`
+	WindowStart    *string   `json:"window_start"`
+	NewMessages    []string  `json:"new_messages"`
+	ReadDigest     string    `json:"read_digest"`
 }
 
 func (q *Queries) CreateJudgment(ctx context.Context, arg CreateJudgmentParams) (uuid.UUID, error) {
@@ -58,6 +62,9 @@ func (q *Queries) CreateJudgment(ctx context.Context, arg CreateJudgmentParams) 
 		arg.CostUsd,
 		arg.LatencyNs,
 		arg.Questions,
+		arg.WindowStart,
+		arg.NewMessages,
+		arg.ReadDigest,
 	)
 	var id uuid.UUID
 	err := row.Scan(&id)
@@ -88,6 +95,64 @@ func (q *Queries) CreateJudgmentAppearance(ctx context.Context, arg CreateJudgme
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const CreateJudgmentClearings = `-- name: CreateJudgmentClearings :exec
+INSERT INTO judgment_clearing (judgment_id, commitment_message_key, commitment_judgment_id, done, probability)
+SELECT $1::uuid,
+       unnest($2::text[])::text,
+       unnest($3::uuid[])::uuid,
+       unnest($4::boolean[])::boolean,
+       unnest($5::float8[])::float8
+`
+
+type CreateJudgmentClearingsParams struct {
+	JudgmentID            uuid.UUID   `json:"judgment_id"`
+	MessageKeys           []string    `json:"message_keys"`
+	CommitmentJudgmentIds []uuid.UUID `json:"commitment_judgment_ids"`
+	Dones                 []bool      `json:"dones"`
+	Probabilities         []float64   `json:"probabilities"`
+}
+
+// Records a judgment's clearing decisions: one commitment's message key and
+// earlier judgment, the answer and its probability of done per position of the
+// four arrays.
+func (q *Queries) CreateJudgmentClearings(ctx context.Context, arg CreateJudgmentClearingsParams) error {
+	_, err := q.db.Exec(ctx, CreateJudgmentClearings,
+		arg.JudgmentID,
+		arg.MessageKeys,
+		arg.CommitmentJudgmentIds,
+		arg.Dones,
+		arg.Probabilities,
+	)
+	return err
+}
+
+const CreateJudgmentFlags = `-- name: CreateJudgmentFlags :exec
+INSERT INTO judgment_flag (judgment_id, message_key, kind, probability)
+SELECT $1::uuid,
+       unnest($2::text[])::text,
+       unnest($3::text[])::text,
+       unnest($4::float8[])::float8
+`
+
+type CreateJudgmentFlagsParams struct {
+	JudgmentID    uuid.UUID `json:"judgment_id"`
+	MessageKeys   []string  `json:"message_keys"`
+	Kinds         []string  `json:"kinds"`
+	Probabilities []float64 `json:"probabilities"`
+}
+
+// Records a judgment's flag decisions: one message key, kind and probability
+// per position of the three arrays.
+func (q *Queries) CreateJudgmentFlags(ctx context.Context, arg CreateJudgmentFlagsParams) error {
+	_, err := q.db.Exec(ctx, CreateJudgmentFlags,
+		arg.JudgmentID,
+		arg.MessageKeys,
+		arg.Kinds,
+		arg.Probabilities,
+	)
+	return err
 }
 
 const CreateJudgmentIncomplete = `-- name: CreateJudgmentIncomplete :exec
@@ -178,7 +243,7 @@ type CreateJudgmentRunParams struct {
 	StartedAt      time.Time  `json:"started_at"`
 }
 
-// Judgment store queries (migrations 092-094). Predicate keys are arguments, so
+// Judgment store queries (migrations 092-094, 099). Predicate keys are arguments, so
 // the judgment package's constants stay their one definition.
 func (q *Queries) CreateJudgmentRun(ctx context.Context, arg CreateJudgmentRunParams) (*JudgmentRun, error) {
 	row := q.db.QueryRow(ctx, CreateJudgmentRun,
@@ -203,6 +268,35 @@ func (q *Queries) CreateJudgmentRun(ctx context.Context, arg CreateJudgmentRunPa
 		&i.FinishedAt,
 	)
 	return &i, err
+}
+
+const CreateJudgmentUnjudged = `-- name: CreateJudgmentUnjudged :exec
+INSERT INTO judgment_unjudged (run_id, thread_id, cut_off, message_key, reason)
+SELECT $1::uuid, $2::uuid, $3::timestamptz,
+       unnest($4::text[])::text,
+       unnest($5::text[])::text
+ON CONFLICT (run_id, thread_id, cut_off, message_key) DO UPDATE SET reason = EXCLUDED.reason
+`
+
+type CreateJudgmentUnjudgedParams struct {
+	RunID       uuid.UUID `json:"run_id"`
+	ThreadID    uuid.UUID `json:"thread_id"`
+	CutOff      time.Time `json:"cut_off"`
+	MessageKeys []string  `json:"message_keys"`
+	Reasons     []string  `json:"reasons"`
+}
+
+// Records the messages no judgment of the run answered at a cut-off, each with
+// its reason; recording a message again keeps one record with the newer reason.
+func (q *Queries) CreateJudgmentUnjudged(ctx context.Context, arg CreateJudgmentUnjudgedParams) error {
+	_, err := q.db.Exec(ctx, CreateJudgmentUnjudged,
+		arg.RunID,
+		arg.ThreadID,
+		arg.CutOff,
+		arg.MessageKeys,
+		arg.Reasons,
+	)
+	return err
 }
 
 const EnsureJudgmentExample = `-- name: EnsureJudgmentExample :one
@@ -235,6 +329,7 @@ WHERE j.method_key = $1
   AND j.wording_version = $3
   AND e.thread_id = $4
   AND e.input_hash = $5
+  AND j.read_digest = $6
 `
 
 type FindJudgmentParams struct {
@@ -243,6 +338,7 @@ type FindJudgmentParams struct {
 	WordingVersion string    `json:"wording_version"`
 	ThreadID       uuid.UUID `json:"thread_id"`
 	InputHash      string    `json:"input_hash"`
+	ReadDigest     string    `json:"read_digest"`
 }
 
 func (q *Queries) FindJudgment(ctx context.Context, arg FindJudgmentParams) (uuid.UUID, error) {
@@ -252,6 +348,7 @@ func (q *Queries) FindJudgment(ctx context.Context, arg FindJudgmentParams) (uui
 		arg.WordingVersion,
 		arg.ThreadID,
 		arg.InputHash,
+		arg.ReadDigest,
 	)
 	var id uuid.UUID
 	err := row.Scan(&id)
@@ -297,6 +394,35 @@ func (q *Queries) FinishJudgmentRun(ctx context.Context, arg FinishJudgmentRunPa
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const GetFlagClearingFloor = `-- name: GetFlagClearingFloor :one
+SELECT clearing_floor FROM judgment_flag_method
+WHERE method_key = $1
+`
+
+func (q *Queries) GetFlagClearingFloor(ctx context.Context, methodKey string) (float64, error) {
+	row := q.db.QueryRow(ctx, GetFlagClearingFloor, methodKey)
+	var clearing_floor float64
+	err := row.Scan(&clearing_floor)
+	return clearing_floor, err
+}
+
+const GetFlagDisplayThreshold = `-- name: GetFlagDisplayThreshold :one
+SELECT display_threshold FROM judgment_flag_threshold
+WHERE method_key = $1 AND kind = $2
+`
+
+type GetFlagDisplayThresholdParams struct {
+	MethodKey string `json:"method_key"`
+	Kind      string `json:"kind"`
+}
+
+func (q *Queries) GetFlagDisplayThreshold(ctx context.Context, arg GetFlagDisplayThresholdParams) (float64, error) {
+	row := q.db.QueryRow(ctx, GetFlagDisplayThreshold, arg.MethodKey, arg.Kind)
+	var display_threshold float64
+	err := row.Scan(&display_threshold)
+	return display_threshold, err
 }
 
 const GetJudgmentRun = `-- name: GetJudgmentRun :one
@@ -363,6 +489,42 @@ func (q *Queries) InteractionStartedAwaitingWait(ctx context.Context, arg Intera
 	return started, err
 }
 
+const IsEarlierCommitment = `-- name: IsEarlierCommitment :one
+SELECT EXISTS (
+    SELECT 1
+    FROM judgment_flag f
+    JOIN judgment j ON j.id = f.judgment_id
+    JOIN judgment_example e ON e.id = j.example_id
+    WHERE f.judgment_id = $1::uuid
+      AND f.message_key = $2::text
+      AND f.kind = $3::text
+      AND e.thread_id = $4::uuid
+      AND j.cut_off < $5::timestamptz)
+`
+
+type IsEarlierCommitmentParams struct {
+	JudgmentID     uuid.UUID `json:"judgment_id"`
+	MessageKey     string    `json:"message_key"`
+	CommitmentKind string    `json:"commitment_kind"`
+	ThreadID       uuid.UUID `json:"thread_id"`
+	CutOff         time.Time `json:"cut_off"`
+}
+
+// Whether the judgment holds a commitment flag decision for the message and
+// belongs to the thread with a cut-off before the given one.
+func (q *Queries) IsEarlierCommitment(ctx context.Context, arg IsEarlierCommitmentParams) (bool, error) {
+	row := q.db.QueryRow(ctx, IsEarlierCommitment,
+		arg.JudgmentID,
+		arg.MessageKey,
+		arg.CommitmentKind,
+		arg.ThreadID,
+		arg.CutOff,
+	)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
+}
+
 const ListJudgmentAppearances = `-- name: ListJudgmentAppearances :many
 SELECT a.run_id, a.judgment_id, a.cut_off, e.thread_id, e.id AS example_id
 FROM judgment_appearance a
@@ -406,6 +568,112 @@ func (q *Queries) ListJudgmentAppearances(ctx context.Context, arg ListJudgmentA
 			&i.CutOff,
 			&i.ThreadID,
 			&i.ExampleID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const ListJudgmentClearings = `-- name: ListJudgmentClearings :many
+SELECT judgment_id, commitment_message_key, commitment_judgment_id, done, probability FROM judgment_clearing
+WHERE judgment_id = ANY($1::uuid[])
+ORDER BY judgment_id, commitment_message_key
+`
+
+func (q *Queries) ListJudgmentClearings(ctx context.Context, judgmentIds []uuid.UUID) ([]*JudgmentClearing, error) {
+	rows, err := q.db.Query(ctx, ListJudgmentClearings, judgmentIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []*JudgmentClearing{}
+	for rows.Next() {
+		var i JudgmentClearing
+		if err := rows.Scan(
+			&i.JudgmentID,
+			&i.CommitmentMessageKey,
+			&i.CommitmentJudgmentID,
+			&i.Done,
+			&i.Probability,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const ListJudgmentFirstMessages = `-- name: ListJudgmentFirstMessages :many
+SELECT j.id AS judgment_id, first.message_key
+FROM judgment j
+JOIN judgment_example e ON e.id = j.example_id
+CROSS JOIN LATERAL (
+    SELECT tc.message_key
+    FROM thread_content tc
+    WHERE tc.venue_id = e.thread_id AND tc.sent_at <= j.cut_off
+    ORDER BY tc.sent_at, tc.message_key
+    LIMIT 1
+) first
+WHERE j.id = ANY($1::uuid[])
+`
+
+type ListJudgmentFirstMessagesRow struct {
+	JudgmentID uuid.UUID `json:"judgment_id"`
+	MessageKey string    `json:"message_key"`
+}
+
+// The key of the first message of the thread context each given judgment read
+// when it read the whole context (a judgment before migration 099): the
+// thread's first message at the judgment's cut-off. A judgment whose thread
+// held no content then has no row.
+func (q *Queries) ListJudgmentFirstMessages(ctx context.Context, judgmentIds []uuid.UUID) ([]*ListJudgmentFirstMessagesRow, error) {
+	rows, err := q.db.Query(ctx, ListJudgmentFirstMessages, judgmentIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []*ListJudgmentFirstMessagesRow{}
+	for rows.Next() {
+		var i ListJudgmentFirstMessagesRow
+		if err := rows.Scan(&i.JudgmentID, &i.MessageKey); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const ListJudgmentFlags = `-- name: ListJudgmentFlags :many
+SELECT judgment_id, message_key, kind, probability FROM judgment_flag
+WHERE judgment_id = ANY($1::uuid[])
+ORDER BY judgment_id, message_key, kind
+`
+
+func (q *Queries) ListJudgmentFlags(ctx context.Context, judgmentIds []uuid.UUID) ([]*JudgmentFlag, error) {
+	rows, err := q.db.Query(ctx, ListJudgmentFlags, judgmentIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []*JudgmentFlag{}
+	for rows.Next() {
+		var i JudgmentFlag
+		if err := rows.Scan(
+			&i.JudgmentID,
+			&i.MessageKey,
+			&i.Kind,
+			&i.Probability,
 		); err != nil {
 			return nil, err
 		}
@@ -508,7 +776,7 @@ func (q *Queries) ListJudgmentOutcomes(ctx context.Context, arg ListJudgmentOutc
 }
 
 const ListJudgmentRows = `-- name: ListJudgmentRows :many
-SELECT j.id, j.method_key, j.method_version, j.wording_version, j.example_id, j.context_kind, j.cut_off, j.judged_at, j.context_tokens, j.question_count, j.billed_tokens, j.cost_usd, j.latency_ns, j.questions, j.created_at, e.thread_id, e.input_hash
+SELECT j.id, j.method_key, j.method_version, j.wording_version, j.example_id, j.context_kind, j.cut_off, j.judged_at, j.context_tokens, j.question_count, j.billed_tokens, j.cost_usd, j.latency_ns, j.questions, j.created_at, j.window_start, j.new_messages, j.read_digest, e.thread_id, e.input_hash
 FROM judgment j
 JOIN judgment_example e ON e.id = j.example_id
 WHERE (cardinality($1::uuid[]) = 0 OR j.id = ANY($1::uuid[]))
@@ -550,6 +818,9 @@ type ListJudgmentRowsRow struct {
 	LatencyNs      int64     `json:"latency_ns"`
 	Questions      []byte    `json:"questions"`
 	CreatedAt      time.Time `json:"created_at"`
+	WindowStart    *string   `json:"window_start"`
+	NewMessages    []string  `json:"new_messages"`
+	ReadDigest     string    `json:"read_digest"`
 	ThreadID       uuid.UUID `json:"thread_id"`
 	InputHash      string    `json:"input_hash"`
 }
@@ -589,6 +860,9 @@ func (q *Queries) ListJudgmentRows(ctx context.Context, arg ListJudgmentRowsPara
 			&i.LatencyNs,
 			&i.Questions,
 			&i.CreatedAt,
+			&i.WindowStart,
+			&i.NewMessages,
+			&i.ReadDigest,
 			&i.ThreadID,
 			&i.InputHash,
 		); err != nil {
@@ -664,6 +938,37 @@ func (q *Queries) ListJudgmentRunSummaries(ctx context.Context, finishedOnly boo
 			&i.ClaimsRaised,
 			&i.CostUsd,
 			&i.CostReported,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const ListJudgmentUnjudged = `-- name: ListJudgmentUnjudged :many
+SELECT run_id, thread_id, cut_off, message_key, reason, created_at FROM judgment_unjudged ORDER BY run_id, cut_off, thread_id, message_key
+`
+
+func (q *Queries) ListJudgmentUnjudged(ctx context.Context) ([]*JudgmentUnjudged, error) {
+	rows, err := q.db.Query(ctx, ListJudgmentUnjudged)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []*JudgmentUnjudged{}
+	for rows.Next() {
+		var i JudgmentUnjudged
+		if err := rows.Scan(
+			&i.RunID,
+			&i.ThreadID,
+			&i.CutOff,
+			&i.MessageKey,
+			&i.Reason,
+			&i.CreatedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -808,7 +1113,7 @@ func (q *Queries) ListOutcomeAssertions(ctx context.Context, arg ListOutcomeAsse
 const ListReviewRecords = `-- name: ListReviewRecords :many
 SELECT
     e.id AS example_id,
-    j.method_key, j.method_version, j.wording_version,
+    j.method_key, j.method_version, j.wording_version, j.read_digest,
     o.question, o.question_id,
     COALESCE(ans.value_text, cls.value_text, '')::text AS judged_value,
     a.value_text AS right_outcome,
@@ -852,6 +1157,7 @@ type ListReviewRecordsRow struct {
 	MethodKey      string    `json:"method_key"`
 	MethodVersion  string    `json:"method_version"`
 	WordingVersion string    `json:"wording_version"`
+	ReadDigest     string    `json:"read_digest"`
 	Question       string    `json:"question"`
 	QuestionID     *string   `json:"question_id"`
 	JudgedValue    string    `json:"judged_value"`
@@ -880,6 +1186,7 @@ func (q *Queries) ListReviewRecords(ctx context.Context, arg ListReviewRecordsPa
 			&i.MethodKey,
 			&i.MethodVersion,
 			&i.WordingVersion,
+			&i.ReadDigest,
 			&i.Question,
 			&i.QuestionID,
 			&i.JudgedValue,

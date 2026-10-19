@@ -117,16 +117,25 @@ type Outcomes struct {
 
 // Judgment is one method's answers to one question tree for one thread at one
 // cut-off. JudgedAt is the execution time of the call that produced it.
+// InputHash identifies the whole context; WindowStart, NewMessages, Flags and
+// Clearings record what the method read of it and answered about messages. A
+// judgment of a version before migration 099 sets none of them; one that sets
+// WindowStart records flag and clearing decisions and holds ball-in-court
+// outcomes only.
 type Judgment struct {
-	Method    MethodRef
-	Thread    threadctx.VenueID
-	Kind      threadctx.ContextKind
-	CutOff    time.Time
-	JudgedAt  time.Time
-	InputHash string
-	Questions []AnsweredQuestion
-	Outcomes  Outcomes
-	Usage     Usage
+	Method      MethodRef
+	Thread      threadctx.VenueID
+	Kind        threadctx.ContextKind
+	CutOff      time.Time
+	JudgedAt    time.Time
+	InputHash   string
+	WindowStart string
+	NewMessages []string
+	Flags       []FlagDecision
+	Clearings   []ClearingDecision
+	Questions   []AnsweredQuestion
+	Outcomes    Outcomes
+	Usage       Usage
 }
 
 // RunSpec describes a run to start.
@@ -179,7 +188,9 @@ type RunRecord struct {
 	FinishedAt time.Time
 	Judged     int
 	Incomplete map[IncompleteReason]int
-	Effects    Effects
+	// Unjudged counts the run's unjudged messages by reason.
+	Unjudged map[UnjudgedReason]int
+	Effects  Effects
 	// CostUSD is summed over the calls the run made; nil when none reported a
 	// cost.
 	CostUSD *float64
@@ -194,19 +205,30 @@ type QuestionOutcome struct {
 
 // JudgmentRecord is one judgment appearing in a run, content-free.
 type JudgmentRecord struct {
-	Example   ExampleID
-	Method    MethodRef
-	CutOff    time.Time
-	JudgedAt  time.Time
-	Questions []AnsweredQuestion
-	Outcomes  []QuestionOutcome
-	Usage     Usage
+	Example ExampleID
+	Method  MethodRef
+	// ReadDigest tells apart a method version's judgments of one example that
+	// read different contexts; empty for a judgment before migration 099.
+	ReadDigest string
+	CutOff     time.Time
+	JudgedAt   time.Time
+	Questions  []AnsweredQuestion
+	Outcomes   []QuestionOutcome
+	Usage      Usage
+	// WindowStart, NewMessages, Flags and Clearings are as JudgmentView holds
+	// them. They name messages by key and carry no text.
+	WindowStart string
+	NewMessages []string
+	Flags       []FlagDecision
+	Clearings   []ClearingDecision
 }
 
 // ReviewRecord is one review, content-free.
 type ReviewRecord struct {
-	Example      ExampleID
-	Method       MethodRef
+	Example ExampleID
+	Method  MethodRef
+	// ReadDigest is the reviewed judgment's, as JudgmentRecord holds it.
+	ReadDigest   string
 	QuestionID   string
 	Verdict      Verdict
 	RightOutcome string
@@ -224,6 +246,10 @@ type RunSummary struct {
 	FinishedAt  *time.Time
 	JudgedCount int
 	Incomplete  []IncompleteThread
+	// Unjudged lists the new messages no judgment of the run answered, and
+	// UnjudgedCounts counts them by reason.
+	Unjudged       []UnjudgedMessage
+	UnjudgedCounts map[UnjudgedReason]int
 }
 
 // IncompleteThread is a thread a run reported incomplete. ListRuns names it
@@ -243,17 +269,28 @@ type JudgmentQuery struct {
 }
 
 // JudgmentView is a judgment as the bench reads it. CutOff is its first
-// appearance's, as of which its content is shown.
+// appearance's, as of which its content is shown. WindowStart is the message
+// key of the first message of the window it read: the context's first message
+// for a judgment of a version before migration 099, which read the whole
+// context (empty for a context with no message). NewMessages are the keys of
+// the messages new at its cut-off inside its window, in thread order; Flags
+// hold one decision per new message and flag kind, and Clearings one per
+// commitment it re-checked. A judgment of a version before migration 099
+// records none of them.
 type JudgmentView struct {
-	ID        uuid.UUID
-	Thread    threadctx.VenueID
-	CutOff    time.Time
-	Runs      []RunAppearance
-	Method    MethodRef
-	Kind      threadctx.ContextKind
-	InputHash string
-	JudgedAt  time.Time
-	Outcomes  []OutcomeView
+	ID          uuid.UUID
+	Thread      threadctx.VenueID
+	CutOff      time.Time
+	Runs        []RunAppearance
+	Method      MethodRef
+	Kind        threadctx.ContextKind
+	InputHash   string
+	JudgedAt    time.Time
+	WindowStart string
+	NewMessages []string
+	Flags       []FlagDecision
+	Clearings   []ClearingDecision
+	Outcomes    []OutcomeView
 }
 
 // RunAppearance is a run a judgment appears in, at that run's cut-off.

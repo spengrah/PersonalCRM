@@ -71,6 +71,26 @@ var (
 	sageLimits = Limits{Tokens: 32768, Questions: 32768}
 )
 
+// Sizing of each method's window. The window is sized by the size estimate
+// (one token per byte of everything the model reads, an upper bound on any
+// tokenizer's count) times Ratio times (1 + Margin). Ratio and Margin come
+// from the ratio of the input tokens a vendor billed to that estimate over the
+// January 2026 runs, and are checked against the tokens billed for synthetic
+// threads at sampled sizes.
+//
+// A method whose ratio is unstable across context sizes is sized from the
+// usage it reports. Sage bills the state again for each question, so its
+// PerQuestion estimate counts the state once per question, and its Ratio is
+// the tokens it billed over that estimate. A window therefore holds the
+// messages whose bill, state times questions, fits the limit, which is far
+// fewer than the messages whose text fits it.
+var (
+	clefSizing      = Sizing{Ratio: 0.43, Margin: 0.40}
+	clefFlashSizing = Sizing{Ratio: 0.43, Margin: 0.40}
+	jevSizing       = Sizing{Ratio: 0.40, Margin: 0.60}
+	sageSizing      = Sizing{Ratio: 0.29, Margin: 0.05, PerQuestion: true}
+)
+
 // zeroRetention routes an OpenRouter request only to zero-retention
 // endpoints, pinned to providers, with no fallback.
 func zeroRetention(providers ...string) *openRouterRouting {
@@ -96,22 +116,22 @@ func NewRegistry(cfg config.DecisionConfig, masker *threadctx.Masker) *Registry 
 		}
 	}
 	routes := []registered{
-		{Definition{Key: "clef-masked", Wording: DefaultWording, Limits: clefLimits, Terms: deepInfraTerms},
+		{Definition{Key: "clef-masked", Wording: DefaultWording, Limits: clefLimits, Sizing: clefSizing, Terms: deepInfraTerms},
 			"OPENROUTER_API_KEY", cfg.OpenRouterAPIKey, openRouter("cloudflare/clef", zeroRetention("deepinfra"))},
-		{Definition{Key: "clef-masked-reasoned", Wording: ReasonedWording, Limits: clefLimits, Terms: deepInfraTerms},
+		{Definition{Key: "clef-masked-reasoned", Wording: ReasonedWording, Limits: clefLimits, Sizing: clefSizing, Terms: deepInfraTerms},
 			"OPENROUTER_API_KEY", cfg.OpenRouterAPIKey, openRouter("cloudflare/clef", zeroRetention("deepinfra"))},
-		{Definition{Key: "clef-flash-masked", Wording: DefaultWording, Limits: clefFlashLimits, Terms: deepInfraTerms},
+		{Definition{Key: "clef-flash-masked", Wording: DefaultWording, Limits: clefFlashLimits, Sizing: clefFlashSizing, Terms: deepInfraTerms},
 			"OPENROUTER_API_KEY", cfg.OpenRouterAPIKey, openRouter("cloudflare/clef-flash", zeroRetention("deepinfra"))},
 		// Venice relays Jev without the user's identity, but its route offers
 		// no zero retention at TypeSafe, so Jev runs on masked content only.
 		// Venice serves only jev-latest and reports no release, so a new Jev
 		// release does not change this method's version.
-		{Definition{Key: "jev-masked", Wording: DefaultWording, Limits: jevLimits, Terms: veniceJevTerms},
+		{Definition{Key: "jev-masked", Wording: DefaultWording, Limits: jevLimits, Sizing: jevSizing, Terms: veniceJevTerms},
 			"VENICE_API_KEY", cfg.VeniceAPIKey, func(def Definition) (Method, error) {
 				return NewMaskedMethod(def, masker, newSystemOne(veniceDecisionsURL, cfg.VeniceAPIKey, "jev-latest", nil)), nil
 			}},
 		// Levanto's route offers no zero retention either.
-		{Definition{Key: "sage-masked", Wording: DefaultWording, Limits: sageLimits, Terms: sageTerms},
+		{Definition{Key: "sage-masked", Wording: DefaultWording, Limits: sageLimits, Sizing: sageSizing, Terms: sageTerms},
 			"SAGE_API_KEY", cfg.SageAPIKey, func(def Definition) (Method, error) {
 				return NewMaskedMethod(def, masker, newSage(sageURL, cfg.SageAPIKey)), nil
 			}},

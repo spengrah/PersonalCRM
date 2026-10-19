@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
+	"slices"
 	"sort"
 
 	"personal-crm/backend/internal/config"
@@ -156,6 +158,18 @@ func writeRunSummary(w io.Writer, month judgerun.Month, s judgerun.Summary) erro
 			return fmt.Errorf("write run summary: %w", err)
 		}
 	}
+	unjudged := 0
+	for _, n := range s.Unjudged {
+		unjudged += n
+	}
+	if _, err := fmt.Fprintf(w, "  unjudged=%d\n", unjudged); err != nil {
+		return fmt.Errorf("write run summary: %w", err)
+	}
+	for _, reason := range slices.Sorted(maps.Keys(s.Unjudged)) {
+		if _, err := fmt.Fprintf(w, "  unjudged reason=%s n=%d\n", reason, s.Unjudged[reason]); err != nil {
+			return fmt.Errorf("write run summary: %w", err)
+		}
+	}
 	if _, err := fmt.Fprintf(w, "  live_effects obligations_opened=%d flags_raised=%d claims_raised=%d\n",
 		s.Effects.ObligationsOpened, s.Effects.FlagsRaised, s.Effects.ClaimsRaised); err != nil {
 		return fmt.Errorf("write run summary: %w", err)
@@ -167,14 +181,14 @@ func writeMeasurement(w io.Writer, m judgerun.Measurement) error {
 	if _, err := fmt.Fprintf(w,
 		"judge-month --measure: month=%s method=%s version=%s (nothing sent, nothing written)\n"+
 			"  cut_offs=%d contexts=%d\n"+
-			"  tokens min=%d p50=%d p90=%d p99=%d max=%d limit=%d over_limit=%d\n"+
-			"  questions min=%d p50=%d p90=%d p99=%d max=%d limit=%d over_limit=%d\n"+
-			"  over_any_limit=%d\n",
+			"  tokens min=%d p50=%d p90=%d p99=%d max=%d limit=%d\n"+
+			"  questions min=%d p50=%d p90=%d p99=%d max=%d limit=%d\n"+
+			"  windowed=%d message_over_limit=%d multi_call=%d\n",
 		m.Month, m.Method.Key, m.Method.Version,
 		m.CutOffs, m.Contexts,
-		m.Tokens.Min, m.Tokens.P50, m.Tokens.P90, m.Tokens.P99, m.Tokens.Max, m.TokenLimit, m.OverTokenLimit,
-		m.Questions.Min, m.Questions.P50, m.Questions.P90, m.Questions.P99, m.Questions.Max, m.QuestionLimit, m.OverQuestionLimit,
-		m.OverLimit); err != nil {
+		m.Tokens.Min, m.Tokens.P50, m.Tokens.P90, m.Tokens.P99, m.Tokens.Max, m.TokenLimit,
+		m.Questions.Min, m.Questions.P50, m.Questions.P90, m.Questions.P99, m.Questions.Max, m.QuestionLimit,
+		m.Windowed, m.MessageOverLimit, m.MultiCall); err != nil {
 		return fmt.Errorf("write measurement: %w", err)
 	}
 	return nil

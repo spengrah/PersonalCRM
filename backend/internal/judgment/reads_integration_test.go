@@ -185,7 +185,7 @@ func TestBenchReads(t *testing.T) {
 }
 
 // ReviewedExamples returns each input the user reviewed, a review labelling it
-// for every method, and OutcomesFor reads one method's outcomes on them.
+// for every method, and RunOutcomes reads the outcomes of a run's judgments.
 // spec: KNW-048.reviewed-examples-label-every-method, KNW-048.one-opaque-example-id
 func TestScorecardReads(t *testing.T) {
 	t.Run("a review of one method's evidence outcome labels the example another method is read for", func(t *testing.T) {
@@ -195,7 +195,7 @@ func TestScorecardReads(t *testing.T) {
 		e.run(t, judgment.RunKindRerun, judgmentOf(otherMethod, th, e.day(1), "h1",
 			judgment.Outcomes{BallInCourt: []judgment.ParticipantOutcome[judgment.BallInCourt]{bic(c, judgment.BallInCourtNobodyOwes, 0.6)}}))
 		prodOutcomes := judgment.Outcomes{BallInCourt: []judgment.ParticipantOutcome[judgment.BallInCourt]{bic(c, judgment.BallInCourtIOweReply, 0.8)}}
-		e.run(t, judgment.RunKindRerun, judgmentOf(prodMethod, th, e.day(1), "h1", prodOutcomes))
+		prodRun, _ := e.run(t, judgment.RunKindRerun, judgmentOf(prodMethod, th, e.day(1), "h1", prodOutcomes))
 		_, err := e.store.ReviewOutcome(e.ctx, e.outcome(t, th, otherMethod, judgment.QuestionBallInCourt, &c).ID, judgment.ReviewRequest{RightOutcome: string(judgment.BallInCourtIOweReply)})
 		require.NoError(t, err)
 
@@ -206,7 +206,7 @@ func TestScorecardReads(t *testing.T) {
 		assert.True(t, e.day(1).Equal(example.CutOff))
 		assert.Equal(t, []judgment.Review{{Question: string(judgment.QuestionBallInCourt), ContactID: &c, RightOutcome: string(judgment.BallInCourtIOweReply)}}, example.Reviews)
 
-		outcomes, err := e.store.OutcomesFor(e.ctx, prodMethod, []judgment.ExampleID{example.ID})
+		outcomes, err := e.store.RunOutcomes(e.ctx, prodRun)
 		require.NoError(t, err)
 		require.Contains(t, outcomes, example.ID)
 		got := outcomes[example.ID].BallInCourt
@@ -239,7 +239,7 @@ func TestScorecardReads(t *testing.T) {
 		}, reviews)
 	})
 
-	t.Run("a method with no judgment on an example is absent from its result", func(t *testing.T) {
+	t.Run("an example the run did not judge is absent from its result", func(t *testing.T) {
 		e := newEnv(t, production)
 		c, th := e.contact(t), e.thread(t)
 		e.message(t, th, c, false, e.day(1))
@@ -251,7 +251,10 @@ func TestScorecardReads(t *testing.T) {
 		require.NoError(t, err)
 		example := exampleOf(t, examples, th.id)
 
-		outcomes, err := e.store.OutcomesFor(e.ctx, prodMethod, []judgment.ExampleID{example.ID})
+		prodRun, err := e.store.StartRun(e.ctx, judgment.RunSpec{Kind: judgment.RunKindRerun, Method: prodMethod})
+		require.NoError(t, err)
+
+		outcomes, err := e.store.RunOutcomes(e.ctx, prodRun)
 
 		require.NoError(t, err)
 		assert.NotContains(t, outcomes, example.ID)

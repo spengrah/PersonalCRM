@@ -116,7 +116,7 @@ func (e *Exporter) Export(ctx context.Context) (Report, error) {
 		if finished == nil {
 			continue
 		}
-		spans = append(spans, runSpan(*finished))
+		spans = append(spans, runSpan(*finished, run.Unjudged))
 		if finished.Kind == judgment.RunKindRerun {
 			m, err := e.metrics.Metrics(ctx, run.Run)
 			if err != nil {

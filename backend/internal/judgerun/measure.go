@@ -2,14 +2,16 @@ package judgerun
 
 import (
 	"context"
+	"fmt"
 	"slices"
+	"time"
 
 	"personal-crm/backend/internal/judgment"
-	"personal-crm/backend/internal/threadctx"
 )
 
 // Measurement is what a measuring run found, content-free: how many contexts
-// it built for the method and how their sizes sit against the method's limits.
+// it built for the method and how their requests, each with every message new,
+// sit against the method's limits.
 type Measurement struct {
 	Method    judgment.MethodRef
 	Month     Month
@@ -20,10 +22,12 @@ type Measurement struct {
 	// TokenLimit and QuestionLimit are the method's own limits, zero when
 	// no context was built.
 	TokenLimit, QuestionLimit int
-	// OverTokenLimit and OverQuestionLimit count the contexts over each limit;
-	// OverLimit counts the contexts over either, which judging would report
-	// over_limit.
-	OverTokenLimit, OverQuestionLimit, OverLimit int
+	// Windowed counts the contexts whose request is over the token limit, which
+	// judging reads a window of; MessageOverLimit those whose newest message
+	// alone does not fit, which judging reports message_over_limit; MultiCall
+	// those whose questions exceed the question limit, which judging sends in
+	// further calls.
+	Windowed, MessageOverLimit, MultiCall int
 }
 
 // Distribution summarizes counts by order statistics, each the nearest-rank
@@ -33,9 +37,9 @@ type Distribution struct {
 }
 
 // Measure builds every context a historical run of the month would judge,
-// with the method's question tree, and sizes each against the method's limits.
-// It sends nothing and writes nothing: no judgment, no run and no live state.
-// It reports every size and refuses none.
+// and sizes its whole request against the method's limits. It sends nothing
+// and writes nothing: no judgment, no run and no live state. It reports every
+// size and refuses none.
 func (r *Runner) Measure(ctx context.Context, methodKey string, month Month) (Measurement, error) {
 	m, err := r.methods.Get(methodKey)
 	if err != nil {
@@ -43,27 +47,33 @@ func (r *Runner) Measure(ctx context.Context, methodKey string, month Month) (Me
 	}
 	out := Measurement{Method: m.Ref(), Month: month, CutOffs: len(month.CutOffs())}
 	var tokens, questions []int
-	err = eachEligible(ctx, r.contexts, month, func(c threadctx.Context) error {
-		size, err := m.Measure(ctx, c)
-		if err != nil {
-			return err
-		}
-		out.TokenLimit, out.QuestionLimit = size.TokenLimit, size.QuestionLimit
-		tokens = append(tokens, size.Tokens)
-		questions = append(questions, size.Questions)
-		if size.Tokens > size.TokenLimit {
-			out.OverTokenLimit++
-		}
-		if size.Questions > size.QuestionLimit {
-			out.OverQuestionLimit++
-		}
-		if size.Exceeds() {
-			out.OverLimit++
-		}
-		return nil
-	})
+	schedule, err := eligible(ctx, r.contexts, month)
 	if err != nil {
 		return Measurement{}, err
+	}
+	for _, e := range schedule {
+		for _, thread := range e.threads {
+			c, err := r.contexts.Build(ctx, thread, e.cutOff)
+			if err != nil {
+				return Measurement{}, fmt.Errorf("build thread %s at %s: %w", thread, e.cutOff.Format(time.RFC3339), err)
+			}
+			size, err := m.Measure(ctx, c)
+			if err != nil {
+				return Measurement{}, err
+			}
+			out.TokenLimit, out.QuestionLimit = size.TokenLimit, size.QuestionLimit
+			tokens = append(tokens, size.Tokens)
+			questions = append(questions, size.Questions)
+			switch {
+			case !size.NewestFits:
+				out.MessageOverLimit++
+			case size.Exceeds():
+				out.Windowed++
+			}
+			if size.Calls > 1 {
+				out.MultiCall++
+			}
+		}
 	}
 	out.Contexts = len(tokens)
 	out.Tokens, out.Questions = distribution(tokens), distribution(questions)

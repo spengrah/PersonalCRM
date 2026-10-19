@@ -179,16 +179,23 @@
 //	      [--measure]             midnights in the server's timezone that close
 //	                              the month's days), judge with method KEY every
 //	                              thread that gained content since the previous
-//	                              cut-off, over its whole content up to the
-//	                              cut-off, and record each judgment or incomplete
-//	                              report through the judgment store. Only the
-//	                              method DECISION_PRODUCTION_METHOD designates
-//	                              changes live state; a designation the method
+//	                              cut-off, a thread's cut-offs in order, over
+//	                              the window of its content up to the cut-off
+//	                              that fits the method's limits, flagging each
+//	                              new message and re-checking the method's own
+//	                              earlier commitments, and record each judgment,
+//	                              incomplete report and unjudged message through
+//	                              the judgment store. Only the method
+//	                              DECISION_PRODUCTION_METHOD designates changes
+//	                              live state, and only through ball-in-court's
+//	                              reply obligations; a designation the method
 //	                              registry lacks fails before any call. A
 //	                              judgment the method version already holds for
-//	                              an input is reused, so repeating a month sends
-//	                              nothing. --measure builds the same contexts,
-//	                              sizes them against the method's limits, and
+//	                              what a cut-off reads (window, new messages,
+//	                              earlier judgments re-checked) is reused, so
+//	                              repeating a month sends nothing. --measure
+//	                              builds the same contexts, sizes each whole
+//	                              request against the method's limits, and
 //	                              sends and writes nothing. Prints a
 //	                              content-free report (IDs, counts, reasons).
 //	                              SAFE with crm-api running (it runs the Todoist
@@ -197,8 +204,11 @@
 //	--scorecard                   Score decision-model methods against the
 //	      [--method KEY           user's reviews: rerun each method as an
 //	      [--compare-method KEY]] evidence-only rerun over every thread
-//	                              context the user reviewed (reusing judgments
-//	                              the method version already holds) and print,
+//	                              context the user reviewed, judging the thread's
+//	                              cut-offs in order from the start of the run the
+//	                              reviewed judgment appeared in (reusing
+//	                              judgments the method version holds for what a
+//	                              cut-off reads), and print,
 //	                              per method, per-outcome recall, precision and
 //	                              confusion, the user's "I owe" outcomes missed,
 //	                              the corrections caused and the method's terms
@@ -854,14 +864,14 @@ func parseArgs(args []string) (runOptions, error) {
 			"a chunk past the attempt cap gets exactly one fresh attempt per requeue.")
 	fs.StringVar(&opts.judgeMonth, "judge-month", "",
 		"Historical decision-model run over one month (YYYY-MM): judge with --method each thread "+
-			"that gained content since the previous simulated nightly cut-off, recording every judgment "+
-			"or incomplete report. Only the designated production method changes live state. Prints a "+
-			"content-free summary.")
+			"that gained content since the previous simulated nightly cut-off over its window, recording "+
+			"every judgment, incomplete report and unjudged message. Only the designated production method "+
+			"changes live state. Prints a content-free summary.")
 	fs.StringVar(&opts.judgeMethod, "method", "",
 		"Decision-model method key for --judge-month, or the one method --scorecard scores.")
 	fs.BoolVar(&opts.judgeMeasure, "measure", false,
-		"With --judge-month: build every eligible context and size it against the method's limits, "+
-			"sending and writing nothing.")
+		"With --judge-month: build every eligible context and size its whole request against the "+
+			"method's limits, sending and writing nothing.")
 	fs.BoolVar(&opts.scorecard, "scorecard", false,
 		"Score decision-model methods against the user's reviews: rerun --method (or, without it, every "+
 			"method) over every reviewed thread context, report per-outcome recall, precision and confusion, "+

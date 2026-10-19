@@ -246,23 +246,25 @@ func TestBenchConfirmNones(t *testing.T) {
 		assert.Equal(t, reviews, again)
 	})
 
-	t.Run("a reply another proposal's commitment absorbs gains no label, so that proposal shows no reply item, and holds back no Nones", func(t *testing.T) {
-		// spec: IXN-056.absorbed-reply-stays, IXN-054.nones-to-review
+	t.Run("a reply beside another proposal's commitment is an item without a label, so it gains no label and holds back its list's Nones", func(t *testing.T) {
+		// spec: IXN-056.item-awaits-review, IXN-054.nones-to-review, IXN-052.reply-beside-commitment
 		b := newBenchEnv(t)
 		x, th := b.oneToOne(t)
 		b.run(t, judgment.RunKindScheduled, judgmentOf(prodMethod, th, b.day(1), "h1", owesAndCommits(x)))
 		b.run(t, judgment.RunKindRerun, judgmentOf(otherMethod, th, b.day(1), "h1", nothingFound(x)))
-		require.Empty(t, listContacts(b.proposal(t, x, prodMethod), "i_owe_reply"), "the commitment absorbs the reply")
+		require.Equal(t, []string{x.String()}, listContacts(b.proposal(t, x, prodMethod), "i_owe_reply"), "the commitment stands in for no reply")
 
 		require.Equal(t, http.StatusOK, b.confirmNones(t, b.proposal(t, x, otherMethod)).Code)
 
 		assert.Equal(t, map[string]string{
 			decision(judgment.QuestionCommitmentTheirs, &x): "none",
 			decision(judgment.QuestionBigMoment, nil):       "none",
-		}, b.labels(t), "the absorbed reply and the commitment absorbing it stay unlabeled")
-		assert.Empty(t, listContacts(b.proposal(t, x, prodMethod), "i_owe_reply"), "no reply item the user never acted on")
+		}, b.labels(t), "the reply and the commitment beside it stay unlabeled")
+		prod := b.proposal(t, x, prodMethod)
+		assert.Equal(t, []string{x.String()}, listContacts(prod, "i_owe_reply"))
+		assert.Nil(t, item(t, prod, "i_owe_reply", x).Mark)
 		other := b.proposal(t, x, otherMethod)
-		assert.True(t, listView(t, other, "i_owe_reply").NonesReviewed, "the absorbed reply does not hold back the reply list's Nones")
+		assert.False(t, listView(t, other, "i_owe_reply").NonesReviewed, "the reply the production proposal holds as an item holds back the reply list's Nones")
 		assert.False(t, other.ConfirmNones)
 	})
 
@@ -385,13 +387,13 @@ func TestBenchInference(t *testing.T) {
 		})
 	})
 
-	t.Run("a close leaves a reply another proposal's commitment absorbs without a label, and no proposal holds it as a None to review", func(t *testing.T) {
-		// spec: IXN-057.absorbed-reply-stays, IXN-054.nones-to-review, IXN-054.proposal-status, IXN-055.nones-reviewed, IXN-051.row-review-status
+	t.Run("a close leaves a reply beside another proposal's commitment without a label, and both proposals hold it to review", func(t *testing.T) {
+		// spec: IXN-057.item-awaits-review, IXN-054.nones-to-review, IXN-054.proposal-status, IXN-055.nones-reviewed, IXN-051.row-review-status, IXN-052.reply-beside-commitment
 		b := newBenchEnv(t)
 		x, th := b.oneToOne(t)
 		b.run(t, judgment.RunKindScheduled, judgmentOf(prodMethod, th, b.day(1), "h1", owesAndCommits(x)))
 		b.run(t, judgment.RunKindRerun, judgmentOf(otherMethod, th, b.day(1), "h1", nothingFound(x)))
-		require.Empty(t, listContacts(b.proposal(t, x, prodMethod), "i_owe_reply"), "the commitment absorbs the reply")
+		require.Equal(t, []string{x.String()}, listContacts(b.proposal(t, x, prodMethod), "i_owe_reply"), "the commitment stands in for no reply")
 		b.act(t, listItem(t, b.proposal(t, x, prodMethod), "commitments", "me"), "confirm")
 
 		require.Equal(t, http.StatusOK, b.closeRow(t, b.row(t, x)).Code)
@@ -400,15 +402,17 @@ func TestBenchInference(t *testing.T) {
 			decision(judgment.QuestionCommitmentMine, &x):   "open",
 			decision(judgment.QuestionCommitmentTheirs, &x): "none",
 			decision(judgment.QuestionBigMoment, nil):       "none",
-		}, b.labels(t), "the other proposal's negatives are labeled but for the reply the production proposal's commitment absorbs")
+		}, b.labels(t), "the other proposal's negatives are labeled but for the reply the production proposal holds as an item")
 		row := b.row(t, x)
 		prod, other := b.proposal(t, x, prodMethod), b.proposal(t, x, otherMethod)
-		assert.Empty(t, listContacts(prod, "i_owe_reply"), "no reply item the user never acted on")
-		assert.Equal(t, "all_reviewed", prod.ReviewStatus)
-		assert.Equal(t, "all_reviewed", other.ReviewStatus, "the absorbed reply is no None to review")
+		assert.Equal(t, []string{x.String()}, listContacts(prod, "i_owe_reply"))
+		assert.Nil(t, item(t, prod, "i_owe_reply", x).Mark)
+		assert.Equal(t, "to_review", prod.ReviewStatus)
+		assert.Equal(t, 1, prod.ToReview)
+		assert.Equal(t, "nones_to_review", other.ReviewStatus, "the reply's negative in this proposal is a None to review")
 		assert.False(t, other.ConfirmNones)
-		assert.True(t, listView(t, other, "i_owe_reply").NonesReviewed, "the absorbed reply does not hold back the reply list's Nones")
-		assert.Equal(t, ptr("all_reviewed"), row.ReviewStatus)
+		assert.False(t, listView(t, other, "i_owe_reply").NonesReviewed, "the reply the production proposal holds as an item holds back the reply list's Nones")
+		assert.Equal(t, 1, row.ToReview)
 	})
 
 	t.Run("a close naming an unknown judgment is not found and records nothing", func(t *testing.T) {
@@ -522,7 +526,7 @@ func TestBenchLabelsAllOrNothing(t *testing.T) {
 }
 
 // owesAndCommits is content where the user owes the contact a reply and has
-// committed to them, so the commitment absorbs the reply.
+// committed to them, so the reply and the commitment are both items.
 func owesAndCommits(x uuid.UUID) judgment.Outcomes {
 	o := nothingFound(x)
 	o.BallInCourt[0].Outcome = judgment.BallInCourtIOweReply

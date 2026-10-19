@@ -27,18 +27,24 @@ func (s *Store) ListRuns(ctx context.Context) ([]RunSummary, error) {
 	if err := s.nameIncomplete(ctx, incomplete); err != nil {
 		return nil, err
 	}
+	unjudged, err := s.unjudgedByRun(ctx)
+	if err != nil {
+		return nil, err
+	}
 	runs := make([]RunSummary, len(rows))
 	for i, r := range rows {
 		runs[i] = RunSummary{
-			ID:          r.ID,
-			Kind:        RunKind(r.Kind),
-			Method:      MethodRef{r.MethodKey, r.MethodVersion, r.WordingVersion},
-			From:        r.WindowFrom,
-			To:          r.WindowTo,
-			StartedAt:   r.StartedAt,
-			FinishedAt:  r.FinishedAt,
-			JudgedCount: int(r.JudgedCount),
-			Incomplete:  emptyIfNil(incomplete[r.ID]),
+			ID:             r.ID,
+			Kind:           RunKind(r.Kind),
+			Method:         MethodRef{r.MethodKey, r.MethodVersion, r.WordingVersion},
+			From:           r.WindowFrom,
+			To:             r.WindowTo,
+			StartedAt:      r.StartedAt,
+			FinishedAt:     r.FinishedAt,
+			JudgedCount:    int(r.JudgedCount),
+			Incomplete:     emptyIfNil(incomplete[r.ID]),
+			Unjudged:       emptyIfNil(unjudged[r.ID]),
+			UnjudgedCounts: unjudgedCounts(unjudged[r.ID]),
 		}
 	}
 	return runs, nil
@@ -54,9 +60,13 @@ func (s *Store) FinishedRuns(ctx context.Context) ([]RunRecord, error) {
 	if err != nil {
 		return nil, err
 	}
+	unjudged, err := s.unjudgedByRun(ctx)
+	if err != nil {
+		return nil, err
+	}
 	records := make([]RunRecord, len(rows))
 	for i, r := range rows {
-		records[i] = runRecord(r, incomplete[r.ID])
+		records[i] = runRecord(r, incomplete[r.ID], unjudged[r.ID])
 	}
 	return records, nil
 }
@@ -67,7 +77,9 @@ func (s *Store) FinishedRuns(ctx context.Context) ([]RunRecord, error) {
 type RunExport struct {
 	Run       RunID
 	Judgments []JudgmentRecord
-	Finished  *RunRecord
+	// Unjudged lists the new messages no judgment of the run answered.
+	Unjudged []UnjudgedMessage
+	Finished *RunRecord
 }
 
 // RunExports returns every run's content-free records, oldest run first, so
@@ -80,6 +92,10 @@ func (s *Store) RunExports(ctx context.Context) ([]RunExport, error) {
 		return nil, fmt.Errorf("list runs: %w", err)
 	}
 	incomplete, err := s.incompleteByRun(ctx)
+	if err != nil {
+		return nil, err
+	}
+	unjudged, err := s.unjudgedByRun(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -97,9 +113,9 @@ func (s *Store) RunExports(ctx context.Context) ([]RunExport, error) {
 	}
 	exports := make([]RunExport, len(rows))
 	for i, r := range rows {
-		exports[i] = RunExport{Run: r.ID, Judgments: byRun[r.ID]}
+		exports[i] = RunExport{Run: r.ID, Judgments: byRun[r.ID], Unjudged: emptyIfNil(unjudged[r.ID])}
 		if r.FinishedAt != nil {
-			record := runRecord(r, incomplete[r.ID])
+			record := runRecord(r, incomplete[r.ID], unjudged[r.ID])
 			exports[i].Finished = &record
 		}
 	}
@@ -107,7 +123,7 @@ func (s *Store) RunExports(ctx context.Context) ([]RunExport, error) {
 }
 
 // runRecord is a finished run's content-free record.
-func runRecord(r *db.ListJudgmentRunSummariesRow, incomplete []IncompleteThread) RunRecord {
+func runRecord(r *db.ListJudgmentRunSummariesRow, incomplete []IncompleteThread, unjudged []UnjudgedMessage) RunRecord {
 	counts := map[IncompleteReason]int{}
 	for _, t := range incomplete {
 		counts[t.Reason]++
@@ -127,6 +143,7 @@ func runRecord(r *db.ListJudgmentRunSummariesRow, incomplete []IncompleteThread)
 		FinishedAt: *r.FinishedAt,
 		Judged:     int(r.JudgedCount),
 		Incomplete: counts,
+		Unjudged:   unjudgedCounts(unjudged),
 		Effects: Effects{
 			ObligationsOpened: int(r.ObligationsOpened),
 			FlagsRaised:       int(r.FlagsRaised),
@@ -146,6 +163,28 @@ func (s *Store) incompleteByRun(ctx context.Context) (map[RunID][]IncompleteThre
 		byRun[r.RunID] = append(byRun[r.RunID], IncompleteThread{Thread: r.ThreadID, CutOff: r.CutOff, Reason: IncompleteReason(r.Reason)})
 	}
 	return byRun, nil
+}
+
+func (s *Store) unjudgedByRun(ctx context.Context) (map[RunID][]UnjudgedMessage, error) {
+	rows, err := s.queries.ListJudgmentUnjudged(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list unjudged messages: %w", err)
+	}
+	byRun := map[RunID][]UnjudgedMessage{}
+	for _, r := range rows {
+		byRun[r.RunID] = append(byRun[r.RunID], UnjudgedMessage{
+			Thread: r.ThreadID, CutOff: r.CutOff, MessageKey: r.MessageKey, Reason: UnjudgedReason(r.Reason),
+		})
+	}
+	return byRun, nil
+}
+
+func unjudgedCounts(messages []UnjudgedMessage) map[UnjudgedReason]int {
+	counts := map[UnjudgedReason]int{}
+	for _, m := range messages {
+		counts[m.Reason]++
+	}
+	return counts
 }
 
 // nameIncomplete sets each incomplete thread's venue kind and title.
@@ -191,6 +230,10 @@ func (s *Store) ListJudgments(ctx context.Context, query JudgmentQuery) ([]Judgm
 	if err != nil {
 		return nil, err
 	}
+	reads, err := readsOf(ctx, s.queries, rows)
+	if err != nil {
+		return nil, err
+	}
 	views := make([]JudgmentView, len(rows))
 	for i, j := range rows {
 		var runs []RunAppearance
@@ -201,16 +244,21 @@ func (s *Store) ListJudgments(ctx context.Context, query JudgmentQuery) ([]Judgm
 		for _, o := range outcomes[j.ID] {
 			outcomeViews = append(outcomeViews, o.view())
 		}
+		read := reads[j.ID]
 		views[i] = JudgmentView{
-			ID:        j.ID,
-			Thread:    j.ThreadID,
-			CutOff:    j.CutOff,
-			Runs:      emptyIfNil(runs),
-			Method:    MethodRef{j.MethodKey, j.MethodVersion, j.WordingVersion},
-			Kind:      threadctx.ContextKind(j.ContextKind),
-			InputHash: j.InputHash,
-			JudgedAt:  j.JudgedAt,
-			Outcomes:  emptyIfNil(outcomeViews),
+			ID:          j.ID,
+			Thread:      j.ThreadID,
+			CutOff:      j.CutOff,
+			Runs:        emptyIfNil(runs),
+			Method:      MethodRef{j.MethodKey, j.MethodVersion, j.WordingVersion},
+			Kind:        threadctx.ContextKind(j.ContextKind),
+			InputHash:   j.InputHash,
+			JudgedAt:    j.JudgedAt,
+			WindowStart: read.windowStart,
+			NewMessages: read.newMessages,
+			Flags:       read.flags,
+			Clearings:   read.clearings,
+			Outcomes:    emptyIfNil(outcomeViews),
 		}
 	}
 	return views, nil
@@ -269,28 +317,20 @@ func (s *Store) ReviewedExamples(ctx context.Context) ([]Example, error) {
 	return emptyIfNil(examples), nil
 }
 
-// OutcomesFor returns one method version's outcomes on the given examples; an
-// example the method did not judge is absent.
-func (s *Store) OutcomesFor(ctx context.Context, method MethodRef, examples []ExampleID) (map[ExampleID]Outcomes, error) {
-	ids := make([]string, len(examples))
-	for i, e := range examples {
-		ids[i] = string(e)
-	}
-	result := map[ExampleID]Outcomes{}
-	if len(ids) == 0 {
-		return result, nil
-	}
-	rows, err := s.queries.ListJudgmentRows(ctx, db.ListJudgmentRowsParams{
-		Ids: []uuid.UUID{}, ExampleIds: ids,
-		MethodKey: &method.Key, MethodVersion: &method.Version, WordingVersion: &method.WordingVersion,
-	})
+// RunOutcomes returns the outcomes of the judgments appearing in a run, keyed
+// by the example each judged, reused appearances included. A run holds one
+// judgment of each example, so a judgment another run recorded over a different
+// window of the same example is not in it.
+func (s *Store) RunOutcomes(ctx context.Context, run RunID) (map[ExampleID]Outcomes, error) {
+	rows, err := s.queries.ListJudgmentRows(ctx, db.ListJudgmentRowsParams{Ids: []uuid.UUID{}, ExampleIds: []string{}, RunID: &run})
 	if err != nil {
-		return nil, fmt.Errorf("list method judgments: %w", err)
+		return nil, fmt.Errorf("list run judgments: %w", err)
 	}
 	outcomes, err := s.outcomesByJudgment(ctx, judgmentIDs(rows))
 	if err != nil {
 		return nil, err
 	}
+	result := map[ExampleID]Outcomes{}
 	for _, j := range rows {
 		result[ExampleID(j.ExampleID)] = typedOutcomes(outcomes[j.ID])
 	}
@@ -329,6 +369,14 @@ func (s *Store) judgmentRecords(ctx context.Context, appearances []*db.ListJudgm
 	if err != nil {
 		return nil, err
 	}
+	rows := make([]*db.ListJudgmentRowsRow, 0, len(byID))
+	for _, r := range byID {
+		rows = append(rows, r)
+	}
+	reads, err := readsOf(ctx, s.queries, rows)
+	if err != nil {
+		return nil, err
+	}
 	records := make([]JudgmentRecord, len(appearances))
 	for i, a := range appearances {
 		j := byID[a.JudgmentID]
@@ -344,13 +392,19 @@ func (s *Store) judgmentRecords(ctx context.Context, appearances []*db.ListJudgm
 			questionOutcomes = append(questionOutcomes, QuestionOutcome{QuestionID: o.QuestionID, Outcome: o.value(), Confidence: o.confidence()})
 		}
 		records[i] = JudgmentRecord{
-			Example:   ExampleID(j.ExampleID),
-			Method:    MethodRef{j.MethodKey, j.MethodVersion, j.WordingVersion},
-			CutOff:    a.CutOff,
-			JudgedAt:  j.JudgedAt,
-			Questions: questions,
-			Outcomes:  emptyIfNil(questionOutcomes),
-			Usage:     usageOf(j),
+			Example:    ExampleID(j.ExampleID),
+			Method:     MethodRef{j.MethodKey, j.MethodVersion, j.WordingVersion},
+			ReadDigest: j.ReadDigest,
+			CutOff:     a.CutOff,
+			JudgedAt:   j.JudgedAt,
+			Questions:  questions,
+			Outcomes:   emptyIfNil(questionOutcomes),
+			Usage:      usageOf(j),
+
+			WindowStart: reads[j.ID].windowStart,
+			NewMessages: reads[j.ID].newMessages,
+			Flags:       reads[j.ID].flags,
+			Clearings:   reads[j.ID].clearings,
 		}
 	}
 	return records, nil
@@ -378,6 +432,7 @@ func (s *Store) ReviewRecords(ctx context.Context) ([]ReviewRecord, error) {
 		records = append(records, ReviewRecord{
 			Example:      ExampleID(r.ExampleID),
 			Method:       MethodRef{r.MethodKey, r.MethodVersion, r.WordingVersion},
+			ReadDigest:   r.ReadDigest,
 			QuestionID:   questionID,
 			Verdict:      deriveVerdict(r.JudgedValue, *r.RightOutcome, r.KeepsDate),
 			RightOutcome: *r.RightOutcome,

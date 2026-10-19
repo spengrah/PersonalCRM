@@ -39,7 +39,7 @@ import (
 )
 
 var (
-	labelsProd  = judgment.MethodRef{Key: "prod-method", Version: "v1", WordingVersion: "w1"}
+	labelsProd  = judgment.MethodRef{Key: "jev-masked", Version: "v1", WordingVersion: "w1"}
 	labelsOther = judgment.MethodRef{Key: "other-method", Version: "v1", WordingVersion: "w1"}
 )
 
@@ -75,6 +75,13 @@ func (*noopKnowledge) Work(context.Context, *river.Job[consumerjobs.KnowledgeCac
 
 func newLabelsEnv(t *testing.T) *labelsEnv {
 	t.Helper()
+	return newLabelsEnvFor(t, labelsProd.Key)
+}
+
+// newLabelsEnvFor is the env whose store designates productionMethod ("" for
+// none).
+func newLabelsEnvFor(t *testing.T, productionMethod string) *labelsEnv {
+	t.Helper()
 	url, drop := testdb.NewEphemeralClone(t)
 	t.Cleanup(drop)
 	database := testsupport.OpenDatabaseAt(t, url)
@@ -94,7 +101,7 @@ func newLabelsEnv(t *testing.T) *labelsEnv {
 	contacts.SetPool(database.Pool)
 	contexts := threadctx.NewBuilder(repository.NewThreadContentRepository(database.Queries), repository.NewVenueRepository(database.Queries))
 	cfg := config.TestConfig()
-	cfg.Decision.ProductionMethod = labelsProd.Key
+	cfg.Decision.ProductionMethod = productionMethod
 	return &labelsEnv{
 		ctx: ctx, database: database, cfg: cfg,
 		store:    buildJudgmentStore(cfg, database, asserts, contacts, jobs, contexts),
@@ -235,7 +242,13 @@ func nothing(x uuid.UUID) judgment.Outcomes {
 type reusingMethod struct{}
 
 func (reusingMethod) Ref() judgment.MethodRef { return labelsProd }
-func (reusingMethod) Judge(context.Context, threadctx.Context) (decision.Result, error) {
+
+// Plan reads what the judgments recorded without a window read: the whole
+// context, so the rerun finds them.
+func (reusingMethod) Plan(context.Context, decision.Request) (*decision.Plan, error) {
+	return &decision.Plan{}, nil
+}
+func (reusingMethod) Judge(context.Context, *decision.Plan) (decision.Result, error) {
 	return nil, errors.New("the scorecard rerun reuses every judgment and sends nothing")
 }
 func (reusingMethod) Measure(context.Context, threadctx.Context) (decision.Size, error) {

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"personal-crm/backend/internal/accelerated"
@@ -141,7 +142,7 @@ func (s *Store) FinishRun(ctx context.Context, run RunID) error {
 // RecordIncomplete reports a thread the run could not judge at a cut-off.
 func (s *Store) RecordIncomplete(ctx context.Context, run RunID, thread threadctx.VenueID, cutOff time.Time, reason IncompleteReason) error {
 	switch reason {
-	case IncompleteReasonOverLimit, IncompleteReasonCallFailed, IncompleteReasonInputChanged:
+	case IncompleteReasonOverLimit, IncompleteReasonCallFailed, IncompleteReasonInputChanged, IncompleteReasonMessageOverLimit:
 	default:
 		return fmt.Errorf("record incomplete: unknown reason %q", reason)
 	}
@@ -153,9 +154,47 @@ func (s *Store) RecordIncomplete(ctx context.Context, run RunID, thread threadct
 	return nil
 }
 
+// RecordUnjudged reports the new messages no judgment of the run answered. An
+// unjudged message is its own record: it is neither a flag decision nor an
+// answer of no.
+func (s *Store) RecordUnjudged(ctx context.Context, run RunID, messages []UnjudgedMessage) error {
+	type cutOff struct {
+		thread threadctx.VenueID
+		at     time.Time
+	}
+	var order []cutOff
+	keys, reasons := map[cutOff][]string{}, map[cutOff][]string{}
+	for _, m := range messages {
+		if !slices.Contains([]UnjudgedReason{UnjudgedReasonCallFailed, UnjudgedReasonMessageOverLimit, UnjudgedReasonBeforeWindow}, m.Reason) {
+			return fmt.Errorf("record unjudged: unknown reason %q", m.Reason)
+		}
+		if m.Thread == uuid.Nil || m.MessageKey == "" {
+			return errors.New("record unjudged: thread and message key are required")
+		}
+		c := cutOff{m.Thread, m.CutOff}
+		if _, seen := keys[c]; !seen {
+			order = append(order, c)
+		}
+		keys[c] = append(keys[c], m.MessageKey)
+		reasons[c] = append(reasons[c], string(m.Reason))
+	}
+	return s.inTx(ctx, func(tx pgx.Tx) error {
+		q := db.New(tx)
+		for _, c := range order {
+			if err := q.CreateJudgmentUnjudged(ctx, db.CreateJudgmentUnjudgedParams{
+				RunID: run, ThreadID: c.thread, CutOff: c.at, MessageKeys: keys[c], Reasons: reasons[c],
+			}); err != nil {
+				return fmt.Errorf("record unjudged: %w", err)
+			}
+		}
+		return nil
+	})
+}
+
 // RecordJudgment records a judgment in a run and gives it the live effects the
-// run gives it. A judgment whose identity (method, thread, input hash) the
-// store already holds is recorded in the run as ReuseJudgment records it.
+// run gives it. A judgment whose identity (method, thread, input hash and what
+// it read) the store already holds is recorded in the run as ReuseJudgment
+// records it.
 func (s *Store) RecordJudgment(ctx context.Context, run RunID, j Judgment) (Effects, error) {
 	if err := validateJudgment(j); err != nil {
 		return Effects{}, fmt.Errorf("record judgment: %w", err)
@@ -170,12 +209,15 @@ func (s *Store) RecordJudgment(ctx context.Context, run RunID, j Judgment) (Effe
 		if runMethod(runRow) != j.Method {
 			return fmt.Errorf("judgment method %+v is not run %s's method", j.Method, run)
 		}
-		judgmentID, found, err := findJudgment(ctx, q, j.Method, j.Thread, j.InputHash)
+		judgmentID, found, err := findJudgment(ctx, q, j.Method, j.Thread, j.InputHash, readOf(j.WindowStart, j.NewMessages, j.Clearings))
 		if err != nil {
 			return err
 		}
 		fresh := !found
 		if fresh {
+			if err := checkClearingsTx(ctx, q, j); err != nil {
+				return err
+			}
 			if judgmentID, err = s.createJudgmentTx(ctx, tx, j); err != nil {
 				return err
 			}
@@ -186,10 +228,19 @@ func (s *Store) RecordJudgment(ctx context.Context, run RunID, j Judgment) (Effe
 	return effects, err
 }
 
-// ReuseJudgment records in the run, at cutOff, the judgment the run's method
-// version holds for the thread and input hash, and gives it the live effects
-// the run gives it. It returns false and records nothing when there is none.
+// ReuseJudgment records in the run, at cutOff, the judgment of a version before
+// migration 099 that the run's method version holds for the thread and input
+// hash, and gives it the live effects the run gives it. It returns false and
+// records nothing when there is none.
 func (s *Store) ReuseJudgment(ctx context.Context, run RunID, thread threadctx.VenueID, cutOff time.Time, inputHash string) (Effects, bool, error) {
+	return s.ReuseRead(ctx, run, thread, cutOff, inputHash, Read{})
+}
+
+// ReuseRead records in the run, at cutOff, the judgment the run's method
+// version holds for the thread, input hash and what it read, and gives it the
+// live effects the run gives it. It returns false and records nothing when
+// there is none: a judgment is reused only when what it read is the same.
+func (s *Store) ReuseRead(ctx context.Context, run RunID, thread threadctx.VenueID, cutOff time.Time, inputHash string, read Read) (Effects, bool, error) {
 	var (
 		effects Effects
 		found   bool
@@ -201,7 +252,7 @@ func (s *Store) ReuseJudgment(ctx context.Context, run RunID, thread threadctx.V
 			return fmt.Errorf("get run %s: %w", run, err)
 		}
 		var judgmentID uuid.UUID
-		judgmentID, found, err = findJudgment(ctx, q, runMethod(runRow), thread, inputHash)
+		judgmentID, found, err = findJudgment(ctx, q, runMethod(runRow), thread, inputHash, read)
 		if err != nil || !found {
 			return err
 		}
@@ -293,6 +344,11 @@ func (s *Store) createJudgmentTx(ctx context.Context, tx pgx.Tx, j Judgment) (uu
 		v := int32(*j.Usage.BilledTokens) //nolint:gosec // token counts fit int32
 		billed = &v
 	}
+	read := readOf(j.WindowStart, j.NewMessages, j.Clearings)
+	var windowStart *string
+	if j.WindowStart != "" {
+		windowStart = &j.WindowStart
+	}
 	id, err := q.CreateJudgment(ctx, db.CreateJudgmentParams{
 		MethodKey:      j.Method.Key,
 		MethodVersion:  j.Method.Version,
@@ -307,9 +363,15 @@ func (s *Store) createJudgmentTx(ctx context.Context, tx pgx.Tx, j Judgment) (uu
 		CostUsd:        j.Usage.CostUSD,
 		LatencyNs:      int64(j.Usage.Latency),
 		Questions:      questionsJSON,
+		WindowStart:    windowStart,
+		NewMessages:    nonNil(j.NewMessages),
+		ReadDigest:     read.digest(),
 	})
 	if err != nil {
 		return uuid.Nil, fmt.Errorf("create judgment: %w", err)
+	}
+	if err := createDecisionsTx(ctx, q, id, j); err != nil {
+		return uuid.Nil, err
 	}
 	locator := judgmentLocator(id, j.Method, j.InputHash)
 	for _, o := range flattenOutcomes(j.Outcomes) {
@@ -336,6 +398,53 @@ func (s *Store) createJudgmentTx(ctx context.Context, tx pgx.Tx, j Judgment) (uu
 		}
 	}
 	return id, nil
+}
+
+// createDecisionsTx stores a judgment's flag and clearing decisions.
+func createDecisionsTx(ctx context.Context, q *db.Queries, id uuid.UUID, j Judgment) error {
+	if len(j.Flags) > 0 {
+		f := db.CreateJudgmentFlagsParams{JudgmentID: id}
+		for _, d := range j.Flags {
+			f.MessageKeys = append(f.MessageKeys, d.MessageKey)
+			f.Kinds = append(f.Kinds, string(d.Kind))
+			f.Probabilities = append(f.Probabilities, d.Probability)
+		}
+		if err := q.CreateJudgmentFlags(ctx, f); err != nil {
+			return fmt.Errorf("create flag decisions: %w", err)
+		}
+	}
+	if len(j.Clearings) > 0 {
+		c := db.CreateJudgmentClearingsParams{JudgmentID: id}
+		for _, d := range j.Clearings {
+			c.MessageKeys = append(c.MessageKeys, d.CommitmentMessageKey)
+			c.CommitmentJudgmentIds = append(c.CommitmentJudgmentIds, d.CommitmentJudgment)
+			c.Dones = append(c.Dones, d.Done)
+			c.Probabilities = append(c.Probabilities, d.Probability)
+		}
+		if err := q.CreateJudgmentClearings(ctx, c); err != nil {
+			return fmt.Errorf("create clearing decisions: %w", err)
+		}
+	}
+	return nil
+}
+
+// checkClearingsTx refuses a judgment whose clearing decision names anything
+// but a commitment flag decision of an earlier judgment of the same thread. The
+// schema holds each judgment's answers apart, so the store's writer keeps it.
+func checkClearingsTx(ctx context.Context, q *db.Queries, j Judgment) error {
+	for _, c := range j.Clearings {
+		earlier, err := q.IsEarlierCommitment(ctx, db.IsEarlierCommitmentParams{
+			JudgmentID: c.CommitmentJudgment, MessageKey: c.CommitmentMessageKey,
+			CommitmentKind: string(FlagKindCommitment), ThreadID: j.Thread, CutOff: j.CutOff,
+		})
+		if err != nil {
+			return fmt.Errorf("check clearing decision: %w", err)
+		}
+		if !earlier {
+			return fmt.Errorf("clearing decision of message %q names no commitment flag decision of an earlier judgment of the thread", c.CommitmentMessageKey)
+		}
+	}
+	return nil
 }
 
 // flatOutcome is one typed outcome flattened to its question, contact and
@@ -391,10 +500,10 @@ func userLocator() service.ProvenanceLocator {
 	}
 }
 
-func findJudgment(ctx context.Context, q *db.Queries, m MethodRef, thread threadctx.VenueID, inputHash string) (uuid.UUID, bool, error) {
+func findJudgment(ctx context.Context, q *db.Queries, m MethodRef, thread threadctx.VenueID, inputHash string, read Read) (uuid.UUID, bool, error) {
 	id, err := q.FindJudgment(ctx, db.FindJudgmentParams{
 		MethodKey: m.Key, MethodVersion: m.Version, WordingVersion: m.WordingVersion,
-		ThreadID: thread, InputHash: inputHash,
+		ThreadID: thread, InputHash: inputHash, ReadDigest: read.digest(),
 	})
 	if errors.Is(err, pgx.ErrNoRows) {
 		return uuid.Nil, false, nil
@@ -441,6 +550,60 @@ func validateJudgment(j Judgment) error {
 		if c.Direction != CommitmentDirectionMine && c.Direction != CommitmentDirectionTheirs {
 			return fmt.Errorf("unknown commitment direction %q", c.Direction)
 		}
+	}
+	return validateDecisions(j)
+}
+
+// validateDecisions checks a judgment's window, flag decisions and clearing
+// decisions. A judgment of a version before migration 099 (no window start)
+// records none. A judgment that read a window holds ball-in-court outcomes
+// only, so only its reply obligations can change live state.
+func validateDecisions(j Judgment) error {
+	if j.WindowStart == "" {
+		if len(j.NewMessages) > 0 || len(j.Flags) > 0 || len(j.Clearings) > 0 {
+			return errors.New("new messages, flag decisions and clearing decisions need a window start")
+		}
+		return nil
+	}
+	if len(j.Outcomes.Commitments) > 0 || j.Outcomes.BigMoment.Outcome != "" {
+		return errors.New("a judgment that read a window holds ball-in-court outcomes only")
+	}
+	isNew := map[string]bool{}
+	for _, key := range j.NewMessages {
+		if key == "" || isNew[key] {
+			return fmt.Errorf("new message %q is empty or listed twice", key)
+		}
+		isNew[key] = true
+	}
+	type flag struct {
+		key  string
+		kind FlagKind
+	}
+	flagged := map[flag]bool{}
+	for _, f := range j.Flags {
+		switch {
+		case !slices.Contains(FlagKinds, f.Kind):
+			return fmt.Errorf("unknown flag kind %q", f.Kind)
+		case !isNew[f.MessageKey]:
+			return fmt.Errorf("flag decision names message %q, which is not a new message", f.MessageKey)
+		case f.Probability < 0 || f.Probability > 1:
+			return fmt.Errorf("flag probability %v is outside [0, 1]", f.Probability)
+		case flagged[flag{f.MessageKey, f.Kind}]:
+			return fmt.Errorf("message %q is flagged twice as %s", f.MessageKey, f.Kind)
+		}
+		flagged[flag{f.MessageKey, f.Kind}] = true
+	}
+	cleared := map[string]bool{}
+	for _, c := range j.Clearings {
+		switch {
+		case c.CommitmentMessageKey == "" || c.CommitmentJudgment == uuid.Nil:
+			return errors.New("clearing decision names no commitment")
+		case c.Probability < 0 || c.Probability > 1:
+			return fmt.Errorf("clearing probability %v is outside [0, 1]", c.Probability)
+		case cleared[c.CommitmentMessageKey]:
+			return fmt.Errorf("commitment %q is re-checked twice", c.CommitmentMessageKey)
+		}
+		cleared[c.CommitmentMessageKey] = true
 	}
 	return nil
 }
