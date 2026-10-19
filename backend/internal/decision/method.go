@@ -4,6 +4,7 @@
 package decision
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -66,8 +67,11 @@ type Commitment struct {
 // A night whose new messages fit one window is read over that window. A night
 // whose new messages do not is read in chunks: the fewest that fit, earliest
 // first, the new messages spread evenly over them, each chunk's window its new
-// messages preceded by as many older messages as fit, and only the last chunk
-// asking ball-in-court.
+// messages preceded by as many older messages as fit with the commitments it
+// re-checks, and only the last chunk asking ball-in-court. A later chunk
+// re-checks what the chunks before it left open, so its window is sized when
+// it is judged, and the plan's Read names it by its new messages and the
+// night's Chunking.
 type Plan struct {
 	// Incomplete is set when the method cannot send the request, and then
 	// holds the reason; the plan reads nothing.
@@ -79,17 +83,20 @@ type Plan struct {
 
 	id      uuid.UUID
 	context threadctx.Context
+	// earlier are the request's commitments, which any chunk may re-check.
+	earlier []Commitment
 	floor   float64
 	chunks  []*chunk
 }
 
-// chunk is one window of a plan and what judging it has answered so far. Its
-// questions are built when it is judged, since it re-checks the commitments
-// the chunks before it flagged.
+// chunk is one window of a plan and what judging it has answered so far.
 type chunk struct {
-	win window
-	// asked is the window as judged, with every commitment it re-checks.
-	asked    window
+	// group is the new messages the chunk flags.
+	group []int
+	// win is the chunk's window, with every commitment it re-checks. A plan's
+	// first window is planned; a later chunk's is sized when it is judged,
+	// once the chunks before it have answered.
+	win      *window
 	tree     *tree
 	calls    [][]threadctx.Question
 	answered map[int]callResult
@@ -298,44 +305,85 @@ func (m *method) Plan(ctx context.Context, r Request) (*Plan, error) {
 	if !ok {
 		return &Plan{Incomplete: judgment.IncompleteReasonMessageOverLimit}, nil
 	}
-	p := &Plan{id: uuid.New(), context: c, floor: r.Floor, chunks: []*chunk{{win: whole}}}
-	var over []int
+	p := &Plan{id: uuid.New(), context: c, earlier: r.Commitments, floor: r.Floor, chunks: []*chunk{{group: whole.new, win: &whole}}}
 	if news := newIn(r, 0, last); r.NewAfter != nil && len(news) > 0 && whole.start > news[0] {
-		if p.chunks, over, err = m.chunk(ctx, r, news); err != nil {
+		groups, over, err := m.chunk(ctx, r, news)
+		if err != nil {
 			return nil, err
 		}
+		p.chunks = nil
+		for _, g := range groups {
+			p.chunks = append(p.chunks, &chunk{group: g})
+		}
+		if p.chunks[0].win, err = m.window(ctx, p, 0); err != nil {
+			return nil, err
+		}
+		for _, i := range over {
+			p.OverLimit = append(p.OverLimit, c.Entries[i].Key)
+		}
 	}
-	key := func(i int) string { return c.Entries[i].Key }
-	p.Read.WindowStart = key(p.chunks[0].win.start)
+	p.Read = p.read(p.chunks[0])
+	p.Read.NewMessages = nil
 	for _, ch := range p.chunks {
-		read := judgment.Read{WindowStart: key(ch.win.start)}
-		for _, i := range ch.win.new {
-			read.NewMessages = append(read.NewMessages, key(i))
-		}
-		for _, rc := range ch.win.rechecked {
-			read.Rechecked = append(read.Rechecked, judgment.Recheck{Judgment: rc.commitment.Judgment, MessageKey: rc.commitment.MessageKey})
-		}
-		p.Read.NewMessages = append(p.Read.NewMessages, read.NewMessages...)
-		for _, rc := range read.Rechecked {
-			if !slices.Contains(p.Read.Rechecked, rc) {
-				p.Read.Rechecked = append(p.Read.Rechecked, rc)
-			}
-		}
-		if len(p.chunks) > 1 {
-			p.Read.Chunks = append(p.Read.Chunks, read)
-		}
+		p.Read.NewMessages = append(p.Read.NewMessages, p.read(ch).NewMessages...)
 	}
-	for _, i := range over {
-		p.OverLimit = append(p.OverLimit, key(i))
+	if len(p.chunks) > 1 {
+		p.Read.Chunks = p.reads()
+		p.Read.Chunking = m.chunking(r)
 	}
 	return p, nil
 }
 
-// chunk plans the chunks of a night whose new messages no one window holds:
-// the fewest windows that fit, earliest first, each its new messages preceded
-// by as many older messages as fit. A new message whose window alone does not
-// fit is over the limit, and the chunks are planned around it.
-func (m *method) chunk(ctx context.Context, r Request, news []int) ([]*chunk, []int, error) {
+// read is what a chunk reads: its new messages and, once its window is sized,
+// the window's start and the earlier judgments' commitments it re-checks.
+func (p *Plan) read(ch *chunk) judgment.Read {
+	key := func(i int) string { return p.context.Entries[i].Key }
+	var read judgment.Read
+	for _, i := range ch.group {
+		read.NewMessages = append(read.NewMessages, key(i))
+	}
+	if ch.win == nil {
+		return read
+	}
+	read.WindowStart = key(ch.win.start)
+	for _, rc := range ch.win.rechecked {
+		if rc.commitment.Judgment != p.id {
+			read.Rechecked = append(read.Rechecked, judgment.Recheck{Judgment: rc.commitment.Judgment, MessageKey: rc.commitment.MessageKey})
+		}
+	}
+	return read
+}
+
+// reads returns what each chunk of the plan reads, earliest first.
+func (p *Plan) reads() []judgment.Read {
+	out := make([]judgment.Read, len(p.chunks))
+	for i, ch := range p.chunks {
+		out[i] = p.read(ch)
+	}
+	return out
+}
+
+// chunking identifies what decides a chunked night's later windows besides
+// the answers of the chunks before them: the method's token limit and sizing,
+// its clearing floor and the request's commitments.
+func (m *method) chunking(r Request) string {
+	earlier := slices.Clone(r.Commitments)
+	slices.SortFunc(earlier, func(a, b Commitment) int {
+		return cmp.Or(slices.Compare(a.Judgment[:], b.Judgment[:]), cmp.Compare(a.MessageKey, b.MessageKey))
+	})
+	return digest(struct {
+		Tokens      int
+		Sizing      Sizing
+		Floor       float64
+		Commitments []Commitment
+	}{m.def.Limits.Tokens, m.def.Sizing, r.Floor, earlier})
+}
+
+// chunk divides the new messages of a night no one window holds into the
+// groups of the fewest chunks that fit, earliest first. A new message whose
+// window alone does not fit is over the limit, and the chunks are planned
+// around it.
+func (m *method) chunk(ctx context.Context, r Request, news []int) ([][]int, []int, error) {
 	var runs [][]int
 	var over, run []int
 	for _, i := range news {
@@ -355,44 +403,86 @@ func (m *method) chunk(ctx context.Context, r Request, news []int) ([]*chunk, []
 	if len(run) > 0 {
 		runs = append(runs, run)
 	}
-	var chunks []*chunk
+	var groups [][]int
 	for _, run := range runs {
-		groups, err := m.spread(ctx, r, run)
+		spread, err := m.spread(ctx, r, run)
 		if err != nil {
 			return nil, nil, err
 		}
-		for _, g := range groups {
-			win, _, err := m.widest(ctx, r, g[0], g[len(g)-1], func(int) []int { return g })
-			if err != nil {
-				return nil, nil, err
-			}
-			chunks = append(chunks, &chunk{win: win})
-		}
+		groups = append(groups, spread...)
 	}
-	return chunks, over, nil
+	return groups, over, nil
 }
 
 // spread divides a run of consecutive new messages, each of which fits a
 // window alone, into the fewest groups whose sizes differ by at most one and
-// whose windows each fit with no older message.
+// whose windows each fit with no older message. Of the divisions into that
+// many groups, it takes the first that fits, smaller groups first.
 func (m *method) spread(ctx context.Context, r Request, run []int) ([][]int, error) {
-	for k := 1; ; k++ {
-		groups := parts(run, k)
-		fit := true
-		for _, g := range groups {
-			ok, err := m.fits(ctx, r.Context, windowOf(r, g[0], g[len(g)-1], g))
-			if err != nil {
-				return nil, err
-			}
-			if !ok {
-				fit = false
-				break
-			}
+	fits := map[[2]int]bool{}
+	fit := func(from, to int) (bool, error) {
+		if ok, seen := fits[[2]int{from, to}]; seen {
+			return ok, nil
 		}
-		if fit {
+		g := run[from:to]
+		ok, err := m.fits(ctx, r.Context, windowOf(r, g[0], g[len(g)-1], g))
+		fits[[2]int{from, to}] = ok
+		return ok, err
+	}
+	for k := 1; ; k++ {
+		bounds, ok, err := balanced(len(run), k, fit)
+		if err != nil {
+			return nil, err
+		}
+		if ok {
+			groups := make([][]int, len(bounds))
+			for i, b := range bounds {
+				groups[i] = run[b[0]:b[1]]
+			}
 			return groups, nil
 		}
 	}
+}
+
+// balanced returns the first division of n items, in order, into k parts
+// whose sizes differ by at most one, smaller parts first, every part of which
+// fit accepts, as each part's bounds. It reports false when no such division
+// does.
+func balanced(n, k int, fit func(from, to int) (bool, error)) ([][2]int, bool, error) {
+	small := n / k
+	// dead holds the (start, parts left) from which no division fits.
+	dead := map[[2]int]bool{}
+	var from func(start, left int) ([][2]int, bool, error)
+	from = func(start, left int) ([][2]int, bool, error) {
+		if left == 0 {
+			return nil, true, nil
+		}
+		if dead[[2]int{start, left}] {
+			return nil, false, nil
+		}
+		for _, size := range []int{small, small + 1} {
+			if rest := n - start - size; rest < small*(left-1) || rest > (small+1)*(left-1) {
+				continue
+			}
+			ok, err := fit(start, start+size)
+			if err != nil {
+				return nil, false, err
+			}
+			if !ok {
+				continue
+			}
+			tail, ok, err := from(start+size, left-1)
+			if err != nil {
+				return nil, false, err
+			}
+			if ok {
+				return append([][2]int{{start, start + size}}, tail...), true, nil
+			}
+		}
+		dead[[2]int{start, left}] = true
+		return nil, false, nil
+	}
+	return from(0, k)
 }
 
 func (m *method) Measure(ctx context.Context, c threadctx.Context) (Size, error) {
@@ -416,12 +506,13 @@ func (m *method) Measure(ctx context.Context, c threadctx.Context) (Size, error)
 	}, nil
 }
 
-// rechecks returns the commitments the plan's chunk i re-checks, in thread
-// order: the earlier commitments inside its window and the commitments the
-// chunks before it flagged above the clearing floor inside its window, each
-// unless a chunk before it answered it done.
-func (p *Plan) rechecks(i int) []recheck {
-	win := p.chunks[i].win
+// window sizes the plan's chunk i: the widest window through its last new
+// message that fits with every commitment inside it the chunk re-checks, the
+// request's commitments and those the chunks before it flagged above the
+// clearing floor, each unless a chunk before it answered it done. The window
+// starting at the chunk's first new message always fits: the chunk's group
+// was divided to fit alone, and no commitment lies among new messages.
+func (m *method) window(ctx context.Context, p *Plan, i int) (*window, error) {
 	done := map[string]bool{}
 	var flagged []string
 	for _, ch := range p.chunks[:i] {
@@ -434,45 +525,20 @@ func (p *Plan) rechecks(i int) []recheck {
 			done[c.CommitmentMessageKey] = c.Done
 		}
 	}
-	var out []recheck
-	for _, rc := range win.rechecked {
-		if !done[rc.commitment.MessageKey] {
-			out = append(out, rc)
+	var open []Commitment
+	for _, c := range p.earlier {
+		if !done[c.MessageKey] {
+			open = append(open, c)
 		}
 	}
 	for _, key := range flagged {
-		entry := slices.IndexFunc(p.context.Entries, func(e threadctx.Entry) bool { return e.Key == key })
-		if !done[key] && entry >= win.start && entry <= win.end {
-			out = append(out, recheck{entry: entry, commitment: Commitment{Judgment: p.id, MessageKey: key}})
+		if !done[key] {
+			open = append(open, Commitment{Judgment: p.id, MessageKey: key})
 		}
 	}
-	sort.SliceStable(out, func(a, b int) bool { return out[a].entry < out[b].entry })
-	return out
-}
-
-// calls divides a window's questions into the fewest calls that each fit the
-// method's limits. A window planned with its questions needs only the calls
-// its question limit asks for; a chunk that re-checks commitments an earlier
-// chunk of its night flagged may need further calls over the same window.
-func (m *method) calls(ctx context.Context, c threadctx.Context, questions []threadctx.Question) ([][]threadctx.Question, error) {
-	for n := (len(questions) + m.def.Limits.Questions - 1) / m.def.Limits.Questions; n < len(questions); n++ {
-		calls := parts(questions, n)
-		fit := true
-		for _, q := range calls {
-			prep, err := m.prepare(ctx, c, q)
-			if err != nil {
-				return nil, err
-			}
-			if m.def.Sizing.scale(prep.wire) > m.def.Limits.Tokens {
-				fit = false
-				break
-			}
-		}
-		if fit {
-			return calls, nil
-		}
-	}
-	return parts(questions, len(questions)), nil
+	g := p.chunks[i].group
+	win, _, err := m.widest(ctx, Request{Context: p.context, Commitments: open}, g[0], g[len(g)-1], func(int) []int { return g })
+	return &win, err
 }
 
 func (m *method) Judge(ctx context.Context, p *Plan) (Result, error) {
@@ -485,16 +551,17 @@ func (m *method) Judge(ctx context.Context, p *Plan) (Result, error) {
 			continue
 		}
 		if ch.tree == nil {
-			ch.asked = ch.win
-			ch.asked.rechecked = p.rechecks(i)
-			t := buildTree(p.context, m.def.Wording, ch.asked)
-			calls, err := m.calls(ctx, windowed(p.context, ch.asked), t.questions)
-			if err != nil {
-				return nil, err
+			if ch.win == nil {
+				win, err := m.window(ctx, p, i)
+				if err != nil {
+					return nil, err
+				}
+				ch.win = win
 			}
-			ch.tree, ch.calls, ch.answered = &t, calls, map[int]callResult{}
+			t := buildTree(p.context, m.def.Wording, *ch.win)
+			ch.tree, ch.calls, ch.answered = &t, split(t.questions, m.def.Limits.Questions), map[int]callResult{}
 		}
-		win := windowed(p.context, ch.asked)
+		win := windowed(p.context, *ch.win)
 		for j, questions := range ch.calls {
 			if _, done := ch.answered[j]; done {
 				continue
@@ -525,10 +592,14 @@ func (m *method) Judge(ctx context.Context, p *Plan) (Result, error) {
 		got, err := ch.tree.answer(p.context, merged)
 		// best-effort: a response that leaves a question unanswered is a failed
 		// call, reported as call_failed; the plan is asked again from its first
-		// chunk.
+		// chunk, every later window sized again from the answers it gets.
 		if err != nil {
-			for _, ch := range p.chunks {
-				*ch = chunk{win: ch.win}
+			for j, ch := range p.chunks {
+				win := ch.win
+				*ch = chunk{group: ch.group}
+				if j == 0 {
+					ch.win = win
+				}
 			}
 			return Incomplete{Reason: judgment.IncompleteReasonCallFailed}, nil
 		}
@@ -576,6 +647,10 @@ func (m *method) Judge(ctx context.Context, p *Plan) (Result, error) {
 	if calls > 0 && allCosted {
 		usage.CostUSD = &cost
 	}
+	var chunks []judgment.Read
+	if len(p.chunks) > 1 {
+		chunks = p.reads()
+	}
 	return Judged{judgment.Judgment{
 		ID:          p.id,
 		Method:      m.ref,
@@ -586,7 +661,8 @@ func (m *method) Judge(ctx context.Context, p *Plan) (Result, error) {
 		InputHash:   p.context.InputHash,
 		WindowStart: p.Read.WindowStart,
 		NewMessages: slices.Clone(p.Read.NewMessages),
-		Chunks:      p.Read.Chunks,
+		Chunks:      chunks,
+		Chunking:    p.Read.Chunking,
 		Flags:       out.flags,
 		Clearings:   out.clearings,
 		Questions:   out.questions,

@@ -105,14 +105,20 @@ type UnjudgedMessage struct {
 //
 // A night judged in more than one chunk holds each chunk's Read in Chunks,
 // earliest first: the chunk's window start, the new messages it flagged and the
-// earlier judgments' commitments inside its window. Its own fields are then the
-// night's: the first chunk's window start, every chunk's new messages and every
-// chunk's re-checks. A night judged over one window has no chunks.
+// earlier judgments' commitments it re-checked. Its own fields are then the
+// night's: the first chunk's window start and every chunk's new messages. A
+// later chunk re-checks what the chunks before it left open, so its window
+// start and re-checks follow from their answers, by what Chunking identifies.
+// A night judged over one window has no chunks and no Chunking.
 type Read struct {
 	WindowStart string
 	NewMessages []string
 	Rechecked   []Recheck
 	Chunks      []Read
+	// Chunking identifies what decides a chunked night's later windows besides
+	// the answers of the chunks before them: the method's sizing of a window,
+	// its clearing floor and the earlier commitments the night may re-check.
+	Chunking string
 }
 
 // Recheck names one earlier commitment a judgment re-checked: the earlier
@@ -125,7 +131,7 @@ type Recheck struct {
 // readOf is the Read of a judgment: its chunks, and the earlier commitments
 // its clearings name.
 func readOf(j Judgment) Read {
-	r := Read{WindowStart: j.WindowStart, NewMessages: j.NewMessages, Chunks: j.Chunks}
+	r := Read{WindowStart: j.WindowStart, NewMessages: j.NewMessages, Chunks: j.Chunks, Chunking: j.Chunking}
 	for _, c := range j.Clearings {
 		r.Rechecked = append(r.Rechecked, Recheck{c.CommitmentJudgment, c.CommitmentMessageKey})
 	}
@@ -143,22 +149,27 @@ func (r Read) ballInCourtWindowStart() string {
 
 // digest identifies the Read among a method version's judgments of one
 // example: of a night judged over one window, its window start, new messages
-// and re-checks; of a night judged in chunks, each chunk's, in order. It is
-// empty for the zero Read, so a judgment of a version before migration 099
-// keeps its identity of method version, thread and input hash.
+// and re-checks; of a night judged in chunks, its window start, each chunk's
+// new messages, in order, and its Chunking, which with the answers of the
+// chunks before it decide every chunk's window and re-checks, so a judgment
+// found by its digest read what a judgment of its plan would. It is empty for
+// the zero Read, so a judgment of a version before migration 099 keeps its
+// identity of method version, thread and input hash.
 func (r Read) digest() string {
 	if r.WindowStart == "" {
 		return ""
 	}
 	var encoded any = r.encoded()
 	if len(r.Chunks) > 0 {
-		chunks := make([]readEncoding, len(r.Chunks))
+		chunks := make([][]string, len(r.Chunks))
 		for i, c := range r.Chunks {
-			chunks[i] = c.encoded()
+			chunks[i] = nonNil(c.NewMessages)
 		}
 		encoded = struct {
-			Chunks []readEncoding `json:"chunks"`
-		}{chunks}
+			WindowStart string     `json:"window_start"`
+			Chunks      [][]string `json:"chunks"`
+			Chunking    string     `json:"chunking"`
+		}{r.WindowStart, chunks, r.Chunking}
 	}
 	raw, err := json.Marshal(encoded)
 	if err != nil {

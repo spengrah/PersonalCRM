@@ -179,6 +179,58 @@ func TestJudgeMonthJudgesAnOverflowingNightInChunks(t *testing.T) {
 		assert.Equal(t, texts[2:], calls[1].Texts, "the second chunk reads the first chunk's last message, the most that fits")
 		assert.Equal(t, texts[3:], calls[1].flagged())
 	})
+
+	// Three short new messages, then two long ones: the even division whose
+	// smaller chunk comes first puts a short message beside the long ones,
+	// which no window holds, while the one whose larger chunk comes first fits.
+	t.Run("a night whose new messages fit two chunks only with the larger chunk first, judged in two chunks", func(t *testing.T) {
+		e := newFlagsEnv(t, "")
+		long := func(i int) string { return filler(i) + strings.Repeat("and the weather ", 60) }
+		th, _, texts := e.nightOf(t, filler(0), "ok one", "ok two", "ok three", long(4), long(5))
+		limit := e.windowLimit(t, fakeDefinition(jevKey, roomy), th, second, 4, 4)
+		v := newVendor(t)
+		m := e.method(jevKey, v, decision.Limits{Tokens: limit, Questions: 1 << 20})
+
+		e.judgeMonth(t, methods{jevKey: m}, jevKey)
+
+		calls := v.all()[1:]
+		require.Len(t, calls, 2, "two chunks, the fewest that fit")
+		assert.Equal(t, texts[1:4], calls[0].flagged())
+		assert.Equal(t, texts[4:], calls[1].flagged())
+	})
+
+	// The first night holds three messages and a commitment; the second the
+	// commitment's keeping and four more. The limit holds every message with
+	// the last three new ones flagged and nothing re-checked.
+	t.Run("a later chunk after an earlier chunk cleared a commitment, whose window holds as many older messages as fit without that commitment's question", func(t *testing.T) {
+		e := newFlagsEnv(t, "")
+		th := e.newThread(t)
+		for i, text := range []string{filler(0), filler(1), filler(2), promise} {
+			th.say(t, jan(3, 9+i), i%2 == 1, text)
+		}
+		for i, text := range []string{kept, filler(5), filler(6), filler(7), filler(8)} {
+			th.say(t, jan(4, 9+i), i%2 == 0, text)
+		}
+		var texts []string
+		for _, text := range []string{filler(0), filler(1), filler(2), promise, kept, filler(5), filler(6), filler(7), filler(8)} {
+			texts = append(texts, strings.TrimSpace(text))
+		}
+		limit := e.windowLimit(t, fakeDefinition(jevKey, roomy), th, second, 0, 6)
+		v := vendorFlagging(t, 0.9)
+		m := e.method(jevKey, v, decision.Limits{Tokens: limit, Questions: 1 << 20})
+
+		e.judgeMonth(t, methods{jevKey: m}, jevKey)
+
+		chunks := chunkCalls(v)
+		require.Len(t, chunks, 2)
+		require.Len(t, asked(chunks[0], "clearing"), 1, "the first chunk re-checks the commitment")
+		assert.Empty(t, asked(chunks[1], "clearing"), "and clears it")
+		assert.Equal(t, texts, chunks[1][0].Texts, "the second chunk reads every older message, which fit beside its own questions")
+		assert.Equal(t, texts[6:], chunks[1][0].flagged())
+		j := th.judgmentAt(t, m.Ref(), second)
+		require.Len(t, j.Clearings, 1)
+		assert.True(t, j.Clearings[0].Done)
+	})
 }
 
 // Each chunk of a night re-checks the method's earlier commitments whose
@@ -195,7 +247,7 @@ func TestJudgeMonthRechecksCommitmentsInEachChunk(t *testing.T) {
 	t.Run("a commitment flagged in a night's first chunk and re-checked in its second", func(t *testing.T) {
 		e := newFlagsEnv(t, "")
 		th, keys, texts := e.nightOf(t, filler(0), filler(1), said, filler(3), done, filler(5))
-		limit := e.windowLimit(t, fakeDefinition(jevKey, roomy), th, second, 2, 3)
+		limit := e.windowLimit(t, fakeDefinition(jevKey, roomy), th, second, 2, 3, decision.Commitment{Judgment: uuid.New(), MessageKey: keys[2]})
 		v := vendorFlagging(t, 0.9)
 		m := e.method(jevKey, v, decision.Limits{Tokens: limit, Questions: 1 << 20})
 
@@ -469,7 +521,8 @@ func TestStoreReadsAChunkedNightAsOneJudgment(t *testing.T) {
 	t.Run("the same night read by thread and by run", func(t *testing.T) {
 		e := newFlagsEnv(t, "")
 		th, keys, _ := e.nightOf(t, filler(0), filler(1), promise, filler(3), kept, filler(5))
-		m := e.method(jevKey, vendorFlagging(t, 0.9), decision.Limits{Tokens: e.windowLimit(t, fakeDefinition(jevKey, roomy), th, second, 2, 3), Questions: 1 << 20})
+		limit := e.windowLimit(t, fakeDefinition(jevKey, roomy), th, second, 2, 3, decision.Commitment{Judgment: uuid.New(), MessageKey: keys[2]})
+		m := e.method(jevKey, vendorFlagging(t, 0.9), decision.Limits{Tokens: limit, Questions: 1 << 20})
 
 		e.judgeMonth(t, methods{jevKey: m}, jevKey)
 
@@ -532,7 +585,7 @@ func windowsOf(chunks [][]call) [][]string {
 
 // A rerun reuses a chunked night's judgment only when every chunk read the
 // same window and new messages and re-checked the same earlier judgments.
-// spec: KNW-073.reuse-when-every-chunk-read-same, KNW-073.different-recheck-judged-again, KNW-073.different-chunks-judged-again
+// spec: KNW-073.reuse-when-every-chunk-read-same, KNW-073.different-recheck-judged-again, KNW-073.different-chunks-judged-again, KNW-073.different-later-window-judged-again
 func TestJudgeMonthReusesAChunkedNightOnlyWhenEveryChunkReadTheSame(t *testing.T) {
 	second := jan(5, 0)
 
@@ -606,5 +659,26 @@ func TestJudgeMonthReusesAChunkedNightOnlyWhenEveryChunkReadTheSame(t *testing.T
 		require.Len(t, nights, 2)
 		assert.Equal(t, nights[0].WindowStart, nights[1].WindowStart, "the night's first window start is the same")
 		assert.Equal(t, nights[0].NewMessages, nights[1].NewMessages, "and so are its new messages")
+	})
+
+	t.Run("a rerun whose later chunk now reads a different window, its first window and chunks the same, which is judged again", func(t *testing.T) {
+		e := newFlagsEnv(t, "")
+		th, keys, texts := e.night(t, 5)
+		def := fakeDefinition(jevKey, roomy)
+		v := newVendor(t)
+		e.judgeMonth(t, methods{jevKey: e.method(jevKey, v, decision.Limits{Tokens: e.windowLimit(t, def, th, second, 2, 3), Questions: 1 << 20})}, jevKey)
+		v.reset()
+		m := e.method(jevKey, v, decision.Limits{Tokens: e.windowLimit(t, def, th, second, 3, 3), Questions: 1 << 20})
+
+		out := e.judgeMonth(t, methods{jevKey: m}, jevKey)
+
+		assert.Contains(t, out, "judged=1 reused=1")
+		calls := v.all()
+		require.Len(t, calls, 2, "the night is judged again in two chunks; the earlier night is reused")
+		assert.Equal(t, texts[1:3], calls[0].flagged(), "the same chunks")
+		assert.Equal(t, texts[3:], calls[1].Texts, "the later chunk now reads from its own first message")
+		nights := th.judgmentsAt(t, m.Ref(), second)
+		require.Len(t, nights, 2)
+		assert.Equal(t, keys[0], nights[1].WindowStart, "the first window start is the same")
 	})
 }
