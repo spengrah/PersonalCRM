@@ -1,5 +1,6 @@
 'use client'
 
+import type { ReactNode } from 'react'
 import { ArrowLeft, ChevronLeft, ChevronRight } from 'lucide-react'
 import { clsx } from 'clsx'
 
@@ -22,12 +23,16 @@ interface ContactNavigationBarProps {
   isEditMode?: boolean
   /** Whether navigation is loading */
   isLoading?: boolean
+  /** What the list holds; the pager names it. Contacts by default. */
+  noun?: 'contact' | 'thread'
+  /** Controls at the right of the bar, before the pager. */
+  controls?: ReactNode
 }
 
 /**
  * Compact navigation bar for contact details page
  *
- * Shows: [Back to list] ... [‹ N of M ›]
+ * Shows: [Back to list] ... [controls] [‹ N of M ›]
  *
  * The bar background is full-bleed; its contents are constrained to the same
  * max-w-4xl column as the detail body so "Back to list" aligns with the
@@ -48,6 +53,8 @@ export function ContactNavigationBar({
   totalCount,
   isEditMode = false,
   isLoading = false,
+  noun = 'contact',
+  controls,
 }: ContactNavigationBarProps) {
   const isPrevDisabled = !canGoBack || isEditMode || isLoading
   const isNextDisabled = !canGoForward || isEditMode || isLoading
@@ -85,6 +92,7 @@ export function ContactNavigationBar({
         </button>
 
         <div className="flex items-center gap-2">
+          {controls}
           <button
             onClick={onPrevious}
             disabled={isPrevDisabled}
@@ -92,10 +100,10 @@ export function ContactNavigationBar({
               isEditMode
                 ? 'Save or discard changes to navigate'
                 : canGoBack
-                  ? 'Previous contact (←)'
-                  : 'At first contact'
+                  ? `Previous ${noun} (←)`
+                  : `At first ${noun}`
             }
-            aria-label="Previous contact"
+            aria-label={`Previous ${noun}`}
             className={clsx('p-1 rounded transition-colors', getButtonStyles(isPrevDisabled))}
           >
             <ChevronLeft className="w-4 h-4" />
@@ -109,7 +117,7 @@ export function ContactNavigationBar({
                 <span className="font-medium">{totalCount}</span>
               </>
             ) : (
-              <span className="text-gray-400">No contacts</span>
+              <span className="text-gray-400">{`No ${noun}s`}</span>
             )}
           </span>
 
@@ -120,10 +128,10 @@ export function ContactNavigationBar({
               isEditMode
                 ? 'Save or discard changes to navigate'
                 : canGoForward
-                  ? 'Next contact (→)'
-                  : 'At last contact'
+                  ? `Next ${noun} (→)`
+                  : `At last ${noun}`
             }
-            aria-label="Next contact"
+            aria-label={`Next ${noun}`}
             className={clsx('p-1 rounded transition-colors', getButtonStyles(isNextDisabled))}
           >
             <ChevronRight className="w-4 h-4" />
