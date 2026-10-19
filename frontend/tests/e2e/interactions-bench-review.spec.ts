@@ -194,7 +194,10 @@ test.describe('Interactions bench review @area:interactions', () => {
 
     // spec: IXN-046.lists-answers, IXN-046.commitment-date-and-stand-in, IXN-046.confidence-shown, IXN-046.states-told-apart, IXN-046.no-item-hidden
     const iOwe = proposalList(proposal, 'I owe a reply')
-    await expect(iOwe.locator('[data-item-text]')).toHaveText([sam.name])
+    // A commitment no longer absorbs a reply: Lee's open commitment and Lee's owed reply both show.
+    // Items sort by name, and the synthetic names vary per run.
+    const byName = (a: string, b: string) => (a.toLowerCase() < b.toLowerCase() ? -1 : 1)
+    await expect(iOwe.locator('[data-item-text]')).toHaveText([lee.name, sam.name].sort(byName))
     await expect(listItem(iOwe, sam.name)).toHaveAttribute('data-state', 'live')
     await expect(listItem(iOwe, sam.name).locator('[data-state-label]')).toHaveText('Live')
     await expect(listItem(iOwe, sam.name).locator('[data-confidence]')).toHaveText('90%')

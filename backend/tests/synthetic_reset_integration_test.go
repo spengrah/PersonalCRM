@@ -46,10 +46,13 @@ var wipedTables = []string{
 	"job_exec_sample",
 	"judgment",
 	"judgment_appearance",
+	"judgment_clearing",
 	"judgment_example",
+	"judgment_flag",
 	"judgment_incomplete",
 	"judgment_outcome",
 	"judgment_run",
+	"judgment_unjudged",
 	"mac_host",
 	"mac_host_pairing_token",
 	"meeting_note",
@@ -81,8 +84,9 @@ var wipedTables = []string{
 // breaks the assert() write path. ResetSyntheticData DOES still clear the
 // runtime-minted PROVISIONAL rows from these tables (so a reset restores a known
 // baseline); the per-namespace SyntheticDelete*ByKeyPrefix helpers remain for
-// test-local provisional cleanup.
-var catalogExclusions = []string{"predicate", "entity_type"}
+// test-local provisional cleanup. The judgment flag threshold tables are
+// migration-seeded settings, not data, and survive the reset unchanged.
+var catalogExclusions = []string{"predicate", "entity_type", "judgment_flag_method", "judgment_flag_threshold"}
 
 // TestSyntheticResetSyntheticData_WipesEveryDataTable is the DESTRUCTIVE,
 // DB-wide reset test. It runs against a per-test CLONE DB (never the shared
