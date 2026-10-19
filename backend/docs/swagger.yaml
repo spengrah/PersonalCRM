@@ -1746,6 +1746,10 @@ definitions:
         type: array
       summary:
         $ref: '#/definitions/handlers.ThreadRunSummaryResponse'
+      type_options:
+        items:
+          $ref: '#/definitions/handlers.InteractionTypeOptionResponse'
+        type: array
     type: object
   handlers.ThreadMessageResponse:
     properties:
@@ -1829,6 +1833,8 @@ definitions:
       thread_id:
         type: string
       title:
+        type: string
+      type:
         type: string
       venue:
         type: string
@@ -5598,10 +5604,11 @@ paths:
   /threads:
     get:
       description: One row per thread a method can judge (each DM, group chat, email
-        thread and meeting holding content), newest latest message first. venue and
-        contact_id narrow the list and combine. With run_id, only the threads the
-        run judged are listed, in the same order, each adding its judged count and
-        its status, and the response adds the run's summary.
+        thread and meeting holding content), newest latest message first. type and
+        contact_id narrow the list and combine; type_options lists the interaction
+        types the type filter offers. With run_id, only the threads the run judged
+        are listed, in the same order, each adding its judged count and its status,
+        and the response adds the run's summary.
       parameters:
       - default: 1
         description: Page number
@@ -5613,15 +5620,13 @@ paths:
         in: query
         name: limit
         type: integer
-      - description: Venue
+      - description: Interaction type
         enum:
-        - whatsapp
-        - telegram
-        - imessage
+        - message
         - email
-        - calendar
+        - event
         in: query
-        name: venue
+        name: type
         type: string
       - description: Participant contact ID
         format: uuid
@@ -5659,10 +5664,10 @@ paths:
   /threads/{thread_id}:
     get:
       description: The thread's header, every message once in thread order, and its
-        place in the list that venue, contact_id and run_id keep. With run_id, it
-        adds the run's nights, one per cut-off at which the run recorded or reused
-        a judgment of the thread, each placing its messages once with the flags they
-        show, its clearing decisions, its reply proposal and its status.
+        place in the list that type, contact_id and run_id keep. With run_id, it adds
+        the run's nights, one per cut-off at which the run recorded or reused a judgment
+        of the thread, each placing its messages once with the flags they show, its
+        clearing decisions, its reply proposal and its status.
       parameters:
       - description: Thread (venue) ID
         format: uuid
@@ -5670,15 +5675,13 @@ paths:
         name: thread_id
         required: true
         type: string
-      - description: Venue
+      - description: Interaction type
         enum:
-        - whatsapp
-        - telegram
-        - imessage
+        - message
         - email
-        - calendar
+        - event
         in: query
-        name: venue
+        name: type
         type: string
       - description: Participant contact ID
         format: uuid

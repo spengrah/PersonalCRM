@@ -5358,7 +5358,7 @@ const docTemplate = `{
         },
         "/threads": {
             "get": {
-                "description": "One row per thread a method can judge (each DM, group chat, email thread and meeting holding content), newest latest message first. venue and contact_id narrow the list and combine. With run_id, only the threads the run judged are listed, in the same order, each adding its judged count and its status, and the response adds the run's summary.",
+                "description": "One row per thread a method can judge (each DM, group chat, email thread and meeting holding content), newest latest message first. type and contact_id narrow the list and combine; type_options lists the interaction types the type filter offers. With run_id, only the threads the run judged are listed, in the same order, each adding its judged count and its status, and the response adds the run's summary.",
                 "produces": [
                     "application/json"
                 ],
@@ -5383,15 +5383,13 @@ const docTemplate = `{
                     },
                     {
                         "enum": [
-                            "whatsapp",
-                            "telegram",
-                            "imessage",
+                            "message",
                             "email",
-                            "calendar"
+                            "event"
                         ],
                         "type": "string",
-                        "description": "Venue",
-                        "name": "venue",
+                        "description": "Interaction type",
+                        "name": "type",
                         "in": "query"
                     },
                     {
@@ -5445,7 +5443,7 @@ const docTemplate = `{
         },
         "/threads/{thread_id}": {
             "get": {
-                "description": "The thread's header, every message once in thread order, and its place in the list that venue, contact_id and run_id keep. With run_id, it adds the run's nights, one per cut-off at which the run recorded or reused a judgment of the thread, each placing its messages once with the flags they show, its clearing decisions, its reply proposal and its status.",
+                "description": "The thread's header, every message once in thread order, and its place in the list that type, contact_id and run_id keep. With run_id, it adds the run's nights, one per cut-off at which the run recorded or reused a judgment of the thread, each placing its messages once with the flags they show, its clearing decisions, its reply proposal and its status.",
                 "produces": [
                     "application/json"
                 ],
@@ -5464,15 +5462,13 @@ const docTemplate = `{
                     },
                     {
                         "enum": [
-                            "whatsapp",
-                            "telegram",
-                            "imessage",
+                            "message",
                             "email",
-                            "calendar"
+                            "event"
                         ],
                         "type": "string",
-                        "description": "Venue",
-                        "name": "venue",
+                        "description": "Interaction type",
+                        "name": "type",
                         "in": "query"
                     },
                     {
@@ -9220,6 +9216,12 @@ const docTemplate = `{
                 },
                 "summary": {
                     "$ref": "#/definitions/handlers.ThreadRunSummaryResponse"
+                },
+                "type_options": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/handlers.InteractionTypeOptionResponse"
+                    }
                 }
             }
         },
@@ -9348,6 +9350,9 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "title": {
+                    "type": "string"
+                },
+                "type": {
                     "type": "string"
                 },
                 "venue": {

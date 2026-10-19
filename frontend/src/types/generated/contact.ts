@@ -728,14 +728,15 @@ export interface ThreadParticipantResponse {
 }
 /**
  * ThreadRowResponse is one thread of the list, and the header of a thread
- * page. venue is the place the thread lives in; title is absent where the venue
- * has none; latest_at is the time of its latest message and message_count its
+ * page. venue is the app the thread lives in, and type its interaction type;
+ * title is absent where the venue has none; latest_at is the time of its latest message and message_count its
  * count of messages, a meeting's notes counted as its messages. review is
  * present when the list is narrowed to a run.
  */
 export interface ThreadRowResponse {
   thread_id: string;
   venue: ThreadVenue;
+  type: InteractionType;
   is_group: boolean;
   title?: string;
   participants: ThreadParticipantResponse[];
@@ -764,11 +765,13 @@ export interface ThreadRunSummaryResponse {
   reviewed: number /* int */;
 }
 /**
- * ThreadListResponse is one page of the threads list. summary is present when
- * the list is narrowed to a run.
+ * ThreadListResponse is one page of the threads list and the interaction types
+ * its type filter offers. summary is present when the list is narrowed to a
+ * run.
  */
 export interface ThreadListResponse {
   items: ThreadRowResponse[];
+  type_options: InteractionTypeOptionResponse[];
   summary?: ThreadRunSummaryResponse;
 }
 /**

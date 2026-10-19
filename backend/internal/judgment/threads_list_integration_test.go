@@ -74,6 +74,7 @@ func TestListThreads(t *testing.T) {
 		row := list.Items[0]
 		assert.Equal(t, th.id.String(), row.ThreadID)
 		assert.Equal(t, "whatsapp", row.Venue)
+		assert.Equal(t, "message", row.Type)
 		assert.True(t, row.IsGroup)
 		assert.Nil(t, row.Title)
 		assert.ElementsMatch(t, []string{people[0].String(), people[1].String(), people[2].String(), people[3].String()}, participantContacts(row))
@@ -117,38 +118,60 @@ func TestListThreads(t *testing.T) {
 
 		require.Len(t, list.Items, 1)
 		assert.Equal(t, th.id.String(), list.Items[0].ThreadID)
-		assert.Equal(t, "calendar", list.Items[0].Venue)
+		assert.Equal(t, "anarlog", list.Items[0].Venue)
+		assert.Equal(t, "event", list.Items[0].Type)
 		assert.Equal(t, 1, list.Items[0].MessageCount)
 	})
 
-	t.Run("each venue value keeps only threads of that venue", func(t *testing.T) {
+	t.Run("each type value keeps only threads of that type, each row naming its app", func(t *testing.T) {
 		// spec: IXN-087.filters-combine
 		b := newBenchEnv(t)
 		c := b.contact(t)
-		perVenue := map[string]thread{
-			"whatsapp": b.venueThread(t, repository.InteractionSourceWhatsApp, repository.VenueKindDM, "wa-"+uuid.NewString()+"@s.whatsapp.net", ""),
-			"telegram": b.venueThread(t, repository.InteractionSourceTelegram, repository.VenueKindDM, "4242", ""),
-			"imessage": b.venueThread(t, repository.InteractionSourceMessages, repository.VenueKindDM, "chat-"+uuid.NewString(), ""),
-			"email":    b.venueThread(t, repository.InteractionSourceEmail, repository.VenueKindEmailThread, "mail-"+uuid.NewString(), ""),
-			"calendar": b.venueThread(t, repository.InteractionSourceGCal, repository.VenueKindMeeting, uuid.NewString(), ""),
+		type app struct {
+			th    thread
+			venue string
 		}
-		day := 0
-		for venue, th := range perVenue {
-			day++
-			if venue == "calendar" {
-				th = b.venueThread(t, repository.InteractionSourceAnarlogSessions, repository.VenueKindSession, uuid.NewString(), "")
-				perVenue[venue] = th
+		perType := map[string][]app{
+			"message": {
+				{b.venueThread(t, repository.InteractionSourceWhatsApp, repository.VenueKindDM, "wa-"+uuid.NewString()+"@s.whatsapp.net", ""), "whatsapp"},
+				{b.venueThread(t, repository.InteractionSourceTelegram, repository.VenueKindDM, "4242", ""), "telegram"},
+				{b.venueThread(t, repository.InteractionSourceMessages, repository.VenueKindDM, "chat-"+uuid.NewString(), ""), "imessage"},
+				{b.venueThread(t, repository.InteractionSourceGChat, repository.VenueKindGroupChat, "space-"+uuid.NewString(), ""), "google_chat"},
+			},
+			"email": {
+				{b.venueThread(t, repository.InteractionSourceEmail, repository.VenueKindEmailThread, "mail-"+uuid.NewString(), ""), "email"},
+			},
+			"event": {
+				{b.venueThread(t, repository.InteractionSourceAnarlogSessions, repository.VenueKindSession, uuid.NewString(), ""), "anarlog"},
+			},
+		}
+		day, total := 0, 0
+		for _, apps := range perType {
+			for _, a := range apps {
+				day++
+				total++
+				b.say(t, a.th, c, false, b.day(day))
 			}
-			b.say(t, th, c, false, b.day(day))
 		}
 
-		for venue, th := range perVenue {
-			list, _ := b.threadList(t, "venue="+venue)
-			assert.Equal(t, []string{th.id.String()}, threadIDs(list.Items), venue)
-			assert.Equal(t, venue, list.Items[0].Venue)
+		for typ, apps := range perType {
+			list, _ := b.threadList(t, "type="+typ)
+			venues := map[string]string{}
+			for _, row := range list.Items {
+				assert.Equal(t, typ, row.Type)
+				venues[row.ThreadID] = row.Venue
+			}
+			want := map[string]string{}
+			for _, a := range apps {
+				want[a.th.id.String()] = a.venue
+			}
+			assert.Equal(t, want, venues, typ)
+			assert.Equal(t, []handlers.InteractionTypeOptionResponse{
+				{Key: "message", Label: "Messages"}, {Key: "email", Label: "Email"}, {Key: "event", Label: "Events"},
+			}, list.TypeOptions)
 		}
 		all, _ := b.threadList(t, "")
-		assert.Len(t, all.Items, len(perVenue))
+		assert.Len(t, all.Items, total)
 	})
 
 	t.Run("a contact filter keeps only the threads that contact takes part in", func(t *testing.T) {
@@ -165,7 +188,7 @@ func TestListThreads(t *testing.T) {
 		assert.Equal(t, int64(2), meta.Total)
 	})
 
-	t.Run("a venue filter and a contact filter combine, keeping only threads matching both", func(t *testing.T) {
+	t.Run("a type filter and a contact filter combine, keeping only threads matching both", func(t *testing.T) {
 		// spec: IXN-087.filters-combine
 		b := newBenchEnv(t)
 		alice, bea := b.contact(t), b.contact(t)
@@ -178,7 +201,7 @@ func TestListThreads(t *testing.T) {
 		b.joined(t, other, bea, b.day(6))
 		_ = whatsapp
 
-		list, _ := b.threadList(t, "venue=email&contact_id="+alice.String())
+		list, _ := b.threadList(t, "type=email&contact_id="+alice.String())
 
 		assert.Equal(t, []string{mail.id.String()}, threadIDs(list.Items))
 	})
@@ -222,25 +245,32 @@ func TestListThreads(t *testing.T) {
 		assert.IsDecreasing(t, sorted, "the thread ID breaks a tie, descending")
 	})
 
-	t.Run("an unknown venue and a malformed contact_id are refused", func(t *testing.T) {
+	t.Run("an unknown type, a type the Threads tab does not offer and a malformed contact_id are refused", func(t *testing.T) {
 		// spec: IXN-087.bad-filter-refused
 		b := newBenchEnv(t)
 
-		assert.Equal(t, http.StatusBadRequest, b.get("/api/v1/threads?venue=fax").Code)
+		assert.Equal(t, http.StatusBadRequest, b.get("/api/v1/threads?type=fax").Code)
+		assert.Equal(t, http.StatusBadRequest, b.get("/api/v1/threads?type=call").Code)
 		assert.Equal(t, http.StatusBadRequest, b.get("/api/v1/threads?contact_id=not-a-uuid").Code)
 	})
 
-	t.Run("a venue outside the five is refused by the list and the read, and its threads are served by neither", func(t *testing.T) {
-		// spec: IXN-087.bad-filter-refused
+	t.Run("a Google Chat thread is listed and read as a message thread", func(t *testing.T) {
+		// spec: IXN-087.one-row-per-thread, IXN-087.filters-combine
 		b := newBenchEnv(t)
 		c := b.contact(t)
 		th := b.venueThread(t, repository.InteractionSourceGChat, repository.VenueKindGroupChat, "space-"+uuid.NewString(), "")
 		b.say(t, th, c, false, b.day(1))
+		b.joined(t, th, c, b.day(1))
 
-		assert.Equal(t, http.StatusBadRequest, b.get("/api/v1/threads?venue=gchat").Code)
-		assert.Equal(t, http.StatusBadRequest, b.get("/api/v1/threads/"+th.id.String()+"?venue=gchat").Code)
-		list, _ := b.threadList(t, "")
-		assert.Empty(t, list.Items)
-		assert.Equal(t, http.StatusNotFound, b.get("/api/v1/threads/"+th.id.String()).Code)
+		list, _ := b.threadList(t, "type=message")
+		read := b.readThread(t, th.id.String(), "type=message")
+
+		require.Len(t, list.Items, 1)
+		assert.Equal(t, th.id.String(), list.Items[0].ThreadID)
+		assert.Equal(t, "google_chat", list.Items[0].Venue)
+		assert.Equal(t, "message", list.Items[0].Type)
+		assert.Len(t, read.Messages, 1)
+		require.NotNil(t, read.Position)
+		assert.Equal(t, 1, read.Position.Total)
 	})
 }

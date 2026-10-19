@@ -38,7 +38,7 @@ function LoadedThread({
 }) {
   const router = useRouter()
   const read = useThread(threadId, {
-    venue: filters.venue,
+    type: filters.type,
     contact_id: filters.contact_id,
     run_id: runId,
   })

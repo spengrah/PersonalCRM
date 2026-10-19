@@ -20,13 +20,13 @@ test.describe('Thread page navigation @area:interactions', () => {
     await testApi.cleanup()
   })
 
-  /** The venue-filtered list of the IXN-076 world's `many` contact: 21 Telegram chats, two list pages. */
+  /** The type-filtered list of the IXN-076 world's `many` contact: 21 Telegram chats, two list pages. */
   async function manyThreads(request: Parameters<typeof fetchThreads>[0]) {
     const seeded = await testApi.seedBehavior('IXN-076')
     const many = entity(seeded, 'many')
     const { data } = await fetchThreads(request, {
       contact_id: many.id,
-      venue: 'telegram',
+      type: 'message',
       limit: 100,
     })
     expect(data.items).toHaveLength(21)
@@ -38,7 +38,7 @@ test.describe('Thread page navigation @area:interactions', () => {
     request,
   }) => {
     const { many, ids } = await manyThreads(request)
-    const query = { venue: 'telegram', contact: many.id }
+    const query = { type: 'message', contact: many.id }
     await page.goto(threadUrl(ids[0], query))
 
     // spec: IXN-078.navigation-bar, IXN-078.header-names-thread
@@ -58,7 +58,7 @@ test.describe('Thread page navigation @area:interactions', () => {
     await page.keyboard.press('ArrowRight')
     await expect(pagerText(page)).toHaveText('2 of 21')
     await expect(page).toHaveURL(new RegExp(`/interactions/threads/${ids[1]}\\?`))
-    await expect(page).toHaveURL(/venue=telegram/)
+    await expect(page).toHaveURL(/type=message/)
     await page.keyboard.press('ArrowLeft')
     await expect(pagerText(page)).toHaveText('1 of 21')
     await expect(page).toHaveURL(new RegExp(`/interactions/threads/${ids[0]}\\?`))
@@ -78,14 +78,12 @@ test.describe('Thread page navigation @area:interactions', () => {
 
   test('Back to list returns to the list with its filters and page', async ({ page, request }) => {
     const { many, ids } = await manyThreads(request)
-    await page.goto(threadUrl(ids[20], { venue: 'telegram', contact: many.id, page: '2' }))
+    await page.goto(threadUrl(ids[20], { type: 'message', contact: many.id, page: '2' }))
     await expect(pagerText(page)).toHaveText('21 of 21', { timeout: SLOW_TIMEOUT_MS })
 
     // spec: IXN-078.navigation-bar
     await page.getByRole('button', { name: 'Back to list' }).click()
-    await expect(page).toHaveURL(
-      `/interactions?tab=threads&venue=telegram&contact=${many.id}&page=2`
-    )
+    await expect(page).toHaveURL(`/interactions?tab=threads&type=message&contact=${many.id}&page=2`)
     await expect(page.getByRole('tab', { name: 'Threads' })).toHaveAttribute(
       'aria-selected',
       'true'

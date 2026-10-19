@@ -1,12 +1,14 @@
 import type { ThreadVenue } from '@/types/generated/judgment'
 
-/** A venue's name, keyed by the generated ThreadVenue; the venue control lists them in this order. */
-export const VENUE_LABELS: Record<ThreadVenue, string> = {
+/** The name a venue chip gives the app a thread lives in, keyed by the generated ThreadVenue. */
+const VENUE_LABELS: Record<ThreadVenue, string> = {
   whatsapp: 'WhatsApp',
   telegram: 'Telegram',
   imessage: 'iMessage',
+  google_chat: 'Google Chat',
   email: 'Email',
   calendar: 'Calendar',
+  anarlog: 'Anarlog',
 }
 
 export function VenueChip({ venue }: { venue: ThreadVenue }) {

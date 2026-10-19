@@ -184,16 +184,18 @@ const (
 	UnjudgedReasonBeforeWindow UnjudgedReason = "before_window"
 )
 
-// ThreadVenue is the kind of place a thread lives in, as the Threads tab
-// filters and names it. sourceVenues maps each venue source to one.
+// ThreadVenue is the app a thread lives in, as a Threads row's chip names it.
+// sourceVenues maps each source the Threads tab serves to one.
 type ThreadVenue string
 
 const (
-	ThreadVenueWhatsApp ThreadVenue = "whatsapp"
-	ThreadVenueTelegram ThreadVenue = "telegram"
-	ThreadVenueIMessage ThreadVenue = "imessage"
-	ThreadVenueEmail    ThreadVenue = "email"
-	ThreadVenueCalendar ThreadVenue = "calendar"
+	ThreadVenueWhatsApp   ThreadVenue = "whatsapp"
+	ThreadVenueTelegram   ThreadVenue = "telegram"
+	ThreadVenueIMessage   ThreadVenue = "imessage"
+	ThreadVenueGoogleChat ThreadVenue = "google_chat"
+	ThreadVenueEmail      ThreadVenue = "email"
+	ThreadVenueCalendar   ThreadVenue = "calendar"
+	ThreadVenueAnarlog    ThreadVenue = "anarlog"
 )
 
 // ChipState is how a flag chip stands under a night's method: to review (a

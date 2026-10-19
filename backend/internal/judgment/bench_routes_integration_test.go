@@ -155,7 +155,29 @@ func TestListAllInteractions(t *testing.T) {
 		for i, o := range page.TypeOptions {
 			keys[i] = o.Key
 		}
-		assert.Equal(t, []string{"message", "email", "calendar", "call", "other"}, keys)
+		assert.Equal(t, []string{"message", "email", "event", "call", "other"}, keys)
+	})
+
+	t.Run("a calendar meeting and an anarlog session are events, and a manual interaction is other", func(t *testing.T) {
+		// spec: IXN-051.filters-combine
+		b := newBenchEnv(t)
+		c := b.contact(t)
+		var events []string
+		for i, source := range []string{repository.InteractionSourceGCal, repository.InteractionSourceAnarlogSessions} {
+			ref := "event-" + uuid.NewString()
+			ix, err := b.contacts.RecordInteraction(b.ctx, repository.RecordInteractionRequest{
+				ContactID: c, Source: source, SourceRef: &ref, OccurredAt: b.day(i + 1), Direction: repository.InteractionDirectionMutual,
+			})
+			require.NoError(t, err)
+			events = append(events, nodeOf(ix))
+		}
+		manual := b.manual(t, c, b.day(3))
+
+		event, _ := b.list(t, "type=event")
+		other, _ := b.list(t, "type=other")
+
+		assert.ElementsMatch(t, events, rowIDs(event.Items))
+		assert.Equal(t, []string{nodeOf(manual)}, rowIDs(other.Items))
 	})
 
 	t.Run("a row whose thread a run judged carries no judgment, and a request naming the run answers as the same request without it", func(t *testing.T) {

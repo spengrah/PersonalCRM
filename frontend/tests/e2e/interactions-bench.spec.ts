@@ -202,12 +202,12 @@ test.describe('Interactions tab @area:interactions', () => {
     const list = page.getByRole('list', { name: 'Interactions' })
     const filters = page.getByRole('tabpanel', { name: 'All interactions' })
 
-    // spec: IXN-042.no-other-filter
+    // spec: IXN-042.no-other-filter, IXN-042.type-filter
     await expect(filters.getByRole('group', { name: 'Type' }).getByRole('button')).toHaveText([
       'All',
       'Messages',
       'Email',
-      'Calendar',
+      'Events',
       'Calls',
       'Other',
     ])

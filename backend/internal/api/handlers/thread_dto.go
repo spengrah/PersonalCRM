@@ -3,9 +3,10 @@ package handlers
 import "time"
 
 // ThreadVenue, FlagKind, ChipState, ClearingLabelState, ThreadStatus,
-// UnjudgedReason and RunKind are the enumerations the Threads responses carry.
-// They are declared in internal/judgment/values.go, and the generated types
-// hold each as a union; a field names its union in its tstype tag.
+// UnjudgedReason and RunKind are the enumerations the Threads responses carry,
+// declared in internal/judgment/values.go, with InteractionType, declared in
+// internal/service/interaction_types.go. The generated types hold each as a
+// union; a field names its union in its tstype tag.
 
 // ThreadParticipantResponse is a contact taking part in a thread.
 type ThreadParticipantResponse struct {
@@ -14,13 +15,14 @@ type ThreadParticipantResponse struct {
 }
 
 // ThreadRowResponse is one thread of the list, and the header of a thread
-// page. venue is the place the thread lives in; title is absent where the venue
-// has none; latest_at is the time of its latest message and message_count its
+// page. venue is the app the thread lives in, and type its interaction type;
+// title is absent where the venue has none; latest_at is the time of its latest message and message_count its
 // count of messages, a meeting's notes counted as its messages. review is
 // present when the list is narrowed to a run.
 type ThreadRowResponse struct {
 	ThreadID     string                      `json:"thread_id"`
 	Venue        string                      `json:"venue" tstype:"ThreadVenue"`
+	Type         string                      `json:"type" tstype:"InteractionType"`
 	IsGroup      bool                        `json:"is_group"`
 	Title        *string                     `json:"title,omitempty"`
 	Participants []ThreadParticipantResponse `json:"participants"`
@@ -47,11 +49,13 @@ type ThreadRunSummaryResponse struct {
 	Reviewed       int `json:"reviewed"`
 }
 
-// ThreadListResponse is one page of the threads list. summary is present when
-// the list is narrowed to a run.
+// ThreadListResponse is one page of the threads list and the interaction types
+// its type filter offers. summary is present when the list is narrowed to a
+// run.
 type ThreadListResponse struct {
-	Items   []ThreadRowResponse       `json:"items"`
-	Summary *ThreadRunSummaryResponse `json:"summary,omitempty"`
+	Items       []ThreadRowResponse             `json:"items"`
+	TypeOptions []InteractionTypeOptionResponse `json:"type_options"`
+	Summary     *ThreadRunSummaryResponse       `json:"summary,omitempty"`
 }
 
 // ReviewRunResponse is a run the user reviews: its kind, method, window and

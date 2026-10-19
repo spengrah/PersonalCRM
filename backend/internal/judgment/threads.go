@@ -9,6 +9,7 @@ import (
 
 	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/repository"
+	"personal-crm/backend/internal/service"
 	"personal-crm/backend/internal/threadctx"
 
 	"github.com/google/uuid"
@@ -17,7 +18,7 @@ import (
 
 var (
 	// ErrThreadNotFound is returned for a thread that holds no content or lives
-	// in no venue the Threads tab names.
+	// in no venue sourceVenues names.
 	ErrThreadNotFound = errors.New("thread not found")
 	// ErrRunNotFound is returned for an unknown run.
 	ErrRunNotFound = errors.New("run not found")
@@ -36,41 +37,52 @@ type MethodKeys interface {
 	Keys() []string
 }
 
-// venueSources maps each venue the Threads tab names to the venue sources it
-// holds: the one place a venue source gets its Threads venue.
-var venueSources = map[ThreadVenue][]string{
-	ThreadVenueWhatsApp: {repository.InteractionSourceWhatsApp},
-	ThreadVenueTelegram: {repository.InteractionSourceTelegram},
-	ThreadVenueIMessage: {repository.InteractionSourceMessages},
-	ThreadVenueEmail:    {repository.InteractionSourceEmail},
-	ThreadVenueCalendar: {repository.InteractionSourceGCal, repository.InteractionSourceAnarlogSessions},
+// sourceVenues names the app of each source whose threads the Threads tab
+// serves: the one list of those sources, and the chip each row shows. A
+// thread's type is its source's interaction type (service.InteractionTypeOf),
+// so the type filter offers the types these sources have.
+var sourceVenues = map[string]ThreadVenue{
+	repository.InteractionSourceWhatsApp:        ThreadVenueWhatsApp,
+	repository.InteractionSourceTelegram:        ThreadVenueTelegram,
+	repository.InteractionSourceMessages:        ThreadVenueIMessage,
+	repository.InteractionSourceGChat:           ThreadVenueGoogleChat,
+	repository.InteractionSourceEmail:           ThreadVenueEmail,
+	repository.InteractionSourceGCal:            ThreadVenueCalendar,
+	repository.InteractionSourceAnarlogSessions: ThreadVenueAnarlog,
 }
 
-// threadSources lists every venue source some venue names: the sources whose
-// threads the Threads tab serves. A thread of any other source has no venue, so
-// no list or read holds it.
-func threadSources() []string {
-	var all []string
-	for _, sources := range venueSources {
-		all = append(all, sources...)
-	}
-	return all
-}
-
-// ParseThreadVenue returns the venue a filter value names.
-func ParseThreadVenue(raw string) (ThreadVenue, bool) {
-	v := ThreadVenue(raw)
-	_, ok := venueSources[v]
-	return v, ok
-}
-
-func venueOfSource(source string) ThreadVenue {
-	for venue, sources := range venueSources {
-		if slices.Contains(sources, source) {
-			return venue
+// threadSources lists the sources of the type, or every source sourceVenues
+// names when typ is nil. A thread of any other source has no venue, so no list
+// or read holds it.
+func threadSources(typ *service.InteractionType) []string {
+	var sources []string
+	for source := range sourceVenues {
+		if typ == nil || service.InteractionTypeOf(source) == *typ {
+			sources = append(sources, source)
 		}
 	}
-	return ""
+	slices.Sort(sources)
+	return sources
+}
+
+// ThreadTypes are the interaction types the Threads tab's type filter offers,
+// in the order the Interactions tab offers them: the types of the sources
+// sourceVenues names.
+func ThreadTypes() []service.InteractionTypeOption {
+	var out []service.InteractionTypeOption
+	for _, t := range service.InteractionTypes {
+		if len(threadSources(&t.Key)) > 0 {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
+// ParseThreadType returns the interaction type a filter value names, if the
+// Threads tab's type filter offers it.
+func ParseThreadType(raw string) (service.InteractionType, bool) {
+	typ := service.InteractionType(raw)
+	return typ, slices.ContainsFunc(ThreadTypes(), func(t service.InteractionTypeOption) bool { return t.Key == typ })
 }
 
 // Threads serves the Threads tab: the threads a method can judge, the runs the
@@ -92,22 +104,23 @@ func NewThreads(store *Store, methods MethodKeys) *Threads {
 	}
 }
 
-// ThreadQuery selects the threads of the list. Venue keeps one venue's threads,
-// ContactID the threads that contact takes part in, and Run the threads the run
+// ThreadQuery selects the threads of the list. Type keeps one interaction
+// type's threads, ContactID the threads that contact takes part in, and Run the threads the run
 // judged. Limit and Offset page the list; a position in the list ignores them.
 type ThreadQuery struct {
-	Venue     *ThreadVenue
+	Type      *service.InteractionType
 	ContactID *uuid.UUID
 	Run       *RunID
 	Limit     int32
 	Offset    int32
 }
 
-// ThreadRow is one thread of the list. Review is set when the list is narrowed
-// to a run.
+// ThreadRow is one thread of the list: Venue names its app and Type its
+// interaction type. Review is set when the list is narrowed to a run.
 type ThreadRow struct {
 	ID           threadctx.VenueID
 	Venue        ThreadVenue
+	Type         service.InteractionType
 	IsGroup      bool
 	Title        *string
 	Participants []repository.ThreadParticipant
@@ -176,13 +189,10 @@ func (t *Threads) ReviewRuns(ctx context.Context) ([]ReviewRun, error) {
 }
 
 // kept lists the threads the query keeps, newest latest message first: every
-// thread holding content, narrowed by the venue, the contact and the run's
+// thread holding content, narrowed by the type, the contact and the run's
 // threads.
 func (t *Threads) kept(ctx context.Context, q ThreadQuery, judged []uuid.UUID) ([]repository.ThreadSummary, error) {
-	f := repository.ThreadFilter{ContactID: q.ContactID, Sources: threadSources()}
-	if q.Venue != nil {
-		f.Sources = venueSources[*q.Venue]
-	}
+	f := repository.ThreadFilter{ContactID: q.ContactID, Sources: threadSources(q.Type)}
 	if q.Run != nil {
 		f.Restrict, f.Only = true, judged
 	}
@@ -210,7 +220,7 @@ func (t *Threads) rows(ctx context.Context, summaries []repository.ThreadSummary
 	rows := make([]ThreadRow, len(summaries))
 	for i, s := range summaries {
 		rows[i] = ThreadRow{
-			ID: s.ID, Venue: venueOfSource(s.Source), IsGroup: s.VenueKind == repository.VenueKindGroupChat, Title: s.Title,
+			ID: s.ID, Venue: sourceVenues[s.Source], Type: service.InteractionTypeOf(s.Source), IsGroup: s.VenueKind == repository.VenueKindGroupChat, Title: s.Title,
 			Participants: emptyIfNil(participants[s.ID]), LatestAt: s.LatestAt, MessageCount: s.MessageCount,
 		}
 	}
@@ -248,7 +258,7 @@ func (t *Threads) List(ctx context.Context, q ThreadQuery) (*ThreadPage, error) 
 	if run == nil {
 		return page, nil
 	}
-	every, err := t.threads.ListThreads(ctx, repository.ThreadFilter{Sources: threadSources(), Restrict: true, Only: judged})
+	every, err := t.threads.ListThreads(ctx, repository.ThreadFilter{Sources: threadSources(nil), Restrict: true, Only: judged})
 	if err != nil {
 		return nil, err
 	}
@@ -336,7 +346,7 @@ func (t *Threads) Read(ctx context.Context, thread uuid.UUID, q ThreadQuery) (*T
 
 func (t *Threads) summary(ctx context.Context, thread uuid.UUID) (*repository.ThreadSummary, error) {
 	summary, err := t.threads.GetThread(ctx, thread)
-	if errors.Is(err, db.ErrNotFound) || (err == nil && venueOfSource(summary.Source) == "") {
+	if errors.Is(err, db.ErrNotFound) || (err == nil && sourceVenues[summary.Source] == "") {
 		return nil, ErrThreadNotFound
 	}
 	return summary, err

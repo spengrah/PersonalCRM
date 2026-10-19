@@ -26,7 +26,7 @@ func messageKeysOf(messages []handlers.ThreadMessageResponse) []string {
 // A thread read returns the thread's header, every message once in thread
 // order, and its place in the list the filters keep.
 func TestReadThread(t *testing.T) {
-	t.Run("a thread's position within a venue-filtered list, with the neighbours either side", func(t *testing.T) {
+	t.Run("a thread's position within a type-filtered list, with the neighbours either side", func(t *testing.T) {
 		// spec: IXN-089.position-in-filtered-list
 		b := newBenchEnv(t)
 		c := b.contact(t)
@@ -40,7 +40,7 @@ func TestReadThread(t *testing.T) {
 		b.say(t, chat, c, false, b.day(2).Add(1))
 		middle := mail[1]
 
-		read := b.readThread(t, middle.id.String(), "venue=email")
+		read := b.readThread(t, middle.id.String(), "type=email")
 
 		require.NotNil(t, read.Position)
 		assert.Equal(t, 2, read.Position.Index)
@@ -127,6 +127,8 @@ func TestReadThread(t *testing.T) {
 		assert.Equal(t, b.contactName(t, bea), read.Messages[0].Sender)
 		assert.Equal(t, "synthetic message body", read.Messages[0].Text)
 		assert.True(t, read.Thread.IsGroup)
+		assert.Equal(t, "whatsapp", read.Thread.Venue)
+		assert.Equal(t, "message", read.Thread.Type)
 		assert.ElementsMatch(t, []string{alice.String(), bea.String()}, participantContacts(read.Thread))
 		assert.Nil(t, read.Review, "no run, no review")
 	})
@@ -145,7 +147,8 @@ func TestReadThread(t *testing.T) {
 		assert.Equal(t, key, read.Messages[0].MessageKey)
 		assert.Equal(t, "Me", read.Messages[0].Sender)
 		assert.Equal(t, "synthetic meeting summary", read.Messages[0].Text)
-		assert.Equal(t, "calendar", read.Thread.Venue)
+		assert.Equal(t, "anarlog", read.Thread.Venue)
+		assert.Equal(t, "event", read.Thread.Type)
 	})
 
 	t.Run("an unknown thread, and an unknown run, are not found", func(t *testing.T) {

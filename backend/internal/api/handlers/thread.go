@@ -4,6 +4,7 @@ import (
 	"errors"
 	"math"
 	"net/http"
+	"strings"
 	"time"
 
 	"personal-crm/backend/internal/api"
@@ -26,12 +27,12 @@ func NewThreadHandler(threads *judgment.Threads) *ThreadHandler {
 
 // ListThreads returns one page of the threads.
 // @Summary List threads
-// @Description One row per thread a method can judge (each DM, group chat, email thread and meeting holding content), newest latest message first. venue and contact_id narrow the list and combine. With run_id, only the threads the run judged are listed, in the same order, each adding its judged count and its status, and the response adds the run's summary.
+// @Description One row per thread a method can judge (each DM, group chat, email thread and meeting holding content), newest latest message first. type and contact_id narrow the list and combine; type_options lists the interaction types the type filter offers. With run_id, only the threads the run judged are listed, in the same order, each adding its judged count and its status, and the response adds the run's summary.
 // @Tags threads
 // @Produce json
 // @Param page query int false "Page number" default(1)
 // @Param limit query int false "Items per page" default(20)
-// @Param venue query string false "Venue" Enums(whatsapp, telegram, imessage, email, calendar)
+// @Param type query string false "Interaction type" Enums(message, email, event)
 // @Param contact_id query string false "Participant contact ID" format(uuid)
 // @Param run_id query string false "Judgment run ID" format(uuid)
 // @Success 200 {object} api.APIResponse{data=ThreadListResponse}
@@ -63,7 +64,12 @@ func (h *ThreadHandler) ListThreads(c *gin.Context) {
 	for i, row := range page.Rows {
 		items[i] = threadRowResponse(row)
 	}
-	out := ThreadListResponse{Items: items}
+	types := judgment.ThreadTypes()
+	options := make([]InteractionTypeOptionResponse, len(types))
+	for i, t := range types {
+		options[i] = InteractionTypeOptionResponse{Key: string(t.Key), Label: t.Label}
+	}
+	out := ThreadListResponse{Items: items, TypeOptions: options}
 	if s := page.Summary; s != nil {
 		out.Summary = &ThreadRunSummaryResponse{Judged: s.Judged, ToReview: s.ToReview, NothingFlagged: s.NothingFlagged, Reviewed: s.Reviewed}
 	}
@@ -72,11 +78,11 @@ func (h *ThreadHandler) ListThreads(c *gin.Context) {
 
 // GetThread returns a thread.
 // @Summary Get a thread
-// @Description The thread's header, every message once in thread order, and its place in the list that venue, contact_id and run_id keep. With run_id, it adds the run's nights, one per cut-off at which the run recorded or reused a judgment of the thread, each placing its messages once with the flags they show, its clearing decisions, its reply proposal and its status.
+// @Description The thread's header, every message once in thread order, and its place in the list that type, contact_id and run_id keep. With run_id, it adds the run's nights, one per cut-off at which the run recorded or reused a judgment of the thread, each placing its messages once with the flags they show, its clearing decisions, its reply proposal and its status.
 // @Tags threads
 // @Produce json
 // @Param thread_id path string true "Thread (venue) ID" format(uuid)
-// @Param venue query string false "Venue" Enums(whatsapp, telegram, imessage, email, calendar)
+// @Param type query string false "Interaction type" Enums(message, email, event)
 // @Param contact_id query string false "Participant contact ID" format(uuid)
 // @Param run_id query string false "Judgment run ID" format(uuid)
 // @Success 200 {object} api.APIResponse{data=ThreadReadResponse}
@@ -289,17 +295,21 @@ func (h *ThreadHandler) fail(c *gin.Context, err error) {
 	}
 }
 
-// threadQuery parses the optional venue, contact_id and run_id filters a
+// threadQuery parses the optional type, contact_id and run_id filters a
 // threads read carries.
 func threadQuery(c *gin.Context) (judgment.ThreadQuery, bool) {
 	var q judgment.ThreadQuery
-	if raw, ok := c.GetQuery("venue"); ok {
-		venue, valid := judgment.ParseThreadVenue(raw)
+	if raw, ok := c.GetQuery("type"); ok {
+		typ, valid := judgment.ParseThreadType(raw)
 		if !valid {
-			api.SendValidationError(c, "Invalid venue", "venue must be one of whatsapp, telegram, imessage, email, calendar")
+			keys := make([]string, 0, len(judgment.ThreadTypes()))
+			for _, t := range judgment.ThreadTypes() {
+				keys = append(keys, string(t.Key))
+			}
+			api.SendValidationError(c, "Invalid type", "type must be one of "+strings.Join(keys, ", "))
 			return q, false
 		}
-		q.Venue = &venue
+		q.Type = &typ
 	}
 	for _, p := range []struct {
 		name string
@@ -345,7 +355,7 @@ func threadRowResponse(row judgment.ThreadRow) ThreadRowResponse {
 		participants[i] = ThreadParticipantResponse{ContactID: p.ContactID.String(), Name: p.Name}
 	}
 	out := ThreadRowResponse{
-		ThreadID: row.ID.String(), Venue: string(row.Venue), IsGroup: row.IsGroup, Title: row.Title,
+		ThreadID: row.ID.String(), Venue: string(row.Venue), Type: string(row.Type), IsGroup: row.IsGroup, Title: row.Title,
 		Participants: participants, LatestAt: row.LatestAt, MessageCount: row.MessageCount,
 	}
 	if r := row.Review; r != nil {

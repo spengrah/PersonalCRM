@@ -29,7 +29,8 @@ const manyThreads = 21
 
 // threadsWorld is a Telegram group chat of four contacts who speak in turn over
 // twelve minutes, an email thread, a meeting with a note, a chat of a contact
-// who is in no other thread, and manyThreads group chats of one more contact.
+// who is in no other thread, manyThreads group chats of one more contact, and a
+// Google Chat chat of a contact who is in no other thread.
 func threadsWorld() []Entity {
 	family := []string{"ana", "ben", "cai", "dee"}
 	var talk []GroupMessage
@@ -54,7 +55,10 @@ func threadsWorld() []Entity {
 		entities = append(entities,
 			TelegramGroupChat(fmt.Sprintf("many-%02d", i), []string{"many"}, AgoDays(10+i), Said("many", 0)))
 	}
-	return entities
+	return append(entities,
+		Contact("chatter", Methods(MethodEmail, MethodGChat)),
+		GroupChat("chatter-chat", []string{"chatter"}, AgoDays(3), Said("chatter", 0)),
+	)
 }
 
 type telegramGroupChatPlan struct {

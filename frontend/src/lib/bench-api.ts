@@ -12,7 +12,6 @@ import type {
   ThreadReadResponse,
   ThreadReviewResponse,
 } from '@/types/generated/contact'
-import type { ThreadVenue } from '@/types/generated/judgment'
 
 export type InteractionType = InteractionTypeOptionResponse['key']
 
@@ -27,7 +26,7 @@ export const ALL_INTERACTIONS_PAGE_SIZE = 20
 
 /** What narrows a thread list, and the list a thread page walks. */
 export interface ThreadFilters {
-  venue?: ThreadVenue
+  type?: InteractionType
   contact_id?: string
   run_id?: string
 }

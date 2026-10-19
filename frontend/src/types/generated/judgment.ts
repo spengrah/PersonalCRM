@@ -168,15 +168,17 @@ export const UnjudgedReasonMessageOverLimit = "message_over_limit";
 export const UnjudgedReasonBeforeWindow = "before_window";
 export type UnjudgedReason = typeof UnjudgedReasonCallFailed | typeof UnjudgedReasonMessageOverLimit | typeof UnjudgedReasonBeforeWindow;
 /**
- * ThreadVenue is the kind of place a thread lives in, as the Threads tab
- * filters and names it. sourceVenues maps each venue source to one.
+ * ThreadVenue is the app a thread lives in, as a Threads row's chip names it.
+ * sourceVenues maps each source the Threads tab serves to one.
  */
 export const ThreadVenueWhatsApp = "whatsapp";
 export const ThreadVenueTelegram = "telegram";
 export const ThreadVenueIMessage = "imessage";
+export const ThreadVenueGoogleChat = "google_chat";
 export const ThreadVenueEmail = "email";
 export const ThreadVenueCalendar = "calendar";
-export type ThreadVenue = typeof ThreadVenueWhatsApp | typeof ThreadVenueTelegram | typeof ThreadVenueIMessage | typeof ThreadVenueEmail | typeof ThreadVenueCalendar;
+export const ThreadVenueAnarlog = "anarlog";
+export type ThreadVenue = typeof ThreadVenueWhatsApp | typeof ThreadVenueTelegram | typeof ThreadVenueIMessage | typeof ThreadVenueGoogleChat | typeof ThreadVenueEmail | typeof ThreadVenueCalendar | typeof ThreadVenueAnarlog;
 /**
  * ChipState is how a flag chip stands under a night's method: to review (a
  * shown flag with no label), confirmed or removed (a shown flag with a label

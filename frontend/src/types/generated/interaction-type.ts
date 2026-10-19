@@ -4,12 +4,12 @@
 // source: interaction_types.go
 
 /**
- * InteractionType is what a row of the all-interactions view is, by the source
- * of its members: the values of the view's type filter.
+ * InteractionType is what an interaction is, by the source of its members: the
+ * values of the Interactions tab's and the Threads tab's type filters.
  */
 export const InteractionTypeMessage = "message";
 export const InteractionTypeEmail = "email";
-export const InteractionTypeCalendar = "calendar";
+export const InteractionTypeEvent = "event";
 export const InteractionTypeCall = "call";
 export const InteractionTypeOther = "other";
-export type InteractionType = typeof InteractionTypeMessage | typeof InteractionTypeEmail | typeof InteractionTypeCalendar | typeof InteractionTypeCall | typeof InteractionTypeOther;
+export type InteractionType = typeof InteractionTypeMessage | typeof InteractionTypeEmail | typeof InteractionTypeEvent | typeof InteractionTypeCall | typeof InteractionTypeOther;

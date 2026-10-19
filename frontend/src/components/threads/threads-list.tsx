@@ -14,7 +14,8 @@ import { ContactFilter } from './contact-filter'
 import { runLabel } from './format'
 import { useReview } from './review-switch'
 import { StatusPill } from './status-pill'
-import { GroupChip, VENUE_LABELS, VenueChip } from './venue'
+import { TypeFilter } from './type-filter'
+import { GroupChip, VenueChip } from './venue'
 
 interface ThreadsListProps {
   /** The tab's address. */
@@ -27,7 +28,7 @@ const ROW_COLUMNS = 'lg:grid lg:grid-cols-[170px_minmax(0,1fr)_168px_150px_130px
 function Count({ thread, review }: { thread: ThreadRowResponse; review: boolean }) {
   if (review && thread.review) return <>{`${thread.review.judged_count} judged in this run`}</>
   const n = thread.message_count
-  if (thread.venue === 'calendar') return <>{`${n} meeting note${n === 1 ? '' : 's'}`}</>
+  if (thread.type === 'event') return <>{`${n} meeting note${n === 1 ? '' : 's'}`}</>
   return <>{`${n.toLocaleString('en-US')} message${n === 1 ? '' : 's'}`}</>
 }
 
@@ -127,7 +128,7 @@ export function ThreadsList({ filters, onChange }: ThreadsListProps) {
   const pagination = list.data?.meta?.pagination
   const set = (patch: Partial<ThreadListFilters>) =>
     onChange({ ...filters, ...patch, page: undefined })
-  const filtered = Boolean(filters.venue || filters.contact_id || (review && filters.run_id))
+  const filtered = Boolean(filters.type || filters.contact_id || (review && filters.run_id))
 
   return (
     <>
@@ -148,37 +149,11 @@ export function ThreadsList({ filters, onChange }: ThreadsListProps) {
             </Select>
           </div>
         )}
-        <div className="flex flex-col gap-1 text-sm text-gray-700">
-          <span id="threads-venue-label">Venue</span>
-          <div
-            role="group"
-            aria-labelledby="threads-venue-label"
-            className="inline-flex flex-wrap overflow-hidden rounded-md border border-gray-300"
-          >
-            {[
-              { key: undefined, label: 'All' },
-              ...Object.entries(VENUE_LABELS).map(([key, label]) => ({
-                key: key as keyof typeof VENUE_LABELS,
-                label,
-              })),
-            ].map(option => (
-              <button
-                key={option.key ?? 'all'}
-                type="button"
-                aria-pressed={filters.venue === option.key}
-                onClick={() => set({ venue: option.key })}
-                className={clsx(
-                  'border-l border-gray-300 px-3 py-1 text-sm first:border-l-0',
-                  filters.venue === option.key
-                    ? 'bg-gray-900 text-white'
-                    : 'bg-white text-gray-600 hover:bg-gray-50'
-                )}
-              >
-                {option.label}
-              </button>
-            ))}
-          </div>
-        </div>
+        <TypeFilter
+          options={list.data?.data?.type_options ?? []}
+          value={filters.type}
+          onChange={type => set({ type })}
+        />
         <ContactFilter
           contactId={filters.contact_id}
           onChange={contactId => set({ contact_id: contactId })}

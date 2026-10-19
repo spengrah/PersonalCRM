@@ -1,13 +1,10 @@
-import type { ThreadListFilters } from '@/lib/bench-api'
-import type { ThreadVenue } from '@/types/generated/judgment'
-import { VENUE_LABELS } from './venue'
+import type { InteractionType, ThreadListFilters } from '@/lib/bench-api'
 
-/** The Threads list's address: /interactions?tab=threads&venue=&contact=&run=&page=. */
+/** The Threads list's address: /interactions?tab=threads&type=&contact=&run=&page=. */
 export function listFiltersFrom(params: URLSearchParams): ThreadListFilters {
   const page = Number(params.get('page'))
-  const venue = params.get('venue')
   return {
-    venue: venue && venue in VENUE_LABELS ? (venue as ThreadVenue) : undefined,
+    type: (params.get('type') as InteractionType | null) || undefined,
     contact_id: params.get('contact') || undefined,
     run_id: params.get('run') || undefined,
     page: Number.isInteger(page) && page > 1 ? page : undefined,
@@ -17,7 +14,7 @@ export function listFiltersFrom(params: URLSearchParams): ThreadListFilters {
 function query(filters: ThreadListFilters, tab: boolean): string {
   const params = new URLSearchParams()
   if (tab) params.set('tab', 'threads')
-  if (filters.venue) params.set('venue', filters.venue)
+  if (filters.type) params.set('type', filters.type)
   if (filters.contact_id) params.set('contact', filters.contact_id)
   if (filters.run_id) params.set('run', filters.run_id)
   if (filters.page && filters.page > 1) params.set('page', String(filters.page))

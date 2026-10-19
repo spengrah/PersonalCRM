@@ -702,7 +702,7 @@ behaviors:
       - key: contact-chosen-by-search
         text: the contact is chosen by typing part of its name or a contact method, which narrows the choices to the matching contacts
       - key: type-filter
-        text: a type filter keeps the rows of that interaction type
+        text: a type filter (All, Messages, Email, Events, Calls, Other) keeps the rows of that interaction type, Messages holding every chat app and Events the calendar meetings and anarlog sessions
       - key: filters-combine
         text: filters combine, and pagination totals count the filtered rows
       - key: filters-in-address
@@ -897,7 +897,7 @@ behaviors:
       - key: pages-without-gaps
         text: rows order newest first with a deterministic tie-breaker, and pages cover them without gaps or duplicates, the total counting the rows the filters keep
       - key: filters-combine
-        text: the contact filter keeps the rows a contact takes part in, the type filter the rows of one interaction type, and the two combine
+        text: the contact filter keeps the rows a contact takes part in, the type filter the rows of one interaction type (message, email, event, call or other, event holding calendar meetings and anarlog sessions), and the two combine
       - key: carries-no-judgment
         text: no row carries a judgment, a proposal or a review status, and the route offers no run filter, so a request naming a run answers as the same request without it
     provenance: [.agents/spec/2026-10-14-decision-model-extraction.md G9, .agents/spec/2026-10-18-message-flags-and-threads.md G8 G12]
@@ -1336,19 +1336,19 @@ behaviors:
     type: ux
     status: current
     surface: ui
-    given: threads of several venues, some of them group chats, some titled, with several participant contacts
+    given: threads of several apps and interaction types, some of them group chats, some titled, with several participant contacts
     when: the Threads list is shown, filtered and paged
     then:
       - key: one-row-per-thread
         text: the list shows one row per thread, however many participants it has or nights it was judged on
       - key: row-contents
-        text: each row shows the thread's venue chip, a Group chip for a group chat, its title where it has one, every participant contact as a link, and the time of its latest message
+        text: each row shows the chip of the thread's app (WhatsApp, Telegram, iMessage, Google Chat, Email, Calendar, Anarlog), a Group chip for a group chat, its title where it has one, every participant contact as a link, and the time of its latest message
       - key: message-count-review-off
         text: with Review off a row also shows the thread's message count
       - key: newest-message-first
         text: rows order by the time of the thread's latest message, newest first
-      - key: venue-filter
-        text: a venue filter (WhatsApp, Telegram, iMessage, Email, Calendar) keeps the threads of that venue
+      - key: type-filter
+        text: a type filter (All, Messages, Email, Events), from the interaction types the Interactions tab filters by, keeps the threads of that type, Messages holding every chat app, Google Chat included, and Events the calendar meetings and anarlog sessions
       - key: contact-filter
         text: a contact filter keeps the threads that contact takes part in
       - key: filters-combine-and-page
@@ -1555,17 +1555,17 @@ behaviors:
     type: api
     status: current
     surface: api
-    given: threads of several venues with participant contacts, judged in several runs
-    when: the threads list is read, optionally by venue, contact, run and page
+    given: threads of several apps and interaction types with participant contacts, judged in several runs
+    when: the threads list is read, optionally by interaction type, contact, run and page
     then:
       - key: one-row-per-thread
-        text: every thread is one row naming its venue, whether it is a group chat, its title where it has one, every participant contact, the time of its latest message and its message count
+        text: every thread of a chat app (Google Chat included), email or event is one row naming its app, its interaction type, whether it is a group chat, its title where it has one, every participant contact, the time of its latest message and its message count
       - key: order-and-pages
         text: rows order by latest message, newest first, with a deterministic tie-breaker, and pages cover them without gaps or duplicates, the total counting the rows the filters keep
       - key: filters-combine
-        text: the venue filter keeps the threads of one venue, the contact filter the threads a contact takes part in, and the two combine
+        text: the type filter keeps the threads of one interaction type (message, email or event, by the mapping the interactions list's type filter uses), the contact filter the threads a contact takes part in, and the two combine; the response lists the types the type filter offers
       - key: bad-filter-refused
-        text: an unknown venue or a malformed contact is refused as invalid
+        text: a type the filter does not offer or a malformed contact is refused as invalid
       - key: run-keeps-its-threads
         text: with a run, only the threads that run judged are listed, in the order the list has without a run, each with its judged count and status
       - key: run-summary
@@ -1597,7 +1597,7 @@ behaviors:
     when: the thread is read, with or without the run
     then:
       - key: header
-        text: the read returns the thread's header, naming its title, venue, whether it is a group chat and its participant contacts
+        text: the read returns the thread's header, naming its title, app, interaction type, whether it is a group chat and its participant contacts
       - key: messages-once-in-order
         text: the read returns every message of the thread once, in thread order, with its sender, time and text
       - key: position-in-filtered-list

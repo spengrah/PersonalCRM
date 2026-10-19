@@ -59,12 +59,14 @@ test.describe('Threads list @area:interactions', () => {
     await expect(row.locator('time')).toHaveAttribute('datetime', family.latest_at)
   })
 
-  test('a row names a thread by its venue, title and latest message, and narrows by venue and contact', async ({
+  test('a row names a thread by its app, title and latest message, and narrows by type and contact', async ({
     page,
     request,
   }) => {
     const seeded = await testApi.seedBehavior('IXN-076')
-    const [ana, host, solo] = ['ana', 'host', 'solo'].map(handle => entity(seeded, handle))
+    const [ana, host, solo, chatter] = ['ana', 'host', 'solo', 'chatter'].map(handle =>
+      entity(seeded, handle)
+    )
     const { data: anas } = await fetchThreads(request, { contact_id: ana.id })
     const mail = anas.items.find(thread => thread.venue === 'email')!
     const family = anas.items.find(thread => thread.is_group)!
@@ -94,32 +96,36 @@ test.describe('Threads list @area:interactions', () => {
     await expect(rows(page).first().locator('[data-count]')).toHaveText('12 messages')
     await expect(mailRow.locator('[data-count]')).toHaveText('1 message')
 
-    // spec: IXN-076.venue-filter
-    const venues = page.getByRole('group', { name: 'Venue' })
-    await expect(venues.getByRole('button')).toHaveText([
-      'All',
-      'WhatsApp',
-      'Telegram',
-      'iMessage',
-      'Email',
-      'Calendar',
-    ])
-    await venues.getByRole('button', { name: 'Email' }).click()
-    await expect(page).toHaveURL(/venue=email/)
+    // spec: IXN-076.type-filter
+    const types = page.getByRole('group', { name: 'Type' })
+    await expect(types.getByRole('button')).toHaveText(['All', 'Messages', 'Email', 'Events'])
+    await types.getByRole('button', { name: 'Email' }).click()
+    await expect(page).toHaveURL(/type=email/)
     await expect(rows(page)).toHaveCount(1)
     await expect(rows(page).first()).toHaveAttribute('data-thread-id', mail.thread_id)
-    await venues.getByRole('button', { name: 'Telegram' }).click()
+    await types.getByRole('button', { name: 'Messages' }).click()
+    await expect(page).toHaveURL(/type=message/)
     await expect(rows(page)).toHaveCount(1)
     await expect(rows(page).first()).toHaveAttribute('data-thread-id', family.thread_id)
-    await venues.getByRole('button', { name: 'WhatsApp' }).click()
+    await types.getByRole('button', { name: 'Events' }).click()
     await expect(page.getByText('No threads match these filters')).toBeVisible()
 
-    // spec: IXN-076.row-contents, IXN-076.message-count-review-off
-    await page.goto(`/interactions?tab=threads&contact=${host.id}&venue=calendar`)
+    // spec: IXN-076.row-contents, IXN-076.message-count-review-off, IXN-076.type-filter
+    await page.goto(`/interactions?tab=threads&contact=${host.id}&type=event`)
     await expect(rows(page)).toHaveCount(1, { timeout: SLOW_TIMEOUT_MS })
     await expect(rows(page).first()).toHaveAttribute('data-thread-id', meeting.thread_id)
     await expect(rows(page).first().locator('[data-venue-chip]')).toHaveText('Calendar')
     await expect(rows(page).first().locator('[data-count]')).toHaveText('1 meeting note')
+
+    // spec: IXN-076.row-contents, IXN-076.type-filter
+    await page.goto(`/interactions?tab=threads&contact=${chatter.id}&type=message`)
+    await expect(rows(page)).toHaveCount(1, { timeout: SLOW_TIMEOUT_MS })
+    await expect(rows(page).first().locator('[data-venue-chip]')).toHaveText('Google Chat')
+    await rows(page).first().getByRole('link', { name: 'Open thread' }).click()
+    await expect(page.locator('[data-thread-header] [data-venue-chip]')).toHaveText('Google Chat', {
+      timeout: SLOW_TIMEOUT_MS,
+    })
+    await expect(page.getByText(/^1 of 1$/)).toBeVisible()
 
     // spec: IXN-076.contact-filter, IXN-076.filters-combine-and-page
     await page.goto('/interactions?tab=threads')
@@ -162,11 +168,11 @@ test.describe('Threads list @area:interactions', () => {
     expect(await shown()).toEqual(ids.slice(20))
 
     // spec: IXN-076.row-opens-thread-page
-    await page.goto(`/interactions?tab=threads&venue=telegram&contact=${many.id}&page=2`)
+    await page.goto(`/interactions?tab=threads&type=message&contact=${many.id}&page=2`)
     await expect(rows(page)).toHaveCount(1, { timeout: SLOW_TIMEOUT_MS })
     await expect(rows(page).first().getByRole('link', { name: 'Open thread' })).toHaveAttribute(
       'href',
-      `/interactions/threads/${ids[20]}?venue=telegram&contact=${many.id}&page=2`
+      `/interactions/threads/${ids[20]}?type=message&contact=${many.id}&page=2`
     )
   })
 })
