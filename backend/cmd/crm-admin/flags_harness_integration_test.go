@@ -85,7 +85,6 @@ func (c call) asks(kind string) []ask {
 // policy a test sets, and records every request.
 type vendor struct {
 	url    string
-	sage   bool
 	mu     sync.Mutex
 	calls  []call
 	flag   func(a ask) float64 // the yes probability of a flag question
@@ -95,10 +94,9 @@ type vendor struct {
 	billed int
 }
 
-func newVendor(t *testing.T, sage bool) *vendor {
+func newVendor(t *testing.T) *vendor {
 	t.Helper()
 	v := &vendor{
-		sage:  sage,
 		flag:  func(ask) float64 { return 0.05 },
 		clear: func(ask) float64 { return 0.1 },
 		bic:   func(string) string { return "nobody_owes" },
@@ -177,10 +175,6 @@ func (v *vendor) record(state string, ids []string) call {
 }
 
 func (v *vendor) serve(w http.ResponseWriter, r *http.Request) {
-	if v.sage {
-		v.serveSage(w, r)
-		return
-	}
 	var req struct {
 		State     string `json:"state"`
 		Questions map[string]struct {
@@ -222,61 +216,6 @@ func (v *vendor) serve(w http.ResponseWriter, r *http.Request) {
 		answers[a.ID] = map[string]any{"type": "choice", "choice": chosen, "probabilities": probs}
 	}
 	writeTestJSON(w, map[string]any{"answers": answers, "usage": map[string]any{"input_tokens": v.billedFor(req.State)}})
-}
-
-func (v *vendor) serveSage(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		Requests []struct {
-			Content   struct{ Value string } `json:"content"`
-			Questions []struct {
-				Kind    string `json:"kind"`
-				ID      string `json:"id"`
-				Options []struct {
-					Option string `json:"option"`
-				} `json:"options"`
-			} `json:"questions"`
-		} `json:"requests"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	group := req.Requests[0]
-	ids := make([]string, len(group.Questions))
-	for i, q := range group.Questions {
-		ids[i] = q.ID
-	}
-	c := v.record(group.Content.Value, ids)
-	if !v.admit(c) {
-		http.Error(w, "refused", http.StatusInternalServerError)
-		return
-	}
-	byID := map[string]ask{}
-	for _, a := range c.Asks {
-		byID[a.ID] = a
-	}
-	var answers []any
-	for _, q := range group.Questions {
-		a := byID[q.ID]
-		if q.Kind == "yesno" {
-			answers = append(answers, map[string]any{"ok": true, "result": map[string]any{"id": q.ID, "kind": "yesno", "result": map[string]any{"answer": nil, "probability": v.yes(a)}}})
-			continue
-		}
-		names := make([]string, len(q.Options))
-		for i, o := range q.Options {
-			names[i] = o.Option
-		}
-		probs, chosen := v.choice(a, names)
-		var list []any
-		for _, name := range names {
-			list = append(list, map[string]any{"option": name, "probability": probs[name]})
-		}
-		answers = append(answers, map[string]any{"ok": true, "result": map[string]any{"id": q.ID, "kind": "choice", "result": map[string]any{"chosen": chosen, "probabilities": list}}})
-	}
-	writeTestJSON(w, map[string]any{
-		"results": []any{map[string]any{"answers": answers}},
-		"meta":    map[string]any{"usage": map[string]any{"billed_input_tokens": v.billedFor(group.Content.Value)}},
-	})
 }
 
 // admit records the call and reports whether the vendor answers it.
@@ -352,9 +291,6 @@ func (e *flagsEnv) method(key string, v *vendor, limits decision.Limits) decisio
 }
 
 func (e *flagsEnv) methodOf(def decision.Definition, v *vendor) decision.Method {
-	if v.sage {
-		return decision.NewMaskedMethod(def, e.masker, decision.NewSageAdapter(v.url, "key"))
-	}
 	return decision.NewMaskedMethod(def, e.masker, decision.NewSystemOneAdapter(v.url, "key", "fake-1"))
 }
 

@@ -29,7 +29,7 @@ type registryEnv struct {
 
 func (e *flagsEnv) newRegistryEnv(t *testing.T) registryEnv {
 	t.Helper()
-	openRouter, venice := newVendor(t, false), newVendor(t, false)
+	openRouter, venice := newVendor(t), newVendor(t)
 	routeVendors(t, map[string]*vendor{"openrouter.ai": openRouter, "api.venice.ai": venice})
 	return registryEnv{
 		registry: decision.NewRegistry(config.DecisionConfig{OpenRouterAPIKey: "key", VeniceAPIKey: "key"}, e.masker),
@@ -84,7 +84,7 @@ func TestRunsAndTheScorecardAcceptOnlyTheComparedMethods(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			e := newFlagsEnv(t, "")
-			reviewedThread(t, e, methods{jevKey: e.method(jevKey, vendorFlagging(t, false, 0.9), roomy)}, jevKey)
+			reviewedThread(t, e, methods{jevKey: e.method(jevKey, vendorFlagging(t, 0.9), roomy)}, jevKey)
 			r := e.newRegistryEnv(t)
 
 			err := e.tryScorecard(r.registry, tc.method, tc.compare)

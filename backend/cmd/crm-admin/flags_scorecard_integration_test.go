@@ -38,9 +38,9 @@ func reviewedThread(t *testing.T, e *flagsEnv, set methods, key string) *thr {
 func TestScorecardRerunReplaysReviewedThreadsInOrder(t *testing.T) {
 	t.Run("a reviewed thread whose later cut-off re-checks a commitment flagged at an earlier, unreviewed cut-off", func(t *testing.T) {
 		e := newFlagsEnv(t, "")
-		jev := e.method(jevKey, vendorFlagging(t, false, 0.9), roomy)
+		jev := e.method(jevKey, vendorFlagging(t, 0.9), roomy)
 		th := reviewedThread(t, e, methods{jevKey: jev}, jevKey)
-		v := vendorFlagging(t, false, 0.9)
+		v := vendorFlagging(t, 0.9)
 		clef := e.method(clefKey, v, roomy)
 
 		out := e.scorecard(t, methods{clefKey: clef}, clefKey)
@@ -58,7 +58,7 @@ func TestScorecardRerunReplaysReviewedThreadsInOrder(t *testing.T) {
 
 	t.Run("a reviewed thread whose input another method judged in an earlier month's run", func(t *testing.T) {
 		e := newFlagsEnv(t, "")
-		jev := e.method(jevKey, vendorFlagging(t, false, 0.9), roomy)
+		jev := e.method(jevKey, vendorFlagging(t, 0.9), roomy)
 		th := reviewedThread(t, e, methods{jevKey: jev}, jevKey)
 		other := judgment.MethodRef{Key: "unrelated", Version: "v", WordingVersion: "v"}
 		from, to := jan(1, 0).AddDate(0, -1, 0), jan(1, 0)
@@ -69,7 +69,7 @@ func TestScorecardRerunReplaysReviewedThreadsInOrder(t *testing.T) {
 			InputHash: th.context(t, jan(5, 0)).InputHash,
 		})
 		require.NoError(t, err)
-		v := vendorFlagging(t, false, 0.9)
+		v := vendorFlagging(t, 0.9)
 		clef := e.method(clefKey, v, roomy)
 
 		e.scorecard(t, methods{clefKey: clef}, clefKey)
@@ -84,7 +84,7 @@ func TestScorecardRerunReplaysReviewedThreadsInOrder(t *testing.T) {
 
 	t.Run("a rerun where nothing changed, which reuses and sends nothing", func(t *testing.T) {
 		e := newFlagsEnv(t, "")
-		v := vendorFlagging(t, false, 0.9)
+		v := vendorFlagging(t, 0.9)
 		jev := e.method(jevKey, v, roomy)
 		set := methods{jevKey: jev}
 		th := reviewedThread(t, e, set, jevKey)
@@ -102,9 +102,9 @@ func TestScorecardRerunReplaysReviewedThreadsInOrder(t *testing.T) {
 
 	t.Run("a rerun that leaves a message unjudged", func(t *testing.T) {
 		e := newFlagsEnv(t, "")
-		jev := e.method(jevKey, vendorFlagging(t, false, 0.9), roomy)
+		jev := e.method(jevKey, vendorFlagging(t, 0.9), roomy)
 		th := reviewedThread(t, e, methods{jevKey: jev}, jevKey)
-		v := vendorFlagging(t, false, 0.9)
+		v := vendorFlagging(t, 0.9)
 		v.fail = func(c call) bool { return len(c.Texts) == 1 }
 		clef := e.method(clefKey, v, roomy)
 
@@ -125,7 +125,7 @@ func TestScorecardRerunReplaysReviewedThreadsInOrder(t *testing.T) {
 func TestScorecardScoresTheJudgmentsOfItsRerun(t *testing.T) {
 	t.Run("a rerun that reuses a wide-window judgment beside a later narrow-window judgment of the same example", func(t *testing.T) {
 		e := newFlagsEnv(t, "")
-		v := newVendor(t, false)
+		v := newVendor(t)
 		th := e.newThread(t)
 		th.say(t, jan(3, 9), false, filler(0))
 		th.say(t, jan(4, 9), true, filler(1))

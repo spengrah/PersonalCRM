@@ -24,9 +24,9 @@ const (
 // vendorFlagging is a vendor that gives a commitment flag to a message
 // stating a promise at the probability, and clears a commitment when a later
 // message shows it kept.
-func vendorFlagging(t *testing.T, sage bool, p float64) *vendor {
+func vendorFlagging(t *testing.T, p float64) *vendor {
 	t.Helper()
-	v := newVendor(t, sage)
+	v := newVendor(t)
 	v.flag = func(a ask) float64 {
 		if a.Flag == judgment.FlagKindCommitment && strings.Contains(a.Text, "i will") {
 			return p
@@ -59,7 +59,7 @@ func TestJudgeMonthRechecksEarlierCommitments(t *testing.T) {
 		th.say(t, jan(3, 10), true, "i will call you on the weekend")
 		th.say(t, jan(4, 9), false, "thanks for the photos")
 		keys := th.keys(t)
-		v := newVendor(t, false)
+		v := newVendor(t)
 		v.flag = func(a ask) float64 {
 			switch {
 			case a.Flag != judgment.FlagKindCommitment:
@@ -95,7 +95,7 @@ func TestJudgeMonthRechecksEarlierCommitments(t *testing.T) {
 		th.say(t, jan(3, 9), true, promise)
 		th.say(t, jan(4, 9), true, kept)
 		th.say(t, jan(5, 9), false, "thanks")
-		v := vendorFlagging(t, false, 0.9)
+		v := vendorFlagging(t, 0.9)
 		m := e.method(jevKey, v, roomy)
 
 		e.judgeMonth(t, methods{jevKey: m}, jevKey)
@@ -113,7 +113,7 @@ func TestJudgeMonthRechecksEarlierCommitments(t *testing.T) {
 		th.say(t, jan(3, 9), true, promise)
 		th.say(t, jan(4, 9), false, "thanks")
 		th.say(t, jan(5, 9), false, "thanks again")
-		v := vendorFlagging(t, false, 0.9)
+		v := vendorFlagging(t, 0.9)
 		m := e.method(jevKey, v, roomy)
 
 		e.judgeMonth(t, methods{jevKey: m}, jevKey)
@@ -135,7 +135,7 @@ func TestJudgeMonthRechecksEarlierCommitments(t *testing.T) {
 		keys := th.keys(t)
 		previous := jan(4, 0)
 		limit := e.tokensFor(t, fakeDefinition(jevKey, roomy), decision.Request{Context: th.context(t, jan(5, 0)), NewAfter: &previous}, keys[2])
-		v := newVendor(t, false)
+		v := newVendor(t)
 		v.flag = func(a ask) float64 {
 			if a.Flag == judgment.FlagKindCommitment && strings.Contains(a.Text, strings.TrimSpace(filler(0))) {
 				return 0.9
@@ -158,7 +158,7 @@ func TestJudgeMonthRechecksEarlierCommitments(t *testing.T) {
 		th := e.newThread(t)
 		th.say(t, jan(3, 9), true, promise)
 		th.say(t, jan(4, 9), true, kept)
-		flagging, silent := vendorFlagging(t, false, 0.9), vendorFlagging(t, false, 0.05)
+		flagging, silent := vendorFlagging(t, 0.9), vendorFlagging(t, 0.05)
 		clef, jev := e.method(clefKey, flagging, roomy), e.method(jevKey, silent, roomy)
 
 		e.judgeMonth(t, methods{clefKey: clef}, clefKey)
@@ -174,7 +174,7 @@ func TestJudgeMonthRechecksEarlierCommitments(t *testing.T) {
 		th := e.newThread(t)
 		th.say(t, jan(30, 9), true, promise)
 		th.say(t, time.Date(2026, time.February, 2, 9, 0, 0, 0, time.Local), true, kept)
-		v := vendorFlagging(t, false, 0.9)
+		v := vendorFlagging(t, 0.9)
 		m := e.method(jevKey, v, roomy)
 		set := methods{jevKey: m}
 
@@ -194,7 +194,7 @@ func TestJudgeMonthRechecksEarlierCommitments(t *testing.T) {
 		th.say(t, jan(31, 9), true, promise)
 		th.say(t, time.Date(2026, time.February, 2, 9, 0, 0, 0, time.Local), true, kept)
 		keys := th.keys(t)
-		v := vendorFlagging(t, false, 0.9)
+		v := vendorFlagging(t, 0.9)
 		m := e.method(jevKey, v, roomy)
 		set := methods{jevKey: m}
 

@@ -50,7 +50,7 @@ func TestJudgeMonthJudgesAThreadOverItsWindow(t *testing.T) {
 		return e, th, keys, e.tokensFor(t, fakeDefinition(jevKey, roomy), req, keys[0])
 	}
 	judgeWith := func(t *testing.T, e *flagsEnv, limit int) (*vendor, judgment.MethodRef, string) {
-		v := newVendor(t, false)
+		v := newVendor(t)
 		m := e.method(jevKey, v, decision.Limits{Tokens: limit, Questions: 1 << 20})
 		out := e.judgeMonth(t, methods{jevKey: m}, jevKey)
 		return v, m.Ref(), out
@@ -70,7 +70,7 @@ func TestJudgeMonthJudgesAThreadOverItsWindow(t *testing.T) {
 
 	t.Run("a context whose text fits but whose text and questions together do not, which is windowed", func(t *testing.T) {
 		e, th, keys, whole := setup(t)
-		roomyVendor := newVendor(t, false)
+		roomyVendor := newVendor(t)
 		e.judgeMonth(t, methods{jevKey: e.method(jevKey, roomyVendor, roomy)}, jevKey)
 		text := roomyVendor.all()[0].StateBytes
 		limit := text + 5000
@@ -147,7 +147,7 @@ func TestJudgeMonthSendsEveryQuestionInTheFewestCalls(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			e := newFlagsEnv(t, "")
 			th := e.chat(t, n)
-			v := newVendor(t, false)
+			v := newVendor(t)
 			m := e.method(jevKey, v, decision.Limits{Tokens: 1 << 24, Questions: tc.limit})
 
 			e.judgeMonth(t, methods{jevKey: m}, jevKey)

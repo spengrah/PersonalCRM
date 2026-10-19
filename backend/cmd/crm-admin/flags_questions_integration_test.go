@@ -38,9 +38,9 @@ func TestJudgeMonthAsksOnlyFlagClearingAndBallInCourtQuestions(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			e := newFlagsEnv(t, "")
-			openRouter, venice := newVendor(t, false), newVendor(t, false)
+			openRouter, venice := newVendor(t), newVendor(t)
 			routeVendors(t, map[string]*vendor{"openrouter.ai": openRouter, "api.venice.ai": venice})
-			registry := decision.NewRegistry(config.DecisionConfig{OpenRouterAPIKey: "key", VeniceAPIKey: "key", SageAPIKey: "key"}, e.masker)
+			registry := decision.NewRegistry(config.DecisionConfig{OpenRouterAPIKey: "key", VeniceAPIKey: "key"}, e.masker)
 			if tc.conversation {
 				th := e.newThread(t)
 				th.say(t, jan(3, 9), false, promise)

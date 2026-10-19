@@ -52,7 +52,7 @@ func TestJudgeMonthReportsContentFree(t *testing.T) {
 			batch.sayFiller(t, jan(4, 8+i), i%2 == 0, i)
 		}
 		limit := e.windowLimit(t, fakeDefinition(jevKey, roomy), batch, jan(5, 0), 3, 3)
-		v := newVendor(t, false)
+		v := newVendor(t)
 		v.fail = func(c call) bool { return len(c.Texts) > 0 && strings.Contains(c.Texts[0], "failme") }
 		m := e.method(jevKey, v, decision.Limits{Tokens: limit, Questions: 1 << 20})
 		set := methods{jevKey: m}
@@ -73,7 +73,7 @@ func TestJudgeMonthReportsContentFree(t *testing.T) {
 		th := e.chat(t, 6)
 		huge := e.newThread(t)
 		huge.say(t, jan(3, 9), false, "zanzibar "+strings.Repeat("and the weather ", 400))
-		v := newVendor(t, false)
+		v := newVendor(t)
 		limit := e.tokensFor(t, fakeDefinition(jevKey, roomy), decision.Request{Context: th.context(t, jan(4, 0))}, th.keys(t)[4])
 		m := e.method(jevKey, v, decision.Limits{Tokens: limit, Questions: 1 << 20})
 

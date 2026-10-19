@@ -106,7 +106,7 @@ func TestJudgeMonthJudgesAnOverflowingNightInChunks(t *testing.T) {
 	t.Run("a night that fits one window, judged over one window as before", func(t *testing.T) {
 		e := newFlagsEnv(t, "")
 		th, keys, texts := e.night(t, 5)
-		v := newVendor(t, false)
+		v := newVendor(t)
 		m := e.method(jevKey, v, roomy)
 
 		e.judgeMonth(t, methods{jevKey: m}, jevKey)
@@ -124,7 +124,7 @@ func TestJudgeMonthJudgesAnOverflowingNightInChunks(t *testing.T) {
 		e := newFlagsEnv(t, "")
 		th, keys, texts := e.night(t, 5)
 		limit := e.windowLimit(t, fakeDefinition(jevKey, roomy), th, second, 2, 2)
-		v := newVendor(t, false)
+		v := newVendor(t)
 		m := e.method(jevKey, v, decision.Limits{Tokens: limit, Questions: 1 << 20})
 
 		out := e.judgeMonth(t, methods{jevKey: m}, jevKey)
@@ -146,7 +146,7 @@ func TestJudgeMonthJudgesAnOverflowingNightInChunks(t *testing.T) {
 		e := newFlagsEnv(t, "")
 		th, keys, texts := e.night(t, 7)
 		limit := e.windowLimit(t, fakeDefinition(jevKey, roomy), th, second, 5, 5)
-		v := newVendor(t, false)
+		v := newVendor(t)
 		m := e.method(jevKey, v, decision.Limits{Tokens: limit, Questions: 1 << 20})
 
 		e.judgeMonth(t, methods{jevKey: m}, jevKey)
@@ -168,7 +168,7 @@ func TestJudgeMonthJudgesAnOverflowingNightInChunks(t *testing.T) {
 		e := newFlagsEnv(t, "")
 		th, _, texts := e.night(t, 5)
 		limit := e.windowLimit(t, fakeDefinition(jevKey, roomy), th, second, 2, 3)
-		v := newVendor(t, false)
+		v := newVendor(t)
 		m := e.method(jevKey, v, decision.Limits{Tokens: limit, Questions: 1 << 20})
 
 		e.judgeMonth(t, methods{jevKey: m}, jevKey)
@@ -196,7 +196,7 @@ func TestJudgeMonthRechecksCommitmentsInEachChunk(t *testing.T) {
 		e := newFlagsEnv(t, "")
 		th, keys, texts := e.nightOf(t, filler(0), filler(1), said, filler(3), done, filler(5))
 		limit := e.windowLimit(t, fakeDefinition(jevKey, roomy), th, second, 2, 3)
-		v := vendorFlagging(t, false, 0.9)
+		v := vendorFlagging(t, 0.9)
 		m := e.method(jevKey, v, decision.Limits{Tokens: limit, Questions: 1 << 20})
 
 		e.judgeMonth(t, methods{jevKey: m}, jevKey)
@@ -221,7 +221,7 @@ func TestJudgeMonthRechecksCommitmentsInEachChunk(t *testing.T) {
 		e := newFlagsEnv(t, "")
 		th, keys, _ := e.nightOf(t, said, done, filler(2), filler(3), filler(4), filler(5))
 		limit := e.windowLimit(t, fakeDefinition(jevKey, roomy), th, second, 0, 3, decision.Commitment{Judgment: uuid.New(), MessageKey: keys[0]})
-		v := vendorFlagging(t, false, 0.9)
+		v := vendorFlagging(t, 0.9)
 		m := e.method(jevKey, v, decision.Limits{Tokens: limit, Questions: 1 << 20})
 
 		e.judgeMonth(t, methods{jevKey: m}, jevKey)
@@ -242,7 +242,7 @@ func TestJudgeMonthRechecksCommitmentsInEachChunk(t *testing.T) {
 		e := newFlagsEnv(t, "")
 		th, keys, _ := e.nightOf(t, said, filler(1), filler(2), filler(3), done, filler(5))
 		limit := e.windowLimit(t, fakeDefinition(jevKey, roomy), th, second, 0, 3, decision.Commitment{Judgment: uuid.New(), MessageKey: keys[0]})
-		v := vendorFlagging(t, false, 0.9)
+		v := vendorFlagging(t, 0.9)
 		m := e.method(jevKey, v, decision.Limits{Tokens: limit, Questions: 1 << 20})
 
 		e.judgeMonth(t, methods{jevKey: m}, jevKey)
@@ -261,7 +261,7 @@ func TestJudgeMonthRechecksCommitmentsInEachChunk(t *testing.T) {
 		e := newFlagsEnv(t, "")
 		th, _, _ := e.nightOf(t, said, filler(1), filler(2), filler(3), done, filler(5))
 		limit := e.windowLimit(t, fakeDefinition(jevKey, roomy), th, second, 2, 3)
-		v := vendorFlagging(t, false, 0.9)
+		v := vendorFlagging(t, 0.9)
 		m := e.method(jevKey, v, decision.Limits{Tokens: limit, Questions: 1 << 20})
 
 		e.judgeMonth(t, methods{jevKey: m}, jevKey)
@@ -286,7 +286,7 @@ func TestJudgeMonthAsksBallInCourtInTheLastChunk(t *testing.T) {
 		e := newFlagsEnv(t, "")
 		th, _, _ := e.night(t, 5)
 		limit := e.windowLimit(t, fakeDefinition(jevKey, roomy), th, jan(5, 0), 2, 3)
-		v := newVendor(t, false)
+		v := newVendor(t)
 		m := e.method(jevKey, v, decision.Limits{Tokens: limit, Questions: 1 << 20})
 
 		e.judgeMonth(t, methods{jevKey: m}, jevKey)
@@ -316,7 +316,7 @@ func TestJudgeMonthAsksBallInCourtInTheLastChunk(t *testing.T) {
 			th := e.newThread(t)
 			th.sayFiller(t, jan(2, 9), false, 0)
 			th.sayFiller(t, jan(3, 9), false, 1)
-			v := newVendor(t, false)
+			v := newVendor(t)
 			v.bic = func(string) string { return "i_owe_reply" }
 			out := e.judgeMonth(t, methods{jevKey: e.method(jevKey, v, roomy)}, jevKey)
 			require.Contains(t, out, "live_effects obligations_opened=1")
@@ -363,7 +363,7 @@ func TestJudgeMonthLeavesNoNewMessageUnjudgedBeforeItsWindow(t *testing.T) {
 			}
 		}
 		limit := e.windowLimit(t, fakeDefinition(jevKey, roomy), th, jan(5, 0), 145, 145)
-		m := e.method(jevKey, newVendor(t, false), decision.Limits{Tokens: limit, Questions: 1 << 20})
+		m := e.method(jevKey, newVendor(t), decision.Limits{Tokens: limit, Questions: 1 << 20})
 
 		out := e.judgeMonth(t, methods{jevKey: m}, jevKey)
 
@@ -380,7 +380,7 @@ func TestJudgeMonthLeavesNoNewMessageUnjudgedBeforeItsWindow(t *testing.T) {
 		e := newFlagsEnv(t, "")
 		th, keys, _ := e.nightOf(t, filler(0), filler(1), filler(2), huge, filler(4), filler(5))
 		limit := e.windowLimit(t, fakeDefinition(jevKey, roomy), th, jan(5, 0), 4, 4)
-		m := e.method(jevKey, newVendor(t, false), decision.Limits{Tokens: limit, Questions: 1 << 20})
+		m := e.method(jevKey, newVendor(t), decision.Limits{Tokens: limit, Questions: 1 << 20})
 
 		out := e.judgeMonth(t, methods{jevKey: m}, jevKey)
 
@@ -400,7 +400,7 @@ func TestJudgeMonthLeavesNoNewMessageUnjudgedBeforeItsWindow(t *testing.T) {
 		e := newFlagsEnv(t, "")
 		th, keys, _ := e.nightOf(t, filler(0), filler(1), filler(2), huge)
 		limit := 3 * e.tokensFor(t, fakeDefinition(jevKey, roomy), decision.Request{Context: th.context(t, jan(4, 0))}, keys[0])
-		v := newVendor(t, false)
+		v := newVendor(t)
 		m := e.method(jevKey, v, decision.Limits{Tokens: limit, Questions: 1 << 20})
 
 		out := e.judgeMonth(t, methods{jevKey: m}, jevKey)
@@ -448,9 +448,9 @@ func TestStoreReadsAChunkedNightAsOneJudgment(t *testing.T) {
 	t.Run("a night one method chunks and another reads whole, both on one example", func(t *testing.T) {
 		e := newFlagsEnv(t, "")
 		th, keys, _ := e.night(t, 5)
-		v := newVendor(t, false)
+		v := newVendor(t)
 		chunking := e.method(jevKey, v, decision.Limits{Tokens: e.windowLimit(t, fakeDefinition(jevKey, roomy), th, second, 2, 3), Questions: 1 << 20})
-		whole := e.method(clefKey, newVendor(t, false), roomy)
+		whole := e.method(clefKey, newVendor(t), roomy)
 
 		e.judgeMonth(t, methods{jevKey: chunking}, jevKey)
 		e.judgeMonth(t, methods{clefKey: whole}, clefKey)
@@ -469,7 +469,7 @@ func TestStoreReadsAChunkedNightAsOneJudgment(t *testing.T) {
 	t.Run("the same night read by thread and by run", func(t *testing.T) {
 		e := newFlagsEnv(t, "")
 		th, keys, _ := e.nightOf(t, filler(0), filler(1), promise, filler(3), kept, filler(5))
-		m := e.method(jevKey, vendorFlagging(t, false, 0.9), decision.Limits{Tokens: e.windowLimit(t, fakeDefinition(jevKey, roomy), th, second, 2, 3), Questions: 1 << 20})
+		m := e.method(jevKey, vendorFlagging(t, 0.9), decision.Limits{Tokens: e.windowLimit(t, fakeDefinition(jevKey, roomy), th, second, 2, 3), Questions: 1 << 20})
 
 		e.judgeMonth(t, methods{jevKey: m}, jevKey)
 
@@ -493,7 +493,7 @@ func TestStoreReadsAChunkedNightAsOneJudgment(t *testing.T) {
 	t.Run("a chunked night holding an oversized message, which appears among its unjudged messages and not among its new messages", func(t *testing.T) {
 		e := newFlagsEnv(t, "")
 		th, keys, _ := e.nightOf(t, filler(0), filler(1), filler(2), huge, filler(4), filler(5))
-		m := e.method(jevKey, newVendor(t, false), decision.Limits{Tokens: e.windowLimit(t, fakeDefinition(jevKey, roomy), th, second, 4, 4), Questions: 1 << 20})
+		m := e.method(jevKey, newVendor(t), decision.Limits{Tokens: e.windowLimit(t, fakeDefinition(jevKey, roomy), th, second, 4, 4), Questions: 1 << 20})
 
 		e.judgeMonth(t, methods{jevKey: m}, jevKey)
 
@@ -539,7 +539,7 @@ func TestJudgeMonthReusesAChunkedNightOnlyWhenEveryChunkReadTheSame(t *testing.T
 	t.Run("an unchanged rerun, which reuses", func(t *testing.T) {
 		e := newFlagsEnv(t, "")
 		th, _, _ := e.night(t, 5)
-		v := newVendor(t, false)
+		v := newVendor(t)
 		set := methods{jevKey: e.method(jevKey, v, decision.Limits{Tokens: e.windowLimit(t, fakeDefinition(jevKey, roomy), th, second, 2, 3), Questions: 1 << 20})}
 		e.judgeMonth(t, set, jevKey)
 		require.Len(t, chunkCalls(v), 2)
@@ -568,7 +568,7 @@ func TestJudgeMonthReusesAChunkedNightOnlyWhenEveryChunkReadTheSame(t *testing.T
 		// windows under both.
 		wide := e.windowLimit(t, def, th, second, 3, 3) - 1
 		narrow := e.tokensFor(t, def, decision.Request{Context: th.context(t, jan(4, 0))}, keys[0]) - 1
-		v := vendorFlagging(t, false, 0.9)
+		v := vendorFlagging(t, 0.9)
 		e.judgeMonth(t, methods{jevKey: e.method(jevKey, v, decision.Limits{Tokens: wide, Questions: 1 << 20})}, jevKey)
 		before := windowsOf(chunkCalls(v))
 		v.reset()
@@ -592,7 +592,7 @@ func TestJudgeMonthReusesAChunkedNightOnlyWhenEveryChunkReadTheSame(t *testing.T
 		e := newFlagsEnv(t, "")
 		th, _, _ := e.night(t, 6)
 		limit := e.windowLimit(t, fakeDefinition(jevKey, roomy), th, second, 4, 4)
-		v := newVendor(t, false)
+		v := newVendor(t)
 		e.judgeMonth(t, methods{jevKey: e.method(jevKey, v, decision.Limits{Tokens: limit, Questions: 1 << 20})}, jevKey)
 		require.Len(t, chunkCalls(v), 2)
 		v.reset()

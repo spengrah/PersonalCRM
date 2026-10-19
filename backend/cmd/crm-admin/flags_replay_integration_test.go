@@ -23,7 +23,7 @@ func TestJudgeMonthReusesAJudgmentOnlyWhenItReadTheSame(t *testing.T) {
 		th.say(t, jan(3, 9), true, promise)
 		th.say(t, jan(4, 9), true, kept)
 		th.say(t, jan(5, 9), false, "thanks")
-		v := vendorFlagging(t, false, 0.9)
+		v := vendorFlagging(t, 0.9)
 		m := e.method(jevKey, v, roomy)
 		set := methods{jevKey: m}
 		e.judgeMonth(t, set, jevKey)
@@ -45,7 +45,7 @@ func TestJudgeMonthReusesAJudgmentOnlyWhenItReadTheSame(t *testing.T) {
 		th.say(t, jan(4, 9), false, "thanks")
 		th.say(t, jan(5, 9), false, "thanks again")
 		keys := th.keys(t)
-		v := vendorFlagging(t, false, 0.9)
+		v := vendorFlagging(t, 0.9)
 		first := e.method(jevKey, v, roomy)
 		e.judgeMonth(t, methods{jevKey: first}, jevKey)
 		recheckedBefore := th.judgmentAt(t, first.Ref(), jan(5, 0))
@@ -81,7 +81,7 @@ func TestJudgeMonthReusesAJudgmentOnlyWhenItReadTheSame(t *testing.T) {
 		th.sayFiller(t, jan(3, 9), false, 0)
 		th.sayFiller(t, jan(4, 9), true, 1)
 		keys := th.keys(t)
-		v := newVendor(t, false)
+		v := newVendor(t)
 		v.fail = func(c call) bool { return len(c.Texts) == 1 }
 		m := e.method(jevKey, v, roomy)
 		set := methods{jevKey: m}
