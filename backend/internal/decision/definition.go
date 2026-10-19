@@ -45,12 +45,20 @@ type Limits struct {
 // the vendor bills for it. A method sizes its window by the scaled estimate:
 // Ratio is the billed tokens per estimated token, Margin the fraction added
 // above it so that a request billed above its typical ratio still fits.
+// PerQuestion sets the estimate to what a vendor reports billing when it
+// bills the state again for each question: the state's bytes once per
+// question, with that question's own bytes.
 type Sizing struct {
 	Ratio, Margin float64
+	PerQuestion   bool
 }
 
-// scale returns the estimate scaled to the tokens the window is sized by.
-func (s Sizing) scale(estimate int) int {
+// scale returns the tokens a request's window is sized by.
+func (s Sizing) scale(w wireRequest) int {
+	estimate := countTokens(w)
+	if s.PerQuestion {
+		estimate = countTokensPerQuestion(w)
+	}
 	return int(math.Ceil(float64(estimate) * s.Ratio * (1 + s.Margin)))
 }
 

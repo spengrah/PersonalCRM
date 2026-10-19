@@ -179,7 +179,7 @@ func (m *method) measureWindow(ctx context.Context, r Request, k int) (sized, er
 	limits := m.def.Limits
 	calls := split(t.questions, limits.Questions)
 	return sized{win: win, tree: t, calls: calls, size: Size{
-		Tokens: m.def.Sizing.scale(countTokens(p.wire)), Questions: len(t.questions), Calls: len(calls),
+		Tokens: m.def.Sizing.scale(p.wire), Questions: len(t.questions), Calls: len(calls),
 		TokenLimit: limits.Tokens, QuestionLimit: limits.Questions,
 	}}, nil
 }

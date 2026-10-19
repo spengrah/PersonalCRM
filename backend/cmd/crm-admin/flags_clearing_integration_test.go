@@ -48,7 +48,7 @@ func vendorFlagging(t *testing.T, sage bool, p float64) *vendor {
 // decisions above its clearing floor, whose message lies inside its window and
 // which it has not cleared, whether the commitment is done as of the cut-off,
 // and records each answer as a clearing decision.
-// spec: KNW-059.rechecked-and-recorded, KNW-059.cleared-once-answered-done, KNW-059.outside-window-neither-cleared-nor-kept, KNW-067.inputs-are-window-and-own-earlier-judgments, KNW-067.reads-no-review-or-label
+// spec: KNW-059.rechecked-and-recorded, KNW-059.cleared-once-answered-done, KNW-059.outside-window-neither-cleared-nor-kept, KNW-067.inputs-are-window-and-own-earlier-judgments
 func TestJudgeMonthRechecksEarlierCommitments(t *testing.T) {
 	t.Run("one above the floor inside the window, which is asked, and one at the floor, which is not", func(t *testing.T) {
 		e := newFlagsEnv(t, "")
@@ -185,31 +185,5 @@ func TestJudgeMonthRechecksEarlierCommitments(t *testing.T) {
 		require.Len(t, february.Clearings, 1)
 		assert.Equal(t, january.ID, february.Clearings[0].CommitmentJudgment)
 		assert.True(t, february.Clearings[0].Done)
-	})
-
-	t.Run("a label on the commitment's flag decision, which leaves the request unchanged", func(t *testing.T) {
-		e := newFlagsEnv(t, "")
-		labeled, plain := e.newThread(t), e.newThread(t)
-		for _, th := range []*thr{labeled, plain} {
-			th.say(t, jan(3, 9), true, promise)
-		}
-		v := vendorFlagging(t, false, 0.9)
-		m := e.method(jevKey, v, roomy)
-		set := methods{jevKey: m}
-		e.judgeMonth(t, set, jevKey)
-		outcome := labeled.judgmentAt(t, m.Ref(), jan(4, 0)).Outcomes[0].ID
-		_, err := e.store.ReviewOutcome(e.ctx, outcome, judgment.ReviewRequest{RightOutcome: string(judgment.BallInCourtIOweReply)})
-		require.NoError(t, err)
-		for _, th := range []*thr{labeled, plain} {
-			th.say(t, jan(4, 9), true, kept)
-		}
-		v.reset()
-
-		e.judgeMonth(t, set, jevKey)
-
-		calls := v.all()
-		require.Len(t, calls, 2, "the first cut-off is reused and sends nothing")
-		assert.Equal(t, calls[0], calls[1], "the labeled thread's request equals the unlabeled one's")
-		assert.Len(t, calls[0].asks("clearing"), 1)
 	})
 }

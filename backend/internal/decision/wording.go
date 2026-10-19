@@ -76,10 +76,10 @@ var DefaultWording = Wording{
 		},
 	},
 	FlagBigMoment: QuestionWording{
-		Instructions: "Does message {message} reveal a big moment? A big moment is a significant moment in the life of a contact, a participant other than ME, such as a new job, an illness, a birth, a death, a wedding or a move. A moment in ME's own life is never a big moment.",
+		Instructions: "Does message {message} reveal a big moment? A big moment is a significant moment in the life of a contact, a participant other than ME, or of someone in a contact's life, such as a new job, an illness, a birth, a death, a wedding or a move. A moment in ME's own life is never a big moment.",
 		Options: []OptionWording{
-			{Key: optionYes, Label: "A big moment", Description: "Message {message} reveals a significant moment in the life of a contact, a participant other than ME."},
-			{Key: optionNo, Label: "No big moment", Description: "Message {message} reveals no such moment in a contact's life, or only a moment in ME's own life."},
+			{Key: optionYes, Label: "A big moment", Description: "Message {message} reveals a significant moment in the life of a contact, a participant other than ME, or of someone in a contact's life."},
+			{Key: optionNo, Label: "No big moment", Description: "Message {message} reveals no such moment in the life of a contact or someone in a contact's life, or only a moment in ME's own life."},
 		},
 	},
 	FlagClaim: QuestionWording{

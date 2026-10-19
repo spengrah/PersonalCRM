@@ -71,28 +71,26 @@ var (
 	sageLimits = Limits{Tokens: 32768, Questions: 32768}
 )
 
-// Sizing of each method's window, chosen from the ratio of the input tokens
-// its vendor billed to the size estimate (one token per byte of everything the
-// model reads, an upper bound on any tokenizer's count) over the January 2026
-// runs. The window is sized by the estimate times Ratio times (1 + Margin).
+// Sizing of each method's window. The window is sized by the size estimate
+// (one token per byte of everything the model reads, an upper bound on any
+// tokenizer's count) times Ratio times (1 + Margin). Ratio and Margin come
+// from the ratio of the input tokens a vendor billed to that estimate over the
+// January 2026 runs, and are checked against the tokens billed for synthetic
+// threads at sampled sizes. The ratios and the choice are in
+// .agents/log/captures/message-flags-pr1/c18-sizing.md, the check in
+// c17-billing.md.
 //
-//   - Clef and Clef-Flash: ratio 0.33 to 0.59, median 0.43, stable across
-//     context sizes. Ratio is the median and Margin takes the factor to 0.60,
-//     the largest ratio billed.
-//   - Jev: ratio 0.33 to 0.68, median 0.40; the highest ratios are contexts
-//     under 3,000 tokens, far from any limit. Margin takes the factor to 0.64,
-//     above the 99th percentile.
-//   - Sage: ratio 0.30 to 2.80, median 1.05, and growing with the context and
-//     with the number of questions, since Sage bills each question's content
-//     separately. Its ratio is unstable, so no ratio sizes its window: it is
-//     sized by the unscaled estimate, which bounds the content each question
-//     carries. What Sage bills grows with the window and the questions, which
-//     the sizing does not bound; that cost is the user's to decide.
+// A method whose ratio is unstable across context sizes is sized from the
+// usage it reports. Sage bills the state again for each question, so its
+// PerQuestion estimate counts the state once per question, and its Ratio is
+// the tokens it billed over that estimate. A window therefore holds the
+// messages whose bill, state times questions, fits the limit, which is far
+// fewer than the messages whose text fits it (c17-billing.md).
 var (
 	clefSizing      = Sizing{Ratio: 0.43, Margin: 0.40}
 	clefFlashSizing = Sizing{Ratio: 0.43, Margin: 0.40}
 	jevSizing       = Sizing{Ratio: 0.40, Margin: 0.60}
-	sageSizing      = Sizing{Ratio: 1, Margin: 0}
+	sageSizing      = Sizing{Ratio: 0.29, Margin: 0.05, PerQuestion: true}
 )
 
 // zeroRetention routes an OpenRouter request only to zero-retention
