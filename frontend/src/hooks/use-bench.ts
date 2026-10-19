@@ -140,11 +140,15 @@ async function sendNext() {
 }
 
 function enqueue(save: Omit<SaveEntry, 'id' | 'status'>) {
-  // The user acting again on a failed save's controls replaces the failed save.
-  setSaves([
-    ...saves.filter(s => !(s.status === 'failed' && s.item === save.item)),
-    { ...save, id: nextId++, status: 'queued' },
-  ])
+  // The user acting again on a failed save's controls replaces the failed save
+  // in its place, so a close queued behind it still waits for the replacement.
+  const entry: SaveEntry = { ...save, id: nextId++, status: 'queued' }
+  const failed = saves.some(s => s.status === 'failed' && s.item === save.item)
+  setSaves(
+    failed
+      ? saves.map(s => (s.status === 'failed' && s.item === save.item ? entry : s))
+      : [...saves, entry]
+  )
   void sendNext()
 }
 
@@ -166,6 +170,8 @@ export function useFailedSave(): (item: string) => boolean {
 export interface FailedSave {
   id: number
   threadId: string
+  /** The controls the save came from. */
+  item: string
   runId: string
   what: string
   /** Whether a close waits behind the failed save. */
@@ -182,6 +188,7 @@ export function useFailedSaves(): FailedSave[] {
     .map(save => ({
       id: save.id,
       threadId: save.threadId,
+      item: save.item,
       runId: save.runId,
       what: save.what,
       closeHeld: snapshot.some(
