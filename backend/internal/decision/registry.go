@@ -76,16 +76,14 @@ var (
 // tokenizer's count) times Ratio times (1 + Margin). Ratio and Margin come
 // from the ratio of the input tokens a vendor billed to that estimate over the
 // January 2026 runs, and are checked against the tokens billed for synthetic
-// threads at sampled sizes. The ratios and the choice are in
-// .agents/log/captures/message-flags-pr1/c18-sizing.md, the check in
-// c17-billing.md.
+// threads at sampled sizes.
 //
 // A method whose ratio is unstable across context sizes is sized from the
 // usage it reports. Sage bills the state again for each question, so its
 // PerQuestion estimate counts the state once per question, and its Ratio is
 // the tokens it billed over that estimate. A window therefore holds the
 // messages whose bill, state times questions, fits the limit, which is far
-// fewer than the messages whose text fits it (c17-billing.md).
+// fewer than the messages whose text fits it.
 var (
 	clefSizing      = Sizing{Ratio: 0.43, Margin: 0.40}
 	clefFlashSizing = Sizing{Ratio: 0.43, Margin: 0.40}
