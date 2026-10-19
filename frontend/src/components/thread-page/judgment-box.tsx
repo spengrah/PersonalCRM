@@ -9,7 +9,13 @@ import { ReplyLists } from '@/components/threads/reply-lists'
 import { FLAG_KINDS } from '@/components/threads/flag-kinds'
 import { SAVE_ERROR, formatConfidence } from '@/components/threads/format'
 import { StatusPill } from '@/components/threads/status-pill'
-import { saveItem, useConfirmNones, useLabelClearing, usePendingSaves } from '@/hooks/use-bench'
+import {
+  saveItem,
+  useConfirmNones,
+  useFailedSave,
+  useLabelClearing,
+  usePendingSaves,
+} from '@/hooks/use-bench'
 import type {
   ClosestUnflaggedResponse,
   NightClearingResponse,
@@ -66,13 +72,13 @@ function Clearing({
   onShow: (messageKey: string) => void
 }) {
   const [changing, setChanging] = useState(false)
-  const [failed, setFailed] = useState(false)
   const label = useLabelClearing()
   const isPending = usePendingSaves()
-  const pending = isPending(saveItem.clearing(clearing.commitment_message_key, clearing.cut_off))
+  const item = saveItem.clearing(clearing.commitment_message_key, clearing.cut_off)
+  const pending = isPending(item)
+  const failed = useFailedSave()(item)
   const reviewing = clearing.label === 'none' || changing
-  const send = (done: boolean) => {
-    setFailed(false)
+  const send = (done: boolean) =>
     label.mutate(
       {
         threadId,
@@ -81,9 +87,8 @@ function Clearing({
         cutOff: clearing.cut_off,
         done,
       },
-      { onSuccess: () => setChanging(false), onError: () => setFailed(true) }
+      { onSuccess: () => setChanging(false) }
     )
-  }
 
   return (
     <li
@@ -186,9 +191,9 @@ function ConfirmNones({
   runId: string
   judgmentId: string
 }) {
-  const [failed, setFailed] = useState(false)
   const confirm = useConfirmNones()
   const pending = usePendingSaves()(saveItem.nones(judgmentId))
+  const failed = useFailedSave()(saveItem.nones(judgmentId))
   return (
     <>
       <Button
@@ -196,10 +201,7 @@ function ConfirmNones({
         size="sm"
         variant="outline"
         disabled={pending}
-        onClick={() => {
-          setFailed(false)
-          confirm.mutate({ threadId, runId, judgmentId }, { onError: () => setFailed(true) })
-        }}
+        onClick={() => confirm.mutate({ threadId, runId, judgmentId })}
       >
         <Check aria-hidden="true" className="mr-1.5 h-4 w-4 text-green-800" />
         Confirm Nones

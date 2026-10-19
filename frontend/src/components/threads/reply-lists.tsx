@@ -4,7 +4,7 @@ import { useState } from 'react'
 import { clsx } from 'clsx'
 import { Check, Plus, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import { saveItem, usePendingSaves, useReviewReplyItem } from '@/hooks/use-bench'
+import { saveItem, useFailedSave, usePendingSaves, useReviewReplyItem } from '@/hooks/use-bench'
 import type {
   BenchActResponse,
   BenchAdditionResponse,
@@ -262,7 +262,7 @@ function ListSection({
   changing: string | null
   setChanging: (outcomeId: string | null) => void
   pending: (outcomeId: string) => boolean
-  failed: string | null
+  failed: (outcomeId: string) => boolean
   onReview: (outcomeId: string, body: ReviewJudgmentOutcomeRequest) => void
 }) {
   const { list, closest } = entry
@@ -271,7 +271,7 @@ function ListSection({
   const additions = proposal.additions.filter(addition => addition.list === list)
   const add = (addition: BenchAdditionResponse) =>
     onReview(addition.outcome_id, { right_outcome: addition.right_outcome })
-  const addFailed = additions.some(addition => addition.outcome_id === failed)
+  const addFailed = additions.some(addition => failed(addition.outcome_id))
   const addPending = additions.some(addition => pending(addition.outcome_id))
   const closestName = closest?.contact?.name ?? ''
   return (
@@ -312,7 +312,7 @@ function ListSection({
               item={item}
               changing={changing === item.outcome_id}
               pending={pending(item.outcome_id)}
-              failed={failed === item.outcome_id}
+              failed={failed(item.outcome_id)}
               onReview={act => onReview(item.outcome_id, reviewOf(act))}
               onChange={on => setChanging(on ? item.outcome_id : null)}
             />
@@ -379,11 +379,10 @@ interface ReplyListsProps {
 export function ReplyLists({ proposal, runId }: ReplyListsProps) {
   const [picker, setPicker] = useState<ProposalList | null>(null)
   const [changing, setChanging] = useState<string | null>(null)
-  const [failed, setFailed] = useState<string | null>(null)
   const review = useReviewReplyItem()
   const isPending = usePendingSaves()
-  const send = (outcomeId: string, body: ReviewJudgmentOutcomeRequest) => {
-    setFailed(null)
+  const isFailed = useFailedSave()
+  const send = (outcomeId: string, body: ReviewJudgmentOutcomeRequest) =>
     review.mutate(
       { threadId: proposal.thread_id, runId, outcomeId, review: body },
       {
@@ -391,10 +390,8 @@ export function ReplyLists({ proposal, runId }: ReplyListsProps) {
           setPicker(null)
           setChanging(null)
         },
-        onError: () => setFailed(outcomeId),
       }
     )
-  }
   const lists = proposal.lists.filter(isReplyList)
   if (lists.length === 0) return null
 
@@ -410,7 +407,7 @@ export function ReplyLists({ proposal, runId }: ReplyListsProps) {
           changing={changing}
           setChanging={setChanging}
           pending={outcomeId => isPending(saveItem.reply(outcomeId))}
-          failed={failed}
+          failed={outcomeId => isFailed(saveItem.reply(outcomeId))}
           onReview={send}
         />
       ))}

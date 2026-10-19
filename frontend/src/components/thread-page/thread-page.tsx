@@ -6,6 +6,7 @@ import { ContactNavigationBar } from '@/components/contacts/contact-navigation-b
 import { Navigation } from '@/components/layout/navigation'
 import { threadAddress, threadsAddress } from '@/components/threads/address'
 import { ReviewSwitch, useReview } from '@/components/threads/review-switch'
+import { SaveFailures } from '@/components/threads/save-failures'
 import {
   saveItem,
   useCloseThread,
@@ -116,6 +117,7 @@ function LoadedThread({
           />
         )}
       </div>
+      <SaveFailures except={threadId} />
       <main className="mx-auto max-w-4xl px-4 py-6 sm:px-6 lg:px-8">
         {read.isError ? (
           <p className="text-sm text-red-700">Failed to load the thread.</p>

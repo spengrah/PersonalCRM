@@ -153,6 +153,44 @@ test.describe('Review saves never wait on the server @area:interactions', () => 
     expect(night.labeled_none).toBe(1)
   })
 
+  test('Next pressed after a confirm failed opens the next thread at once, holds the close and offers the failed save to retry', async ({
+    page,
+    request,
+  }) => {
+    const { side, board, runId } = await openSide(page, request)
+    let failing = true
+    await page.route(/\/threads\/[^/]+\/flag-labels/, route =>
+      failing ? route.fulfill({ status: 500, body: '{}' }) : route.continue()
+    )
+    const closes: string[] = []
+    page.on('request', req => {
+      if (req.method() === 'POST' && /\/threads\/[^/]+\/close/.test(req.url())) {
+        closes.push(req.url())
+      }
+    })
+    await chip(page, side.messages[0].message_key, 'claim')
+      .getByRole('button', { name: 'Confirm Claim' })
+      .click()
+
+    // spec: IXN-085.close-after-earlier-saves
+    await page.keyboard.press('ArrowRight')
+    await expect(page).toHaveURL(new RegExp(`/interactions/threads/${board.thread.thread_id}\\?`))
+    await expect(page.locator('[data-thread-header]')).toBeVisible()
+    const failure = page.locator('[data-save-failures]').getByRole('alert')
+    await expect(failure).toContainText("Couldn't save a flag label", { timeout: SLOW_TIMEOUT_MS })
+    await expect(failure).toContainText('Its close waits')
+    expect(closes, 'the close is not sent after a save that failed').toEqual([])
+    expect((await reviewOf(request, side.thread.thread_id, runId)).nights[0].labeled_none).toBe(0)
+
+    failing = false
+    await failure.getByRole('button', { name: 'Retry' }).click()
+    await expect.poll(() => closes, { timeout: SLOW_TIMEOUT_MS }).toHaveLength(1)
+    await expect(failure).toHaveCount(0)
+    const night = (await reviewOf(request, side.thread.thread_id, runId)).nights[0]
+    expect(night.messages[0].chips[0].state).toBe('confirmed')
+    expect(night.labeled_none).toBe(1)
+  })
+
   test('Done pressed while Confirm Nones is pending closes after the night is labeled', async ({
     page,
     request,

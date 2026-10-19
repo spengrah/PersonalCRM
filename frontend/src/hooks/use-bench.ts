@@ -1,10 +1,5 @@
-import {
-  keepPreviousData,
-  useMutation,
-  useMutationState,
-  useQuery,
-  type MutateOptions,
-} from '@tanstack/react-query'
+import { useSyncExternalStore } from 'react'
+import { keepPreviousData, MutationObserver, useQuery } from '@tanstack/react-query'
 import {
   benchApi,
   threadsApi,
@@ -63,11 +58,152 @@ export function useReviewRuns() {
  * the order made and a close is sent after every save made before it is
  * recorded. A queued save never blocks a click: the caller learns of its end
  * through the answer it draws, and navigating away does not wait for it.
+ *
+ * The queue lives outside any component. A save that fails after the client's
+ * retries stays in it, with the thread and run it names, and parks its
+ * thread: the saves made after it wait, so a close never infers labels from a
+ * decision the server did not record. Other threads' saves go on. The user
+ * retries the failed save, which sends it and then the saves behind it, or
+ * discards it, which drops it and the thread's closes behind it.
  */
-const THREAD_SAVES = { id: 'thread-saves' }
-const THREAD_SAVE = ['thread-save'] as const
+type SaveStatus = 'queued' | 'running' | 'failed'
 
-/** The controls a save came from; only those wait while it is pending. */
+interface SaveEntry {
+  id: number
+  threadId: string
+  runId: string
+  /** The controls the save came from; only those wait while it is pending. */
+  item: string
+  /** What the user sees named when the save fails. */
+  what: string
+  closes: boolean
+  status: SaveStatus
+  send: () => Promise<void>
+  event: DomainEvent
+  onSuccess?: () => void
+  onError?: (error: Error) => void
+}
+
+let saves: readonly SaveEntry[] = []
+let nextId = 0
+let sending = false
+const listeners = new Set<() => void>()
+
+function setSaves(next: readonly SaveEntry[]) {
+  saves = next
+  listeners.forEach(listener => listener())
+}
+
+function subscribe(listener: () => void) {
+  listeners.add(listener)
+  return () => {
+    listeners.delete(listener)
+  }
+}
+
+// The queue is empty when a page renders on the server.
+const NO_SAVES: readonly SaveEntry[] = []
+const useSaves = () =>
+  useSyncExternalStore(
+    subscribe,
+    () => saves,
+    () => NO_SAVES
+  )
+
+const parked = (threadId: string) =>
+  saves.some(save => save.status === 'failed' && save.threadId === threadId)
+
+function setStatus(id: number, status: SaveStatus) {
+  setSaves(saves.map(save => (save.id === id ? { ...save, status } : save)))
+}
+
+// Sends one save at a time, the oldest first, past the threads a failure parks.
+// A save's retries are the shared client's mutation retry policy.
+async function sendNext() {
+  if (sending) return
+  const save = saves.find(s => s.status === 'queued' && !parked(s.threadId))
+  if (!save) return
+  sending = true
+  setStatus(save.id, 'running')
+  try {
+    await new MutationObserver(queryClient, { mutationFn: save.send }).mutate()
+    setSaves(saves.filter(s => s.id !== save.id))
+    save.onSuccess?.()
+  } catch (error) {
+    setStatus(save.id, 'failed')
+    save.onError?.(error as Error)
+  } finally {
+    invalidateFor(save.event)
+    sending = false
+    void sendNext()
+  }
+}
+
+function enqueue(save: Omit<SaveEntry, 'id' | 'status'>) {
+  // The user acting again on a failed save's controls replaces the failed save.
+  setSaves([
+    ...saves.filter(s => !(s.status === 'failed' && s.item === save.item)),
+    { ...save, id: nextId++, status: 'queued' },
+  ])
+  void sendNext()
+}
+
+/**
+ * Whether the controls of a save item wait on a pending save (one in flight or
+ * queued behind another).
+ */
+export function usePendingSaves(): (item: string) => boolean {
+  const snapshot = useSaves()
+  return item => snapshot.some(save => save.item === item && save.status !== 'failed')
+}
+
+/** Whether a save item's last save failed and was neither retried nor replaced. */
+export function useFailedSave(): (item: string) => boolean {
+  const snapshot = useSaves()
+  return item => snapshot.some(save => save.item === item && save.status === 'failed')
+}
+
+export interface FailedSave {
+  id: number
+  threadId: string
+  runId: string
+  what: string
+  /** Whether a close waits behind the failed save. */
+  closeHeld: boolean
+  retry: () => void
+  discard: () => void
+}
+
+/** The saves that failed and still wait for the user, whatever page they came from. */
+export function useFailedSaves(): FailedSave[] {
+  const snapshot = useSaves()
+  return snapshot
+    .filter(save => save.status === 'failed')
+    .map(save => ({
+      id: save.id,
+      threadId: save.threadId,
+      runId: save.runId,
+      what: save.what,
+      closeHeld: snapshot.some(
+        other => other.closes && other.status === 'queued' && other.threadId === save.threadId
+      ),
+      retry: () => {
+        setStatus(save.id, 'queued')
+        void sendNext()
+      },
+      discard: () => {
+        setSaves(
+          saves.filter(
+            other =>
+              other.id !== save.id &&
+              !(other.closes && other.status === 'queued' && other.threadId === save.threadId)
+          )
+        )
+        void sendNext()
+      },
+    }))
+}
+
 export const saveItem = {
   flag: (messageKey: string, kind: FlagKind) => `flag:${messageKey}:${kind}`,
   clearing: (commitmentMessageKey: string, cutOff: string) =>
@@ -81,23 +217,6 @@ export const saveItem = {
 interface SaveTarget {
   threadId: string
   runId: string
-}
-
-interface QueuedSave<V> {
-  vars: V
-  item: string
-}
-
-/**
- * Whether the controls of a save item wait on a pending save (one in flight or
- * queued behind another).
- */
-export function usePendingSaves(): (item: string) => boolean {
-  const items = useMutationState({
-    filters: { mutationKey: THREAD_SAVE, status: 'pending' },
-    select: mutation => (mutation.state.variables as QueuedSave<unknown>).item,
-  })
-  return item => items.includes(item)
 }
 
 /**
@@ -119,26 +238,30 @@ async function showRecorded(target: SaveTarget, review: ThreadReviewResponse | u
   )
 }
 
+interface SaveCallbacks {
+  onSuccess?: () => void
+  onError?: (error: Error) => void
+}
+
 function useThreadSave<V extends SaveTarget>(
   itemOf: (vars: V) => string,
   send: (vars: V) => Promise<ThreadReviewResponse | undefined>,
-  event: DomainEvent
+  event: DomainEvent,
+  what: string,
+  closes = false
 ) {
-  const save = useMutation({
-    mutationKey: THREAD_SAVE,
-    scope: THREAD_SAVES,
-    mutationFn: async ({ vars }: QueuedSave<V>) => {
-      const review = await send(vars)
-      await showRecorded(vars, review)
-      return review
-    },
-    onSettled: () => invalidateFor(event),
-  })
   return {
-    mutate: (
-      vars: V,
-      options?: MutateOptions<ThreadReviewResponse | undefined, Error, QueuedSave<V>>
-    ) => save.mutate({ vars, item: itemOf(vars) }, options),
+    mutate: (vars: V, callbacks?: SaveCallbacks) =>
+      enqueue({
+        threadId: vars.threadId,
+        runId: vars.runId,
+        item: itemOf(vars),
+        what,
+        closes,
+        event,
+        send: async () => showRecorded(vars, await send(vars)),
+        ...callbacks,
+      }),
   }
 }
 
@@ -157,7 +280,8 @@ export function useLabelFlag() {
         kind: v.kind,
         holds: v.holds,
       }),
-    'thread:labeled'
+    'thread:labeled',
+    'a flag label'
   )
 }
 
@@ -176,7 +300,8 @@ export function useLabelClearing() {
         cut_off: v.cutOff,
         done: v.done,
       }),
-    'thread:labeled'
+    'thread:labeled',
+    'a clearing label'
   )
 }
 
@@ -191,7 +316,8 @@ export function useReviewReplyItem() {
   return useThreadSave(
     (v: ReviewReplyItemVars) => saveItem.reply(v.outcomeId),
     async v => (await threadsApi.reviewReplyItem(v.outcomeId, v.runId, v.review)).thread_review,
-    'thread:reply-reviewed'
+    'thread:reply-reviewed',
+    'a reply review'
   )
 }
 
@@ -203,7 +329,8 @@ export function useConfirmNones() {
   return useThreadSave(
     (v: ConfirmNonesVars) => saveItem.nones(v.judgmentId),
     v => threadsApi.confirmNones(v.judgmentId, v.runId),
-    'thread:nones-confirmed'
+    'thread:nones-confirmed',
+    'Confirm Nones'
   )
 }
 
@@ -213,6 +340,8 @@ export function useCloseThread() {
   return useThreadSave(
     (v: SaveTarget) => saveItem.close(v.threadId),
     v => threadsApi.close(v.threadId, v.runId),
-    'thread:closed'
+    'thread:closed',
+    'Done',
+    true
   )
 }

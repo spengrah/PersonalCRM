@@ -4,7 +4,7 @@ import { useState } from 'react'
 import { clsx } from 'clsx'
 import { Check, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import { saveItem, usePendingSaves, useLabelFlag } from '@/hooks/use-bench'
+import { saveItem, useFailedSave, usePendingSaves, useLabelFlag } from '@/hooks/use-bench'
 import type { FlagChipResponse } from '@/types/generated/contact'
 import type { ChipState, FlagKind } from '@/types/generated/judgment'
 import { FLAG_KINDS, FLAG_KIND_ORDER } from '@/components/threads/flag-kinds'
@@ -32,15 +32,7 @@ interface MessageTarget {
   messageKey: string
 }
 
-function Chip({
-  target,
-  chip,
-  onFailed,
-}: {
-  target: MessageTarget
-  chip: FlagChipResponse
-  onFailed: (failed: boolean) => void
-}) {
+function Chip({ target, chip }: { target: MessageTarget; chip: FlagChipResponse }) {
   const [changing, setChanging] = useState(false)
   const label = useLabelFlag()
   const isPending = usePendingSaves()
@@ -49,13 +41,8 @@ function Chip({
   const look = STATE_LOOK[chip.state]
   const reviewing = chip.state === 'to_review' || changing
 
-  const send = (holds: boolean) => {
-    onFailed(false)
-    label.mutate(
-      { ...target, kind: chip.kind, holds },
-      { onSuccess: () => setChanging(false), onError: () => onFailed(true) }
-    )
-  }
+  const send = (holds: boolean) =>
+    label.mutate({ ...target, kind: chip.kind, holds }, { onSuccess: () => setChanging(false) })
 
   return (
     <span
@@ -123,15 +110,7 @@ function Chip({
   )
 }
 
-function FlagMenu({
-  target,
-  kinds,
-  onFailed,
-}: {
-  target: MessageTarget
-  kinds: FlagKind[]
-  onFailed: (failed: boolean) => void
-}) {
+function FlagMenu({ target, kinds }: { target: MessageTarget; kinds: FlagKind[] }) {
   const [open, setOpen] = useState(false)
   const label = useLabelFlag()
   if (kinds.length === 0) return null
@@ -164,8 +143,7 @@ function FlagMenu({
                 role="menuitem"
                 onClick={() => {
                   setOpen(false)
-                  onFailed(false)
-                  label.mutate({ ...target, kind, holds: true }, { onError: () => onFailed(true) })
+                  label.mutate({ ...target, kind, holds: true })
                 }}
                 className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm text-gray-700 hover:bg-gray-50"
               >
@@ -192,19 +170,16 @@ export function MessageFlags({
   messageKey,
   chips,
 }: MessageTarget & { chips: FlagChipResponse[] }) {
-  const [failed, setFailed] = useState(false)
+  const isFailed = useFailedSave()
+  const failed = FLAG_KIND_ORDER.some(kind => isFailed(saveItem.flag(messageKey, kind)))
   const target = { threadId, runId, messageKey }
   const shown = new Set(chips.map(chip => chip.kind))
   return (
     <div data-message-flags className="flex flex-wrap items-center gap-2 pt-1">
       {chips.map(chip => (
-        <Chip key={chip.kind} target={target} chip={chip} onFailed={setFailed} />
+        <Chip key={chip.kind} target={target} chip={chip} />
       ))}
-      <FlagMenu
-        target={target}
-        kinds={FLAG_KIND_ORDER.filter(kind => !shown.has(kind))}
-        onFailed={setFailed}
-      />
+      <FlagMenu target={target} kinds={FLAG_KIND_ORDER.filter(kind => !shown.has(kind))} />
       {failed && <span className="text-xs text-red-700">{SAVE_ERROR}</span>}
     </div>
   )

@@ -13,6 +13,7 @@ import { threadAddress } from './address'
 import { ContactFilter } from './contact-filter'
 import { runLabel } from './format'
 import { useReview } from './review-switch'
+import { SaveFailures } from './save-failures'
 import { StatusPill } from './status-pill'
 import { TypeFilter } from './type-filter'
 import { GroupChip, VenueChip } from './venue'
@@ -132,6 +133,7 @@ export function ThreadsList({ filters, onChange }: ThreadsListProps) {
 
   return (
     <>
+      <SaveFailures />
       <div className="flex flex-wrap items-end gap-4 border-b border-gray-200 px-4 py-4 sm:px-6">
         {review && (
           <div className="min-w-[12rem] flex-1">
