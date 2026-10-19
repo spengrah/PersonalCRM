@@ -34,7 +34,7 @@ One row per thread, in one white card (T1, T2).
 
 **Filters**, in a row above the list: Run (Review on only), Venue, Contact, and "Clear filters".
 
-- **Run** lists historical and scheduled runs only, each named "{method} · {month}", for example "clef-masked · January 2026". Scorecard reruns never appear. A run fixes its method, so there is no method filter.
+- **Run** lists the historical and scheduled runs of the compared methods (clef-masked, clef-masked-reasoned, jev-masked), each named "{method} · {month}", for example "clef-masked · January 2026". Scorecard reruns and the runs of removed methods never appear. A run fixes its method, so there is no method filter. With Review on and no run chosen, it holds the newest run it lists.
 - **Venue** is a segmented control: All, WhatsApp, Telegram, iMessage, Email, Calendar.
 - **Contact** narrows to threads the contact takes part in.
 
@@ -53,7 +53,7 @@ One row per thread, in one white card (T1, T2).
 | Status | Review on only: a pill (below) |
 | Open | a chevron link to the thread page |
 
-**Status pills:** "{n} to review" (amber-50, amber-300 border, amber-800), "Nothing flagged" (gray-100, gray-300 border, gray-700), "Reviewed" (green-50, green-300 border, green-800). The count is the shown flags, clearing decisions and reply items without a label. "Nothing flagged" is a thread whose nights show no flag, no clearing and no reply item and are not yet confirmed.
+**Status pills:** "{n} to review" (amber-50, amber-300 border, amber-800), "Nothing flagged" (gray-100, gray-300 border, gray-700), "Reviewed" (green-50, green-300 border, green-800). A thread reads "Reviewed" once every night holds one of the user's labels. Otherwise, a thread that shows at least one flag, clearing decision or reply item reads "{n} to review", n counting its shown items without a label plus each night that shows nothing and still awaits Confirm Nones. A thread that shows nothing at all and is not yet confirmed reads "Nothing flagged".
 
 Paging is the shipped "Page {n} of {m} ({total} threads)" with Previous and Next.
 
@@ -116,7 +116,7 @@ A box with a blue-50 tint (#f3f8ff), a blue-300 border, 10 px radius and a faint
 ## Labeling and closing
 
 - A **close** is Done or Next (the pager's › or the right-arrow key). Back to list, ‹ and leaving the page are not closes.
-- A close labels "no", for all three kinds, every unflagged flag decision without a label among the new messages of each night that holds at least one of the user's labels. A label on a chip, a reply item or a clearing decision counts. A shown flag without a label stays to review.
+- A close labels "no", for all three kinds, every unflagged flag decision without a label among the new messages of each night that holds at least one of the user's labels. A label on a chip, a reply item or a clearing decision counts. A shown flag without a label stays to review, and a close never labels a flag decision that any compared method's judgment shows as a flag without a label; removed methods' judgments never hold a close back.
 - A night that shows nothing gets its label from Confirm Nones; a close alone gives it none.
 - A thread is **Reviewed** when every night in it holds at least one of the user's labels.
 - No save waits before the user's next click (spec SC9): saves are recorded in order, and a close takes effect after every save made on the page is recorded.
