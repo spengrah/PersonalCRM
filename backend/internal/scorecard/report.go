@@ -35,6 +35,9 @@ type MethodScore struct {
 	Terms   decision.TermsStatus
 	// Incomplete counts the examples the rerun reported incomplete, by reason.
 	Incomplete map[judgment.IncompleteReason]int
+	// Unjudged counts the new messages no judgment of the rerun answered, by
+	// reason; never a count of messages answered no.
+	Unjudged map[judgment.UnjudgedReason]int
 }
 
 // Comparison compares a method with a second one over the same examples.
@@ -89,7 +92,8 @@ type Proposal struct {
 }
 
 // Scorecard reruns methods over the reviewed examples and reports their
-// scores.
+// scores. A rerun judges each reviewed thread's cut-offs in order through the
+// runner, the one path every run judges through.
 type Scorecard struct {
 	reader  *Reader
 	runner  *judgerun.Runner
@@ -125,6 +129,34 @@ func (s *Scorecard) Report(ctx context.Context, methodKey, compareKey string) (R
 	return report, failureOf(err)
 }
 
+// targets names, for each reviewed example, the judgments its reviews sit on:
+// those of the methods the user reviewed, at the example's thread and input
+// hash. A rerun replays from the start of the run they appeared in.
+func (s *Scorecard) targets(ctx context.Context, examples []judgment.Example) ([]judgerun.Target, error) {
+	records, err := s.reader.store.ReviewRecords(ctx)
+	if err != nil {
+		return nil, err
+	}
+	reviewedBy := map[judgment.ExampleID][]judgment.MethodRef{}
+	for _, r := range records {
+		reviewedBy[r.Example] = append(reviewedBy[r.Example], r.Method)
+	}
+	targets := make([]judgerun.Target, len(examples))
+	for i, ex := range examples {
+		targets[i] = judgerun.Target{Thread: ex.Thread, CutOff: ex.CutOff, InputHash: ex.InputHash}
+		views, err := s.reader.store.ListJudgments(ctx, judgment.JudgmentQuery{Thread: &ex.Thread})
+		if err != nil {
+			return nil, err
+		}
+		for _, v := range views {
+			if v.InputHash == ex.InputHash && slices.Contains(reviewedBy[ex.ID], v.Method) {
+				targets[i].Judgments = append(targets[i].Judgments, v.ID)
+			}
+		}
+	}
+	return targets, nil
+}
+
 func (s *Scorecard) report(ctx context.Context, methodKey, compareKey string) (Report, error) {
 	methods, unavailable, err := s.selectMethods(methodKey, compareKey)
 	if err != nil {
@@ -139,13 +171,13 @@ func (s *Scorecard) report(ctx context.Context, methodKey, compareKey string) (R
 		report.Proposal = Proposal{Reason: ProposalNoReviews}
 		return report, nil
 	}
-	ids := make([]judgment.ExampleID, len(examples))
-	for i, ex := range examples {
-		ids[i] = ex.ID
+	targets, err := s.targets(ctx, examples)
+	if err != nil {
+		return Report{}, failed(Failure{Reason: FailureReadReviews}, err)
 	}
 	var runs []scoredRun
 	for _, m := range methods {
-		run, err := s.runner.Rerun(ctx, m.Ref().Key, ids)
+		run, err := s.runner.Rerun(ctx, m.Ref().Key, targets)
 		if err != nil {
 			return Report{}, failed(Failure{Reason: FailureRerun, Method: m.Ref().Key, Run: run}, err)
 		}
@@ -157,7 +189,7 @@ func (s *Scorecard) report(ctx context.Context, methodKey, compareKey string) (R
 		for _, t := range scored.summary.Incomplete {
 			incomplete[t.Reason]++
 		}
-		report.Methods = append(report.Methods, MethodScore{Metrics: scored.metrics, Terms: m.Terms(), Incomplete: incomplete})
+		report.Methods = append(report.Methods, MethodScore{Metrics: scored.metrics, Terms: m.Terms(), Incomplete: incomplete, Unjudged: scored.summary.UnjudgedCounts})
 		runs = append(runs, scored)
 	}
 	if compareKey != "" {

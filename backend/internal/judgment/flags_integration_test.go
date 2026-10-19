@@ -192,46 +192,6 @@ func TestJudgmentReadsReturnFlagRecords(t *testing.T) {
 	})
 }
 
-// A judgment is identified by the earlier commitments it re-checked, not only
-// by the earlier judgments holding them.
-func TestJudgmentsRecheckingDifferentCommitmentsOfOneEarlierJudgmentAreDistinct(t *testing.T) {
-	// spec: KNW-062.different-read-judged-anew
-	e := newEnv(t, production)
-	c, th := e.contact(t), e.thread(t)
-	for day := 1; day <= 3; day++ {
-		e.message(t, th, c, false, e.day(day))
-	}
-	keys := e.messageKeys(t, th)
-	earlier := windowed(otherMethod, th, e.day(2), "h2", keys[0], keys[:2], judgment.Outcomes{})
-	earlier.Flags = append(flagsOf(keys[0], 0.8, 0.1, 0.2), flagsOf(keys[1], 0.9, 0.1, 0.2)...)
-	run, err := e.store.StartRun(e.ctx, judgment.RunSpec{Kind: judgment.RunKindRerun, Method: otherMethod})
-	require.NoError(t, err)
-	_, err = e.store.RecordJudgment(e.ctx, run, earlier)
-	require.NoError(t, err)
-	first := e.viewOf(t, th, otherMethod, e.day(2))
-	later := func(commitment string) judgment.Judgment {
-		j := windowed(otherMethod, th, e.day(3), "h3", keys[0], keys[2:], judgment.Outcomes{})
-		j.Flags = flagsOf(keys[2], 0.1, 0.1, 0.1)
-		j.Clearings = []judgment.ClearingDecision{{CommitmentMessageKey: commitment, CommitmentJudgment: first.ID, Done: true, Probability: 0.9}}
-		return j
-	}
-
-	_, err = e.store.RecordJudgment(e.ctx, run, later(keys[0]))
-	require.NoError(t, err)
-	_, err = e.store.RecordJudgment(e.ctx, run, later(keys[1]))
-	require.NoError(t, err)
-
-	views, err := e.store.ListJudgments(e.ctx, judgment.JudgmentQuery{Thread: &th.id})
-	require.NoError(t, err)
-	var cleared []string
-	for _, v := range views {
-		for _, cl := range v.Clearings {
-			cleared = append(cleared, cl.CommitmentMessageKey)
-		}
-	}
-	assert.ElementsMatch(t, keys[:2], cleared, "each judgment keeps the clearing it recorded")
-}
-
 func mustListRuns(t *testing.T, e *env) []judgment.RunSummary {
 	t.Helper()
 	runs, err := e.store.ListRuns(e.ctx)

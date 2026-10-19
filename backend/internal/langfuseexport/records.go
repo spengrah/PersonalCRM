@@ -10,7 +10,6 @@ import (
 	"strings"
 	"time"
 
-	"personal-crm/backend/internal/decision"
 	"personal-crm/backend/internal/judgment"
 	"personal-crm/backend/internal/scorecard"
 )
@@ -101,6 +100,10 @@ func judgmentSpan(j judgment.JudgmentRecord) span {
 	s.metadata["context_tokens"] = j.Usage.ContextTokens
 	s.metadata["question_count"] = j.Usage.Questions
 	s.metadata["latency_ms"] = j.Usage.Latency.Milliseconds()
+	candidates := messageCandidates(j)
+	s.metadata["window_start"] = candidates[j.WindowStart]
+	s.metadata["flags"] = flagsOf(j, candidates)
+	s.metadata["clearings"] = clearingsOf(j, candidates)
 	// Decision models generate no text, so every billed token is input.
 	if j.Usage.BilledTokens != nil {
 		s.usage = map[string]int{"input": *j.Usage.BilledTokens}
@@ -120,6 +123,38 @@ type question struct {
 	Outcome       string             `json:"outcome,omitempty"`
 	Confidence    *float64           `json:"confidence,omitempty"`
 	Probabilities map[string]float64 `json:"probabilities"`
+}
+
+// flag is one flag decision as the export sends it.
+type flag struct {
+	Message     string  `json:"message"`
+	Kind        string  `json:"kind"`
+	Probability float64 `json:"probability"`
+}
+
+// clearing is one clearing decision as the export sends it. It names the
+// commitment by its message's candidate, and not by the earlier judgment
+// holding the commitment's flag decision, which is a store identifier.
+type clearing struct {
+	Message     string  `json:"message"`
+	Done        bool    `json:"done"`
+	Probability float64 `json:"probability"`
+}
+
+func flagsOf(j judgment.JudgmentRecord, candidates map[string]string) []flag {
+	out := make([]flag, len(j.Flags))
+	for i, f := range j.Flags {
+		out[i] = flag{Message: candidates[f.MessageKey], Kind: string(f.Kind), Probability: f.Probability}
+	}
+	return out
+}
+
+func clearingsOf(j judgment.JudgmentRecord, candidates map[string]string) []clearing {
+	out := make([]clearing, len(j.Clearings))
+	for i, c := range j.Clearings {
+		out[i] = clearing{Message: candidates[c.CommitmentMessageKey], Done: c.Done, Probability: c.Probability}
+	}
+	return out
 }
 
 // questionsOf lists every answered question, outcome or not, with its
@@ -152,17 +187,11 @@ func questionsOf(j judgment.JudgmentRecord) []question {
 	return out
 }
 
-// sourceMessageOptions are the options a source-message question offers
-// besides its messages, in every wording; none names a message.
-var sourceMessageOptions = func() map[string]bool {
-	keys := map[string]bool{}
-	for _, w := range []decision.Wording{decision.DefaultWording, decision.ReasonedWording} {
-		for _, o := range w.SourceMessage.Options {
-			keys[o.Key] = true
-		}
-	}
-	return keys
-}()
+// sourceMessageOptions are the options the retired source-message questions
+// offered besides their messages, in every wording; none names a message.
+// Only judgments of method versions from before message flags hold such a
+// question, so the set never changes.
+var sourceMessageOptions = map[string]bool{"none": true, "unlisted": true}
 
 // isSourceMessage reports whether a question is a source-message question,
 // by its own ID.
@@ -170,10 +199,11 @@ func isSourceMessage(id string) bool {
 	return strings.HasSuffix(id, judgment.SourceMessageQuestionID(""))
 }
 
-// messageCandidates maps each message key the judgment's source-message
-// questions offer or select to an opaque candidate, numbered in key order.
-// Every key of those questions that is not one of their own options is taken
-// for a message key, so an unknown key is never sent as it is.
+// messageCandidates maps each message key the judgment names to an opaque
+// candidate, numbered in key order: the keys its source-message questions
+// offer or select, its window start, and its flag and clearing decisions.
+// Every key of a source-message question that is not one of its own options is
+// taken for a message key, so an unknown key is never sent as it is.
 func messageCandidates(j judgment.JudgmentRecord) map[string]string {
 	var keys []string
 	for _, q := range j.Questions {
@@ -181,12 +211,26 @@ func messageCandidates(j judgment.JudgmentRecord) map[string]string {
 			continue
 		}
 		for _, k := range append(slices.Collect(maps.Keys(q.Probabilities)), q.Chosen()) {
-			if k != "" && !sourceMessageOptions[k] && !slices.Contains(keys, k) {
+			if !sourceMessageOptions[k] {
 				keys = append(keys, k)
 			}
 		}
 	}
+	keys = append(keys, j.WindowStart)
+	for _, f := range j.Flags {
+		keys = append(keys, f.MessageKey)
+	}
+	for _, c := range j.Clearings {
+		keys = append(keys, c.CommitmentMessageKey)
+	}
+	return candidatesOf(keys)
+}
+
+// candidatesOf numbers the distinct non-empty keys in key order.
+func candidatesOf(keys []string) map[string]string {
+	keys = slices.DeleteFunc(slices.Clone(keys), func(k string) bool { return k == "" })
 	slices.Sort(keys)
+	keys = slices.Compact(keys)
 	candidates := make(map[string]string, len(keys))
 	for i, k := range keys {
 		candidates[k] = "candidate_" + strconv.Itoa(i+1)
@@ -200,8 +244,32 @@ func runIDs(run judgment.RunID) (trace, span string) {
 	return ids(traceRun, run.String())
 }
 
-// runSpan is a finished run's summary, spanning the run.
-func runSpan(r judgment.RunRecord) span {
+// unjudged is one unjudged message as the export sends it. It names no
+// thread: the cut-off and the message's candidate say which message it is.
+type unjudged struct {
+	Message string `json:"message"`
+	Reason  string `json:"reason"`
+	CutOff  string `json:"cut_off"`
+}
+
+// unjudgedOf lists a run's unjudged messages, each message as an opaque
+// candidate numbered in key order across the run.
+func unjudgedOf(messages []judgment.UnjudgedMessage) []unjudged {
+	keys := make([]string, len(messages))
+	for i, m := range messages {
+		keys[i] = m.MessageKey
+	}
+	candidates := candidatesOf(keys)
+	out := make([]unjudged, len(messages))
+	for i, m := range messages {
+		out[i] = unjudged{Message: candidates[m.MessageKey], Reason: string(m.Reason), CutOff: m.CutOff.UTC().Format(time.RFC3339)}
+	}
+	return out
+}
+
+// runSpan is a finished run's summary, spanning the run, with the new messages
+// no judgment of it answered.
+func runSpan(r judgment.RunRecord, messages []judgment.UnjudgedMessage) span {
 	trace, spanID := runIDs(r.Run)
 	incomplete := map[string]int{}
 	for reason, n := range r.Incomplete {
@@ -219,6 +287,7 @@ func runSpan(r judgment.RunRecord) span {
 	s.metadata["obligations_opened"] = r.Effects.ObligationsOpened
 	s.metadata["flags_raised"] = r.Effects.FlagsRaised
 	s.metadata["claims_raised"] = r.Effects.ClaimsRaised
+	s.metadata["unjudged"] = unjudgedOf(messages)
 	if r.From != nil {
 		s.metadata["window_from"] = r.From.UTC().Format(time.RFC3339)
 	}

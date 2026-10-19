@@ -27,12 +27,12 @@ func TestJudge_JudgmentCarriesItsUsage(t *testing.T) {
 		m := decision.NewMaskedMethod(definition(roomy), masker, adapter)
 		size, err := m.Measure(t.Context(), c)
 		require.NoError(t, err)
-		res, err := m.Judge(t.Context(), c)
+		res, err := planAndJudge(t.Context(), m, c)
 		require.NoError(t, err)
 		j := judged(t, res)
 		assert.Equal(t, executedAt, j.JudgedAt, "judged at execution time, not the cut-off")
 		assert.Positive(t, j.Usage.Latency)
-		assert.Equal(t, size.Tokens, j.Usage.ContextTokens)
+		assert.Equal(t, size.Tokens, j.Usage.ContextTokens, "an unscaled sizing gives the estimate itself")
 		assert.Equal(t, size.Questions, j.Usage.Questions)
 		assert.Equal(t, decision.DefaultWording.Version(), j.Method.WordingVersion)
 		return j, size
@@ -83,7 +83,7 @@ func TestJudge_JudgmentCarriesItsUsage(t *testing.T) {
 		m := newMethod(def, f)
 		ref := m.Ref()
 		def.Wording.BallInCourt.Options[0].Description = "reworded"
-		_, err := m.Judge(t.Context(), dm("see you friday?"))
+		_, err := planAndJudge(t.Context(), m, dm("see you friday?"))
 		require.NoError(t, err)
 		bic := f.requests[0].Questions()[0]
 		require.Equal(t, "ball_in_court/THEM", bic.ID)
@@ -98,17 +98,9 @@ func TestJudge_JudgmentCarriesItsUsage(t *testing.T) {
 		for _, b := range j.Outcomes.BallInCourt {
 			got[b.QuestionID] = b.ContactID.String()
 		}
-		for _, c := range j.Outcomes.Commitments {
-			got[c.QuestionID] = c.ContactID.String()
-		}
 		assert.Equal(t, map[string]string{
-			"ball_in_court/PERSON_2":     juniper.String(),
-			"commitment_mine/PERSON_2":   juniper.String(),
-			"commitment_theirs/PERSON_2": juniper.String(),
-			"ball_in_court/PERSON_3":     tobias.String(),
-			"commitment_mine/PERSON_3":   tobias.String(),
-			"commitment_theirs/PERSON_3": tobias.String(),
+			"ball_in_court/PERSON_2": juniper.String(),
+			"ball_in_court/PERSON_3": tobias.String(),
 		}, got)
-		assert.Equal(t, "big_moment", j.Outcomes.BigMoment.QuestionID)
 	})
 }

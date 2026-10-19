@@ -106,6 +106,20 @@ SELECT sqlc.arg('judgment_id')::uuid,
        unnest(sqlc.arg('dones')::boolean[])::boolean,
        unnest(sqlc.arg('probabilities')::float8[])::float8;
 
+-- name: IsEarlierCommitment :one
+-- Whether the judgment holds a commitment flag decision for the message and
+-- belongs to the thread with a cut-off before the given one.
+SELECT EXISTS (
+    SELECT 1
+    FROM judgment_flag f
+    JOIN judgment j ON j.id = f.judgment_id
+    JOIN judgment_example e ON e.id = j.example_id
+    WHERE f.judgment_id = sqlc.arg('judgment_id')::uuid
+      AND f.message_key = sqlc.arg('message_key')::text
+      AND f.kind = sqlc.arg('commitment_kind')::text
+      AND e.thread_id = sqlc.arg('thread_id')::uuid
+      AND j.cut_off < sqlc.arg('cut_off')::timestamptz);
+
 -- name: ListJudgmentFlags :many
 SELECT * FROM judgment_flag
 WHERE judgment_id = ANY(sqlc.arg('judgment_ids')::uuid[])

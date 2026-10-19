@@ -435,7 +435,6 @@ type JudgmentClearing struct {
 	JudgmentID           uuid.UUID `json:"judgment_id"`
 	CommitmentMessageKey string    `json:"commitment_message_key"`
 	CommitmentJudgmentID uuid.UUID `json:"commitment_judgment_id"`
-	CommitmentKind       string    `json:"commitment_kind"`
 	Done                 bool      `json:"done"`
 	Probability          float64   `json:"probability"`
 }

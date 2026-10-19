@@ -56,6 +56,9 @@ func writeScorecard(w io.Writer, r scorecard.Report) error {
 		for _, reason := range slices.Sorted(maps.Keys(m.Incomplete)) {
 			p.printf("  incomplete reason=%s n=%d\n", reason, m.Incomplete[reason])
 		}
+		for _, reason := range slices.Sorted(maps.Keys(m.Unjudged)) {
+			p.printf("  unjudged reason=%s n=%d\n", reason, m.Unjudged[reason])
+		}
 		for _, key := range slices.Sorted(maps.Keys(mm.PerOutcome)) {
 			p.outcome("  ", key, mm.PerOutcome[key])
 		}

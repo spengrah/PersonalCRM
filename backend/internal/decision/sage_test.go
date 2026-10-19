@@ -16,38 +16,12 @@ func sageMethod(url string) decision.Method {
 	return decision.NewMaskedMethod(definition(roomy), threadctx.NewMasker(names), decision.NewSageAdapter(url, "key"))
 }
 
-// Every option of every question carries a probability in a sage-masked
-// judgment; a yes/no answer is the outcome whatever its probability, and an
-// answer of null, Sage's "not sure", keeps its probabilities and records no
-// original answer, so the most probable option is the chosen one.
+// Every option of the ball-in-court question carries a probability in a
+// sage-masked judgment.
 func TestSage_EveryOptionHasAProbability(t *testing.T) {
 	yes := "yes"
-	cases := []struct {
-		name       string
-		answer     *string
-		original   string
-		outcome    judgment.CommitmentState
-		confidence float64
-	}{
-		{"a yes/no answer with a probability", &yes, "open", judgment.CommitmentStateOpen, 0.35},
-		{"a yes/no answer of null", nil, "", judgment.CommitmentStateNone, 0.65},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			res, err := sageMethod(sageServer(t, tc.answer, nil, 0).URL).Judge(t.Context(), dm("I'll send the photos on Friday"))
-			require.NoError(t, err)
-			j := judged(t, res)
-			q := answered(j, "commitment_theirs/THEM")
-			assert.Equal(t, map[string]float64{"open": 0.35, "none": 0.65}, q.Probabilities)
-			assert.Equal(t, tc.original, q.OriginalAnswer)
-			theirs := commitment(t, j, judgment.CommitmentDirectionTheirs)
-			assert.Equal(t, tc.outcome, theirs.Outcome)
-			assert.InDelta(t, tc.confidence, theirs.Confidence, 1e-9)
-		})
-	}
-
 	t.Run("a four-option ball-in-court question", func(t *testing.T) {
-		res, err := sageMethod(sageServer(t, &yes, nil, 0).URL).Judge(t.Context(), dm("are you free saturday?"))
+		res, err := planAndJudge(t.Context(), sageMethod(sageServer(t, &yes, nil, 0).URL), dm("are you free saturday?"))
 		require.NoError(t, err)
 		j := judged(t, res)
 		q := answered(j, "ball_in_court/THEM")
@@ -68,7 +42,7 @@ func TestSage_EveryOptionHasAProbability(t *testing.T) {
 func TestSage_RefusedCallIsCallFailed(t *testing.T) {
 	for _, status := range []int{http.StatusPaymentRequired, http.StatusInternalServerError} {
 		t.Run(http.StatusText(status), func(t *testing.T) {
-			res, err := sageMethod(sageServer(t, nil, nil, status).URL).Judge(t.Context(), dm("are you free saturday?"))
+			res, err := planAndJudge(t.Context(), sageMethod(sageServer(t, nil, nil, status).URL), dm("are you free saturday?"))
 			require.NoError(t, err)
 			assert.Equal(t, decision.Incomplete{Reason: judgment.IncompleteReasonCallFailed}, res)
 		})

@@ -780,7 +780,7 @@ behaviors:
       - key: reply-list-limits
         text: a reply list holds at most one contact for a one-to-one thread, and a meeting's proposal has no reply lists
       - key: commitment-date-and-stand-in
-        text: a commitment shows the due date its judgment selected, or that it has no stated date, and a party's commitment stands in for that party's reply owed in the same direction
+        text: a commitment shows the due date its judgment selected, or that it has no stated date
       - key: source-quote-leads
         text: a commitment whose judgment names the message that states it quotes that message and leads to it in the thread; a commitment whose judgment names none shows no quote
       - key: flag-belongs-to-thread

@@ -22,9 +22,11 @@
 --
 -- A flag decision is identified by its thread, message key and kind, whichever
 -- method, run or cut-off judged it; judgment_flag holds each judgment's answer
--- for it. A clearing decision is identified by its thread, the commitment's
--- message key and the cut-off of the judgment that made it, and must name a
--- commitment flag decision of an earlier judgment.
+-- for it, so its thread is its judgment's. A clearing decision is identified by
+-- its thread, the commitment's message key and the cut-off of the judgment that
+-- made it; judgment_clearing holds each judgment's answer for it. That a
+-- clearing names a commitment flag decision of an earlier judgment of the same
+-- thread is kept by the judgment store's writer alone, not by a constraint.
 --
 -- Wrapped in an explicit transaction: the postgres migration driver does NOT
 -- auto-wrap a migration file, so multi-statement DDL must self-wrap to stay
@@ -57,20 +59,15 @@ CREATE TABLE judgment_flag (
 
 -- judgment_clearing: a judgment's answer to whether one earlier commitment is
 -- done as of its cut-off. commitment_judgment_id names the earlier judgment
--- holding the commitment flag decision; the composite key to judgment_flag
--- makes the cleared decision a commitment one. done is the method's answer and
+-- holding the commitment flag decision. done is the method's answer and
 -- probability the answer's probability of done.
 CREATE TABLE judgment_clearing (
     judgment_id UUID NOT NULL REFERENCES judgment(id),
     commitment_message_key TEXT NOT NULL,
-    commitment_judgment_id UUID NOT NULL,
-    commitment_kind TEXT NOT NULL DEFAULT 'commitment' CHECK (commitment_kind = 'commitment'),
+    commitment_judgment_id UUID NOT NULL REFERENCES judgment(id),
     done BOOLEAN NOT NULL,
     probability DOUBLE PRECISION NOT NULL CHECK (probability BETWEEN 0 AND 1),
-    PRIMARY KEY (judgment_id, commitment_message_key),
-    FOREIGN KEY (commitment_judgment_id, commitment_message_key, commitment_kind)
-        REFERENCES judgment_flag (judgment_id, message_key, kind),
-    CHECK (judgment_id <> commitment_judgment_id)
+    PRIMARY KEY (judgment_id, commitment_message_key)
 );
 
 CREATE INDEX idx_judgment_clearing_commitment ON judgment_clearing (commitment_judgment_id);

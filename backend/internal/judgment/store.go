@@ -215,6 +215,9 @@ func (s *Store) RecordJudgment(ctx context.Context, run RunID, j Judgment) (Effe
 		}
 		fresh := !found
 		if fresh {
+			if err := checkClearingsTx(ctx, q, j); err != nil {
+				return err
+			}
 			if judgmentID, err = s.createJudgmentTx(ctx, tx, j); err != nil {
 				return err
 			}
@@ -420,6 +423,25 @@ func createDecisionsTx(ctx context.Context, q *db.Queries, id uuid.UUID, j Judgm
 		}
 		if err := q.CreateJudgmentClearings(ctx, c); err != nil {
 			return fmt.Errorf("create clearing decisions: %w", err)
+		}
+	}
+	return nil
+}
+
+// checkClearingsTx refuses a judgment whose clearing decision names anything
+// but a commitment flag decision of an earlier judgment of the same thread. The
+// schema holds each judgment's answers apart, so the store's writer keeps it.
+func checkClearingsTx(ctx context.Context, q *db.Queries, j Judgment) error {
+	for _, c := range j.Clearings {
+		earlier, err := q.IsEarlierCommitment(ctx, db.IsEarlierCommitmentParams{
+			JudgmentID: c.CommitmentJudgment, MessageKey: c.CommitmentMessageKey,
+			CommitmentKind: string(FlagKindCommitment), ThreadID: j.Thread, CutOff: j.CutOff,
+		})
+		if err != nil {
+			return fmt.Errorf("check clearing decision: %w", err)
+		}
+		if !earlier {
+			return fmt.Errorf("clearing decision of message %q names no commitment flag decision of an earlier judgment of the thread", c.CommitmentMessageKey)
 		}
 	}
 	return nil

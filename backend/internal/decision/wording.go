@@ -2,27 +2,23 @@ package decision
 
 import "encoding/json"
 
-// Wording is the text of every question in the tree. In it, {party} is a
-// participant's role label; {debtor} and {creditor} are the roles of who made
-// a commitment and to whom; {message}, {expression} and {date} fill a
-// candidate option's label.
+// Wording is the text of every question a method asks. In it, {party} is a
+// participant's role label and {message} the reference the rendered state
+// gives one message (m1, m2, and so on).
 type Wording struct {
 	// BallInCourt options are keyed by a ball-in-court outcome value, or, in a
 	// reasoned variant, by "<outcome>.<reason>"; options of one outcome sum.
 	BallInCourt QuestionWording
-	// CommitmentMine and CommitmentTheirs are yes/no questions: the first
-	// option is the yes answer (open), the second the no answer (none).
-	CommitmentMine   QuestionWording
-	CommitmentTheirs QuestionWording
-	// CommitmentDate offers each date the thread's timing expressions resolve
-	// to, labeled by DateOption, and then its own options.
-	CommitmentDate QuestionWording
-	DateOption     string
-	// SourceMessage offers each message the commitment could be stated in,
-	// labeled by MessageOption, and then its own options.
-	SourceMessage QuestionWording
-	MessageOption string
-	BigMoment     QuestionWording
+	// FlagCommitment, FlagBigMoment and FlagClaim are yes/no questions about
+	// one new message: the first option is the yes answer, the second the no
+	// answer.
+	FlagCommitment QuestionWording
+	FlagBigMoment  QuestionWording
+	FlagClaim      QuestionWording
+	// Clearing is a yes/no question about the commitment one earlier message
+	// states: the first option is the done answer, the second the not done
+	// answer.
+	Clearing QuestionWording
 }
 
 // QuestionWording is one question's instructions and fixed options.
@@ -53,13 +49,12 @@ func (w Wording) clone() Wording {
 	return out
 }
 
-// Option keys the tree reads besides outcome values. A candidate question
-// always offers its own two options, so it is a choice even when the thread
-// gives it no candidate; neither names a date or a message.
+// Option keys of the yes/no questions: the first option of each is yes.
 const (
-	optionDateUnknown = "unknown"
-	optionNoMessage   = "none"
-	optionUnlisted    = "unlisted"
+	optionYes     = "yes"
+	optionNo      = "no"
+	optionDone    = "done"
+	optionNotDone = "not_done"
 )
 
 // DefaultWording is the plain question wording.
@@ -73,42 +68,32 @@ var DefaultWording = Wording{
 			{Key: "not_applicable", Label: "Not a conversation", Description: "The thread is an automated message, a broadcast or a newsletter, not a conversation between ME and {party}."},
 		},
 	},
-	CommitmentMine: QuestionWording{
-		Instructions: "Has ME said ME would do something for {party} that ME has not yet done?",
+	FlagCommitment: QuestionWording{
+		Instructions: "Does message {message} state a commitment? A commitment is a statement that someone will do something for another participant, that the messages shown, up to the last one, do not show done. Read the messages after message {message}: if one of them shows the thing done, message {message} states no commitment, because a commitment made and kept within the messages shown is not one. A commitment ME makes counts. In meeting notes, which ME wrote, a commitment the note reports for anyone counts.",
 		Options: []OptionWording{
-			{Key: "open", Description: "ME promised or agreed to do something for {party}, and the thread does not show it done."},
-			{Key: "none", Description: "ME made no such promise, or it is done."},
+			{Key: optionYes, Label: "A commitment", Description: "Message {message} states that someone will do something for another participant, and no message shown after it shows it done."},
+			{Key: optionNo, Label: "No commitment", Description: "Message {message} states no such commitment, or a message shown after it shows the thing done."},
 		},
 	},
-	CommitmentTheirs: QuestionWording{
-		Instructions: "Has {party} said {party} would do something for ME that {party} has not yet done?",
+	FlagBigMoment: QuestionWording{
+		Instructions: "Does message {message} reveal a big moment? A big moment is a significant moment in the life of a contact, a participant other than ME, such as a new job, an illness, a birth, a death, a wedding or a move. A moment in ME's own life is never a big moment.",
 		Options: []OptionWording{
-			{Key: "open", Description: "{party} promised or agreed to do something for ME, and the thread does not show it done."},
-			{Key: "none", Description: "{party} made no such promise, or it is done."},
+			{Key: optionYes, Label: "A big moment", Description: "Message {message} reveals a significant moment in the life of a contact, a participant other than ME."},
+			{Key: optionNo, Label: "No big moment", Description: "Message {message} reveals no such moment in a contact's life, or only a moment in ME's own life."},
 		},
 	},
-	CommitmentDate: QuestionWording{
-		Instructions: "If {debtor} said {debtor} would do something for {creditor}, by when did {debtor} say it would be done?",
+	FlagClaim: QuestionWording{
+		Instructions: "Does message {message} state a claim? A claim is a fact about a contact, a participant other than ME, or about someone in a contact's life: a preference, biography, contact details or a relationship. A fact about ME is never a claim.",
 		Options: []OptionWording{
-			{Key: optionDateUnknown, Label: "No date stated", Description: "The thread states no time for it, or there is no such commitment."},
-			{Key: optionUnlisted, Label: "A time not listed here", Description: "The thread states a time for it that none of the other options gives."},
+			{Key: optionYes, Label: "A claim", Description: "Message {message} states a fact about a contact, a participant other than ME, or about someone in a contact's life."},
+			{Key: optionNo, Label: "No claim", Description: "Message {message} states no such fact about a contact or someone in a contact's life, or only a fact about ME."},
 		},
 	},
-	DateOption: "\"{expression}\" in {message}, meaning {date}",
-	SourceMessage: QuestionWording{
-		Instructions: "If {debtor} said {debtor} would do something for {creditor}, which message states that commitment?",
+	Clearing: QuestionWording{
+		Instructions: "Message {message} states a commitment. As of the last message shown, is that commitment done?",
 		Options: []OptionWording{
-			{Key: optionNoMessage, Label: "No message", Description: "There is no such commitment."},
-			{Key: optionUnlisted, Label: "A message not listed here", Description: "The commitment is stated in a message none of the other options names."},
-		},
-	},
-	MessageOption: "message {message}",
-	BigMoment: QuestionWording{
-		Instructions: "Does the thread reveal a significant moment in someone's life, such as a new job, an illness, a birth, a death, a wedding or a move?",
-		Options: []OptionWording{
-			{Key: "none", Label: "No significant moment", Description: "Nothing in the thread is a significant life event."},
-			{Key: "participant_moment", Label: "A participant's own moment", Description: "A significant moment in the life of someone writing or written to in the thread."},
-			{Key: "other_person_moment", Label: "Someone else's moment, mentioned in passing", Description: "A significant moment in the life of a person outside the thread, such as a participant's relative or friend."},
+			{Key: optionDone, Label: "Done", Description: "The messages shown, up to the last one, show that what message {message} commits someone to do has been done."},
+			{Key: optionNotDone, Label: "Not done", Description: "The messages shown, up to the last one, do not show it done."},
 		},
 	},
 }

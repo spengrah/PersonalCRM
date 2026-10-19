@@ -489,6 +489,42 @@ func (q *Queries) InteractionStartedAwaitingWait(ctx context.Context, arg Intera
 	return started, err
 }
 
+const IsEarlierCommitment = `-- name: IsEarlierCommitment :one
+SELECT EXISTS (
+    SELECT 1
+    FROM judgment_flag f
+    JOIN judgment j ON j.id = f.judgment_id
+    JOIN judgment_example e ON e.id = j.example_id
+    WHERE f.judgment_id = $1::uuid
+      AND f.message_key = $2::text
+      AND f.kind = $3::text
+      AND e.thread_id = $4::uuid
+      AND j.cut_off < $5::timestamptz)
+`
+
+type IsEarlierCommitmentParams struct {
+	JudgmentID     uuid.UUID `json:"judgment_id"`
+	MessageKey     string    `json:"message_key"`
+	CommitmentKind string    `json:"commitment_kind"`
+	ThreadID       uuid.UUID `json:"thread_id"`
+	CutOff         time.Time `json:"cut_off"`
+}
+
+// Whether the judgment holds a commitment flag decision for the message and
+// belongs to the thread with a cut-off before the given one.
+func (q *Queries) IsEarlierCommitment(ctx context.Context, arg IsEarlierCommitmentParams) (bool, error) {
+	row := q.db.QueryRow(ctx, IsEarlierCommitment,
+		arg.JudgmentID,
+		arg.MessageKey,
+		arg.CommitmentKind,
+		arg.ThreadID,
+		arg.CutOff,
+	)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
+}
+
 const ListJudgmentAppearances = `-- name: ListJudgmentAppearances :many
 SELECT a.run_id, a.judgment_id, a.cut_off, e.thread_id, e.id AS example_id
 FROM judgment_appearance a
@@ -544,7 +580,7 @@ func (q *Queries) ListJudgmentAppearances(ctx context.Context, arg ListJudgmentA
 }
 
 const ListJudgmentClearings = `-- name: ListJudgmentClearings :many
-SELECT judgment_id, commitment_message_key, commitment_judgment_id, commitment_kind, done, probability FROM judgment_clearing
+SELECT judgment_id, commitment_message_key, commitment_judgment_id, done, probability FROM judgment_clearing
 WHERE judgment_id = ANY($1::uuid[])
 ORDER BY judgment_id, commitment_message_key
 `
@@ -562,7 +598,6 @@ func (q *Queries) ListJudgmentClearings(ctx context.Context, judgmentIds []uuid.
 			&i.JudgmentID,
 			&i.CommitmentMessageKey,
 			&i.CommitmentJudgmentID,
-			&i.CommitmentKind,
 			&i.Done,
 			&i.Probability,
 		); err != nil {

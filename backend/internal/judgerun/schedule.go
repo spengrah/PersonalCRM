@@ -23,6 +23,12 @@ func ParseMonth(s string) (Month, error) {
 	return Month{start: start}, nil
 }
 
+// MonthOf is the month containing t.
+func MonthOf(t time.Time) Month {
+	t = t.In(time.Local)
+	return Month{start: time.Date(t.Year(), t.Month(), 1, 0, 0, 0, 0, time.Local)}
+}
+
 // Start is the month's first midnight.
 func (m Month) Start() time.Time { return m.start }
 
@@ -41,29 +47,40 @@ func (m Month) CutOffs() []time.Time {
 	return cutOffs
 }
 
-// eachEligible builds, at each cut-off of the month, the context of every
-// thread that gained content after the previous cut-off and up to and
-// including this one, over the thread's whole content up to the cut-off, and
-// hands it to fn. The first window opens at the month's start, so a thread
-// whose only content precedes the month is never eligible. It is the one
-// eligibility rule every run over a month uses.
-func eachEligible(ctx context.Context, contexts *threadctx.Builder, month Month, fn func(threadctx.Context) error) error {
+// previousCutOff is the nightly cut-off immediately before cutOff: the
+// midnight a day earlier for a nightly cut-off, which for a month's first is
+// the month's start.
+func previousCutOff(cutOff time.Time) time.Time {
+	local := cutOff.In(time.Local)
+	midnight := time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, time.Local)
+	if midnight.Equal(cutOff) {
+		return midnight.AddDate(0, 0, -1)
+	}
+	return midnight
+}
+
+// eligibility is the threads that gained content between a nightly cut-off's
+// previous cut-off and the cut-off, up to and including it.
+type eligibility struct {
+	cutOff  time.Time
+	threads []threadctx.VenueID
+}
+
+// eligible lists, at each cut-off of the month, the threads that gained
+// content after the previous cut-off and up to and including this one. The
+// first window opens at the month's start, so a thread whose only content
+// precedes the month is never eligible. It is the one eligibility rule every
+// run over a month uses.
+func eligible(ctx context.Context, contexts *threadctx.Builder, month Month) ([]eligibility, error) {
 	after := month.Start()
+	var out []eligibility
 	for _, cutOff := range month.CutOffs() {
 		threads, err := contexts.ThreadsWithContentIn(ctx, after, cutOff)
 		if err != nil {
-			return fmt.Errorf("threads with content up to %s: %w", cutOff.Format(time.RFC3339), err)
+			return nil, fmt.Errorf("threads with content up to %s: %w", cutOff.Format(time.RFC3339), err)
 		}
-		for _, thread := range threads {
-			c, err := contexts.Build(ctx, thread, cutOff)
-			if err != nil {
-				return fmt.Errorf("build thread %s at %s: %w", thread, cutOff.Format(time.RFC3339), err)
-			}
-			if err := fn(c); err != nil {
-				return fmt.Errorf("thread %s at %s: %w", thread, cutOff.Format(time.RFC3339), err)
-			}
-		}
+		out = append(out, eligibility{cutOff: cutOff, threads: threads})
 		after = cutOff
 	}
-	return nil
+	return out, nil
 }

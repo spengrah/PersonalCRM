@@ -1283,6 +1283,9 @@ type Querier interface {
 	// Whether the contact's outreach that started its awaiting-reply wait (the
 	// outbound at last_outreach_at) happened on the venue.
 	InteractionStartedAwaitingWait(ctx context.Context, arg InteractionStartedAwaitingWaitParams) (bool, error)
+	// Whether the judgment holds a commitment flag decision for the message and
+	// belongs to the thread with a cut-off before the given one.
+	IsEarlierCommitment(ctx context.Context, arg IsEarlierCommitmentParams) (bool, error)
 	// Metric 1: peak concurrency over [@window_start,@window_end]. Intervals are selected by
 	// OVERLAP with the window and clamped to it (so a job spanning the whole window
 	// still contributes); deltas are netted per timestamp before the running sum

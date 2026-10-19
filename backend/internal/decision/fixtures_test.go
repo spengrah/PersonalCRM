@@ -75,18 +75,6 @@ func group(texts ...string) threadctx.Context {
 	return c
 }
 
-// meeting is a meeting's notes, attended by Juniper and Tobias.
-func meeting(notes ...string) threadctx.Context {
-	c := group()
-	c.Kind, c.InputHash = threadctx.KindMeeting, "hash-meeting"
-	delete(c.Participants, threadctx.PersonRole(4))
-	for i := range notes {
-		notes[i] = "ME: " + notes[i]
-	}
-	c.Entries = entries(threadctx.RoleMe, notes)
-	return c
-}
-
 // answerer answers one masked question.
 type answerer func(q threadctx.Question) decision.Answer
 
@@ -131,10 +119,6 @@ func pick(q threadctx.Question, p float64, accept func(threadctx.Option) bool) d
 	return a
 }
 
-func key(k string) func(threadctx.Option) bool {
-	return func(o threadctx.Option) bool { return o.Key == k }
-}
-
 // plain answers every question with its first option.
 func plain(q threadctx.Question) decision.Answer {
 	return pick(q, 0.9, func(threadctx.Option) bool { return true })
@@ -143,7 +127,17 @@ func plain(q threadctx.Question) decision.Answer {
 var errEndpoint = errors.New("endpoint unavailable")
 
 func definition(limits decision.Limits) decision.Definition {
-	return decision.Definition{Key: "test-method", Wording: decision.DefaultWording, Limits: limits}
+	return decision.Definition{Key: "test-method", Wording: decision.DefaultWording, Limits: limits, Sizing: decision.Sizing{Ratio: 1}}
+}
+
+// planAndJudge plans the context at its thread's first judged cut-off and judges the
+// plan.
+func planAndJudge(ctx context.Context, m decision.Method, c threadctx.Context) (decision.Result, error) {
+	p, err := m.Plan(ctx, decision.Request{Context: c})
+	if err != nil {
+		return nil, err
+	}
+	return m.Judge(ctx, p)
 }
 
 var roomy = decision.Limits{Tokens: 1 << 20, Questions: 64}
@@ -157,14 +151,6 @@ func judged(t *testing.T, res decision.Result) judgment.Judgment {
 	j, ok := res.(decision.Judged)
 	require.True(t, ok, "result is %#v, not a judgment", res)
 	return j.Judgment
-}
-
-func questionIDs(req threadctx.MaskedRequest) []string {
-	var ids []string
-	for _, q := range req.Questions() {
-		ids = append(ids, q.ID)
-	}
-	return ids
 }
 
 func answered(j judgment.Judgment, id string) judgment.AnsweredQuestion {

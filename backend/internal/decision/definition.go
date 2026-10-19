@@ -4,17 +4,19 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"math"
 	"time"
 
 	"personal-crm/backend/internal/judgment"
 )
 
 // Definition is what a method is apart from its route: its key, question
-// wording, limits and terms status.
+// wording, limits, sizing and terms status.
 type Definition struct {
 	Key     string
 	Wording Wording
 	Limits  Limits
+	Sizing  Sizing
 	Terms   TermsStatus
 }
 
@@ -36,6 +38,20 @@ type Route struct {
 type Limits struct {
 	Tokens    int
 	Questions int
+}
+
+// Sizing scales the size estimate of a request (one token per byte of
+// everything the model reads, which no tokenizer exceeds) to the input tokens
+// the vendor bills for it. A method sizes its window by the scaled estimate:
+// Ratio is the billed tokens per estimated token, Margin the fraction added
+// above it so that a request billed above its typical ratio still fits.
+type Sizing struct {
+	Ratio, Margin float64
+}
+
+// scale returns the estimate scaled to the tokens the window is sized by.
+func (s Sizing) scale(estimate int) int {
+	return int(math.Ceil(float64(estimate) * s.Ratio * (1 + s.Margin)))
 }
 
 // ref names the method built from the definition on a route. Its version is
