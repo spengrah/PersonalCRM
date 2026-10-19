@@ -3824,7 +3824,7 @@ const docTemplate = `{
                         "enum": [
                             "message",
                             "email",
-                            "calendar",
+                            "event",
                             "call",
                             "other"
                         ],

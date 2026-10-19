@@ -40,7 +40,7 @@ func RegisterAllInteractionsRoutes(v1 *gin.RouterGroup, handler *AllInteractions
 // @Param page query int false "Page number" default(1)
 // @Param limit query int false "Items per page" default(20)
 // @Param contact_id query string false "Participant contact ID" format(uuid)
-// @Param type query string false "Interaction type" Enums(message, email, calendar, call, other)
+// @Param type query string false "Interaction type" Enums(message, email, event, call, other)
 // @Success 200 {object} api.APIResponse{data=AllInteractionsResponse}
 // @Failure 400 {object} api.APIResponse
 // @Router /interactions [get]

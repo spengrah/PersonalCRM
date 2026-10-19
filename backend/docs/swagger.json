@@ -3822,7 +3822,7 @@
                         "enum": [
                             "message",
                             "email",
-                            "calendar",
+                            "event",
                             "call",
                             "other"
                         ],

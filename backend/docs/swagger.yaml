@@ -4676,7 +4676,7 @@ paths:
         enum:
         - message
         - email
-        - calendar
+        - event
         - call
         - other
         in: query
