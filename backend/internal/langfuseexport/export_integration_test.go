@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -16,9 +17,13 @@ import (
 
 	"personal-crm/backend/internal/accelerated"
 	"personal-crm/backend/internal/config"
+	"personal-crm/backend/internal/consumer/consumerjobs"
+	"personal-crm/backend/internal/db"
+	"personal-crm/backend/internal/events"
 	"personal-crm/backend/internal/judgment"
 	"personal-crm/backend/internal/langfuseexport"
 	"personal-crm/backend/internal/repository"
+	"personal-crm/backend/internal/service"
 	"personal-crm/backend/internal/synthetic"
 	"personal-crm/backend/internal/synthetic/factory"
 	"personal-crm/backend/internal/threadctx"
@@ -27,6 +32,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/riverqueue/river"
+	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 	"github.com/riverqueue/river/rivertype"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -34,10 +40,8 @@ import (
 
 var method = judgment.MethodRef{Key: "export-method", Version: "v1", WordingVersion: "w1"}
 
-// unusedAsserter, unusedCadence and unusedJobs stand in for the store's live
-// effects, which a historical run with no production method never reaches.
-type unusedAsserter struct{ judgment.Asserter }
-
+// unusedCadence and unusedJobs stand in for the store's live effects, which a
+// historical run with no production method never reaches.
 type unusedCadence struct{}
 
 func (unusedCadence) EndAwaitingReplyTx(context.Context, pgx.Tx, uuid.UUID) error { return nil }
@@ -56,6 +60,12 @@ type langfuse struct {
 	bodies []string
 	spans  map[string]map[string]any // trace name -> trace metadata
 	judged map[string]map[string]any // judgment cut-off -> trace metadata
+	// held are the traces received, which the observations list returns.
+	held []string
+	// verdicts are the trace and score IDs of every verdict score received.
+	verdicts []string
+	// judgmentIDs are the trace and span IDs of every judgment span received.
+	judgmentIDs []string
 }
 
 func newLangfuse(t *testing.T) *langfuse {
@@ -72,11 +82,16 @@ func newLangfuse(t *testing.T) *langfuse {
 		l.bodies = append(l.bodies, string(raw))
 		switch r.URL.Path {
 		case "/api/public/v2/observations":
-			_, _ = w.Write([]byte(`{"data":[],"meta":{}}`))
+			data := make([]map[string]string, len(l.held))
+			for i, trace := range l.held {
+				data[i] = map[string]string{"traceId": trace}
+			}
+			require.NoError(t, json.NewEncoder(w).Encode(map[string]any{"data": data, "meta": map[string]any{}}))
 		case "/api/public/otel/v1/traces":
 			l.keepSpans(t, raw)
 			_, _ = w.Write([]byte(`{}`))
 		default:
+			l.keepScores(t, raw)
 			_, _ = w.Write([]byte(`{"errors":[]}`))
 		}
 	}))
@@ -90,6 +105,8 @@ func (l *langfuse) keepSpans(t *testing.T, raw []byte) {
 		ResourceSpans []struct {
 			ScopeSpans []struct {
 				Spans []struct {
+					TraceID    string `json:"traceId"`
+					SpanID     string `json:"spanId"`
 					Attributes []struct {
 						Key   string `json:"key"`
 						Value struct {
@@ -115,10 +132,33 @@ func (l *langfuse) keepSpans(t *testing.T, raw []byte) {
 					}
 				}
 				l.spans[name] = metadata
+				l.held = append(l.held, s.TraceID)
+				if name == "judgment" {
+					l.judgmentIDs = append(l.judgmentIDs, s.TraceID+"/"+s.SpanID)
+				}
 				if cutOff, ok := metadata["cut_off"].(string); ok {
 					l.judged[cutOff] = metadata
 				}
 			}
+		}
+	}
+}
+
+// keepScores keeps each received verdict score's trace and score IDs.
+func (l *langfuse) keepScores(t *testing.T, raw []byte) {
+	var req struct {
+		Batch []struct {
+			Body struct {
+				ID      string `json:"id"`
+				TraceID string `json:"traceId"`
+				Name    string `json:"name"`
+			} `json:"body"`
+		} `json:"batch"`
+	}
+	require.NoError(t, json.Unmarshal(raw, &req))
+	for _, e := range req.Batch {
+		if e.Body.Name == "verdict" {
+			l.verdicts = append(l.verdicts, e.Body.TraceID+"/"+e.Body.ID)
 		}
 	}
 }
@@ -133,6 +173,32 @@ func (l *langfuse) sent() string {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return strings.Join(l.bodies, "\n")
+}
+
+// newAsserter is the real assertion write path, over a River client that is
+// never started: an insert lands its job, which never runs.
+func newAsserter(t *testing.T, database *db.Database) judgment.Asserter {
+	t.Helper()
+	workers := river.NewWorkers()
+	river.AddWorker(workers, &noopWorker{})
+	jobs, err := river.NewClient(riverpgxv5.New(database.Pool), &river.Config{
+		Queues:   map[string]river.QueueConfig{river.QueueDefault: {MaxWorkers: 1}},
+		Workers:  workers,
+		TestOnly: true,
+	})
+	require.NoError(t, err)
+	bus := events.NewBus(database.Pool, jobs, repository.NewEventRepository(database.Queries))
+	return service.NewAssertService(database.Pool, repository.NewNodeRepository(database.Queries),
+		repository.NewEntityRepository(database.Queries), repository.NewPredicateRepository(database.Queries),
+		repository.NewAssertionRepository(database.Queries), bus)
+}
+
+type noopWorker struct {
+	river.WorkerDefaults[consumerjobs.KnowledgeCacheUpdaterJobArgs]
+}
+
+func (*noopWorker) Work(context.Context, *river.Job[consumerjobs.KnowledgeCacheUpdaterJobArgs]) error {
+	return nil
 }
 
 // exportEnv is a judgment store over a real database, with a thread of
@@ -188,7 +254,7 @@ func newExportEnv(t *testing.T, messages int) *exportEnv {
 
 	store := judgment.NewStore(judgment.StoreDeps{
 		Pool: database.Pool, Queries: database.Queries,
-		Assert:   unusedAsserter{},
+		Assert:   newAsserter(t, database),
 		Contexts: threadctx.NewBuilder(repository.NewThreadContentRepository(database.Queries), venues),
 		Cadence:  unusedCadence{}, Jobs: unusedJobs{},
 		Watchdog: config.TestConfig().Watchdog,
@@ -339,4 +405,66 @@ func TestExportSendsMessageFlagRecordsContentFree(t *testing.T) {
 		assert.ElementsMatch(t, []string{"call_failed", "before_window"}, []string{reasons["candidate_1"], reasons["candidate_2"]})
 		e.assertContentFree(t)
 	})
+}
+
+// Two judgments of one method version and example that read different windows
+// are two records: the export sends the later one although the earlier one is
+// held, under a different trace and span.
+func TestExportDistinguishesJudgmentsOfOneExampleByRead(t *testing.T) {
+	// spec: KNW-066.new-records-exported
+	e := newExportEnv(t, 2)
+	cutOff := accelerated.GetCurrentTime().UTC().Add(-48 * time.Hour).Truncate(time.Second)
+	whole := e.judgmentAt(cutOff, e.keys)
+	later := e.judgmentAt(cutOff, e.keys[1:])
+	later.WindowStart = e.keys[1]
+	e.record(t, []judgment.Judgment{whole}, nil)
+	e.export(t)
+	sentBefore := slices.Clone(e.langfuse.judgmentIDs)
+
+	e.record(t, []judgment.Judgment{later}, nil)
+	e.export(t)
+
+	sentAfter := e.langfuse.judgmentIDs[len(sentBefore):]
+	require.Len(t, sentAfter, 1, "the later read is sent")
+	assert.NotContains(t, sentBefore, sentAfter[0], "under its own trace and span")
+}
+
+// Reviews of two judgments of one method version and example that read
+// different windows are scores on their own judgments' traces, each under its
+// own ID.
+func TestExportAttachesReviewsToTheirJudgmentsRead(t *testing.T) {
+	// spec: KNW-066.new-records-exported
+	e := newExportEnv(t, 2)
+	cutOff := accelerated.GetCurrentTime().UTC().Add(-48 * time.Hour).Truncate(time.Second)
+	whole := e.judgmentAt(cutOff, e.keys)
+	later := e.judgmentAt(cutOff, e.keys[1:])
+	later.WindowStart = e.keys[1]
+	for _, j := range []*judgment.Judgment{&whole, &later} {
+		j.Outcomes.BallInCourt = []judgment.ParticipantOutcome[judgment.BallInCourt]{
+			{QuestionID: "ball_in_court:" + e.contact.String()[:6], ContactID: e.contact, Outcome: judgment.BallInCourtIOweReply, Confidence: 0.9},
+		}
+	}
+	e.record(t, []judgment.Judgment{whole}, nil)
+	e.record(t, []judgment.Judgment{later}, nil)
+	views, err := e.store.ListJudgments(t.Context(), judgment.JudgmentQuery{Thread: &e.thread})
+	require.NoError(t, err)
+	require.Len(t, views, 2)
+	for _, v := range views {
+		require.Len(t, v.Outcomes, 1)
+		_, err := e.store.ReviewOutcome(t.Context(), v.Outcomes[0].ID, judgment.ReviewRequest{RightOutcome: string(judgment.BallInCourtNobodyOwes)})
+		require.NoError(t, err)
+	}
+
+	e.export(t)
+
+	require.Len(t, e.langfuse.verdicts, 2)
+	assert.NotEqual(t, e.langfuse.verdicts[0], e.langfuse.verdicts[1])
+	traces := map[string]bool{}
+	for _, id := range e.langfuse.judgmentIDs {
+		traces[strings.Split(id, "/")[0]] = true
+	}
+	for _, v := range e.langfuse.verdicts {
+		assert.True(t, traces[strings.Split(v, "/")[0]], "a verdict is scored on a judgment's trace")
+	}
+	assert.NotEqual(t, strings.Split(e.langfuse.verdicts[0], "/")[0], strings.Split(e.langfuse.verdicts[1], "/")[0])
 }

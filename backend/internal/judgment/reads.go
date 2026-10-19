@@ -400,13 +400,14 @@ func (s *Store) judgmentRecords(ctx context.Context, appearances []*db.ListJudgm
 			questionOutcomes = append(questionOutcomes, QuestionOutcome{QuestionID: o.QuestionID, Outcome: o.value(), Confidence: o.confidence()})
 		}
 		records[i] = JudgmentRecord{
-			Example:   ExampleID(j.ExampleID),
-			Method:    MethodRef{j.MethodKey, j.MethodVersion, j.WordingVersion},
-			CutOff:    a.CutOff,
-			JudgedAt:  j.JudgedAt,
-			Questions: questions,
-			Outcomes:  emptyIfNil(questionOutcomes),
-			Usage:     usageOf(j),
+			Example:    ExampleID(j.ExampleID),
+			Method:     MethodRef{j.MethodKey, j.MethodVersion, j.WordingVersion},
+			ReadDigest: j.ReadDigest,
+			CutOff:     a.CutOff,
+			JudgedAt:   j.JudgedAt,
+			Questions:  questions,
+			Outcomes:   emptyIfNil(questionOutcomes),
+			Usage:      usageOf(j),
 
 			WindowStart: reads[j.ID].windowStart,
 			NewMessages: reads[j.ID].newMessages,
@@ -439,6 +440,7 @@ func (s *Store) ReviewRecords(ctx context.Context) ([]ReviewRecord, error) {
 		records = append(records, ReviewRecord{
 			Example:      ExampleID(r.ExampleID),
 			Method:       MethodRef{r.MethodKey, r.MethodVersion, r.WordingVersion},
+			ReadDigest:   r.ReadDigest,
 			QuestionID:   questionID,
 			Verdict:      deriveVerdict(r.JudgedValue, *r.RightOutcome, r.KeepsDate),
 			RightOutcome: *r.RightOutcome,

@@ -205,13 +205,16 @@ type QuestionOutcome struct {
 
 // JudgmentRecord is one judgment appearing in a run, content-free.
 type JudgmentRecord struct {
-	Example   ExampleID
-	Method    MethodRef
-	CutOff    time.Time
-	JudgedAt  time.Time
-	Questions []AnsweredQuestion
-	Outcomes  []QuestionOutcome
-	Usage     Usage
+	Example ExampleID
+	Method  MethodRef
+	// ReadDigest tells apart a method version's judgments of one example that
+	// read different contexts; empty for a judgment before migration 099.
+	ReadDigest string
+	CutOff     time.Time
+	JudgedAt   time.Time
+	Questions  []AnsweredQuestion
+	Outcomes   []QuestionOutcome
+	Usage      Usage
 	// WindowStart, NewMessages, Flags and Clearings are as JudgmentView holds
 	// them. They name messages by key and carry no text.
 	WindowStart string
@@ -222,8 +225,10 @@ type JudgmentRecord struct {
 
 // ReviewRecord is one review, content-free.
 type ReviewRecord struct {
-	Example      ExampleID
-	Method       MethodRef
+	Example ExampleID
+	Method  MethodRef
+	// ReadDigest is the reviewed judgment's, as JudgmentRecord holds it.
+	ReadDigest   string
 	QuestionID   string
 	Verdict      Verdict
 	RightOutcome string

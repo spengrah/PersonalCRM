@@ -293,7 +293,7 @@ ORDER BY e.id, o.question, o.contact_id, a.created_at DESC, a.id DESC;
 -- Every live review with the reviewed outcome's judgment, for the export.
 SELECT
     e.id AS example_id,
-    j.method_key, j.method_version, j.wording_version,
+    j.method_key, j.method_version, j.wording_version, j.read_digest,
     o.question, o.question_id,
     COALESCE(ans.value_text, cls.value_text, '')::text AS judged_value,
     a.value_text AS right_outcome,

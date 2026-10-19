@@ -1113,7 +1113,7 @@ func (q *Queries) ListOutcomeAssertions(ctx context.Context, arg ListOutcomeAsse
 const ListReviewRecords = `-- name: ListReviewRecords :many
 SELECT
     e.id AS example_id,
-    j.method_key, j.method_version, j.wording_version,
+    j.method_key, j.method_version, j.wording_version, j.read_digest,
     o.question, o.question_id,
     COALESCE(ans.value_text, cls.value_text, '')::text AS judged_value,
     a.value_text AS right_outcome,
@@ -1157,6 +1157,7 @@ type ListReviewRecordsRow struct {
 	MethodKey      string    `json:"method_key"`
 	MethodVersion  string    `json:"method_version"`
 	WordingVersion string    `json:"wording_version"`
+	ReadDigest     string    `json:"read_digest"`
 	Question       string    `json:"question"`
 	QuestionID     *string   `json:"question_id"`
 	JudgedValue    string    `json:"judged_value"`
@@ -1185,6 +1186,7 @@ func (q *Queries) ListReviewRecords(ctx context.Context, arg ListReviewRecordsPa
 			&i.MethodKey,
 			&i.MethodVersion,
 			&i.WordingVersion,
+			&i.ReadDigest,
 			&i.Question,
 			&i.QuestionID,
 			&i.JudgedValue,

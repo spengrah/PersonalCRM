@@ -50,19 +50,33 @@ type score struct {
 	metadata       map[string]any
 }
 
-// judgmentKey is one judgment: a method version's answer for one example.
+// judgmentKey is one judgment: a method version's answer for one example over
+// one read of its context. Judgments of one method version and example that
+// read different windows are different judgments.
 type judgmentKey struct {
 	example judgment.ExampleID
 	method  judgment.MethodRef
+	read    string
 }
 
-func keyOf(example judgment.ExampleID, method judgment.MethodRef) judgmentKey {
-	return judgmentKey{example: example, method: method}
+func keyOf(example judgment.ExampleID, method judgment.MethodRef, read string) judgmentKey {
+	return judgmentKey{example: example, method: method, read: read}
+}
+
+// parts name the judgment in every ID derived from it. A judgment with no read
+// digest, one from before message flags, names itself by example and method
+// version alone, so the IDs it was exported under stay its IDs.
+func (k judgmentKey) parts() []string {
+	p := []string{string(k.example), k.method.Key, k.method.Version, k.method.WordingVersion}
+	if k.read != "" {
+		p = append(p, k.read)
+	}
+	return p
 }
 
 // ids are the judgment's trace and span; its reviews' scores name the trace.
 func (k judgmentKey) ids() (trace, span string) {
-	return ids(traceJudgment, string(k.example), k.method.Key, k.method.Version, k.method.WordingVersion)
+	return ids(append([]string{traceJudgment}, k.parts()...)...)
 }
 
 // ids derives a trace ID (32 hex digits) and a span ID (16 hex digits) from
@@ -87,7 +101,7 @@ func methodMetadata(m judgment.MethodRef) map[string]any {
 // lasting its latency, with its cut-off as metadata, since Langfuse hides
 // observations far from their trace's date.
 func judgmentSpan(j judgment.JudgmentRecord) span {
-	trace, spanID := keyOf(j.Example, j.Method).ids()
+	trace, spanID := keyOf(j.Example, j.Method, j.ReadDigest).ids()
 	s := span{
 		traceID: trace, spanID: spanID, name: traceJudgment,
 		start: j.JudgedAt, end: j.JudgedAt.Add(j.Usage.Latency),
@@ -335,12 +349,13 @@ func scorecardScore(r judgment.RunRecord, m scorecard.RunMetrics) score {
 // that judgment's trace. Its ID names the judgment and the question, so a
 // later review of the same outcome replaces it.
 func reviewScore(r judgment.ReviewRecord) score {
-	id, _ := ids(scoreVerdict, string(r.Example), r.Method.Key, r.Method.Version, r.Method.WordingVersion, r.QuestionID)
+	key := keyOf(r.Example, r.Method, r.ReadDigest)
+	id, _ := ids(append(append([]string{scoreVerdict}, key.parts()...), r.QuestionID)...)
 	metadata := methodMetadata(r.Method)
 	metadata["example_id"] = string(r.Example)
 	metadata["question_id"] = r.QuestionID
 	metadata["right_outcome"] = r.RightOutcome
-	trace, _ := keyOf(r.Example, r.Method).ids()
+	trace, _ := key.ids()
 	return score{
 		id: id, traceID: trace, name: scoreVerdict, dataType: "CATEGORICAL",
 		at: r.ReviewedAt, value: string(r.Verdict), metadata: metadata,
