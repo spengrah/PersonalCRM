@@ -20,7 +20,7 @@ The look follows the shipped bench (`designs/bench.md`): Geist, gray-50 page, wh
 
 `/interactions` opens with a heading "Interactions", the Review switch at the heading's right, and two tabs beneath it: **Interactions** and **Threads**. The tab is part of the URL.
 
-The **Interactions** tab (T6) lists interaction rows for correcting frequency data: merge, delete and correct, through each row's "⋯" menu. Its filters are Type (the segmented All, Messages, Email, Calendar, Calls, Other) and Contact. It shows no judgment, review indicator or run filter. Review controls return to this tab once a judgment proposes changes to interactions, such as merges; until then the Review switch does not change it.
+The **Interactions** tab (T6) lists interaction rows for correcting frequency data: merge, delete and correct, through each row's "⋯" menu. Its filters are Type (the segmented All, Messages, Email, Events, Calls, Other) and Contact. It shows no judgment, review indicator or run filter. Review controls return to this tab once a judgment proposes changes to interactions, such as merges; until then the Review switch does not change it.
 
 ## The Review switch
 
@@ -32,10 +32,10 @@ With Review off, nothing about judgments shows: no run filter, review status, co
 
 One row per thread, in one white card (T1, T2).
 
-**Filters**, in a row above the list: Run (Review on only), Venue, Contact, and "Clear filters".
+**Filters**, in a row above the list: Run (Review on only), Type, Contact, and "Clear filters".
 
 - **Run** lists the historical and scheduled runs of the compared methods (clef-masked, clef-masked-reasoned, jev-masked), each named "{method} · {month}", for example "clef-masked · January 2026". Scorecard reruns and the runs of removed methods never appear. A run fixes its method, so there is no method filter. With Review on and no run chosen, it holds the newest run it lists.
-- **Venue** is a segmented control: All, WhatsApp, Telegram, iMessage, Email, Calendar.
+- **Type** is the Interactions tab's segmented Type control, from the same source-to-type mapping: All, Messages, Email, Events. Messages covers every chat app (WhatsApp, Telegram, iMessage, Google Chat), Email covers email threads, and Events covers calendar meetings and anarlog sessions. The Interactions tab's own Type control reads All, Messages, Email, Events, Calls, Other: its Calendar option is renamed Events, and anarlog sessions move there from Other (decision 20261019T205343Z-afc9197af058).
 - **Contact** narrows to threads the contact takes part in.
 
 **Order:** by the thread's latest message, newest first, with Review on or off. Turning Review on never reorders the list. With Review on and a run chosen, the list holds the threads that run judged, in that same order.
@@ -46,7 +46,7 @@ One row per thread, in one white card (T1, T2).
 
 | Column | Holds |
 |---|---|
-| Venue | the venue chip (WhatsApp, Telegram, Email, Calendar…), plus a purple "Group" chip for a group thread |
+| Venue | the app's chip (WhatsApp, Telegram, iMessage, Google Chat, Email, Calendar, Anarlog), plus a purple "Group" chip for a group thread |
 | Thread | the title in semibold where the thread has one, and every participant contact beneath, each a link to the contact |
 | Latest | the time of the thread's latest message |
 | Count | Review off: the thread's message count ("1,204 messages", "1 meeting note"). Review on: "{n} judged in this run" |
