@@ -3,29 +3,24 @@
 import { useState } from 'react'
 import Link from 'next/link'
 import { clsx } from 'clsx'
-import { Check } from 'lucide-react'
 import {
   CallDetails,
   Caret,
   DirectionGlyph,
   OverflowMenu,
   SOURCE_LABELS,
+  TimelineDrillDown,
   formatDateTime,
   type ParticipationContext,
   type TimelineRowAction,
   type TimelineRowSelection,
 } from '@/components/timeline'
-import { useCloseRow } from '@/hooks/use-bench'
 import type { AllInteractionItemResponse } from '@/types/generated/contact'
-import { BenchDrillDown } from './bench-drill-down'
-import { SAVE_ERROR } from './format'
 
-interface BenchRowProps {
+interface InteractionRowProps {
   row: AllInteractionItemResponse
   actions: TimelineRowAction[]
   selection?: TimelineRowSelection
-  /** The run the view is narrowed to, so a save returns its rows as the view shows them. */
-  runId?: string
 }
 
 function Preview({ row }: { row: AllInteractionItemResponse }) {
@@ -44,58 +39,23 @@ function Count({ row }: { row: AllInteractionItemResponse }) {
   return null
 }
 
-/** The row's review status as the server compiled it; a row with no proposal has none. */
-function ReviewIndicator({ row }: { row: AllInteractionItemResponse }) {
-  if (!row.review_status) return null
-  if (row.review_status !== 'all_reviewed') {
-    const toReview = row.review_status === 'to_review'
-    return (
-      <span
-        data-review-indicator={toReview ? 'to-review' : 'nones-to-review'}
-        className="inline-flex whitespace-nowrap rounded-full border border-amber-300 bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-800"
-      >
-        {toReview ? `${row.to_review} to review` : 'Nones to review'}
-      </span>
-    )
-  }
-  return (
-    <span
-      data-review-indicator="reviewed"
-      className="inline-flex items-center gap-1 text-xs text-gray-500"
-    >
-      <Check aria-hidden="true" className="h-3.5 w-3.5" />
-      Reviewed
-    </span>
-  )
-}
-
 /**
- * One row of the all-interactions view: the contact history's row parts laid
- * out across the full width (direction and source, participants, preview,
- * date, review indicator, actions), read in the row's context contact's
- * participation, and its drill-down beneath. While the row is open its header
- * stays in view, so the user can close it from anywhere in the drill-down.
- * Closing a row with proposals records the close; the server decides what it
- * labels, after every save made before it.
+ * One row of the Interactions tab: the contact history's row parts laid out
+ * across the full width (direction and source, participants, preview, date,
+ * actions), read in the row's context contact's participation, and its
+ * drill-down beneath. While the row is open its header stays in view, so the
+ * user can close it from anywhere in the drill-down. The row carries no
+ * judgment.
  */
-export function BenchRow({ row, actions, selection, runId }: BenchRowProps) {
+export function InteractionRow({ row, actions, selection }: InteractionRowProps) {
   const [expanded, setExpanded] = useState(false)
-  const close = useCloseRow()
-  const toggle = () => {
-    if (expanded && row.proposals.length > 0) {
-      close.mutate({ proposals: row.proposals, runId })
-    }
-    setExpanded(!expanded)
-  }
   const { identity, members } = row.item
   const context: ParticipationContext = { contactId: row.context_contact_id }
   const missedCall = identity.kind === 'missed_call'
   const correctable = identity.kind === 'interaction'
-  const expandable =
-    row.proposals.length > 0 ||
-    members.some(
-      member => member.content_kind === 'messages' || member.content_kind === 'meeting_note'
-    )
+  const expandable = members.some(
+    member => member.content_kind === 'messages' || member.content_kind === 'meeting_note'
+  )
   const group = members.some(member => member.is_group)
 
   return (
@@ -110,7 +70,7 @@ export function BenchRow({ row, actions, selection, runId }: BenchRowProps) {
       <div
         data-row-header
         className={clsx(
-          'flex flex-col gap-2 lg:grid lg:grid-cols-[170px_200px_minmax(0,1fr)_168px_104px_72px] lg:items-start lg:gap-4',
+          'flex flex-col gap-2 lg:grid lg:grid-cols-[170px_200px_minmax(0,1fr)_168px_72px] lg:items-start lg:gap-4',
           expanded && 'sticky top-16 z-10 py-2',
           expanded && (missedCall ? 'bg-gray-50' : 'bg-white')
         )}
@@ -163,9 +123,6 @@ export function BenchRow({ row, actions, selection, runId }: BenchRowProps) {
             <Count row={row} />
           </div>
         </div>
-        <div className="lg:text-right">
-          <ReviewIndicator row={row} />
-        </div>
         <div data-row-actions className="flex items-center justify-end gap-1">
           {correctable && selection && (
             <input
@@ -180,7 +137,7 @@ export function BenchRow({ row, actions, selection, runId }: BenchRowProps) {
               type="button"
               aria-expanded={expanded}
               aria-label={expanded ? 'Collapse content' : 'Expand content'}
-              onClick={toggle}
+              onClick={() => setExpanded(!expanded)}
               className="flex h-8 w-8 items-center justify-center rounded-md text-gray-400 hover:bg-gray-100 hover:text-gray-600"
             >
               <Caret expanded={expanded} />
@@ -189,10 +146,7 @@ export function BenchRow({ row, actions, selection, runId }: BenchRowProps) {
           {correctable && <OverflowMenu identity={identity} context={context} actions={actions} />}
         </div>
       </div>
-      {close.isError && <p className="mt-2 text-xs text-red-700">{SAVE_ERROR}</p>}
-      {expanded && (
-        <BenchDrillDown row={row} context={context} runId={runId} closing={close.isPending} />
-      )}
+      {expanded && <TimelineDrillDown identity={identity} context={context} />}
     </article>
   )
 }

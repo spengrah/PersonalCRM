@@ -194,6 +194,8 @@ func (e *env) contact(t *testing.T, cadence ...string) uuid.UUID {
 type thread struct {
 	id        threadctx.VenueID
 	container string
+	// source is the venue's source: email unless a test chose another.
+	source string
 }
 
 func (e *env) thread(t *testing.T) thread {
@@ -205,7 +207,7 @@ func (e *env) thread(t *testing.T) thread {
 	id, err := e.venues.ResolveVenueForInteraction(e.ctx, tx, repository.InteractionSourceEmail, repository.VenueKindEmailThread, container, "")
 	require.NoError(t, err)
 	require.NoError(t, tx.Commit(e.ctx))
-	return thread{id: id, container: container}
+	return thread{id: id, container: container, source: repository.InteractionSourceEmail}
 }
 
 // message stores one message on the thread: from the contact when fromUser is

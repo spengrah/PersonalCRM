@@ -5,17 +5,19 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"time"
 
 	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/service"
+	"personal-crm/backend/internal/threadctx"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 )
 
-// ErrConfirmNonesRefused is returned for a Confirm Nones on a proposal that
-// has an item, or that holds no negative decision the labeling rule may label.
-var ErrConfirmNonesRefused = errors.New("confirm nones applies only to a proposal with no items and an unlabeled negative decision")
+// ErrConfirmNonesRefused is returned for a Confirm Nones on a night that shows a
+// chip, a clearing decision or a reply item, or that holds a label.
+var ErrConfirmNonesRefused = errors.New("confirm nones applies only to a night that shows nothing and holds no label")
 
 // decisionKey names one decision: one question answered for one contact (nil
 // for the big moment) on one judged content. Every method's outcome on that
@@ -71,13 +73,74 @@ func loadLabels(ctx context.Context, q db.Querier, examples []ExampleID) (labels
 	return lb, nil
 }
 
-// recordReviewTx records a review of the outcome's decision: the right
-// outcome and whether it keeps an open commitment's current date, as
-// assertions with user provenance. The outcome's earlier review, if any, is
-// retracted first, so each review is a new assertion and the latest review of
-// a decision is its label whichever outcomes earlier reviews were made on. It
-// is the one writer of reviews.
-func (s *Store) recordReviewTx(ctx context.Context, tx pgx.Tx, o *outcomeRecord, right string, keep bool) error {
+// review is one label the user states, for the review writer to record: a
+// review of a reply-proposal outcome, or a label of a flag decision or of a
+// clearing decision.
+type review interface{ isReview() }
+
+// outcomeReview is the user's review of an outcome's decision: the right
+// outcome, and whether it keeps an open commitment's current date.
+type outcomeReview struct {
+	outcome   *outcomeRecord
+	right     string
+	keepsDate bool
+}
+
+// flagReview is the user's label of a flag decision: whether the message holds
+// the kind.
+type flagReview struct {
+	thread     uuid.UUID
+	messageKey string
+	kind       FlagKind
+	holds      bool
+}
+
+// clearingReview is the user's label of a clearing decision: whether the
+// commitment's message is done as of the cut-off.
+type clearingReview struct {
+	thread        uuid.UUID
+	commitmentKey string
+	cutOff        time.Time
+	done          bool
+}
+
+func (outcomeReview) isReview()  {}
+func (flagReview) isReview()     {}
+func (clearingReview) isReview() {}
+
+// recordReviewTx records the user's label of a decision, whichever kind of
+// decision it is. A review of an outcome is recorded as assertions with user
+// provenance: the outcome's earlier review, if any, is retracted first, so each
+// review is a new assertion and the latest review of a decision is its label
+// whichever outcomes earlier reviews were made on. A label of a flag decision
+// or of a clearing decision replaces the decision's one row, so a decision has
+// one current label. It is the one writer of reviews: every label, whether
+// made by a control, by Confirm Nones or by a close, is recorded here.
+func (s *Store) recordReviewTx(ctx context.Context, tx pgx.Tx, r review) error {
+	switch r := r.(type) {
+	case outcomeReview:
+		return s.recordOutcomeReviewTx(ctx, tx, r)
+	case flagReview:
+		if err := db.New(tx).UpsertJudgmentFlagLabel(ctx, db.UpsertJudgmentFlagLabelParams{
+			ThreadID: r.thread, MessageKey: r.messageKey, Kind: string(r.kind), Holds: r.holds, LabeledAt: now(),
+		}); err != nil {
+			return fmt.Errorf("record flag label: %w", err)
+		}
+		return nil
+	case clearingReview:
+		if err := db.New(tx).UpsertJudgmentClearingLabel(ctx, db.UpsertJudgmentClearingLabelParams{
+			ThreadID: r.thread, CommitmentMessageKey: r.commitmentKey, CutOff: r.cutOff, Done: r.done, LabeledAt: now(),
+		}); err != nil {
+			return fmt.Errorf("record clearing label: %w", err)
+		}
+		return nil
+	default:
+		return fmt.Errorf("record review: unknown review %T", r)
+	}
+}
+
+func (s *Store) recordOutcomeReviewTx(ctx context.Context, tx pgx.Tx, r outcomeReview) error {
+	o := r.outcome
 	for _, earlier := range []*db.Assertion{o.review, o.keepsDate} {
 		if earlier == nil {
 			continue
@@ -90,7 +153,7 @@ func (s *Store) recordReviewTx(ctx context.Context, tx pgx.Tx, o *outcomeRecord,
 	if _, err := s.assert.AssertTx(ctx, tx, service.AssertRequest{
 		SubjectNodeID: o.ID,
 		PredicateKey:  predicateReview,
-		ValueText:     &right,
+		ValueText:     &r.right,
 		Confidence:    100,
 		Locators:      []service.ProvenanceLocator{locator},
 	}); err != nil {
@@ -99,7 +162,7 @@ func (s *Store) recordReviewTx(ctx context.Context, tx pgx.Tx, o *outcomeRecord,
 	if _, err := s.assert.AssertTx(ctx, tx, service.AssertRequest{
 		SubjectNodeID: o.ID,
 		PredicateKey:  predicateReviewKeepsDate,
-		ValueBool:     &keep,
+		ValueBool:     &r.keepsDate,
 		Confidence:    100,
 		Locators:      []service.ProvenanceLocator{locator},
 	}); err != nil {
@@ -108,23 +171,84 @@ func (s *Store) recordReviewTx(ctx context.Context, tx pgx.Tx, o *outcomeRecord,
 	return nil
 }
 
+// FlagLabel is the user's label of a flag decision: whether the message holds
+// the kind. A label belongs to the decision, so every method, run and cut-off
+// that judged the message and kind reads it.
+type FlagLabel struct {
+	Thread     threadctx.VenueID
+	MessageKey string
+	Kind       FlagKind
+	Holds      bool
+}
+
+// ClearingLabel is the user's label of a clearing decision: whether the
+// commitment's message is done as of the cut-off of the judgment that
+// re-checked it.
+type ClearingLabel struct {
+	Thread               threadctx.VenueID
+	CommitmentMessageKey string
+	CutOff               time.Time
+	Done                 bool
+}
+
+// ThreadLabels are a thread's current labels of flag and clearing decisions:
+// one per labeled decision, the latest review's, whoever or whatever wrote it.
+type ThreadLabels struct {
+	Flags     []FlagLabel
+	Clearings []ClearingLabel
+}
+
+// LabelsByThread returns the thread's current flag and clearing labels, each
+// decision once. A label a close or Confirm Nones wrote reads as any other.
+func (s *Store) LabelsByThread(ctx context.Context, thread threadctx.VenueID) (ThreadLabels, error) {
+	byThread, err := loadDecisionLabels(ctx, s.queries, []uuid.UUID{thread})
+	if err != nil {
+		return ThreadLabels{}, err
+	}
+	return byThread[thread], nil
+}
+
+// loadDecisionLabels reads the flag and clearing labels of the given threads.
+func loadDecisionLabels(ctx context.Context, q db.Querier, threads []uuid.UUID) (map[uuid.UUID]ThreadLabels, error) {
+	out := make(map[uuid.UUID]ThreadLabels, len(threads))
+	for _, t := range threads {
+		out[t] = ThreadLabels{Flags: []FlagLabel{}, Clearings: []ClearingLabel{}}
+	}
+	flags, err := q.ListJudgmentFlagLabels(ctx, threads)
+	if err != nil {
+		return nil, fmt.Errorf("list flag labels: %w", err)
+	}
+	for _, f := range flags {
+		l := out[f.ThreadID]
+		l.Flags = append(l.Flags, FlagLabel{Thread: f.ThreadID, MessageKey: f.MessageKey, Kind: FlagKind(f.Kind), Holds: f.Holds})
+		out[f.ThreadID] = l
+	}
+	clearings, err := q.ListJudgmentClearingLabels(ctx, threads)
+	if err != nil {
+		return nil, fmt.Errorf("list clearing labels: %w", err)
+	}
+	for _, c := range clearings {
+		l := out[c.ThreadID]
+		l.Clearings = append(l.Clearings, ClearingLabel{Thread: c.ThreadID, CommitmentMessageKey: c.CommitmentMessageKey, CutOff: c.CutOff, Done: c.Done})
+		out[c.ThreadID] = l
+	}
+	return out, nil
+}
+
 // labelNegativesTx is the one rule by which a negative decision gains a label
 // no user act states. The rule labels only a negative decision without a
 // label that it does not spare: it spares a decision some proposal on the
 // same content holds as an item without a label, which awaits the user's
-// review of the item in every proposal on the content (G4). With confirm
-// set (Confirm Nones), the one judgment given must have no items and such a
-// negative decision, and every such negative decision of its proposal is
-// labeled with its judged value. Otherwise (inference, on a close
-// of the row the judgments sit on), every such negative decision of each
-// given proposal that holds a label is labeled with its judged value, until
-// no given proposal changes, since a label shared across proposals on the
-// same content can give another proposal its first label. A label that exists
-// is never replaced, and a proposal holding no label gains none by inference.
-// Each label is an ordinary review and changes nothing live. A review of an
-// item never runs the rule. It returns how many labels it recorded, or
-// ErrNotFound when a judgment is unknown.
-func (s *Store) labelNegativesTx(ctx context.Context, tx pgx.Tx, judgments []uuid.UUID, confirm bool) (int, error) {
+// review of the item in every proposal on the content (G4). A night's close
+// or Confirm Nones runs it on the night's judgment (labelNightNegativesTx);
+// inference runs it on each given proposal that holds a label, until no given
+// proposal changes, since a label shared across proposals on the same content
+// can give another proposal its first label. A label that exists is never
+// replaced, and a proposal holding no label gains none by inference. Each
+// label is an ordinary review and changes nothing live. A review of an item
+// never runs the rule. It returns how many labels it recorded, or ErrNotFound
+// when a judgment is unknown.
+func (s *Store) labelNegativesTx(ctx context.Context, tx pgx.Tx, judgments []uuid.UUID, infer bool) (int, error) {
 	// An empty ID list reads every judgment, so no judgment is no proposal.
 	if len(judgments) == 0 {
 		return 0, nil
@@ -146,7 +270,7 @@ func (s *Store) labelNegativesTx(ctx context.Context, tx pgx.Tx, judgments []uui
 	recorded := 0
 	labelAll := func(negatives []*outcomeRecord) error {
 		for _, o := range negatives {
-			if err := s.recordReviewTx(ctx, tx, o, o.value(), false); err != nil {
+			if err := s.recordReviewTx(ctx, tx, outcomeReview{outcome: o, right: o.value()}); err != nil {
 				return err
 			}
 			lb[o.decision()] = label{right: o.value()}
@@ -154,23 +278,12 @@ func (s *Store) labelNegativesTx(ctx context.Context, tx pgx.Tx, judgments []uui
 		}
 		return nil
 	}
-	if confirm {
-		if len(rows) != 1 {
-			return 0, ErrConfirmNonesRefused
-		}
-		pending := sortOutcomes(byJudgment[rows[0].ID], lb).confirmNones(lb, spared(byJudgment, lb))
-		if len(pending) == 0 {
-			return 0, ErrConfirmNonesRefused
-		}
-		err := labelAll(pending)
-		return recorded, err
-	}
 	for changed := true; changed; {
 		changed = false
 		sp := spared(byJudgment, lb)
 		for _, j := range rows {
 			sorted := sortOutcomes(byJudgment[j.ID], lb)
-			if !sorted.holdsLabel(lb) {
+			if infer && !sorted.holdsLabel(lb) {
 				continue
 			}
 			pending := sorted.unlabeledNegatives(lb, sp.spares)
@@ -179,38 +292,16 @@ func (s *Store) labelNegativesTx(ctx context.Context, tx pgx.Tx, judgments []uui
 			}
 			changed = changed || len(pending) > 0
 		}
+		if !infer {
+			break
+		}
 	}
 	return recorded, nil
 }
 
-// ConfirmNones labels every negative decision of the judgment's proposal that
-// has no label from any proposal and that no proposal on the same content
-// holds as an item without a label, each with its judged value, in one
-// transaction. It refuses a proposal with an item, or one holding no such
-// negative decision, with ErrConfirmNonesRefused, and an unknown judgment
-// with ErrNotFound.
-func (s *Store) ConfirmNones(ctx context.Context, judgmentID uuid.UUID) error {
-	return s.inTx(ctx, func(tx pgx.Tx) error {
-		_, err := s.labelNegativesTx(ctx, tx, []uuid.UUID{judgmentID}, true)
-		return err
-	})
-}
-
-// CloseRow records the user closing a row on the bench: every negative
-// decision without a label of each of the given proposals (the row's) that
-// holds a label is labeled with its judged value, but for one a proposal on
-// the same content holds as an item without a label, all in one transaction.
-// It returns ErrNotFound, recording nothing, when a judgment is unknown.
-func (s *Store) CloseRow(ctx context.Context, judgments []uuid.UUID) error {
-	return s.inTx(ctx, func(tx pgx.Tx) error {
-		_, err := s.labelNegativesTx(ctx, tx, judgments, false)
-		return err
-	})
-}
-
 // InferNegativeLabels runs the labeling rule's inference once over every
 // content the user has labeled, each content's proposals together and in a
-// transaction of their own, as a close of their row would, so a proposal
+// transaction of their own, as a close of their thread would, so a proposal
 // holding a label before the rule existed holds no unlabeled negative
 // decision. Only content with a label can hold such a proposal. It never
 // replaces a label and labels nothing in a proposal holding no label; a second
@@ -236,7 +327,7 @@ func (s *Store) InferNegativeLabels(ctx context.Context) (int, error) {
 			if err != nil {
 				return fmt.Errorf("list content judgments: %w", err)
 			}
-			n, err = s.labelNegativesTx(ctx, tx, judgmentIDs(judgments), false)
+			n, err = s.labelNegativesTx(ctx, tx, judgmentIDs(judgments), true)
 			return err
 		}); err != nil {
 			return total, err

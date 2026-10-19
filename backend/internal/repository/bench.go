@@ -56,16 +56,6 @@ func (r *InteractionRepository) ListGroupChatMessageCopies(ctx context.Context) 
 	return copies, nil
 }
 
-// ListThreadAnchorObservations returns the live observations holding a copy
-// of the thread's latest content at or before cutOff.
-func (r *ThreadContentRepository) ListThreadAnchorObservations(ctx context.Context, venueID uuid.UUID, cutOff time.Time) ([]uuid.UUID, error) {
-	ids, err := r.queries.ListThreadAnchorObservations(ctx, db.ListThreadAnchorObservationsParams{VenueID: venueID, CutOff: cutOff})
-	if err != nil {
-		return nil, fmt.Errorf("list thread anchor observations: %w", err)
-	}
-	return ids, nil
-}
-
 // ThreadMessage is one message of a thread. ContactID is the contact a copy
 // attributes it to: the sender of a received message.
 type ThreadMessage struct {
@@ -86,23 +76,4 @@ func (r *ThreadContentRepository) GetThreadMessage(ctx context.Context, venueID 
 		return nil, fmt.Errorf("get thread message: %w", err)
 	}
 	return &ThreadMessage{SentAt: row.SentAt, FromUser: row.FromUser, Body: row.Body, ContactID: row.PeerContactID}, nil
-}
-
-// VenueObservation is one live observation recorded in a venue.
-type VenueObservation struct {
-	ID         uuid.UUID
-	OccurredAt time.Time
-}
-
-// ListVenueObservations returns a venue's live observations, oldest first.
-func (r *InteractionRepository) ListVenueObservations(ctx context.Context, venueID uuid.UUID) ([]VenueObservation, error) {
-	rows, err := r.queries.ListVenueObservations(ctx, &venueID)
-	if err != nil {
-		return nil, fmt.Errorf("list venue observations: %w", err)
-	}
-	out := make([]VenueObservation, len(rows))
-	for i, row := range rows {
-		out[i] = VenueObservation{ID: row.ID, OccurredAt: row.OccurredAt}
-	}
-	return out, nil
 }

@@ -54,7 +54,7 @@ WHERE ep.contact_id IN (SELECT id FROM live_contact)
 ORDER BY ep.contact_id, ep.occurred_at DESC, ep.members->0->>'observation_id'
 `
 
-// Reads of the all-interactions view (the bench). Participation comes from the
+// Reads of the all-interactions list. Participation comes from the
 // one derivation, the effective_participation view of migration 089; content
 // comes from the one definition of a thread's content, the thread_content view
 // of migrations 091 and 096.
@@ -143,82 +143,6 @@ func (q *Queries) ListLiveObservationVenues(ctx context.Context) ([]*ListLiveObs
 	for rows.Next() {
 		var i ListLiveObservationVenuesRow
 		if err := rows.Scan(&i.ID, &i.VenueID); err != nil {
-			return nil, err
-		}
-		items = append(items, &i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const ListThreadAnchorObservations = `-- name: ListThreadAnchorObservations :many
-SELECT DISTINCT tc.observation_id::uuid AS observation_id
-FROM thread_content tc
-JOIN interaction i ON i.id = tc.observation_id AND i.deleted_at IS NULL
-WHERE tc.venue_id = $1
-  AND tc.message_key = (
-      SELECT latest.message_key
-      FROM thread_content latest
-      WHERE latest.venue_id = $1
-        AND latest.sent_at <= $2
-      ORDER BY latest.sent_at DESC, latest.message_key DESC
-      LIMIT 1)
-ORDER BY 1
-`
-
-type ListThreadAnchorObservationsParams struct {
-	VenueID uuid.UUID `json:"venue_id"`
-	CutOff  time.Time `json:"cut_off"`
-}
-
-// The live observations holding a copy of the thread's latest content at or
-// before the cut-off.
-func (q *Queries) ListThreadAnchorObservations(ctx context.Context, arg ListThreadAnchorObservationsParams) ([]uuid.UUID, error) {
-	rows, err := q.db.Query(ctx, ListThreadAnchorObservations, arg.VenueID, arg.CutOff)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []uuid.UUID{}
-	for rows.Next() {
-		var observation_id uuid.UUID
-		if err := rows.Scan(&observation_id); err != nil {
-			return nil, err
-		}
-		items = append(items, observation_id)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const ListVenueObservations = `-- name: ListVenueObservations :many
-SELECT id, occurred_at
-FROM interaction
-WHERE venue_id = $1
-  AND deleted_at IS NULL
-ORDER BY occurred_at, id
-`
-
-type ListVenueObservationsRow struct {
-	ID         uuid.UUID `json:"id"`
-	OccurredAt time.Time `json:"occurred_at"`
-}
-
-// A venue's live observations, oldest first.
-func (q *Queries) ListVenueObservations(ctx context.Context, venueID *uuid.UUID) ([]*ListVenueObservationsRow, error) {
-	rows, err := q.db.Query(ctx, ListVenueObservations, venueID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []*ListVenueObservationsRow{}
-	for rows.Next() {
-		var i ListVenueObservationsRow
-		if err := rows.Scan(&i.ID, &i.OccurredAt); err != nil {
 			return nil, err
 		}
 		items = append(items, &i)

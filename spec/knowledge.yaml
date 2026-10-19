@@ -979,3 +979,61 @@ behaviors:
       - key: reads-no-review-or-label
         text: no method reads a review or a label, so methods stay comparable
     provenance: [.agents/spec/2026-10-18-message-flags-and-threads.md HC4 A2]
+
+  - id: KNW-075
+    title: A flag label belongs to a flag decision and is shared by every method, run and cut-off
+    type: data
+    status: current
+    surface: none
+    given: a flag decision, one message of a thread and one flag kind, judged by several methods, runs or cut-offs
+    when: the user labels it
+    then:
+      - key: label-records-whether-held
+        text: the label records whether the message holds that kind
+      - key: at-most-one-current-label
+        text: the decision has at most one current label, and a later review replaces it
+      - key: shared-by-every-judgment
+        text: the label is shared by every method, run and cut-off that judged that message and kind
+    provenance: [.agents/spec/2026-10-18-message-flags-and-threads.md T5 AD2, designs/threads.md]
+
+  - id: KNW-076
+    title: A clearing label belongs to a clearing decision and is shared by every method
+    type: data
+    status: current
+    surface: none
+    given: a clearing decision, one commitment's message of a thread at one cut-off, judged by several methods
+    when: the user labels it
+    then:
+      - key: label-records-whether-done
+        text: the label records whether the commitment is done as of that cut-off
+      - key: at-most-one-current-label
+        text: the decision has at most one current label, and a later review replaces it
+      - key: shared-by-every-method
+        text: the label is shared by every method's clearing decision of that commitment at that cut-off
+    provenance: [.agents/spec/2026-10-18-message-flags-and-threads.md T5a AD2, designs/threads.md]
+
+  - id: KNW-077
+    title: The judgment store reads a thread's current flag and clearing labels
+    type: data
+    status: current
+    surface: none
+    given: a thread whose flag and clearing decisions hold labels, some written by a close or Confirm Nones
+    when: the judgment store reads the thread's labels
+    then:
+      - key: flag-labels-read
+        text: the read returns each labeled flag decision of the thread with its message key, flag kind and whether the message holds it
+      - key: clearing-labels-read
+        text: the read returns each labeled clearing decision of the thread with its commitment's message key, cut-off and whether the commitment is done
+      - key: current-label-only
+        text: the read returns each decision's current label once
+      - key: close-and-confirm-nones-read-as-any
+        text: a label a close or Confirm Nones wrote reads as any other label
+    provenance: [.agents/spec/2026-10-18-message-flags-and-threads.md T5 T5a T6, designs/threads.md]
+
+  - id: KNW-078
+    title: Every label is recorded by the judgment store's one review writer
+    type: invariant
+    status: current
+    surface: none
+    statement: every label, whether a reply-item review, a flag label, a clearing label, Confirm Nones or a close, is recorded by the judgment store's one review writer, and no other code records a label.
+    provenance: [.agents/spec/2026-10-18-message-flags-and-threads.md G12, designs/threads.md]

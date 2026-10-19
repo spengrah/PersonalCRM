@@ -235,7 +235,7 @@ type ReviewRecord struct {
 	ReviewedAt   time.Time
 }
 
-// RunSummary is a run as the bench lists it.
+// RunSummary is a run as the judgment-runs read lists it.
 type RunSummary struct {
 	ID          RunID
 	Kind        RunKind
@@ -268,7 +268,7 @@ type JudgmentQuery struct {
 	Run    *RunID
 }
 
-// JudgmentView is a judgment as the bench reads it. CutOff is its first
+// JudgmentView is a judgment as the judgments read returns it. CutOff is its first
 // appearance's, as of which its content is shown. WindowStart is the message
 // key of the first message of the window it read: the context's first message
 // for a judgment of a version before migration 099, which read the whole

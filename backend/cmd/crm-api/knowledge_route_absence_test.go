@@ -4,8 +4,8 @@
 //
 // KNW-038 is an invariant over the ENTIRE application route set: no HTTP
 // endpoint other than the timeline item assertions read and the bench's
-// judgment routes exposes assertions, graph nodes, edges, predicates, or
-// provenance.
+// judgment and Threads routes exposes assertions, graph nodes, edges,
+// predicates, or provenance.
 // A handler-level test cannot prove an absence claim — only enumerating the
 // real router built by the real registerRoutes can. This file reuses the
 // oauth_routes_boundary_test.go wire-chain harness (buildRouterForOAuthWiring)
@@ -41,7 +41,7 @@ import (
 //   - "predicate":  predicates (internal/repository/predicate.go).
 //   - "provenance": assertion provenance, named directly by the spec text.
 //   - "judgment":   decision-model judgments, claims and reviews, which are
-//     assertions; only the bench's judgment routes may expose them.
+//     assertions; only the judgment and Threads routes may expose them.
 //
 // False-positive audit (why substring matching is safe here): the current
 // production route set was inspected route-by-route and NO legitimate path
@@ -62,17 +62,20 @@ var assertionStoreStems = []string{
 // store: the read-only assertions beside a timeline item's displayed content.
 const assertionStoreRead = "GET /api/v1/timeline-items/:kind/:id/assertions"
 
-// judgmentRoutes are the bench's routes over judgments: the runs and
-// judgments reads, the review of one outcome, Confirm Nones on one proposal,
-// the close of a row's proposals, and the all-interactions list, whose rows carry their thread judgments
-// compiled for review.
+// judgmentRoutes are the routes over judgments: the runs and judgments reads,
+// the review of one outcome, Confirm Nones on one night, and the Threads tab's
+// routes, whose thread reads carry a run's judgments compiled for review.
 var judgmentRoutes = []string{
 	"GET /api/v1/judgment-runs",
 	"GET /api/v1/judgments",
 	"POST /api/v1/judgment-outcomes/:id/review",
 	"POST /api/v1/judgments/:id/confirm-nones",
-	"POST /api/v1/judgments/close",
-	"GET /api/v1/interactions",
+	"GET /api/v1/threads",
+	"GET /api/v1/threads/:thread_id",
+	"GET /api/v1/review-runs",
+	"POST /api/v1/threads/:thread_id/flag-labels",
+	"POST /api/v1/threads/:thread_id/clearing-labels",
+	"POST /api/v1/threads/:thread_id/close",
 }
 
 // testJudgmentRoutes record and read judgments for browser tests while no

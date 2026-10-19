@@ -122,12 +122,9 @@ func TestBenchReReview(t *testing.T) {
 			Commitments: []judgment.CommitmentOutcome{commitment(x, judgment.CommitmentDirectionMine, judgment.CommitmentStateOpen, 0.9, later)},
 		}))
 		moving := func() handlers.BenchItemResponse {
-			page, _ := b.list(t, "contact_id="+x.String())
-			for _, row := range page.Items {
-				for _, p := range row.Proposals {
-					if b.day(2).Equal(p.CutOff) {
-						return item(t, p, "commitments", x)
-					}
+			for _, p := range b.proposals(t, x) {
+				if b.day(2).Equal(p.CutOff) {
+					return item(t, p, "commitments", x)
 				}
 			}
 			require.FailNow(t, "no proposal at day 2")
@@ -169,12 +166,9 @@ func TestBenchReReview(t *testing.T) {
 			}))
 		}
 		moving := func(m judgment.MethodRef) handlers.BenchItemResponse {
-			page, _ := b.list(t, "contact_id="+x.String())
-			for _, row := range page.Items {
-				for _, p := range row.Proposals {
-					if b.day(2).Equal(p.CutOff) && p.MethodVersion == m.Version {
-						return item(t, p, "commitments", x)
-					}
+			for _, p := range b.proposals(t, x) {
+				if b.day(2).Equal(p.CutOff) && p.MethodVersion == m.Version {
+					return item(t, p, "commitments", x)
 				}
 			}
 			require.FailNow(t, "no proposal at day 2", "method version %s", m.Version)
@@ -217,12 +211,9 @@ func TestBenchReReview(t *testing.T) {
 		b.run(t, judgment.RunKindScheduled, judgmentOf(prodMethod, th, b.day(2), "h2", moving))
 		b.run(t, judgment.RunKindRerun, judgmentOf(otherMethod, th, b.day(2), "h2", moving))
 		at := func(m judgment.MethodRef) handlers.BenchItemResponse {
-			page, _ := b.list(t, "contact_id="+x.String())
-			for _, row := range page.Items {
-				for _, p := range row.Proposals {
-					if b.day(2).Equal(p.CutOff) && p.MethodKey == m.Key {
-						return item(t, p, "commitments", x)
-					}
+			for _, p := range b.proposals(t, x) {
+				if b.day(2).Equal(p.CutOff) && p.MethodKey == m.Key {
+					return item(t, p, "commitments", x)
 				}
 			}
 			require.FailNow(t, "no proposal at day 2", "method %s", m.Key)
@@ -257,12 +248,9 @@ func TestBenchReReview(t *testing.T) {
 			Commitments: []judgment.CommitmentOutcome{commitment(x, judgment.CommitmentDirectionMine, judgment.CommitmentStateOpen, 0.9, later)},
 		}))
 		at := func(cutOff time.Time) handlers.BenchItemResponse {
-			page, _ := b.list(t, "contact_id="+x.String())
-			for _, row := range page.Items {
-				for _, p := range row.Proposals {
-					if cutOff.Equal(p.CutOff) {
-						return item(t, p, "commitments", x)
-					}
+			for _, p := range b.proposals(t, x) {
+				if cutOff.Equal(p.CutOff) {
+					return item(t, p, "commitments", x)
 				}
 			}
 			require.FailNow(t, "no proposal", "cut-off %s", cutOff)

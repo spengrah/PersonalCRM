@@ -439,6 +439,14 @@ type JudgmentClearing struct {
 	Probability          float64   `json:"probability"`
 }
 
+type JudgmentClearingLabel struct {
+	ThreadID             uuid.UUID `json:"thread_id"`
+	CommitmentMessageKey string    `json:"commitment_message_key"`
+	CutOff               time.Time `json:"cut_off"`
+	Done                 bool      `json:"done"`
+	LabeledAt            time.Time `json:"labeled_at"`
+}
+
 type JudgmentExample struct {
 	ID        string    `json:"id"`
 	ThreadID  uuid.UUID `json:"thread_id"`
@@ -450,6 +458,14 @@ type JudgmentFlag struct {
 	MessageKey  string    `json:"message_key"`
 	Kind        string    `json:"kind"`
 	Probability float64   `json:"probability"`
+}
+
+type JudgmentFlagLabel struct {
+	ThreadID   uuid.UUID `json:"thread_id"`
+	MessageKey string    `json:"message_key"`
+	Kind       string    `json:"kind"`
+	Holds      bool      `json:"holds"`
+	LabeledAt  time.Time `json:"labeled_at"`
 }
 
 type JudgmentFlagMethod struct {

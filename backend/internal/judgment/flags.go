@@ -13,46 +13,12 @@ import (
 	"github.com/google/uuid"
 )
 
-// This file holds the message-flag records of migration 099. Its values sit
-// outside values.go, whose constants the generated API types mirror: no
-// response carries them yet.
-
-// FlagKind is what a flag decision flags a message as holding. A flag carries
-// no category and no extracted content.
-type FlagKind string
-
-const (
-	// FlagKindCommitment: the message states that someone will do something for
-	// another participant, and the content up to the cut-off does not show it
-	// done.
-	FlagKindCommitment FlagKind = "commitment"
-	// FlagKindBigMoment: the message reveals a significant moment in a contact's
-	// life.
-	FlagKindBigMoment FlagKind = "big_moment"
-	// FlagKindClaim: the message states a fact about a contact or someone in a
-	// contact's life.
-	FlagKindClaim FlagKind = "claim"
-)
+// This file holds the message-flag records of migration 099. The enumerations
+// they carry (FlagKind, UnjudgedReason) sit in values.go, which the generated
+// API types mirror.
 
 // FlagKinds lists the flag kinds, in the order a message's flag decisions read.
 var FlagKinds = []FlagKind{FlagKindCommitment, FlagKindBigMoment, FlagKindClaim}
-
-// UnjudgedReason is why a new message was answered by no judgment of a run.
-type UnjudgedReason string
-
-const (
-	// UnjudgedReasonCallFailed: the cut-off's call failed after its retries.
-	UnjudgedReasonCallFailed UnjudgedReason = "call_failed"
-	// UnjudgedReasonMessageOverLimit: the cut-off was reported incomplete with
-	// IncompleteReasonMessageOverLimit.
-	UnjudgedReasonMessageOverLimit UnjudgedReason = "message_over_limit"
-	// UnjudgedReasonBeforeWindow: the message lay before the window's start.
-	UnjudgedReasonBeforeWindow UnjudgedReason = "before_window"
-)
-
-// IncompleteReasonMessageOverLimit is the reason for a context whose newest
-// message alone exceeds the method's limits.
-const IncompleteReasonMessageOverLimit IncompleteReason = "message_over_limit"
 
 // ErrNoFlagSettings is returned for a method key with no display threshold or
 // clearing floor.

@@ -1036,8 +1036,10 @@ TRUNCATE TABLE
     judgment,
     judgment_appearance,
     judgment_clearing,
+    judgment_clearing_label,
     judgment_example,
     judgment_flag,
+    judgment_flag_label,
     judgment_incomplete,
     judgment_outcome,
     judgment_run,
@@ -1732,6 +1734,13 @@ WHERE judgment_id IN (
     SELECT j.id FROM judgment j
     JOIN judgment_example e ON e.id = j.example_id
     WHERE e.thread_id = ANY(@thread_ids::uuid[]));
+
+-- name: SyntheticDeleteJudgmentFlagLabelsForThreads :execrows
+-- The flag labels of the threads, which reference the threads' venue nodes.
+DELETE FROM judgment_flag_label WHERE thread_id = ANY(@thread_ids::uuid[]);
+
+-- name: SyntheticDeleteJudgmentClearingLabelsForThreads :execrows
+DELETE FROM judgment_clearing_label WHERE thread_id = ANY(@thread_ids::uuid[]);
 
 -- name: SyntheticDeleteJudgmentFlagsForThreads :execrows
 DELETE FROM judgment_flag

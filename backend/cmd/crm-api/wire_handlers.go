@@ -4,6 +4,7 @@ import (
 	"personal-crm/backend/internal/api/handlers"
 	"personal-crm/backend/internal/config"
 	"personal-crm/backend/internal/db"
+	"personal-crm/backend/internal/decision"
 	"personal-crm/backend/internal/events"
 	"personal-crm/backend/internal/judgment"
 	"personal-crm/backend/internal/repository"
@@ -18,14 +19,16 @@ type coreHandlers struct {
 	Interaction       *handlers.InteractionHandler
 	Correction        *handlers.InteractionCorrectionHandler
 	TimelineAssertion *handlers.TimelineAssertionHandler
-	Bench             *handlers.BenchHandler
+	AllInteractions   *handlers.AllInteractionsHandler
+	Thread            *handlers.ThreadHandler
+	Judgment          *handlers.JudgmentHandler
 	System            *handlers.SystemHandler
 	Rematch           *handlers.RematchHandler
 	ContactMethod     *handlers.ContactMethodHandler
 }
 
 // buildCoreHandlers constructs the contact / note / interaction / interaction
-// correction / bench / system / rematch handlers. manualHandler is nil in interaction-mode off (the
+// correction / all-interactions / threads / judgment / system / rematch handlers. manualHandler is nil in interaction-mode off (the
 // InteractionHandler tolerates a nil manual handler exactly as today).
 func buildCoreHandlers(
 	database *db.Database,
@@ -72,13 +75,19 @@ func buildCoreHandlers(
 		eventBus,
 	)
 
+	// Only the registry's list of compared methods is read, never a method, so
+	// the registry needs no masker.
+	threads := judgment.NewThreads(judgments, decision.NewRegistry(cfg.Decision, nil))
+
 	return coreHandlers{
 		Contact:           handlers.NewContactHandler(contactService),
 		Note:              handlers.NewNoteHandler(noteService),
 		Interaction:       handlers.NewInteractionHandler(manualHandler, contentService),
 		Correction:        handlers.NewInteractionCorrectionHandler(correctionService),
 		TimelineAssertion: handlers.NewTimelineAssertionHandler(service.NewTimelineAssertionService(contentService, graph.GraphAssertion)),
-		Bench:             handlers.NewBenchHandler(judgment.NewBench(judgments, contentService)),
+		AllInteractions:   handlers.NewAllInteractionsHandler(contentService),
+		Thread:            handlers.NewThreadHandler(threads),
+		Judgment:          handlers.NewJudgmentHandler(judgments),
 		System:            handlers.NewSystemHandler(contactRepo, cfg.Runtime),
 		Rematch:           handlers.NewRematchHandler(rematchService, contactService),
 		ContactMethod:     handlers.NewContactMethodHandler(contactMethodService),

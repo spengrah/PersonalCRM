@@ -11,7 +11,7 @@
 
 import type { ContactListParams } from '@/types/contact'
 import type { ImportCandidatesListParams, SuggestionsListParams } from '@/types/import'
-import type { AllInteractionsFilters } from './bench-api'
+import type { AllInteractionsFilters, ThreadFilters, ThreadListFilters } from './bench-api'
 import type { InteractionListFilters } from './interactions-api'
 
 // Contact query keys
@@ -111,18 +111,24 @@ export const interactionKeys = {
     [...interactionKeys.forContact(contactId), 'merge-preview', interactionIds] as const,
   timelineAssertions: (contactId: string, kind: string, id: string) =>
     [...interactionKeys.forContact(contactId), 'assertions', kind, id] as const,
-  // The all-interactions view: every interaction across contacts.
+  // The Interactions tab: every interaction across contacts.
   allLists: () => [...interactionKeys.all, 'all-list'] as const,
   allList: (filters: AllInteractionsFilters) => [...interactionKeys.allLists(), filters] as const,
-  // A judged thread's whole content, which the view's drill-down shows.
-  threadContent: (threadId: string) =>
-    [...interactionKeys.all, 'thread-content', threadId] as const,
 }
 
-// Decision-model judgment query keys
-export const judgmentKeys = {
-  all: ['judgments'] as const,
-  runs: () => [...judgmentKeys.all, 'runs'] as const,
+// Threads tab query keys: the thread list, a thread and its review in a run,
+// and the runs the user reviews.
+export const threadKeys = {
+  all: ['threads'] as const,
+  lists: () => [...threadKeys.all, 'list'] as const,
+  list: (filters: ThreadListFilters) => [...threadKeys.lists(), filters] as const,
+  reads: () => [...threadKeys.all, 'thread'] as const,
+  // forThread prefix-matches every read of the thread, whatever filters keep
+  // its place in the list.
+  forThread: (threadId: string) => [...threadKeys.reads(), threadId] as const,
+  read: (threadId: string, filters: ThreadFilters) =>
+    [...threadKeys.forThread(threadId), filters] as const,
+  runs: () => [...threadKeys.all, 'runs'] as const,
 }
 
 // Rematch job query keys

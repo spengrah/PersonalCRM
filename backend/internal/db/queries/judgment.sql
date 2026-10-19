@@ -354,3 +354,90 @@ SELECT metadata FROM external_sync_state
 WHERE source = 'todoist'
 ORDER BY updated_at DESC
 LIMIT 1;
+
+-- name: UpsertJudgmentFlagLabel :exec
+-- Records the user's label of a flag decision (message and kind of a thread),
+-- replacing the decision's earlier label: the primary key is the decision.
+INSERT INTO judgment_flag_label (thread_id, message_key, kind, holds, labeled_at)
+VALUES (sqlc.arg('thread_id'), sqlc.arg('message_key'), sqlc.arg('kind'), sqlc.arg('holds'), sqlc.arg('labeled_at'))
+ON CONFLICT (thread_id, message_key, kind)
+DO UPDATE SET holds = EXCLUDED.holds, labeled_at = EXCLUDED.labeled_at;
+
+-- name: UpsertJudgmentClearingLabel :exec
+-- Records the user's label of a clearing decision (a commitment's message of a
+-- thread at a cut-off), replacing the decision's earlier label.
+INSERT INTO judgment_clearing_label (thread_id, commitment_message_key, cut_off, done, labeled_at)
+VALUES (sqlc.arg('thread_id'), sqlc.arg('commitment_message_key'), sqlc.arg('cut_off'), sqlc.arg('done'), sqlc.arg('labeled_at'))
+ON CONFLICT (thread_id, commitment_message_key, cut_off)
+DO UPDATE SET done = EXCLUDED.done, labeled_at = EXCLUDED.labeled_at;
+
+-- name: ListJudgmentFlagLabels :many
+SELECT thread_id, message_key, kind, holds FROM judgment_flag_label
+WHERE thread_id = ANY(sqlc.arg('thread_ids')::uuid[])
+ORDER BY thread_id, message_key, kind;
+
+-- name: ListJudgmentClearingLabels :many
+SELECT thread_id, commitment_message_key, cut_off, done FROM judgment_clearing_label
+WHERE thread_id = ANY(sqlc.arg('thread_ids')::uuid[])
+ORDER BY thread_id, commitment_message_key, cut_off;
+
+-- name: HasJudgmentClearing :one
+-- Whether a judgment of the thread with the cut-off made a clearing decision
+-- of the commitment's message.
+SELECT EXISTS (
+    SELECT 1
+    FROM judgment_clearing c
+    JOIN judgment j ON j.id = c.judgment_id
+    JOIN judgment_example e ON e.id = j.example_id
+    WHERE e.thread_id = sqlc.arg('thread_id')::uuid
+      AND j.cut_off = sqlc.arg('cut_off')::timestamptz
+      AND c.commitment_message_key = sqlc.arg('commitment_message_key')::text);
+
+-- name: ListRunUnjudged :many
+-- The new messages no judgment of the run answered in the given threads, with
+-- their reasons.
+SELECT * FROM judgment_unjudged
+WHERE run_id = sqlc.arg('run_id')
+  AND thread_id = ANY(sqlc.arg('thread_ids')::uuid[])
+ORDER BY thread_id, cut_off, message_key;
+
+-- name: ListRunThreads :many
+-- The threads a run judged, by a judgment it recorded or reused.
+SELECT DISTINCT e.thread_id
+FROM judgment_appearance a
+JOIN judgment j ON j.id = a.judgment_id
+JOIN judgment_example e ON e.id = j.example_id
+WHERE a.run_id = sqlc.arg('run_id')
+ORDER BY e.thread_id;
+
+-- name: ListRunAppearancesForThreads :many
+-- The appearances of judgments in the run, of the given threads: one per
+-- cut-off at which the run recorded or reused a judgment of the thread.
+SELECT a.judgment_id, a.cut_off, e.thread_id
+FROM judgment_appearance a
+JOIN judgment j ON j.id = a.judgment_id
+JOIN judgment_example e ON e.id = j.example_id
+WHERE a.run_id = sqlc.arg('run_id')
+  AND e.thread_id = ANY(sqlc.arg('thread_ids')::uuid[])
+ORDER BY e.thread_id, a.cut_off, a.judgment_id;
+
+-- name: ListShownFlagDecisions :many
+-- The flag decisions of a thread that a judgment of one of the given methods
+-- shows as a flag: its probability reaches that method's display threshold for
+-- the kind, whichever run holds the judgment.
+SELECT DISTINCT f.message_key, f.kind
+FROM judgment_flag f
+JOIN judgment j ON j.id = f.judgment_id
+JOIN judgment_example e ON e.id = j.example_id
+JOIN judgment_flag_threshold t ON t.method_key = j.method_key AND t.kind = f.kind
+WHERE e.thread_id = sqlc.arg('thread_id')::uuid
+  AND j.method_key = ANY(sqlc.arg('method_keys')::text[])
+  AND f.probability >= t.display_threshold
+ORDER BY f.message_key, f.kind;
+
+-- name: ListReviewRuns :many
+-- The historical and scheduled runs of the given methods, newest first.
+SELECT * FROM judgment_run
+WHERE kind IN ('historical', 'scheduled')
+  AND method_key = ANY(sqlc.arg('method_keys')::text[])
+ORDER BY started_at DESC, id DESC;

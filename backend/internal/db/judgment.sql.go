@@ -462,6 +462,32 @@ func (q *Queries) GetTodoistTaskSettings(ctx context.Context) ([]byte, error) {
 	return metadata, err
 }
 
+const HasJudgmentClearing = `-- name: HasJudgmentClearing :one
+SELECT EXISTS (
+    SELECT 1
+    FROM judgment_clearing c
+    JOIN judgment j ON j.id = c.judgment_id
+    JOIN judgment_example e ON e.id = j.example_id
+    WHERE e.thread_id = $1::uuid
+      AND j.cut_off = $2::timestamptz
+      AND c.commitment_message_key = $3::text)
+`
+
+type HasJudgmentClearingParams struct {
+	ThreadID             uuid.UUID `json:"thread_id"`
+	CutOff               time.Time `json:"cut_off"`
+	CommitmentMessageKey string    `json:"commitment_message_key"`
+}
+
+// Whether a judgment of the thread with the cut-off made a clearing decision
+// of the commitment's message.
+func (q *Queries) HasJudgmentClearing(ctx context.Context, arg HasJudgmentClearingParams) (bool, error) {
+	row := q.db.QueryRow(ctx, HasJudgmentClearing, arg.ThreadID, arg.CutOff, arg.CommitmentMessageKey)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
+}
+
 const InteractionStartedAwaitingWait = `-- name: InteractionStartedAwaitingWait :one
 SELECT EXISTS (
     SELECT 1
@@ -579,6 +605,44 @@ func (q *Queries) ListJudgmentAppearances(ctx context.Context, arg ListJudgmentA
 	return items, nil
 }
 
+const ListJudgmentClearingLabels = `-- name: ListJudgmentClearingLabels :many
+SELECT thread_id, commitment_message_key, cut_off, done FROM judgment_clearing_label
+WHERE thread_id = ANY($1::uuid[])
+ORDER BY thread_id, commitment_message_key, cut_off
+`
+
+type ListJudgmentClearingLabelsRow struct {
+	ThreadID             uuid.UUID `json:"thread_id"`
+	CommitmentMessageKey string    `json:"commitment_message_key"`
+	CutOff               time.Time `json:"cut_off"`
+	Done                 bool      `json:"done"`
+}
+
+func (q *Queries) ListJudgmentClearingLabels(ctx context.Context, threadIds []uuid.UUID) ([]*ListJudgmentClearingLabelsRow, error) {
+	rows, err := q.db.Query(ctx, ListJudgmentClearingLabels, threadIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []*ListJudgmentClearingLabelsRow{}
+	for rows.Next() {
+		var i ListJudgmentClearingLabelsRow
+		if err := rows.Scan(
+			&i.ThreadID,
+			&i.CommitmentMessageKey,
+			&i.CutOff,
+			&i.Done,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const ListJudgmentClearings = `-- name: ListJudgmentClearings :many
 SELECT judgment_id, commitment_message_key, commitment_judgment_id, done, probability FROM judgment_clearing
 WHERE judgment_id = ANY($1::uuid[])
@@ -644,6 +708,44 @@ func (q *Queries) ListJudgmentFirstMessages(ctx context.Context, judgmentIds []u
 	for rows.Next() {
 		var i ListJudgmentFirstMessagesRow
 		if err := rows.Scan(&i.JudgmentID, &i.MessageKey); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const ListJudgmentFlagLabels = `-- name: ListJudgmentFlagLabels :many
+SELECT thread_id, message_key, kind, holds FROM judgment_flag_label
+WHERE thread_id = ANY($1::uuid[])
+ORDER BY thread_id, message_key, kind
+`
+
+type ListJudgmentFlagLabelsRow struct {
+	ThreadID   uuid.UUID `json:"thread_id"`
+	MessageKey string    `json:"message_key"`
+	Kind       string    `json:"kind"`
+	Holds      bool      `json:"holds"`
+}
+
+func (q *Queries) ListJudgmentFlagLabels(ctx context.Context, threadIds []uuid.UUID) ([]*ListJudgmentFlagLabelsRow, error) {
+	rows, err := q.db.Query(ctx, ListJudgmentFlagLabels, threadIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []*ListJudgmentFlagLabelsRow{}
+	for rows.Next() {
+		var i ListJudgmentFlagLabelsRow
+		if err := rows.Scan(
+			&i.ThreadID,
+			&i.MessageKey,
+			&i.Kind,
+			&i.Holds,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, &i)
@@ -1204,6 +1306,203 @@ func (q *Queries) ListReviewRecords(ctx context.Context, arg ListReviewRecordsPa
 	return items, nil
 }
 
+const ListReviewRuns = `-- name: ListReviewRuns :many
+SELECT id, kind, method_key, method_version, wording_version, window_from, window_to, started_at, finished_at FROM judgment_run
+WHERE kind IN ('historical', 'scheduled')
+  AND method_key = ANY($1::text[])
+ORDER BY started_at DESC, id DESC
+`
+
+// The historical and scheduled runs of the given methods, newest first.
+func (q *Queries) ListReviewRuns(ctx context.Context, methodKeys []string) ([]*JudgmentRun, error) {
+	rows, err := q.db.Query(ctx, ListReviewRuns, methodKeys)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []*JudgmentRun{}
+	for rows.Next() {
+		var i JudgmentRun
+		if err := rows.Scan(
+			&i.ID,
+			&i.Kind,
+			&i.MethodKey,
+			&i.MethodVersion,
+			&i.WordingVersion,
+			&i.WindowFrom,
+			&i.WindowTo,
+			&i.StartedAt,
+			&i.FinishedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const ListRunAppearancesForThreads = `-- name: ListRunAppearancesForThreads :many
+SELECT a.judgment_id, a.cut_off, e.thread_id
+FROM judgment_appearance a
+JOIN judgment j ON j.id = a.judgment_id
+JOIN judgment_example e ON e.id = j.example_id
+WHERE a.run_id = $1
+  AND e.thread_id = ANY($2::uuid[])
+ORDER BY e.thread_id, a.cut_off, a.judgment_id
+`
+
+type ListRunAppearancesForThreadsParams struct {
+	RunID     uuid.UUID   `json:"run_id"`
+	ThreadIds []uuid.UUID `json:"thread_ids"`
+}
+
+type ListRunAppearancesForThreadsRow struct {
+	JudgmentID uuid.UUID `json:"judgment_id"`
+	CutOff     time.Time `json:"cut_off"`
+	ThreadID   uuid.UUID `json:"thread_id"`
+}
+
+// The appearances of judgments in the run, of the given threads: one per
+// cut-off at which the run recorded or reused a judgment of the thread.
+func (q *Queries) ListRunAppearancesForThreads(ctx context.Context, arg ListRunAppearancesForThreadsParams) ([]*ListRunAppearancesForThreadsRow, error) {
+	rows, err := q.db.Query(ctx, ListRunAppearancesForThreads, arg.RunID, arg.ThreadIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []*ListRunAppearancesForThreadsRow{}
+	for rows.Next() {
+		var i ListRunAppearancesForThreadsRow
+		if err := rows.Scan(&i.JudgmentID, &i.CutOff, &i.ThreadID); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const ListRunThreads = `-- name: ListRunThreads :many
+SELECT DISTINCT e.thread_id
+FROM judgment_appearance a
+JOIN judgment j ON j.id = a.judgment_id
+JOIN judgment_example e ON e.id = j.example_id
+WHERE a.run_id = $1
+ORDER BY e.thread_id
+`
+
+// The threads a run judged, by a judgment it recorded or reused.
+func (q *Queries) ListRunThreads(ctx context.Context, runID uuid.UUID) ([]uuid.UUID, error) {
+	rows, err := q.db.Query(ctx, ListRunThreads, runID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []uuid.UUID{}
+	for rows.Next() {
+		var thread_id uuid.UUID
+		if err := rows.Scan(&thread_id); err != nil {
+			return nil, err
+		}
+		items = append(items, thread_id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const ListRunUnjudged = `-- name: ListRunUnjudged :many
+SELECT run_id, thread_id, cut_off, message_key, reason, created_at FROM judgment_unjudged
+WHERE run_id = $1
+  AND thread_id = ANY($2::uuid[])
+ORDER BY thread_id, cut_off, message_key
+`
+
+type ListRunUnjudgedParams struct {
+	RunID     uuid.UUID   `json:"run_id"`
+	ThreadIds []uuid.UUID `json:"thread_ids"`
+}
+
+// The new messages no judgment of the run answered in the given threads, with
+// their reasons.
+func (q *Queries) ListRunUnjudged(ctx context.Context, arg ListRunUnjudgedParams) ([]*JudgmentUnjudged, error) {
+	rows, err := q.db.Query(ctx, ListRunUnjudged, arg.RunID, arg.ThreadIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []*JudgmentUnjudged{}
+	for rows.Next() {
+		var i JudgmentUnjudged
+		if err := rows.Scan(
+			&i.RunID,
+			&i.ThreadID,
+			&i.CutOff,
+			&i.MessageKey,
+			&i.Reason,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const ListShownFlagDecisions = `-- name: ListShownFlagDecisions :many
+SELECT DISTINCT f.message_key, f.kind
+FROM judgment_flag f
+JOIN judgment j ON j.id = f.judgment_id
+JOIN judgment_example e ON e.id = j.example_id
+JOIN judgment_flag_threshold t ON t.method_key = j.method_key AND t.kind = f.kind
+WHERE e.thread_id = $1::uuid
+  AND j.method_key = ANY($2::text[])
+  AND f.probability >= t.display_threshold
+ORDER BY f.message_key, f.kind
+`
+
+type ListShownFlagDecisionsParams struct {
+	ThreadID   uuid.UUID `json:"thread_id"`
+	MethodKeys []string  `json:"method_keys"`
+}
+
+type ListShownFlagDecisionsRow struct {
+	MessageKey string `json:"message_key"`
+	Kind       string `json:"kind"`
+}
+
+// The flag decisions of a thread that a judgment of one of the given methods
+// shows as a flag: its probability reaches that method's display threshold for
+// the kind, whichever run holds the judgment.
+func (q *Queries) ListShownFlagDecisions(ctx context.Context, arg ListShownFlagDecisionsParams) ([]*ListShownFlagDecisionsRow, error) {
+	rows, err := q.db.Query(ctx, ListShownFlagDecisions, arg.ThreadID, arg.MethodKeys)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []*ListShownFlagDecisionsRow{}
+	for rows.Next() {
+		var i ListShownFlagDecisionsRow
+		if err := rows.Scan(&i.MessageKey, &i.Kind); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const ResolveContactMerges = `-- name: ResolveContactMerges :many
 WITH RECURSIVE chain(contact_id, node_id, merged_into) AS (
     SELECT n.id, n.id, n.merged_into
@@ -1310,5 +1609,61 @@ type SetJudgmentOutcomeObligationParams struct {
 // effect is no obligation.
 func (q *Queries) SetJudgmentOutcomeObligation(ctx context.Context, arg SetJudgmentOutcomeObligationParams) error {
 	_, err := q.db.Exec(ctx, SetJudgmentOutcomeObligation, arg.ObligationTaskID, arg.NodeID)
+	return err
+}
+
+const UpsertJudgmentClearingLabel = `-- name: UpsertJudgmentClearingLabel :exec
+INSERT INTO judgment_clearing_label (thread_id, commitment_message_key, cut_off, done, labeled_at)
+VALUES ($1, $2, $3, $4, $5)
+ON CONFLICT (thread_id, commitment_message_key, cut_off)
+DO UPDATE SET done = EXCLUDED.done, labeled_at = EXCLUDED.labeled_at
+`
+
+type UpsertJudgmentClearingLabelParams struct {
+	ThreadID             uuid.UUID `json:"thread_id"`
+	CommitmentMessageKey string    `json:"commitment_message_key"`
+	CutOff               time.Time `json:"cut_off"`
+	Done                 bool      `json:"done"`
+	LabeledAt            time.Time `json:"labeled_at"`
+}
+
+// Records the user's label of a clearing decision (a commitment's message of a
+// thread at a cut-off), replacing the decision's earlier label.
+func (q *Queries) UpsertJudgmentClearingLabel(ctx context.Context, arg UpsertJudgmentClearingLabelParams) error {
+	_, err := q.db.Exec(ctx, UpsertJudgmentClearingLabel,
+		arg.ThreadID,
+		arg.CommitmentMessageKey,
+		arg.CutOff,
+		arg.Done,
+		arg.LabeledAt,
+	)
+	return err
+}
+
+const UpsertJudgmentFlagLabel = `-- name: UpsertJudgmentFlagLabel :exec
+INSERT INTO judgment_flag_label (thread_id, message_key, kind, holds, labeled_at)
+VALUES ($1, $2, $3, $4, $5)
+ON CONFLICT (thread_id, message_key, kind)
+DO UPDATE SET holds = EXCLUDED.holds, labeled_at = EXCLUDED.labeled_at
+`
+
+type UpsertJudgmentFlagLabelParams struct {
+	ThreadID   uuid.UUID `json:"thread_id"`
+	MessageKey string    `json:"message_key"`
+	Kind       string    `json:"kind"`
+	Holds      bool      `json:"holds"`
+	LabeledAt  time.Time `json:"labeled_at"`
+}
+
+// Records the user's label of a flag decision (message and kind of a thread),
+// replacing the decision's earlier label: the primary key is the decision.
+func (q *Queries) UpsertJudgmentFlagLabel(ctx context.Context, arg UpsertJudgmentFlagLabelParams) error {
+	_, err := q.db.Exec(ctx, UpsertJudgmentFlagLabel,
+		arg.ThreadID,
+		arg.MessageKey,
+		arg.Kind,
+		arg.Holds,
+		arg.LabeledAt,
+	)
 	return err
 }
