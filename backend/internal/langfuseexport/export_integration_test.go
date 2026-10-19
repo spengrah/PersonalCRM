@@ -23,6 +23,7 @@ import (
 	"personal-crm/backend/internal/judgment"
 	"personal-crm/backend/internal/langfuseexport"
 	"personal-crm/backend/internal/repository"
+	"personal-crm/backend/internal/scorecard"
 	"personal-crm/backend/internal/service"
 	"personal-crm/backend/internal/synthetic"
 	"personal-crm/backend/internal/synthetic/factory"
@@ -296,7 +297,7 @@ func (e *exportEnv) record(t *testing.T, judgments []judgment.Judgment, unjudged
 // export runs the export against the faked Langfuse.
 func (e *exportEnv) export(t *testing.T) {
 	t.Helper()
-	exporter := langfuseexport.New(config.LangfuseExtractionConfig{Host: e.langfuse.server.URL, PublicKey: "pk", SecretKey: "sk"}, e.store, nil)
+	exporter := langfuseexport.New(config.LangfuseExtractionConfig{Host: e.langfuse.server.URL, PublicKey: "pk", SecretKey: "sk"}, e.store, scorecard.NewReader(e.store))
 	report, err := exporter.Export(t.Context())
 	require.NoError(t, err)
 	require.True(t, report.Sent())
@@ -467,4 +468,44 @@ func TestExportAttachesReviewsToTheirJudgmentsRead(t *testing.T) {
 		assert.True(t, traces[strings.Split(v, "/")[0]], "a verdict is scored on a judgment's trace")
 	}
 	assert.NotEqual(t, strings.Split(e.langfuse.verdicts[0], "/")[0], strings.Split(e.langfuse.verdicts[1], "/")[0])
+}
+
+// A rerun's exported scorecard score counts the judgments the rerun appeared
+// with: a judgment of the same method version and example over another window,
+// recorded in another run, does not stand in for the one the rerun reused.
+func TestExportScoresARerunOnTheJudgmentsItReused(t *testing.T) {
+	// spec: KNW-053.rerun-reviewed-examples
+	e := newExportEnv(t, 2)
+	cutOff := accelerated.GetCurrentTime().UTC().Add(-48 * time.Hour).Truncate(time.Second)
+	whole := e.judgmentAt(cutOff, e.keys)
+	later := e.judgmentAt(cutOff, e.keys[1:])
+	later.WindowStart = e.keys[1]
+	answer := func(j *judgment.Judgment, outcome judgment.BallInCourt) {
+		j.Outcomes.BallInCourt = []judgment.ParticipantOutcome[judgment.BallInCourt]{
+			{QuestionID: "ball_in_court:" + e.contact.String()[:6], ContactID: e.contact, Outcome: outcome, Confidence: 0.9},
+		}
+	}
+	answer(&whole, judgment.BallInCourtNobodyOwes)
+	answer(&later, judgment.BallInCourtIOweReply)
+	e.record(t, []judgment.Judgment{whole}, nil)
+	e.record(t, []judgment.Judgment{later}, nil)
+	views, err := e.store.ListJudgments(t.Context(), judgment.JudgmentQuery{Thread: &e.thread})
+	require.NoError(t, err)
+	for _, v := range views {
+		if v.WindowStart == e.keys[0] {
+			require.Len(t, v.Outcomes, 1)
+			_, err := e.store.ReviewOutcome(t.Context(), v.Outcomes[0].ID, judgment.ReviewRequest{RightOutcome: string(judgment.BallInCourtNobodyOwes)})
+			require.NoError(t, err)
+		}
+	}
+	rerun, err := e.store.StartRun(t.Context(), judgment.RunSpec{Kind: judgment.RunKindRerun, Method: method})
+	require.NoError(t, err)
+	_, reused, err := e.store.ReuseRead(t.Context(), rerun, e.thread, cutOff, whole.InputHash, judgment.Read{WindowStart: e.keys[0], NewMessages: e.keys})
+	require.NoError(t, err)
+	require.True(t, reused)
+	require.NoError(t, e.store.FinishRun(t.Context(), rerun))
+
+	e.export(t)
+
+	assert.Contains(t, e.langfuse.sent(), `"corrections_caused":0`)
 }

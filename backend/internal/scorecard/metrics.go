@@ -83,15 +83,9 @@ func (r *Reader) scored(ctx context.Context, run judgment.RunID) (scoredRun, err
 	if err != nil {
 		return scoredRun{}, err
 	}
-	records, err := r.store.JudgmentRecords(ctx, run)
+	outcomes, err := r.store.RunOutcomes(ctx, run)
 	if err != nil {
 		return scoredRun{}, failed(Failure{Reason: FailureReadRun, Run: run}, err)
-	}
-	var judged []judgment.ExampleID
-	for _, rec := range records {
-		if !slices.Contains(judged, rec.Example) {
-			judged = append(judged, rec.Example)
-		}
 	}
 	reviewed, err := r.store.ReviewedExamples(ctx)
 	if err != nil {
@@ -99,13 +93,9 @@ func (r *Reader) scored(ctx context.Context, run judgment.RunID) (scoredRun, err
 	}
 	var covered []judgment.Example
 	for _, ex := range reviewed {
-		if slices.Contains(judged, ex.ID) || reportedIncomplete(summary, ex) {
+		if _, judged := outcomes[ex.ID]; judged || reportedIncomplete(summary, ex) {
 			covered = append(covered, ex)
 		}
-	}
-	outcomes, err := r.store.OutcomesFor(ctx, summary.Method, judged)
-	if err != nil {
-		return scoredRun{}, failed(Failure{Reason: FailureReadRun, Run: run}, err)
 	}
 	labels := labelsOf(covered, outcomes)
 	return scoredRun{metrics: score(run, summary.Method, labels), labels: labels, summary: summary}, nil

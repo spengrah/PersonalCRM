@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"personal-crm/backend/internal/decision"
 	"personal-crm/backend/internal/judgment"
 	"personal-crm/backend/internal/threadctx"
 
@@ -113,5 +114,44 @@ func TestScorecardRerunReplaysReviewedThreadsInOrder(t *testing.T) {
 		assert.Contains(t, out, "scorecard: reviewed_examples=1")
 		assert.False(t, strings.Contains(out, "unjudged reason=before_window"))
 		assertContentFree(t, out, th)
+	})
+}
+
+// The scorecard scores a method on the judgments its rerun appeared with, not
+// on another run's judgment of the same example: a method version's judgment
+// over a narrower window of the same example does not replace the one the
+// rerun reused.
+// spec: KNW-053.rerun-reviewed-examples
+func TestScorecardScoresTheJudgmentsOfItsRerun(t *testing.T) {
+	t.Run("a rerun that reuses a wide-window judgment beside a later narrow-window judgment of the same example", func(t *testing.T) {
+		e := newFlagsEnv(t, "")
+		v := newVendor(t, false)
+		th := e.newThread(t)
+		th.say(t, jan(3, 9), false, filler(0))
+		th.say(t, jan(4, 9), true, filler(1))
+		wide := e.method(jevKey, v, roomy)
+		e.judgeMonth(t, methods{jevKey: wide}, jevKey)
+		keys := th.keys(t)
+		limit := e.tokensFor(t, fakeDefinition(jevKey, roomy), decision.Request{Context: th.context(t, jan(5, 0))}, keys[1])
+		v.bic = func(string) string { return "i_owe_reply" }
+		narrow := e.method(jevKey, v, decision.Limits{Tokens: limit, Questions: 1 << 20})
+		e.judgeMonth(t, methods{jevKey: narrow}, jevKey)
+		var widest judgment.JudgmentView
+		for _, j := range th.judgments(t, wide.Ref()) {
+			if j.CutOff.Equal(jan(5, 0)) && j.WindowStart == keys[0] {
+				widest = j
+			}
+		}
+		require.NotEmpty(t, widest.Outcomes, "the wide-window judgment of the reviewed cut-off")
+		_, err := e.store.ReviewOutcome(e.ctx, widest.Outcomes[0].ID, judgment.ReviewRequest{RightOutcome: string(judgment.BallInCourtNobodyOwes)})
+		require.NoError(t, err)
+		sent := len(v.all())
+
+		out := e.scorecard(t, methods{jevKey: wide}, jevKey)
+
+		assert.Len(t, v.all(), sent, "the rerun reuses the wide-window judgment")
+		assert.Contains(t, out, "corrections_caused=0")
+		assert.Contains(t, out, "reviewed=nobody_owes judged=nobody_owes n=1")
+		assert.NotContains(t, out, "judged=i_owe_reply")
 	})
 }

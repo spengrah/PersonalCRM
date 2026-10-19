@@ -317,28 +317,20 @@ func (s *Store) ReviewedExamples(ctx context.Context) ([]Example, error) {
 	return emptyIfNil(examples), nil
 }
 
-// OutcomesFor returns one method version's outcomes on the given examples; an
-// example the method did not judge is absent.
-func (s *Store) OutcomesFor(ctx context.Context, method MethodRef, examples []ExampleID) (map[ExampleID]Outcomes, error) {
-	ids := make([]string, len(examples))
-	for i, e := range examples {
-		ids[i] = string(e)
-	}
-	result := map[ExampleID]Outcomes{}
-	if len(ids) == 0 {
-		return result, nil
-	}
-	rows, err := s.queries.ListJudgmentRows(ctx, db.ListJudgmentRowsParams{
-		Ids: []uuid.UUID{}, ExampleIds: ids,
-		MethodKey: &method.Key, MethodVersion: &method.Version, WordingVersion: &method.WordingVersion,
-	})
+// RunOutcomes returns the outcomes of the judgments appearing in a run, keyed
+// by the example each judged, reused appearances included. A run holds one
+// judgment of each example, so a judgment another run recorded over a different
+// window of the same example is not in it.
+func (s *Store) RunOutcomes(ctx context.Context, run RunID) (map[ExampleID]Outcomes, error) {
+	rows, err := s.queries.ListJudgmentRows(ctx, db.ListJudgmentRowsParams{Ids: []uuid.UUID{}, ExampleIds: []string{}, RunID: &run})
 	if err != nil {
-		return nil, fmt.Errorf("list method judgments: %w", err)
+		return nil, fmt.Errorf("list run judgments: %w", err)
 	}
 	outcomes, err := s.outcomesByJudgment(ctx, judgmentIDs(rows))
 	if err != nil {
 		return nil, err
 	}
+	result := map[ExampleID]Outcomes{}
 	for _, j := range rows {
 		result[ExampleID(j.ExampleID)] = typedOutcomes(outcomes[j.ID])
 	}
