@@ -15,6 +15,33 @@ import {
 const chip = (page: Page, key: string, kind: string) =>
   page.locator(`[data-message-key="${key}"]`).locator(`[data-chip="${kind}"]`)
 
+const SAVE_PATHS = {
+  flag: /\/threads\/[^/]+\/flag-labels/,
+  close: /\/threads\/[^/]+\/close/,
+}
+type SaveKind = keyof typeof SAVE_PATHS
+
+/**
+ * Fails every save of `kind` while `failing` is set, so the client's retries
+ * fail too, and lists the flag and close saves the server recorded, in order.
+ */
+async function failSaves(page: Page, kind: SaveKind) {
+  const saves = { failing: true, recorded: [] as SaveKind[] }
+  const kindOf = (url: URL) =>
+    (Object.keys(SAVE_PATHS) as SaveKind[]).find(k => SAVE_PATHS[k].test(url.pathname))
+  await page.route(
+    url => kindOf(url) !== undefined,
+    async route => {
+      const saved = kindOf(new URL(route.request().url()))!
+      if (saves.failing && saved === kind) return route.fulfill({ status: 500, body: '{}' })
+      const response = await route.fetch()
+      if (response.ok()) saves.recorded.push(saved)
+      await route.fulfill({ response })
+    }
+  )
+  return saves
+}
+
 test.describe('Review saves never wait on the server @area:interactions', () => {
   let testApi: TestAPI
 
@@ -189,6 +216,72 @@ test.describe('Review saves never wait on the server @area:interactions', () => 
     const night = (await reviewOf(request, side.thread.thread_id, runId)).nights[0]
     expect(night.messages[0].chips[0].state).toBe('confirmed')
     expect(night.labeled_none).toBe(1)
+  })
+
+  test('a failed confirm retried through its own chip after Next is recorded before the close it holds', async ({
+    page,
+    request,
+  }) => {
+    const { side, board, runId } = await openSide(page, request)
+    const saves = await failSaves(page, 'flag')
+    const confirm = chip(page, side.messages[0].message_key, 'claim').getByRole('button', {
+      name: 'Confirm Claim',
+    })
+    await confirm.click()
+    await expect(
+      page.locator(`[data-message-key="${side.messages[0].message_key}"] [data-message-flags]`)
+    ).toContainText("Couldn't save", { timeout: SLOW_TIMEOUT_MS })
+
+    // spec: IXN-085.saves-in-order, IXN-085.close-after-earlier-saves
+    await page.keyboard.press('ArrowRight')
+    await expect(page).toHaveURL(new RegExp(`/interactions/threads/${board.thread.thread_id}\\?`))
+    await expect(page.locator('[data-save-failures]').getByRole('alert')).toContainText(
+      'Its close waits'
+    )
+    await page.keyboard.press('ArrowLeft')
+    await expect(page).toHaveURL(new RegExp(`/interactions/threads/${side.thread.thread_id}\\?`))
+    saves.failing = false
+    await confirm.click()
+
+    await expect.poll(() => saves.recorded, { timeout: SLOW_TIMEOUT_MS }).toEqual(['flag', 'close'])
+    const night = (await reviewOf(request, side.thread.thread_id, runId)).nights[0]
+    expect(night.messages[0].chips[0].state).toBe('confirmed')
+    // The close saw the confirm: it labeled the night's one message without a chip none.
+    expect(night.labeled_none).toBe(1)
+  })
+
+  test('a failed Done shows on its own thread with Retry, and Retry records the close and the saves behind it', async ({
+    page,
+    request,
+  }) => {
+    const { side, runId } = await openSide(page, request)
+    await chip(page, side.messages[0].message_key, 'claim')
+      .getByRole('button', { name: 'Confirm Claim' })
+      .click()
+    await expect(chip(page, side.messages[0].message_key, 'claim')).toHaveAttribute(
+      'data-chip-state',
+      'confirmed'
+    )
+    const saves = await failSaves(page, 'close')
+
+    // spec: IXN-085.close-after-earlier-saves
+    await page.getByRole('button', { name: 'Done' }).click()
+    const failure = page.locator('[data-save-failures]').getByRole('alert')
+    await expect(failure).toContainText("Couldn't save Done", { timeout: SLOW_TIMEOUT_MS })
+    const later = chip(page, side.messages[1].message_key, 'big_moment').getByRole('button', {
+      name: 'Confirm Big moment',
+    })
+    await later.click()
+    await expect(later, 'a save after the failed Done waits for it').toBeDisabled()
+    expect(saves.recorded).toEqual([])
+
+    saves.failing = false
+    await failure.getByRole('button', { name: 'Retry' }).click()
+    await expect.poll(() => saves.recorded, { timeout: SLOW_TIMEOUT_MS }).toEqual(['close', 'flag'])
+    await expect(failure).toHaveCount(0)
+    const night = (await reviewOf(request, side.thread.thread_id, runId)).nights[0]
+    expect(night.labeled_none).toBe(1)
+    expect(night.messages[1].chips[0].state).toBe('confirmed')
   })
 
   test('Done pressed while Confirm Nones is pending closes after the night is labeled', async ({
