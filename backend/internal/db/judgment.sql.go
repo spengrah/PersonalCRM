@@ -12,43 +12,46 @@ import (
 	"github.com/google/uuid"
 )
 
-const CreateJudgment = `-- name: CreateJudgment :one
+const CreateJudgment = `-- name: CreateJudgment :exec
 INSERT INTO judgment (
-    method_key, method_version, wording_version, example_id, context_kind,
+    id, method_key, method_version, wording_version, example_id, context_kind,
     cut_off, judged_at, context_tokens, question_count, billed_tokens,
-    cost_usd, latency_ns, questions, window_start, new_messages, read_digest
+    cost_usd, latency_ns, questions, window_start, new_messages, read_digest,
+    ball_in_court_window_start
 ) VALUES (
-    $1, $2, $3,
-    $4, $5, $6,
-    $7, $8, $9,
-    $10, $11, $12,
-    $13, $14, $15::text[],
-    $16
+    $1, $2, $3, $4,
+    $5, $6, $7,
+    $8, $9, $10,
+    $11, $12, $13,
+    $14, $15, $16::text[],
+    $17, $18
 )
-RETURNING id
 `
 
 type CreateJudgmentParams struct {
-	MethodKey      string    `json:"method_key"`
-	MethodVersion  string    `json:"method_version"`
-	WordingVersion string    `json:"wording_version"`
-	ExampleID      string    `json:"example_id"`
-	ContextKind    string    `json:"context_kind"`
-	CutOff         time.Time `json:"cut_off"`
-	JudgedAt       time.Time `json:"judged_at"`
-	ContextTokens  int32     `json:"context_tokens"`
-	QuestionCount  int32     `json:"question_count"`
-	BilledTokens   *int32    `json:"billed_tokens"`
-	CostUsd        *float64  `json:"cost_usd"`
-	LatencyNs      int64     `json:"latency_ns"`
-	Questions      []byte    `json:"questions"`
-	WindowStart    *string   `json:"window_start"`
-	NewMessages    []string  `json:"new_messages"`
-	ReadDigest     string    `json:"read_digest"`
+	ID                     uuid.UUID `json:"id"`
+	MethodKey              string    `json:"method_key"`
+	MethodVersion          string    `json:"method_version"`
+	WordingVersion         string    `json:"wording_version"`
+	ExampleID              string    `json:"example_id"`
+	ContextKind            string    `json:"context_kind"`
+	CutOff                 time.Time `json:"cut_off"`
+	JudgedAt               time.Time `json:"judged_at"`
+	ContextTokens          int32     `json:"context_tokens"`
+	QuestionCount          int32     `json:"question_count"`
+	BilledTokens           *int32    `json:"billed_tokens"`
+	CostUsd                *float64  `json:"cost_usd"`
+	LatencyNs              int64     `json:"latency_ns"`
+	Questions              []byte    `json:"questions"`
+	WindowStart            *string   `json:"window_start"`
+	NewMessages            []string  `json:"new_messages"`
+	ReadDigest             string    `json:"read_digest"`
+	BallInCourtWindowStart *string   `json:"ball_in_court_window_start"`
 }
 
-func (q *Queries) CreateJudgment(ctx context.Context, arg CreateJudgmentParams) (uuid.UUID, error) {
-	row := q.db.QueryRow(ctx, CreateJudgment,
+func (q *Queries) CreateJudgment(ctx context.Context, arg CreateJudgmentParams) error {
+	_, err := q.db.Exec(ctx, CreateJudgment,
+		arg.ID,
 		arg.MethodKey,
 		arg.MethodVersion,
 		arg.WordingVersion,
@@ -65,10 +68,9 @@ func (q *Queries) CreateJudgment(ctx context.Context, arg CreateJudgmentParams) 
 		arg.WindowStart,
 		arg.NewMessages,
 		arg.ReadDigest,
+		arg.BallInCourtWindowStart,
 	)
-	var id uuid.UUID
-	err := row.Scan(&id)
-	return id, err
+	return err
 }
 
 const CreateJudgmentAppearance = `-- name: CreateJudgmentAppearance :execrows
@@ -776,7 +778,7 @@ func (q *Queries) ListJudgmentOutcomes(ctx context.Context, arg ListJudgmentOutc
 }
 
 const ListJudgmentRows = `-- name: ListJudgmentRows :many
-SELECT j.id, j.method_key, j.method_version, j.wording_version, j.example_id, j.context_kind, j.cut_off, j.judged_at, j.context_tokens, j.question_count, j.billed_tokens, j.cost_usd, j.latency_ns, j.questions, j.created_at, j.window_start, j.new_messages, j.read_digest, e.thread_id, e.input_hash
+SELECT j.id, j.method_key, j.method_version, j.wording_version, j.example_id, j.context_kind, j.cut_off, j.judged_at, j.context_tokens, j.question_count, j.billed_tokens, j.cost_usd, j.latency_ns, j.questions, j.created_at, j.window_start, j.new_messages, j.read_digest, j.ball_in_court_window_start, e.thread_id, e.input_hash
 FROM judgment j
 JOIN judgment_example e ON e.id = j.example_id
 WHERE (cardinality($1::uuid[]) = 0 OR j.id = ANY($1::uuid[]))
@@ -803,26 +805,27 @@ type ListJudgmentRowsParams struct {
 }
 
 type ListJudgmentRowsRow struct {
-	ID             uuid.UUID `json:"id"`
-	MethodKey      string    `json:"method_key"`
-	MethodVersion  string    `json:"method_version"`
-	WordingVersion string    `json:"wording_version"`
-	ExampleID      string    `json:"example_id"`
-	ContextKind    string    `json:"context_kind"`
-	CutOff         time.Time `json:"cut_off"`
-	JudgedAt       time.Time `json:"judged_at"`
-	ContextTokens  int32     `json:"context_tokens"`
-	QuestionCount  int32     `json:"question_count"`
-	BilledTokens   *int32    `json:"billed_tokens"`
-	CostUsd        *float64  `json:"cost_usd"`
-	LatencyNs      int64     `json:"latency_ns"`
-	Questions      []byte    `json:"questions"`
-	CreatedAt      time.Time `json:"created_at"`
-	WindowStart    *string   `json:"window_start"`
-	NewMessages    []string  `json:"new_messages"`
-	ReadDigest     string    `json:"read_digest"`
-	ThreadID       uuid.UUID `json:"thread_id"`
-	InputHash      string    `json:"input_hash"`
+	ID                     uuid.UUID `json:"id"`
+	MethodKey              string    `json:"method_key"`
+	MethodVersion          string    `json:"method_version"`
+	WordingVersion         string    `json:"wording_version"`
+	ExampleID              string    `json:"example_id"`
+	ContextKind            string    `json:"context_kind"`
+	CutOff                 time.Time `json:"cut_off"`
+	JudgedAt               time.Time `json:"judged_at"`
+	ContextTokens          int32     `json:"context_tokens"`
+	QuestionCount          int32     `json:"question_count"`
+	BilledTokens           *int32    `json:"billed_tokens"`
+	CostUsd                *float64  `json:"cost_usd"`
+	LatencyNs              int64     `json:"latency_ns"`
+	Questions              []byte    `json:"questions"`
+	CreatedAt              time.Time `json:"created_at"`
+	WindowStart            *string   `json:"window_start"`
+	NewMessages            []string  `json:"new_messages"`
+	ReadDigest             string    `json:"read_digest"`
+	BallInCourtWindowStart *string   `json:"ball_in_court_window_start"`
+	ThreadID               uuid.UUID `json:"thread_id"`
+	InputHash              string    `json:"input_hash"`
 }
 
 // Judgments with their example, by ID, or for a thread, a run or both (a run
@@ -863,6 +866,7 @@ func (q *Queries) ListJudgmentRows(ctx context.Context, arg ListJudgmentRowsPara
 			&i.WindowStart,
 			&i.NewMessages,
 			&i.ReadDigest,
+			&i.BallInCourtWindowStart,
 			&i.ThreadID,
 			&i.InputHash,
 		); err != nil {

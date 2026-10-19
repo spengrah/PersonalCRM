@@ -243,33 +243,4 @@ func TestJudgeMonthRecordsMessagesNoJudgmentAnsweredAsUnjudged(t *testing.T) {
 		assert.Contains(t, out, "unjudged reason=message_over_limit n=3")
 		assert.Empty(t, th.judgments(t, m.Ref()))
 	})
-
-	t.Run("a new message before its cut-off's window start", func(t *testing.T) {
-		e := newFlagsEnv(t, "")
-		th := e.newThread(t)
-		th.sayFiller(t, jan(3, 9), false, 0)
-		for i := 1; i <= 5; i++ {
-			th.sayFiller(t, jan(4, 8+i), i%2 == 0, i)
-		}
-		keys := th.keys(t)
-		previous := jan(4, 0)
-		limit := e.tokensFor(t, fakeDefinition(jevKey, roomy), decision.Request{Context: th.context(t, jan(5, 0)), NewAfter: &previous}, keys[3])
-		m := e.method(jevKey, newVendor(t, false), decision.Limits{Tokens: limit, Questions: 1 << 20})
-
-		out := e.judgeMonth(t, methods{jevKey: m}, jevKey)
-
-		assert.Contains(t, out, "unjudged reason=before_window n=2")
-		j := th.judgmentAt(t, m.Ref(), jan(5, 0))
-		assert.Equal(t, keys[3], j.WindowStart)
-		assert.Equal(t, keys[3:], j.NewMessages)
-		var unjudged []string
-		for _, u := range e.lastRun(t, m.Ref()).Unjudged {
-			assert.Equal(t, judgment.UnjudgedReasonBeforeWindow, u.Reason)
-			unjudged = append(unjudged, u.MessageKey)
-		}
-		assert.ElementsMatch(t, keys[1:3], unjudged)
-		for _, f := range j.Flags {
-			assert.NotContains(t, keys[1:3], f.MessageKey, "an unjudged message is not a flag decision answered no")
-		}
-	})
 }

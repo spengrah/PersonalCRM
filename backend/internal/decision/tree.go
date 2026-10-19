@@ -18,9 +18,9 @@ import (
 // method asks of it, and what maps their answers back to judgment records on
 // the Pi.
 type tree struct {
-	kind      threadctx.ContextKind
-	questions []threadctx.Question
-	parties   []party
+	ballInCourt bool
+	questions   []threadctx.Question
+	parties     []party
 	// flags and clearings map a question ID to the entry it concerns. Question
 	// IDs name a message by its position in the window, since a message key is
 	// a source identifier that stays on the Pi.
@@ -46,13 +46,15 @@ type clearingTarget struct {
 }
 
 // window is the part of a thread context one request reads: the entries from
-// start on, the entries among them that are new at the cut-off, and the
-// earlier commitments inside it that the request re-checks. Entry indexes
-// are positions in the whole context.
+// start through end, the entries among them it flags, the commitments inside
+// it that the request re-checks, and whether it asks ball-in-court,
+// which only a night's last window does. Entry indexes are positions in the
+// whole context.
 type window struct {
-	start     int
-	new       []int
-	rechecked []recheck
+	start, end  int
+	new         []int
+	rechecked   []recheck
+	ballInCourt bool
 }
 
 type recheck struct {
@@ -73,10 +75,11 @@ func clearingID(ref string) string { return "clearing/" + ref }
 func messageRef(i int) string { return "m" + strconv.Itoa(i+1) }
 
 // buildTree builds the question tree of a window: per matched contact,
-// ball-in-court (conversations only); per new message, one yes/no question per
-// flag kind; per commitment re-checked, one yes/no clearing question.
+// ball-in-court (conversations only, in the window that asks it); per new
+// message, one yes/no question per flag kind; per commitment re-checked, one
+// yes/no clearing question.
 func buildTree(c threadctx.Context, w Wording, win window) tree {
-	t := tree{kind: c.Kind, flags: map[string]flagTarget{}, clearings: map[string]clearingTarget{}}
+	t := tree{ballInCourt: win.ballInCourt && c.Kind == threadctx.KindConversation, flags: map[string]flagTarget{}, clearings: map[string]clearingTarget{}}
 	for _, role := range slices.Sorted(maps.Keys(c.Participants)) {
 		p := c.Participants[role]
 		if p.IsUser || p.ContactID == nil {
@@ -84,7 +87,7 @@ func buildTree(c threadctx.Context, w Wording, win window) tree {
 		}
 		t.parties = append(t.parties, party{role: role, contact: *p.ContactID})
 	}
-	if c.Kind == threadctx.KindConversation {
+	if t.ballInCourt {
 		for _, p := range t.parties {
 			fill := strings.NewReplacer("{party}", string(p.role)).Replace
 			t.questions = append(t.questions, question(ballInCourtID(p.role), threadctx.QuestionChoice, w.BallInCourt, fill))
@@ -156,7 +159,7 @@ func (t tree) answer(c threadctx.Context, byQuestion map[string]Answer) (answers
 	}
 
 	var out answers
-	if t.kind == threadctx.KindConversation {
+	if t.ballInCourt {
 		for _, p := range t.parties {
 			id := ballInCourtID(p.role)
 			out.questions = append(out.questions, judgment.AnsweredQuestion{ID: id, Probabilities: probs[id], OriginalAnswer: chosen[id]})

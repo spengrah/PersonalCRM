@@ -129,7 +129,7 @@ func TestJudgeMonthRechecksEarlierCommitments(t *testing.T) {
 		e := newFlagsEnv(t, "")
 		th := e.newThread(t)
 		th.sayFiller(t, jan(3, 9), true, 0)
-		th.sayFiller(t, jan(4, 9), false, 1)
+		th.sayFiller(t, jan(3, 10), false, 1)
 		th.sayFiller(t, jan(4, 10), true, 2)
 		th.sayFiller(t, jan(4, 11), false, 3)
 		keys := th.keys(t)
@@ -137,7 +137,7 @@ func TestJudgeMonthRechecksEarlierCommitments(t *testing.T) {
 		limit := e.tokensFor(t, fakeDefinition(jevKey, roomy), decision.Request{Context: th.context(t, jan(5, 0)), NewAfter: &previous}, keys[2])
 		v := newVendor(t, false)
 		v.flag = func(a ask) float64 {
-			if a.Flag == judgment.FlagKindCommitment && strings.Contains(a.Text, filler(0)) {
+			if a.Flag == judgment.FlagKindCommitment && strings.Contains(a.Text, strings.TrimSpace(filler(0))) {
 				return 0.9
 			}
 			return 0.05
@@ -146,6 +146,7 @@ func TestJudgeMonthRechecksEarlierCommitments(t *testing.T) {
 
 		e.judgeMonth(t, methods{jevKey: m}, jevKey)
 
+		require.InDelta(t, 0.9, flagsOf(th.judgmentAt(t, m.Ref(), jan(4, 0)))[keys[0]+"/commitment"], 1e-9, "the commitment is flagged at the first cut-off")
 		second := th.judgmentAt(t, m.Ref(), jan(5, 0))
 		require.Equal(t, keys[2], second.WindowStart)
 		assert.Empty(t, second.Clearings)

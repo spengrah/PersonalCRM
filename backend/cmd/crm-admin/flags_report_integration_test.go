@@ -40,8 +40,8 @@ func TestJudgeMonthReportsContentFree(t *testing.T) {
 	t.Run("a run whose flag decisions name messages holding text, with unjudged messages of each reason", func(t *testing.T) {
 		e := newFlagsEnv(t, "")
 		// A thread whose call fails, one whose newest message alone is over the
-		// limit, and one whose later cut-off has more new messages than its
-		// window holds.
+		// limit, and one whose later cut-off has more new messages than one
+		// window holds, judged in chunks.
 		failing := e.newThread(t)
 		failing.say(t, jan(3, 9), false, "zanzibar failme in the garden")
 		huge := e.newThread(t)
@@ -51,9 +51,7 @@ func TestJudgeMonthReportsContentFree(t *testing.T) {
 		for i := 1; i <= 5; i++ {
 			batch.sayFiller(t, jan(4, 8+i), i%2 == 0, i)
 		}
-		keys := batch.keys(t)
-		previous := jan(4, 0)
-		limit := e.tokensFor(t, fakeDefinition(jevKey, roomy), decision.Request{Context: batch.context(t, jan(5, 0)), NewAfter: &previous}, keys[3])
+		limit := e.windowLimit(t, fakeDefinition(jevKey, roomy), batch, jan(5, 0), 3, 3)
 		v := newVendor(t, false)
 		v.fail = func(c call) bool { return len(c.Texts) > 0 && strings.Contains(c.Texts[0], "failme") }
 		m := e.method(jevKey, v, decision.Limits{Tokens: limit, Questions: 1 << 20})
@@ -64,8 +62,7 @@ func TestJudgeMonthReportsContentFree(t *testing.T) {
 		assert.Contains(t, out, "judged=2 reused=0 incomplete=2")
 		assert.Contains(t, out, "incomplete reason=call_failed n=1")
 		assert.Contains(t, out, "incomplete reason=message_over_limit n=1")
-		assert.Contains(t, out, "unjudged=4")
-		assert.Contains(t, out, "unjudged reason=before_window n=2")
+		assert.Contains(t, out, "unjudged=2")
 		assert.Contains(t, out, "unjudged reason=call_failed n=1")
 		assert.Contains(t, out, "unjudged reason=message_over_limit n=1")
 		assertContentFree(t, out, failing, huge, batch)

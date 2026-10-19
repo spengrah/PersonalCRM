@@ -68,11 +68,20 @@ type FlagDecision struct {
 	Probability float64
 }
 
+// IsCommitmentAbove reports whether the flag decision is a commitment whose
+// probability exceeds the clearing floor: one that later windows re-check
+// until a clearing decision answers it done.
+func (f FlagDecision) IsCommitmentAbove(floor float64) bool {
+	return f.Kind == FlagKindCommitment && f.Probability > floor
+}
+
 // ClearingDecision is one judgment's answer to whether an earlier commitment is
 // done as of its cut-off: Done is the method's answer and Probability that
-// answer's probability of done. CommitmentJudgment is the earlier judgment
-// holding the commitment's flag decision. Its identity is the thread, the
-// commitment's message key and the cut-off of the judgment that made it.
+// answer's probability of done. CommitmentJudgment is the judgment holding the
+// commitment's flag decision: an earlier judgment, or the clearing's own
+// judgment when an earlier chunk of its night flagged the commitment. Its
+// identity is the thread, the commitment's message key and the cut-off of the
+// judgment that made it.
 type ClearingDecision struct {
 	CommitmentMessageKey string
 	CommitmentJudgment   uuid.UUID
@@ -89,14 +98,21 @@ type UnjudgedMessage struct {
 }
 
 // Read is what a judgment read beside its context: the message key of its
-// window's first message, the keys of the messages new at its cut-off in thread
-// order, and the earlier commitments it re-checked. The zero
-// Read is a judgment of a version before migration 099, which read its whole
-// context.
+// window's first message, the keys of the messages new at its cut-off that it
+// answered, in thread order, and the earlier commitments it re-checked. The
+// zero Read is a judgment of a version before migration 099, which read its
+// whole context.
+//
+// A night judged in more than one chunk holds each chunk's Read in Chunks,
+// earliest first: the chunk's window start, the new messages it flagged and the
+// earlier judgments' commitments inside its window. Its own fields are then the
+// night's: the first chunk's window start, every chunk's new messages and every
+// chunk's re-checks. A night judged over one window has no chunks.
 type Read struct {
 	WindowStart string
 	NewMessages []string
 	Rechecked   []Recheck
+	Chunks      []Read
 }
 
 // Recheck names one earlier commitment a judgment re-checked: the earlier
@@ -106,37 +122,65 @@ type Recheck struct {
 	MessageKey string
 }
 
-// readOf is the Read of a judgment: the earlier commitments its clearings name.
-func readOf(windowStart string, newMessages []string, clearings []ClearingDecision) Read {
-	r := Read{WindowStart: windowStart, NewMessages: newMessages}
-	for _, c := range clearings {
+// readOf is the Read of a judgment: its chunks, and the earlier commitments
+// its clearings name.
+func readOf(j Judgment) Read {
+	r := Read{WindowStart: j.WindowStart, NewMessages: j.NewMessages, Chunks: j.Chunks}
+	for _, c := range j.Clearings {
 		r.Rechecked = append(r.Rechecked, Recheck{c.CommitmentJudgment, c.CommitmentMessageKey})
 	}
 	return r
 }
 
-// digest identifies the Read among a method version's judgments of one example;
+// ballInCourtWindowStart is the first message of the window a judgment asked
+// ball-in-court over: its last chunk's, since only a night's last chunk asks it.
+func (r Read) ballInCourtWindowStart() string {
+	if len(r.Chunks) > 0 {
+		return r.Chunks[len(r.Chunks)-1].WindowStart
+	}
+	return r.WindowStart
+}
+
+// digest identifies the Read among a method version's judgments of one
+// example: of a night judged over one window, its window start, new messages
+// and re-checks; of a night judged in chunks, each chunk's, in order. It is
 // empty for the zero Read, so a judgment of a version before migration 099
 // keeps its identity of method version, thread and input hash.
 func (r Read) digest() string {
 	if r.WindowStart == "" {
 		return ""
 	}
-	rechecked := slices.Clone(r.Rechecked)
-	slices.SortFunc(rechecked, func(a, b Recheck) int {
-		return cmp.Or(slices.Compare(a.Judgment[:], b.Judgment[:]), cmp.Compare(a.MessageKey, b.MessageKey))
-	})
-	rechecked = slices.Compact(rechecked)
-	raw, err := json.Marshal(struct {
-		WindowStart string    `json:"window_start"`
-		NewMessages []string  `json:"new_messages"`
-		Rechecked   []Recheck `json:"rechecked"`
-	}{r.WindowStart, nonNil(r.NewMessages), nonNil(rechecked)})
+	var encoded any = r.encoded()
+	if len(r.Chunks) > 0 {
+		chunks := make([]readEncoding, len(r.Chunks))
+		for i, c := range r.Chunks {
+			chunks[i] = c.encoded()
+		}
+		encoded = struct {
+			Chunks []readEncoding `json:"chunks"`
+		}{chunks}
+	}
+	raw, err := json.Marshal(encoded)
 	if err != nil {
 		panic(fmt.Sprintf("encode read: %v", err)) // strings and UUIDs always encode
 	}
 	sum := sha256.Sum256(raw)
 	return hex.EncodeToString(sum[:])
+}
+
+// readEncoding is one window's read as its digest encodes it.
+type readEncoding struct {
+	WindowStart string    `json:"window_start"`
+	NewMessages []string  `json:"new_messages"`
+	Rechecked   []Recheck `json:"rechecked"`
+}
+
+func (r Read) encoded() readEncoding {
+	rechecked := slices.Clone(r.Rechecked)
+	slices.SortFunc(rechecked, func(a, b Recheck) int {
+		return cmp.Or(slices.Compare(a.Judgment[:], b.Judgment[:]), cmp.Compare(a.MessageKey, b.MessageKey))
+	})
+	return readEncoding{r.WindowStart, nonNil(r.NewMessages), nonNil(slices.Compact(rechecked))}
 }
 
 func nonNil[T any](s []T) []T {

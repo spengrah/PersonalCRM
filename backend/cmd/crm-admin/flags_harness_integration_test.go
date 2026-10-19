@@ -527,7 +527,7 @@ func (noSend) Send(context.Context, threadctx.MaskedRequest) (decision.Answers, 
 }
 
 // tokensFor returns the smallest token limit under which a method of the
-// definition plans the request with its window starting at the message key
+// definition plans the request as one window starting at the message key
 // start: the limit a window of exactly that size needs.
 func (e *flagsEnv) tokensFor(t *testing.T, def decision.Definition, req decision.Request, start string) int {
 	t.Helper()
@@ -535,7 +535,7 @@ func (e *flagsEnv) tokensFor(t *testing.T, def decision.Definition, req decision
 		def.Limits.Tokens = limit
 		p, err := decision.NewMaskedMethod(def, e.masker, noSend{}).Plan(e.ctx, req)
 		require.NoError(t, err)
-		return p.Read.WindowStart, p.Incomplete == ""
+		return p.Read.WindowStart, p.Incomplete == "" && len(p.Read.Chunks) == 0
 	}
 	index := func(key string) int {
 		return slices.IndexFunc(req.Context.Entries, func(e threadctx.Entry) bool { return e.Key == key })
