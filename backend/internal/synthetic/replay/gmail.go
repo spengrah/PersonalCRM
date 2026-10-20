@@ -2,6 +2,7 @@ package replay
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -30,22 +31,7 @@ type GmailResult struct {
 // contactID is the seeded contact this message targets (for MatchSeeded). The
 // caller seeds the contact first via Harness.SeedContact.
 func (h *Harness) ReplayGmail(ctx context.Context, contactID uuid.UUID, spec factory.GmailMessageSpec) (GmailResult, error) {
-	provider := google.NewGmailSyncProvider(nil, h.commsRepo, h.bus, h.database.Pool)
-	provider.SetFetcherFactoryForTest(google.NewFakeGmailFetcherFactoryForTest(google.FakeGmailFetcherFuncs{
-		ListMessageIDs: func(_ context.Context, _, pageToken string) ([]google.GmailMessageRefForTest, string, error) {
-			if pageToken != "" {
-				return nil, "", nil
-			}
-			return []google.GmailMessageRefForTest{{ID: spec.Message.Id, ThreadID: spec.Message.ThreadId}}, "", nil
-		},
-		GetMessage: func(_ context.Context, id string) (*gmailapi.Message, error) {
-			if id == spec.Message.Id {
-				return spec.Message, nil
-			}
-			return nil, fmt.Errorf("synthetic gmail: message %s not found", id)
-		},
-	}))
-	provider.SetMeSetForTest(map[string]struct{}{spec.AccountID: {}})
+	provider := h.gmailProvider(spec.AccountID, []factory.GmailMessageSpec{spec})
 
 	// Floor the scan window just before THIS message's own send time so a message
 	// replayed at any age (the interaction temporal spread) is still inside the
@@ -157,9 +143,11 @@ func (h *Harness) ReplayGmailBatch(ctx context.Context, items []GmailBatchItem) 
 			genItems = append(genItems, items[i])
 		}
 
-		provider := google.NewGmailSyncProvider(nil, h.commsRepo, h.bus, h.database.Pool)
-		provider.SetFetcherFactoryForTest(google.NewFakeGmailFetcherFactoryForTest(gmailBatchFetcherFuncs(genItems)))
-		provider.SetMeSetForTest(map[string]struct{}{accountID: {}})
+		specs := make([]factory.GmailMessageSpec, len(genItems))
+		for i, it := range genItems {
+			specs[i] = it.Spec
+		}
+		provider := h.gmailProvider(accountID, specs)
 
 		// Floor the scan window just before the generation's OLDEST message, the
 		// same rule the single adapter applies to its one message.
@@ -202,14 +190,46 @@ func (h *Harness) gmailBatchSettled(externalIDs []string) gateA {
 	}
 }
 
-// gmailBatchFetcherFuncs builds the fake fetcher for one generation: every
-// message on the first page, each resolvable by id.
-func gmailBatchFetcherFuncs(items []GmailBatchItem) google.FakeGmailFetcherFuncs {
-	refs := make([]google.GmailMessageRefForTest, 0, len(items))
-	byID := make(map[string]*gmailapi.Message, len(items))
-	for _, it := range items {
-		refs = append(refs, google.GmailMessageRefForTest{ID: it.Spec.Message.Id, ThreadID: it.Spec.Message.ThreadId})
-		byID[it.Spec.Message.Id] = it.Spec.Message
+// GmailProvider returns a real GmailSyncProvider wired to this harness's
+// repositories, bus and pool, serving exactly specs under their one account.
+// ReplayGmail and ReplayGmailBatch settle on the rows a message stores; a test
+// whose subject is the scan itself, such as a message the provider must drop,
+// calls Sync or ScanIdentifier on this provider directly, then DrainGateB so
+// the jobs the scan enqueued finalize while this harness's client still runs.
+// Cleanup captures the email root events the provider publishes.
+func (h *Harness) GmailProvider(specs ...factory.GmailMessageSpec) (*google.GmailSyncProvider, error) {
+	if len(specs) == 0 {
+		return nil, errors.New("gmail: GmailProvider needs at least one message")
+	}
+	account := specs[0].AccountID
+	for i, spec := range specs {
+		if spec.AccountID != account {
+			return nil, fmt.Errorf("gmail: message %d is on account %q but the first is on %q: %w",
+				i, spec.AccountID, account, ErrBatchMixedAccounts)
+		}
+	}
+	h.track(func(c *created) { c.addDirectSource(repository.InteractionSourceEmail) })
+	return h.gmailProvider(account, specs), nil
+}
+
+// gmailProvider is the one construction of a provider over synthetic payloads:
+// the harness's repositories and bus, a fake fetcher serving specs, and the
+// account as the me-set.
+func (h *Harness) gmailProvider(accountID string, specs []factory.GmailMessageSpec) *google.GmailSyncProvider {
+	provider := google.NewGmailSyncProvider(nil, h.commsRepo, h.bus, h.database.Pool)
+	provider.SetFetcherFactoryForTest(google.NewFakeGmailFetcherFactoryForTest(gmailFetcherFuncs(specs)))
+	provider.SetMeSetForTest(map[string]struct{}{accountID: {}})
+	return provider
+}
+
+// gmailFetcherFuncs builds the fake fetcher over specs: every message on the
+// first page of any query, each resolvable by id.
+func gmailFetcherFuncs(specs []factory.GmailMessageSpec) google.FakeGmailFetcherFuncs {
+	refs := make([]google.GmailMessageRefForTest, 0, len(specs))
+	byID := make(map[string]*gmailapi.Message, len(specs))
+	for _, spec := range specs {
+		refs = append(refs, google.GmailMessageRefForTest{ID: spec.Message.Id, ThreadID: spec.Message.ThreadId})
+		byID[spec.Message.Id] = spec.Message
 	}
 	return google.FakeGmailFetcherFuncs{
 		ListMessageIDs: func(_ context.Context, _, pageToken string) ([]google.GmailMessageRefForTest, string, error) {

@@ -77,7 +77,7 @@ New tests follow these rules. Convert an existing fake-based test when a change 
 
 - **Don't** open-code a `CreateContact` fixture, a raw `pool.Exec(ctx, "INSERT ...")`, or a hand-built source payload — call `gen.Contact(...)` / `gen.GmailMessage(...)` / `h.SeedContact(...)` / `h.ReplayGmail(...)` etc.
 - **Namespace isolation** is automatic: give each sub-test a unique namespace via `synthetic.NewHarnessForNamespace` so shared-test-DB reuse can't collide (supersedes the manual randomized-suffix pattern).
-- **Heavy replay tests are slow** (River-draining): call `testsupport.RequireLongTests(t)` and name them with the `TestSynthetic` prefix so they route onto the slow suite (see Slow-test routing in `.agents/patterns/synthetic-seed-toolkit.md`).
+- **Lane placement:** the test that proves a spec behavior runs in a merge-gating lane, whatever it drives. The nightly slow lane holds only extra coverage whose measured cost outweighs catching its regression a day late; cost alone never moves a behavior's last proof there. Routing a test to the slow lane takes `testsupport.RequireLongTests(t)` and a `BACKEND_SLOW_TESTS_REGEX` prefix (see Slow-test routing in `.agents/patterns/synthetic-seed-toolkit.md`).
 
 - **E2E specs that need a seeded world** post `POST /api/v1/test/seed/declared` with a `behavior_id`, and the fixture shape is DECLARED in `backend/internal/synthetic/declare/<domain>.go` beside its spec behavior. This is the only provisioning path — no bespoke `/api/v1/test/seed/*` endpoint exists. A spec that creates rows through the PRODUCT (a contact POST, a note PUT) builds their identifying strings from `testApi.prefix` so `cleanup()` can find them.
 
