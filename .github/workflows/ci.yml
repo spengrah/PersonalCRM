@@ -67,13 +67,17 @@ jobs:
             go-mod-${{ runner.os }}-go1.25.5-${{ hashFiles('backend/go.sum') }}-
             go-mod-${{ runner.os }}-go1.25.5-
 
-      # Rolling Go build cache. SHA-keyed so every run misses its exact key and
-      # saves a fresh entry; restore-keys brings the most recent prior build
-      # cache forward so warmth compounds across CI runs. Namespaced per job
-      # because each job has a distinct build config (arm64 cross-compile plus
-      # amd64 lint/analysis here).
-      - name: Cache Go build cache
-        uses: actions/cache@v4
+      # Rolling Go build cache, restored here and saved at the end of the job
+      # only on a develop push. A pull_request run can restore develop's cache
+      # (develop is the default branch) but a develop push cannot restore a
+      # pull request's, so per-run PR saves only crowd develop's entry out of
+      # the repository's 10 GB cache quota and leave develop pushes cold.
+      # SHA-keyed; restore-keys bring the most recent develop build forward.
+      # Namespaced per job because each job has a distinct build config (arm64
+      # cross-compile plus amd64 lint/analysis here).
+      - name: Restore Go build cache
+        id: go-build-quality
+        uses: actions/cache/restore@v4
         with:
           path: ~/.cache/go-build
           key: go-build-quality-${{ runner.os }}-go1.25.5-${{ github.sha }}
@@ -136,6 +140,14 @@ jobs:
         # --seed subcommand type) would otherwise ship uncaught. This
         # cross-compile builds the package and guards it.
         run: go build -o bin/crm-admin-arm64 ./cmd/crm-admin
+
+      # Only a develop push saves the build cache (see the restore step).
+      - name: Save Go build cache
+        if: github.event_name == 'push' && github.ref == 'refs/heads/develop'
+        uses: actions/cache/save@v4
+        with:
+          path: ~/.cache/go-build
+          key: ${{ steps.go-build-quality.outputs.cache-primary-key }}
 
   # Lints the behavior SSOT corpus (spec/*.yaml). Gated on spec OR backend:
   # spec/** changes must lint the corpus, and the backend OR closes the drift
@@ -250,13 +262,17 @@ jobs:
             go-mod-${{ runner.os }}-go1.25.5-${{ hashFiles('backend/go.sum') }}-
             go-mod-${{ runner.os }}-go1.25.5-
 
-      # Rolling Go build cache. SHA-keyed so every run misses its exact key and
-      # saves a fresh entry; restore-keys brings the most recent prior build
-      # cache forward so warmth compounds across pushes. Namespaced per job
-      # because each job has a distinct build config (amd64 with the
-      # integration_testdb build tag here).
-      - name: Cache Go build cache
-        uses: actions/cache@v4
+      # Rolling Go build cache, restored here and saved at the end of the job
+      # only on a develop push. A pull_request run can restore develop's cache
+      # (develop is the default branch) but a develop push cannot restore a
+      # pull request's, so per-run PR saves only crowd develop's entry out of
+      # the repository's 10 GB cache quota and leave develop pushes cold.
+      # SHA-keyed; restore-keys bring the most recent develop build forward.
+      # Namespaced per job because each job has a distinct build config (amd64
+      # with the integration_testdb build tag here).
+      - name: Restore Go build cache
+        id: go-build-tests
+        uses: actions/cache/restore@v4
         with:
           path: ~/.cache/go-build
           key: go-build-tests-${{ runner.os }}-go1.25.5-${{ github.sha }}
@@ -339,6 +355,14 @@ jobs:
           API_KEY: test-api-key-for-ci
           GOTEST_VERBOSE: ""
         run: make test-integration-fast
+
+      # Only a develop push saves the build cache (see the restore step).
+      - name: Save Go build cache
+        if: github.event_name == 'push' && github.ref == 'refs/heads/develop'
+        uses: actions/cache/save@v4
+        with:
+          path: ~/.cache/go-build
+          key: ${{ steps.go-build-tests.outputs.cache-primary-key }}
 
   # Shell suites: git hook + worktree tests and the deploy/backup script tests.
   # Gated on the scripts path group so an ops-script or infra change runs only
@@ -587,20 +611,21 @@ jobs:
             go-mod-${{ runner.os }}-go1.25.5-${{ hashFiles('backend/go.sum') }}-
             go-mod-${{ runner.os }}-go1.25.5-
 
-      # Rolling Go build cache. SHA-keyed so every run misses its exact key and
-      # saves a fresh entry; restore-keys brings the most recent prior build
-      # cache forward so warmth compounds across pushes. Namespaced per job
-      # because each job has a distinct build config (plain amd64 `go run` here).
-      # The trailing ${{ matrix.shard }} makes the two concurrent E2E shards
-      # save collision-free (same SHA otherwise collides); the shared
-      # restore-keys prefix lets a shard restore the other shard's most-recent
-      # entry (the backend binary is identical across shards, so the cross-shard
-      # restore is content-addressed-safe and genuinely warm).
-      - name: Cache Go build cache
-        uses: actions/cache@v4
+      # Rolling Go build cache, restored here and saved at the end of the job
+      # only on a develop push. A pull_request run can restore develop's cache
+      # (develop is the default branch) but a develop push cannot restore a
+      # pull request's, so per-run PR saves only crowd develop's entry out of
+      # the repository's 10 GB cache quota and leave develop pushes cold.
+      # SHA-keyed; restore-keys bring the most recent develop build forward.
+      # Namespaced per job because each job has a distinct build config (plain
+      # amd64 `go run` here). Both shards restore the same entry, which shard 1
+      # saves.
+      - name: Restore Go build cache
+        id: go-build-e2e
+        uses: actions/cache/restore@v4
         with:
           path: ~/.cache/go-build
-          key: go-build-e2e-${{ runner.os }}-go1.25.5-${{ github.sha }}-${{ matrix.shard }}
+          key: go-build-e2e-${{ runner.os }}-go1.25.5-${{ github.sha }}
           restore-keys: |
             go-build-e2e-${{ runner.os }}-go1.25.5-
 
@@ -746,6 +771,15 @@ jobs:
           CRM_ENV: testing
           ENABLE_EXTERNAL_SYNC: true
         run: bunx playwright test --project=chromium --shard=${{ matrix.shard }}/2
+
+      # Only a develop push saves the build cache, and only shard 1: both shards
+      # build the same backend, so one entry serves both.
+      - name: Save Go build cache
+        if: github.event_name == 'push' && github.ref == 'refs/heads/develop' && matrix.shard == 1
+        uses: actions/cache/save@v4
+        with:
+          path: ~/.cache/go-build
+          key: ${{ steps.go-build-e2e.outputs.cache-primary-key }}
 
       - name: Upload Playwright report
         uses: actions/upload-artifact@v4
