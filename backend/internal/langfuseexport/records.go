@@ -41,7 +41,8 @@ type span struct {
 
 // score is a value on a trace that can change after it is first sent: a
 // review, or one of a rerun's scorecard metrics. Langfuse upserts a score by its ID,
-// so every export sends each one.
+// so every export sends each one; a metric left without a value is deleted by
+// its ID.
 type score struct {
 	id, traceID    string
 	name, dataType string
@@ -316,17 +317,28 @@ func runSpan(r judgment.RunRecord, messages []judgment.UnjudgedMessage) span {
 
 // scorecardScores are a finished rerun run's scorecard metrics, each its own
 // numeric score on the run's trace, so each metric charts per method and
-// version. The metrics follow the latest labels, so each score's ID names the
-// run and the metric, and each export replaces the value Langfuse holds. A
-// rate with no labeled decision behind it is not sent, nor are a flag kind's or
-// the clearing decisions' counts when none is labeled, nor the reviewed-outcome
-// counts when the run covered no review, so a chart never reads an absent
-// measurement as a measured zero. The message counts are always sent.
-func scorecardScores(r judgment.RunRecord, m scorecard.RunMetrics) []score {
+// version. Every run carries one fixed set of metrics, named from the fixed
+// enumerations: each question's outcome values, the flag kinds and the
+// unjudged reasons. The metrics follow the latest labels and reviews, so each
+// score's ID names the run and the metric, and each export replaces the value
+// Langfuse holds. The counts, confusion cells among them, are measured on
+// every export, zeros included. A rate with no labeled decision behind it, and
+// i_owe_missed and corrections_caused when the run covered no review, have no
+// value, so a chart never reads an absent measurement as a measured zero:
+// absent names the IDs of those metrics, which the export deletes, so a value
+// an earlier export sent is not left standing.
+func scorecardScores(r judgment.RunRecord, m scorecard.RunMetrics) (scores []score, absent []string) {
 	trace, _ := runIDs(r.Run)
-	var scores []score
-	add := func(name string, value any) {
+	// Exports before per-metric scores sent the run's scorecard as one score
+	// under this ID, which no metric holds now.
+	legacy, _ := ids(scoreScorecard, r.Run.String())
+	absent = append(absent, legacy)
+	set := func(name string, value any, ok bool) {
 		id, _ := ids(scoreScorecard, r.Run.String(), name)
+		if !ok {
+			absent = append(absent, id)
+			return
+		}
 		metadata := methodMetadata(m.Method)
 		metadata["run_id"] = m.Run.String()
 		scores = append(scores, score{
@@ -334,59 +346,50 @@ func scorecardScores(r judgment.RunRecord, m scorecard.RunMetrics) []score {
 			at: r.FinishedAt, value: value, metadata: metadata,
 		})
 	}
-	addRate := func(name string, rate scorecard.Rate) {
-		if v, ok := rate.Value(); ok {
-			add(name, v)
-		}
+	rate := func(name string, rate scorecard.Rate) {
+		v, ok := rate.Value()
+		set(name, v, ok)
 	}
-	if m.Reviewed > 0 {
-		add("i_owe_missed", m.IOweMissed)
-		add("corrections_caused", m.CorrectionsCaused)
-	}
-	confusions := map[string]map[string]map[string]int{}
-	for _, key := range slices.Sorted(maps.Keys(m.PerOutcome)) {
-		o := m.PerOutcome[key]
-		addRate("outcome."+key+".recall", o.Recall)
-		addRate("outcome."+key+".precision", o.Precision)
-		// Every outcome of a question carries the question's whole confusion.
-		question, _, _ := strings.Cut(key, ".")
-		confusions[question] = o.Confusion
-	}
-	for _, question := range slices.Sorted(maps.Keys(confusions)) {
-		for _, right := range slices.Sorted(maps.Keys(confusions[question])) {
-			row := confusions[question][right]
-			for _, judged := range slices.Sorted(maps.Keys(row)) {
-				add("confusion."+question+"."+right+"."+judged, row[judged])
+	count := func(name string, n int) { set(name, n, true) }
+	set("i_owe_missed", m.IOweMissed, m.Reviewed > 0)
+	set("corrections_caused", m.CorrectionsCaused, m.Reviewed > 0)
+	for _, question := range slices.Sorted(maps.Keys(judgment.QuestionValues)) {
+		values := judgment.QuestionValues[question]
+		for _, value := range values {
+			key := scorecard.OutcomeKey(question, value)
+			// An outcome's metrics carry its question's whole confusion; an
+			// outcome no label names has none, and its row counts 0.
+			o := m.PerOutcome[key]
+			rate("outcome."+key+".recall", o.Recall)
+			rate("outcome."+key+".precision", o.Precision)
+			for _, judged := range append(slices.Clone(values), scorecard.Unanswered) {
+				count("confusion."+key+"."+judged, o.Confusion[value][judged])
 			}
 		}
 	}
 	for _, kind := range judgment.FlagKinds {
 		f, prefix := m.Flags[kind], "flag."+string(kind)
-		if f.ShownHeld+f.ShownNotHeld+f.UnshownHeld+f.UnshownNotHeld == 0 {
-			continue
-		}
-		addRate(prefix+".precision", f.Precision())
-		addRate(prefix+".recall", f.Recall())
-		add(prefix+".shown_held", f.ShownHeld)
-		add(prefix+".shown_not_held", f.ShownNotHeld)
-		add(prefix+".unshown_held", f.UnshownHeld)
-		add(prefix+".unshown_not_held", f.UnshownNotHeld)
+		rate(prefix+".precision", f.Precision())
+		rate(prefix+".recall", f.Recall())
+		count(prefix+".shown_held", f.ShownHeld)
+		count(prefix+".shown_not_held", f.ShownNotHeld)
+		count(prefix+".unshown_held", f.UnshownHeld)
+		count(prefix+".unshown_not_held", f.UnshownNotHeld)
 	}
-	if c := m.Clearing; c.Accuracy().Of > 0 {
-		addRate("clearing.accuracy", c.Accuracy())
-		add("clearing.done_labeled_done", c.DoneLabeledDone)
-		add("clearing.done_labeled_not_done", c.DoneLabeledNotDone)
-		add("clearing.not_done_labeled_done", c.NotDoneLabeledDone)
-		add("clearing.not_done_labeled_not_done", c.NotDoneLabeledNotDone)
-	}
-	add("messages.judged", m.Messages.Judged)
+	c := m.Clearing
+	rate("clearing.accuracy", c.Accuracy())
+	count("clearing.done_labeled_done", c.DoneLabeledDone)
+	count("clearing.done_labeled_not_done", c.DoneLabeledNotDone)
+	count("clearing.not_done_labeled_done", c.NotDoneLabeledDone)
+	count("clearing.not_done_labeled_not_done", c.NotDoneLabeledNotDone)
+	count("messages.judged", m.Messages.Judged)
 	for _, reason := range judgment.UnjudgedReasons {
-		add("messages.unjudged."+string(reason), m.Messages.Unjudged[reason])
+		count("messages.unjudged."+string(reason), m.Messages.Unjudged[reason])
 	}
 	for _, kind := range judgment.FlagKinds {
-		add("messages.flagged."+string(kind), m.Messages.Flagged[kind])
+		count("messages.flagged."+string(kind), m.Messages.Flagged[kind])
 	}
-	return scores
+	return scores, absent
 }
 
 // reviewScore is the user's verdict on one outcome of a judgment, a score on

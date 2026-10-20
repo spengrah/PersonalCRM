@@ -1223,11 +1223,11 @@ behaviors:
     when: crm-admin --langfuse-export sends it
     then:
       - key: each-metric-own-score
-        text: each metric of the rerun's scorecard, flag and ball-in-court alike (per-outcome recall and precision, confusion counts, i_owe_missed, corrections_caused, each flag kind's precision, recall and counts, clearing accuracy and counts, and the message counts), is its own numeric score on the run's trace, carrying the method key and versions
+        text: each metric of the rerun's scorecard, flag and ball-in-court alike (per-outcome recall and precision, confusion counts, i_owe_missed, corrections_caused, each flag kind's precision, recall and counts, clearing accuracy and counts, and the message counts), is its own numeric score on the run's trace, carrying the method key and versions; every run carries one fixed set of metrics, named from each question's outcome values, the flag kinds and the unjudged reasons
       - key: later-export-replaces
-        text: each export replaces the run's earlier value of each metric
+        text: each export replaces the run's earlier value of each metric, and deletes the value Langfuse holds for each metric the latest labels and reviews leave without one, the single scorecard score earlier exports sent among them
       - key: absent-metric-not-sent
-        text: a metric with no labeled decision behind it is not sent, never sent as 0
+        text: after an export Langfuse holds no value, never 0, for a rate with no labeled decision behind it, nor for i_owe_missed and corrections_caused when the run covered no review; a count, each confusion cell among them, is sent on every export, zero included
       - key: scores-content-free
         text: the scores carry no message text, sender or contact identity
-    provenance: [langfuseexport.scorecardScores, langfuseexport.Exporter.Export, crm-admin --langfuse-export, .agents/spec/2026-10-18-message-flags-and-threads.md G14 HC3 SC7]
+    provenance: [langfuseexport.scorecardScores, langfuseexport.Exporter.Export, langfuseexport.client.deleteScores, crm-admin --langfuse-export, .agents/spec/2026-10-18-message-flags-and-threads.md G14 HC3 SC7]

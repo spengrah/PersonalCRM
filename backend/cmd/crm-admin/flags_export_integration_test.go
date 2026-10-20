@@ -4,6 +4,8 @@ package main
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -33,7 +35,8 @@ type sentScore struct {
 }
 
 // fakeLangfuse is Langfuse at its HTTP API: it holds the traces it received,
-// keeps every score by ID as Langfuse upserts it, and records every request
+// keeps every score by ID as Langfuse upserts it, deletes a score by ID,
+// accepting an ID it does not hold as Langfuse does, and records every request
 // body.
 type fakeLangfuse struct {
 	server *httptest.Server
@@ -57,6 +60,12 @@ func newFakeLangfuse(t *testing.T) *fakeLangfuse {
 		l.mu.Lock()
 		defer l.mu.Unlock()
 		l.bodies = append(l.bodies, string(raw))
+		if id, ok := strings.CutPrefix(r.URL.Path, "/api/public/scores/"); ok && r.Method == http.MethodDelete {
+			delete(l.scores, id)
+			w.WriteHeader(http.StatusAccepted)
+			_, _ = w.Write([]byte(`{"message":"Score deletion queued successfully"}`))
+			return
+		}
 		switch r.URL.Path {
 		case "/api/public/v2/observations":
 			data := make([]map[string]string, len(l.held))
@@ -172,13 +181,35 @@ func value(t *testing.T, scores map[string]sentScore, name string) float64 {
 
 // The export sends each scorecard metric of a rerun, flag and ball-in-court
 // alike, as its own numeric score on the rerun's trace, content-free; each
-// export replaces the run's earlier value of each metric, and a metric with
-// no labeled decision behind it is not sent.
+// export replaces the run's earlier value of each metric, and Langfuse holds
+// no value for a metric with no labeled decision behind it.
 func TestLangfuseExportSendsEachScorecardMetric(t *testing.T) {
 	t.Run("a rerun with flag and clearing labels", func(t *testing.T) {
 		// spec: KNW-088.each-metric-own-score
-		s := clearedThread(t, 0.9)
-		s.label(t, 0, judgment.FlagKindCommitment, true)
+		byText := map[string]map[judgment.FlagKind]float64{
+			promise:                      {judgment.FlagKindCommitment: 0.9, judgment.FlagKindBigMoment: 0.9, judgment.FlagKindClaim: 0.9},
+			strings.TrimSpace(filler(0)): {judgment.FlagKindClaim: 0.9},
+		}
+		v := newVendor(t)
+		v.flag = func(a ask) float64 {
+			if p, ok := byText[a.Text][a.Flag]; ok {
+				return p
+			}
+			return 0.05
+		}
+		v.clear = func(ask) float64 { return 0.9 }
+		s := judgeThread(t, v, said{3, promise}, said{4, filler(0)})
+		for _, l := range []struct {
+			message int
+			kind    judgment.FlagKind
+			holds   bool
+		}{
+			{0, judgment.FlagKindCommitment, true}, {1, judgment.FlagKindCommitment, false},
+			{0, judgment.FlagKindBigMoment, true}, {1, judgment.FlagKindBigMoment, true},
+			{0, judgment.FlagKindClaim, false}, {1, judgment.FlagKindClaim, true},
+		} {
+			s.label(t, l.message, l.kind, l.holds)
+		}
 		s.labelClearing(t, jan(5, 0), true)
 		reviewed := s.judgmentAt(t, s.set[jevKey].Ref(), jan(5, 0))
 		require.NotEmpty(t, reviewed.Outcomes)
@@ -192,20 +223,33 @@ func TestLangfuseExportSendsEachScorecardMetric(t *testing.T) {
 		s.e.langfuseExport(t, l)
 
 		scores := l.runScores(t, rerun.ID)
-		assert.InDelta(t, 1, value(t, scores, "flag.commitment.precision"), 1e-9)
-		assert.InDelta(t, 1, value(t, scores, "flag.commitment.recall"), 1e-9)
-		assert.InDelta(t, 1, value(t, scores, "flag.commitment.shown_held"), 1e-9)
-		assert.InDelta(t, 1, value(t, scores, "clearing.accuracy"), 1e-9)
-		assert.InDelta(t, 1, value(t, scores, "clearing.done_labeled_done"), 1e-9)
-		assert.InDelta(t, 2, value(t, scores, "messages.judged"), 1e-9)
-		assert.InDelta(t, 0, value(t, scores, "messages.unjudged.call_failed"), 1e-9)
-		assert.InDelta(t, 1, value(t, scores, "messages.flagged.commitment"), 1e-9)
-		assert.InDelta(t, 0, value(t, scores, "messages.flagged.claim"), 1e-9)
-		assert.InDelta(t, 1, value(t, scores, "outcome.ball_in_court.nobody_owes.recall"), 1e-9)
-		assert.InDelta(t, 1, value(t, scores, "outcome.ball_in_court.nobody_owes.precision"), 1e-9)
-		assert.InDelta(t, 1, value(t, scores, "confusion.ball_in_court.nobody_owes.nobody_owes"), 1e-9)
-		assert.InDelta(t, 0, value(t, scores, "i_owe_missed"), 1e-9)
-		assert.InDelta(t, 0, value(t, scores, "corrections_caused"), 1e-9)
+		for name, want := range map[string]float64{
+			"flag.commitment.precision": 1, "flag.commitment.recall": 1,
+			"flag.commitment.shown_held": 1, "flag.commitment.shown_not_held": 0,
+			"flag.commitment.unshown_held": 0, "flag.commitment.unshown_not_held": 1,
+			"flag.big_moment.precision": 1, "flag.big_moment.recall": 0.5,
+			"flag.big_moment.shown_held": 1, "flag.big_moment.shown_not_held": 0,
+			"flag.big_moment.unshown_held": 1, "flag.big_moment.unshown_not_held": 0,
+			"flag.claim.precision": 0.5, "flag.claim.recall": 1,
+			"flag.claim.shown_held": 1, "flag.claim.shown_not_held": 1,
+			"flag.claim.unshown_held": 0, "flag.claim.unshown_not_held": 0,
+			"clearing.accuracy": 1, "clearing.done_labeled_done": 1, "clearing.done_labeled_not_done": 0,
+			"clearing.not_done_labeled_done": 0, "clearing.not_done_labeled_not_done": 0,
+			"messages.judged":                                 2,
+			"messages.unjudged.call_failed":                   0,
+			"messages.unjudged.message_over_limit":            0,
+			"messages.unjudged.before_window":                 0,
+			"messages.flagged.commitment":                     1,
+			"messages.flagged.big_moment":                     1,
+			"messages.flagged.claim":                          2,
+			"outcome.ball_in_court.nobody_owes.recall":        1,
+			"outcome.ball_in_court.nobody_owes.precision":     1,
+			"confusion.ball_in_court.nobody_owes.nobody_owes": 1,
+			"i_owe_missed":                                    0,
+			"corrections_caused":                              0,
+		} {
+			assert.InDelta(t, want, value(t, scores, name), 1e-9, name)
+		}
 		for name, sc := range scores {
 			assert.Equal(t, jevKey, sc.Metadata["method_key"], name)
 			assert.Equal(t, s.set[jevKey].Ref().Version, sc.Metadata["method_version"], name)
@@ -223,9 +267,9 @@ func TestLangfuseExportSendsEachScorecardMetric(t *testing.T) {
 
 		scores := l.runScores(t, s.e.lastRun(t, s.set[jevKey].Ref()).ID)
 		require.Contains(t, scores, "flag.commitment.precision")
-		for name := range scores {
-			assert.False(t, strings.HasPrefix(name, "flag.big_moment."), "big moment's shown flag holds no label: %s", name)
-		}
+		assert.NotContains(t, scores, "flag.big_moment.precision", "big moment's shown flag holds no label")
+		assert.NotContains(t, scores, "flag.big_moment.recall")
+		assert.InDelta(t, 0, value(t, scores, "flag.big_moment.shown_held"), 1e-9, "a count is measured, zero included")
 		assert.InDelta(t, 1, value(t, scores, "messages.flagged.big_moment"), 1e-9)
 	})
 
@@ -250,6 +294,71 @@ func TestLangfuseExportSendsEachScorecardMetric(t *testing.T) {
 		assert.InDelta(t, 1, value(t, second, "flag.commitment.unshown_held"), 1e-9)
 		assert.Equal(t, first["flag.commitment.precision"].ID, second["flag.commitment.precision"].ID, "the later value replaces the earlier")
 		assert.Len(t, second, len(first), "each metric is one score")
+	})
+
+	t.Run("a rate whose denominator disappears after a label change", func(t *testing.T) {
+		// spec: KNW-088.later-export-replaces, KNW-088.absent-metric-not-sent
+		s := judgedThread(t, map[string]map[judgment.FlagKind]float64{promise: {judgment.FlagKindCommitment: 0.9}}, said{3, promise})
+		s.label(t, 0, judgment.FlagKindCommitment, true)
+		s.scorecard(t)
+		rerun := s.e.lastRun(t, s.set[jevKey].Ref()).ID
+		l := newFakeLangfuse(t)
+		s.e.langfuseExport(t, l)
+		require.InDelta(t, 1, value(t, l.runScores(t, rerun), "flag.commitment.recall"), 1e-9)
+		s.label(t, 0, judgment.FlagKindCommitment, false)
+
+		s.e.langfuseExport(t, l)
+
+		scores := l.runScores(t, rerun)
+		assert.NotContains(t, scores, "flag.commitment.recall", "no labeled message holds a commitment")
+		assert.InDelta(t, 0, value(t, scores, "flag.commitment.precision"), 1e-9)
+	})
+
+	t.Run("a confusion cell after a review moves", func(t *testing.T) {
+		// spec: KNW-088.later-export-replaces, KNW-088.absent-metric-not-sent
+		s := clearedThread(t, 0.9)
+		reviewed := s.judgmentAt(t, s.set[jevKey].Ref(), jan(5, 0))
+		require.NotEmpty(t, reviewed.Outcomes)
+		review := func(right judgment.BallInCourt) {
+			_, err := s.e.store.ReviewOutcome(s.e.ctx, reviewed.Outcomes[0].ID, judgment.ReviewRequest{RightOutcome: string(right)})
+			require.NoError(t, err)
+		}
+		review(judgment.BallInCourtNobodyOwes)
+		s.scorecard(t)
+		rerun := s.e.lastRun(t, s.set[jevKey].Ref()).ID
+		l := newFakeLangfuse(t)
+		s.e.langfuseExport(t, l)
+		require.InDelta(t, 1, value(t, l.runScores(t, rerun), "confusion.ball_in_court.nobody_owes.nobody_owes"), 1e-9)
+		review(judgment.BallInCourtIOweReply)
+
+		s.e.langfuseExport(t, l)
+
+		scores := l.runScores(t, rerun)
+		assert.InDelta(t, 0, value(t, scores, "confusion.ball_in_court.nobody_owes.nobody_owes"), 1e-9, "the review left the cell")
+		assert.InDelta(t, 1, value(t, scores, "confusion.ball_in_court.i_owe_reply.nobody_owes"), 1e-9)
+		assert.NotContains(t, scores, "outcome.ball_in_court.nobody_owes.recall", "no review states nobody_owes")
+		assert.InDelta(t, 0, value(t, scores, "outcome.ball_in_court.i_owe_reply.recall"), 1e-9)
+		assert.InDelta(t, 1, value(t, scores, "i_owe_missed"), 1e-9)
+	})
+
+	t.Run("the single scorecard score an earlier export sent", func(t *testing.T) {
+		// spec: KNW-088.later-export-replaces
+		s := judgedThread(t, map[string]map[judgment.FlagKind]float64{promise: {judgment.FlagKindCommitment: 0.9}}, said{3, promise})
+		s.label(t, 0, judgment.FlagKindCommitment, true)
+		s.scorecard(t)
+		rerun := s.e.lastRun(t, s.set[jevKey].Ref()).ID
+		l := newFakeLangfuse(t)
+		s.e.langfuseExport(t, l)
+		// Exports before per-metric scores sent a run's scorecard as one score,
+		// whose ID derives from its name and the run.
+		sum := sha256.Sum256([]byte("scorecard\x00" + rerun.String() + "\x00"))
+		l.mu.Lock()
+		l.scores[hex.EncodeToString(sum[:16])] = sentScore{ID: hex.EncodeToString(sum[:16]), TraceID: l.runTraces[rerun.String()], Name: "scorecard", Value: 0.0, DataType: "NUMERIC"}
+		l.mu.Unlock()
+
+		s.e.langfuseExport(t, l)
+
+		assert.NotContains(t, l.runScores(t, rerun), "scorecard")
 	})
 
 	t.Run("scores holding no message text, sender or contact identity", func(t *testing.T) {
