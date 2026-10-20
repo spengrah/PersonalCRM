@@ -2,35 +2,49 @@ import { apiClient } from './api-client'
 import type { ApiResponseWithMeta } from './api-client'
 import type {
   AllInteractionsResponse,
-  BenchRowRequest,
-  BenchRowsResponse,
-  BenchThreadContentResponse,
+  ClearingLabelRequest,
+  FlagLabelRequest,
   InteractionTypeOptionResponse,
-  JudgmentRunsResponse,
   ReviewJudgmentOutcomeRequest,
   ReviewJudgmentOutcomeResponse,
+  ReviewRunsResponse,
+  ThreadListResponse,
+  ThreadReadResponse,
+  ThreadReviewResponse,
 } from '@/types/generated/contact'
 
 export type InteractionType = InteractionTypeOptionResponse['key']
 
-/** The all-interactions view's filters; each is part of the page's address. */
+/** The Interactions tab's filters; each is part of the tab's address. */
 export interface AllInteractionsFilters {
   contact_id?: string
   type?: InteractionType
-  run_id?: string
   page?: number
 }
 
 export const ALL_INTERACTIONS_PAGE_SIZE = 20
 
-/** A save's path, carrying the run the view is narrowed to, so the rows it returns read as the view shows them. */
-function inRun(path: string, runId: string | undefined): string {
-  return runId ? `${path}?run_id=${encodeURIComponent(runId)}` : path
+/** What narrows a thread list, and the list a thread page walks. */
+export interface ThreadFilters {
+  type?: InteractionType
+  contact_id?: string
+  run_id?: string
+}
+
+/** The Threads list's filters; each is part of the tab's address. */
+export interface ThreadListFilters extends ThreadFilters {
+  page?: number
+}
+
+export const THREAD_PAGE_SIZE = 20
+
+/** A save's path, naming the run whose review state the answer carries. */
+function inRun(path: string, runId: string): string {
+  return `${path}?run_id=${encodeURIComponent(runId)}`
 }
 
 export const benchApi = {
-  // One page of every interaction across contacts, each row with the
-  // proposals of the thread judgments it holds, compiled by the server.
+  // One page of every interaction across contacts.
   async list(
     filters: AllInteractionsFilters
   ): Promise<ApiResponseWithMeta<AllInteractionsResponse>> {
@@ -39,25 +53,62 @@ export const benchApi = {
       limit: ALL_INTERACTIONS_PAGE_SIZE,
     } as Record<string, unknown>)
   },
+}
 
-  // A judged thread's whole content, each message once, oldest first.
-  async threadContent(threadId: string): Promise<BenchThreadContentResponse> {
-    return apiClient.get<BenchThreadContentResponse>(
-      `/api/v1/interactions/threads/${threadId}/content`
+export const threadsApi = {
+  // One page of the threads, newest latest message first; given a run, the
+  // threads it judged with their judged count and status, and the run's
+  // summary.
+  async list(filters: ThreadListFilters): Promise<ApiResponseWithMeta<ThreadListResponse>> {
+    return apiClient.getWithMeta<ThreadListResponse>('/api/v1/threads', {
+      ...filters,
+      limit: THREAD_PAGE_SIZE,
+    } as Record<string, unknown>)
+  },
+
+  // A thread, its place in the list the filters keep and, given a run, the
+  // run's review of it.
+  async read(threadId: string, filters: ThreadFilters): Promise<ThreadReadResponse> {
+    return apiClient.get<ThreadReadResponse>(
+      `/api/v1/threads/${threadId}`,
+      filters as Record<string, unknown>
     )
   },
 
-  async runs(): Promise<JudgmentRunsResponse> {
-    return apiClient.get<JudgmentRunsResponse>('/api/v1/judgment-runs')
+  async runs(): Promise<ReviewRunsResponse> {
+    return apiClient.get<ReviewRunsResponse>('/api/v1/review-runs')
   },
 
-  // Records the right outcome the user states; the server derives the
-  // verdict, so a review never carries one. It returns the rows the body
-  // names as the server recorded them.
-  async review(
+  // Every save below answers with the thread's review state in the run, as a
+  // read of the thread returns it.
+  async labelFlag(
+    threadId: string,
+    runId: string,
+    label: FlagLabelRequest
+  ): Promise<ThreadReviewResponse> {
+    return apiClient.post<ThreadReviewResponse>(
+      inRun(`/api/v1/threads/${threadId}/flag-labels`, runId),
+      label
+    )
+  },
+
+  async labelClearing(
+    threadId: string,
+    runId: string,
+    label: ClearingLabelRequest
+  ): Promise<ThreadReviewResponse> {
+    return apiClient.post<ThreadReviewResponse>(
+      inRun(`/api/v1/threads/${threadId}/clearing-labels`, runId),
+      label
+    )
+  },
+
+  // Records the right outcome the user states for a reply item; the server
+  // derives the verdict, so a review never carries one.
+  async reviewReplyItem(
     outcomeId: string,
-    body: ReviewJudgmentOutcomeRequest,
-    runId?: string
+    runId: string,
+    body: ReviewJudgmentOutcomeRequest
   ): Promise<ReviewJudgmentOutcomeResponse> {
     return apiClient.post<ReviewJudgmentOutcomeResponse>(
       inRun(`/api/v1/judgment-outcomes/${outcomeId}/review`, runId),
@@ -65,30 +116,16 @@ export const benchApi = {
     )
   },
 
-  // Labels every negative decision of a proposal that has no label with its
-  // judged value; the server decides which, and refuses a proposal with an
-  // item. It returns the rows named as the server recorded them.
-  async confirmNones(
-    judgmentId: string,
-    rows: BenchRowRequest[],
-    runId?: string
-  ): Promise<BenchRowsResponse> {
-    return apiClient.post<BenchRowsResponse>(
-      inRun(`/api/v1/judgments/${judgmentId}/confirm-nones`, runId),
-      { rows }
+  // Labels a night that shows nothing; the server refuses a night that shows
+  // anything.
+  async confirmNones(judgmentId: string, runId: string): Promise<ThreadReviewResponse> {
+    return apiClient.post<ThreadReviewResponse>(
+      inRun(`/api/v1/judgments/${judgmentId}/confirm-nones`, runId)
     )
   },
 
-  // Records the user closing a row: the server labels what a close labels and
-  // returns the rows named as it recorded them.
-  async closeRow(
-    judgmentIds: string[],
-    rows: BenchRowRequest[],
-    runId?: string
-  ): Promise<BenchRowsResponse> {
-    return apiClient.post<BenchRowsResponse>(inRun('/api/v1/judgments/close', runId), {
-      judgment_ids: judgmentIds,
-      rows,
-    })
+  // Records the user closing a thread; the server labels what a close labels.
+  async close(threadId: string, runId: string): Promise<ThreadReviewResponse> {
+    return apiClient.post<ThreadReviewResponse>(inRun(`/api/v1/threads/${threadId}/close`, runId))
   },
 }

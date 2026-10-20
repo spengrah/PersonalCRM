@@ -13,7 +13,6 @@ import (
 const (
 	openRouterDecisionsURL = "https://openrouter.ai/api/alpha/decisions"
 	veniceDecisionsURL     = "https://api.venice.ai/api/v1/decisions"
-	sageURL                = "https://sage.levanto.ai/decide/batch"
 )
 
 // readOn is when the terms below were read at their primary sources.
@@ -37,7 +36,7 @@ var (
 		"https://openrouter.ai/docs/features/zdr",
 		"https://openrouter.ai/api/v1/endpoints/zdr",
 	}
-	// Clef and Clef-Flash pinned to DeepInfra under zero-retention routing:
+	// Clef pinned to DeepInfra under zero-retention routing:
 	// DeepInfra's terms promise no training on and no retention of customer
 	// data beyond processing the request.
 	deepInfraTerms = TermsStatus{Training: TermsShown, Retention: TermsShown, Sources: sources(slices.Concat(openRouterSources, []string{
@@ -49,26 +48,16 @@ var (
 	veniceJevTerms = TermsStatus{Training: TermsShown, Retention: TermsContradicted, Sources: append(
 		[]TermsSource{{URL: "https://docs.venice.ai/overview/privacy", ReadOn: time.Date(2026, 10, 17, 0, 0, 0, 0, time.UTC)}},
 		sources("https://typesafe.ai/legal/privacy-policy", "https://typesafe.ai/legal/data-processing", "https://typesafe.ai/legal/mca", "https://docs.typesafe.ai/legal.md")...)}
-	// Levanto promises no training and keeps no content after responding,
-	// except diagnostic payloads of failed or slow requests, deleted after 30
-	// days: temporary, and masked.
-	sageTerms = TermsStatus{Training: TermsShown, Retention: TermsShown, Sources: sources(
-		"https://levanto.ai/privacy", "https://levanto.ai/terms")}
 )
 
 // Limits, each bounding the whole request so that every vendor limit holds.
 var (
 	// Clef on DeepInfra: a 65,536-token context; 64 questions, as on Workers AI.
 	clefLimits = Limits{Tokens: 65536, Questions: 64}
-	// Clef-Flash on DeepInfra: a 24,576-token context; 64 questions.
-	clefFlashLimits = Limits{Tokens: 24576, Questions: 64}
 	// Jev on Venice: 32,000 tokens for the state with its longest question,
 	// the tighter of its two limits (64,000 for the state with every
 	// question); no question cap.
 	jevLimits = Limits{Tokens: 32000, Questions: 32000}
-	// Sage: 32,768 tokens on plans below Growth, which alone extends the
-	// context to 131,072; no documented question cap.
-	sageLimits = Limits{Tokens: 32768, Questions: 32768}
 )
 
 // Sizing of each method's window. The window is sized by the size estimate
@@ -77,18 +66,9 @@ var (
 // from the ratio of the input tokens a vendor billed to that estimate over the
 // January 2026 runs, and are checked against the tokens billed for synthetic
 // threads at sampled sizes.
-//
-// A method whose ratio is unstable across context sizes is sized from the
-// usage it reports. Sage bills the state again for each question, so its
-// PerQuestion estimate counts the state once per question, and its Ratio is
-// the tokens it billed over that estimate. A window therefore holds the
-// messages whose bill, state times questions, fits the limit, which is far
-// fewer than the messages whose text fits it.
 var (
-	clefSizing      = Sizing{Ratio: 0.43, Margin: 0.40}
-	clefFlashSizing = Sizing{Ratio: 0.43, Margin: 0.40}
-	jevSizing       = Sizing{Ratio: 0.40, Margin: 0.60}
-	sageSizing      = Sizing{Ratio: 0.29, Margin: 0.05, PerQuestion: true}
+	clefSizing = Sizing{Ratio: 0.43, Margin: 0.40}
+	jevSizing  = Sizing{Ratio: 0.40, Margin: 0.60}
 )
 
 // zeroRetention routes an OpenRouter request only to zero-retention
@@ -106,9 +86,12 @@ type registered struct {
 	build   func(Definition) (Method, error)
 }
 
-// NewRegistry returns the registry of every compared method, each keyed by
-// its definition's key. A method whose route is not configured stays in the
-// registry and fails on Get.
+// NewRegistry returns the registry of the compared methods, each keyed by its
+// definition's key: the one list of methods a run, the production designation
+// and the scorecard accept. A removed method (sage-masked, clef-flash-masked)
+// is not listed, so naming it is refused as an unknown method is; its stored
+// judgments and runs read without the registry. A method whose route is not
+// configured stays in the registry and fails on Get.
 func NewRegistry(cfg config.DecisionConfig, masker *threadctx.Masker) *Registry {
 	openRouter := func(model string, routing *openRouterRouting) func(Definition) (Method, error) {
 		return func(def Definition) (Method, error) {
@@ -120,8 +103,6 @@ func NewRegistry(cfg config.DecisionConfig, masker *threadctx.Masker) *Registry 
 			"OPENROUTER_API_KEY", cfg.OpenRouterAPIKey, openRouter("cloudflare/clef", zeroRetention("deepinfra"))},
 		{Definition{Key: "clef-masked-reasoned", Wording: ReasonedWording, Limits: clefLimits, Sizing: clefSizing, Terms: deepInfraTerms},
 			"OPENROUTER_API_KEY", cfg.OpenRouterAPIKey, openRouter("cloudflare/clef", zeroRetention("deepinfra"))},
-		{Definition{Key: "clef-flash-masked", Wording: DefaultWording, Limits: clefFlashLimits, Sizing: clefFlashSizing, Terms: deepInfraTerms},
-			"OPENROUTER_API_KEY", cfg.OpenRouterAPIKey, openRouter("cloudflare/clef-flash", zeroRetention("deepinfra"))},
 		// Venice relays Jev without the user's identity, but its route offers
 		// no zero retention at TypeSafe, so Jev runs on masked content only.
 		// Venice serves only jev-latest and reports no release, so a new Jev
@@ -129,11 +110,6 @@ func NewRegistry(cfg config.DecisionConfig, masker *threadctx.Masker) *Registry 
 		{Definition{Key: "jev-masked", Wording: DefaultWording, Limits: jevLimits, Sizing: jevSizing, Terms: veniceJevTerms},
 			"VENICE_API_KEY", cfg.VeniceAPIKey, func(def Definition) (Method, error) {
 				return NewMaskedMethod(def, masker, newSystemOne(veniceDecisionsURL, cfg.VeniceAPIKey, "jev-latest", nil)), nil
-			}},
-		// Levanto's route offers no zero retention either.
-		{Definition{Key: "sage-masked", Wording: DefaultWording, Limits: sageLimits, Sizing: sageSizing, Terms: sageTerms},
-			"SAGE_API_KEY", cfg.SageAPIKey, func(def Definition) (Method, error) {
-				return NewMaskedMethod(def, masker, newSage(sageURL, cfg.SageAPIKey)), nil
 			}},
 	}
 	r := &Registry{methods: make(map[string]func() (Method, error), len(routes))}

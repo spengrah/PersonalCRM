@@ -2,25 +2,38 @@ import { expect, type APIRequestContext, type Locator, type Page } from '@playwr
 import type {
   AllInteractionItemResponse,
   AllInteractionsResponse,
+  ThreadListResponse,
+  ThreadReadResponse,
+  ThreadReviewResponse,
+  ThreadRowResponse,
   TimelineContentResponse,
 } from '../../../src/types/generated/contact'
+import type { FlagKind, UnjudgedReason } from '../../../src/types/generated/judgment'
 import { API_BASE_URL, API_HEADERS, type SeedBehaviorResult } from './test-api'
 import { SLOW_TIMEOUT_MS } from './timeouts'
 
 /**
- * The method key the E2E backend designates as the production method
- * (DECISION_PRODUCTION_METHOD), so its judgments of current content change
- * live state.
+ * The compared methods, the only ones whose runs the Run filter lists. The
+ * backend's method registry fixes them; a run of any other key is never listed.
  */
-export const PRODUCTION_METHOD = 'bench-production'
+export const COMPARED_METHODS = {
+  clef: 'clef-masked',
+  reasoned: 'clef-masked-reasoned',
+  jev: 'jev-masked',
+} as const
 
-export interface SeedOutcome {
-  question_id: string
-  contact_id?: string
-  direction?: 'mine' | 'theirs'
-  outcome: string
-  confidence: number
-  due_date?: string
+export interface SeedFlag {
+  message_key: string
+  kind: FlagKind
+  probability: number
+}
+
+export interface SeedClearing {
+  commitment_message_key: string
+  /** The cut-off of the earlier judgment that flagged the commitment. */
+  commitment_cut_off: string
+  done: boolean
+  probability: number
 }
 
 export interface SeedJudgment {
@@ -29,10 +42,19 @@ export interface SeedJudgment {
   cut_off: string
   input_hash?: string
   context_kind?: 'conversation' | 'meeting'
-  questions?: { id: string; probabilities: Record<string, number>; original_answer: string }[]
-  ball_in_court?: SeedOutcome[]
-  commitments?: SeedOutcome[]
-  big_moment?: SeedOutcome
+  /** The key of the first message its window reads. */
+  window_start?: string
+  /** The keys of the messages new at its cut-off, in thread order. */
+  new_messages?: string[]
+  flags?: SeedFlag[]
+  clearings?: SeedClearing[]
+}
+
+export interface SeedUnjudged {
+  thread_interaction_id: string
+  cut_off: string
+  message_key: string
+  reason: UnjudgedReason
 }
 
 export interface SeedRun {
@@ -42,13 +64,13 @@ export interface SeedRun {
   from?: string
   to?: string
   judgments?: SeedJudgment[]
-  incomplete?: { thread_interaction_id: string; cut_off: string; reason: string }[]
+  unjudged?: SeedUnjudged[]
   unfinished?: boolean
 }
 
 /**
  * Records one judgment run through the judgment store's testing-only route,
- * as a method would. Defaults: a scheduled run of the production method.
+ * as a method would. Defaults: a historical run of the first compared method.
  */
 export async function seedJudgmentRun(
   request: APIRequestContext,
@@ -57,12 +79,13 @@ export async function seedJudgmentRun(
   const response = await request.post(`${API_BASE_URL}/api/v1/test/judgment-runs`, {
     headers: API_HEADERS,
     data: {
-      kind: 'scheduled',
-      method_key: PRODUCTION_METHOD,
+      kind: 'historical',
+      method_key: COMPARED_METHODS.clef,
       method_version: 'v1',
       wording_version: 'w1',
       judgments: [],
       incomplete: [],
+      unjudged: [],
       ...run,
       ...(run.judgments && {
         judgments: run.judgments.map(j => ({ context_kind: 'conversation', ...j })),
@@ -73,7 +96,7 @@ export async function seedJudgmentRun(
   return (await response.json()).data
 }
 
-/** One page of the all-interactions view as the API gives it. */
+/** One page of the Interactions tab's list as the API gives it. */
 export async function fetchAllInteractions(
   request: APIRequestContext,
   query: Record<string, string | number>
@@ -93,6 +116,64 @@ export async function contactRows(
   contactId: string
 ): Promise<AllInteractionItemResponse[]> {
   return (await fetchAllInteractions(request, { contact_id: contactId, limit: 100 })).data.items
+}
+
+/** One page of the Threads list as the API gives it. */
+export async function fetchThreads(
+  request: APIRequestContext,
+  query: Record<string, string | number>
+): Promise<{ data: ThreadListResponse; total: number; pages: number }> {
+  const params = new URLSearchParams(Object.entries(query).map(([k, v]) => [k, String(v)]))
+  const response = await request.get(`${API_BASE_URL}/api/v1/threads?${params}`, {
+    headers: API_HEADERS,
+  })
+  expect(response.ok(), await response.text()).toBe(true)
+  const body = await response.json()
+  return { data: body.data, total: body.meta.pagination.total, pages: body.meta.pagination.pages }
+}
+
+/** A thread as the API reads it, with the run's review of it given a run_id. */
+export async function readThread(
+  request: APIRequestContext,
+  threadId: string,
+  query: Record<string, string> = {}
+): Promise<ThreadReadResponse> {
+  const params = new URLSearchParams(query)
+  const response = await request.get(`${API_BASE_URL}/api/v1/threads/${threadId}?${params}`, {
+    headers: API_HEADERS,
+  })
+  expect(response.ok(), await response.text()).toBe(true)
+  return (await response.json()).data
+}
+
+/**
+ * The thread an interaction was recorded in, from the contact's threads: the
+ * one list row naming the contact whose latest message is the interaction's.
+ */
+export async function threadOf(
+  request: APIRequestContext,
+  contactId: string,
+  title: string | undefined
+): Promise<ThreadRowResponse> {
+  const { data } = await fetchThreads(request, { contact_id: contactId, limit: 100 })
+  const thread = title ? data.items.find(row => row.title === title) : data.items[0]
+  expect(thread, `a thread of the contact${title ? ` titled ${title}` : ''}`).toBeTruthy()
+  return thread!
+}
+
+/** Labels a flag decision as the user would, so a thread reads as reviewed without driving the page. */
+export async function labelFlag(
+  request: APIRequestContext,
+  threadId: string,
+  runId: string,
+  label: { message_key: string; kind: FlagKind; holds: boolean }
+): Promise<ThreadReviewResponse> {
+  const response = await request.post(
+    `${API_BASE_URL}/api/v1/threads/${threadId}/flag-labels?run_id=${runId}`,
+    { headers: API_HEADERS, data: label }
+  )
+  expect(response.ok(), await response.text()).toBe(true)
+  return (await response.json()).data
 }
 
 /** The content of a row, read in its context contact's participation. */
@@ -122,8 +203,8 @@ export function entity(seeded: SeedBehaviorResult, handle: string): { id: string
   return e
 }
 
-/** The view's row for an interaction identity. */
-export function benchRow(page: Page, identityId: string): Locator {
+/** The Interactions tab's row for an interaction identity. */
+export function interactionRow(page: Page, identityId: string): Locator {
   return page
     .getByRole('list', { name: 'Interactions' })
     .locator(`[data-interaction-id="${identityId}"]`)
@@ -137,9 +218,9 @@ export async function expandRow(row: Locator): Promise<Locator> {
   return region
 }
 
-/** A proposal's list by its heading. */
-export function proposalList(proposal: Locator, title: string): Locator {
-  return proposal.getByRole('group', { name: title, exact: true })
+/** A judgment box's reply list by its heading. */
+export function proposalList(box: Locator, title: string): Locator {
+  return box.getByRole('group', { name: title, exact: true })
 }
 
 /** The one item of a list whose text starts with the given words. */
@@ -147,11 +228,6 @@ export function listItem(list: Locator, text: string): Locator {
   return list.locator('[data-item]').filter({
     has: list.page().locator('[data-item-text]', { hasText: text }),
   })
-}
-
-/** Today's calendar date as the server reads it (YYYY-MM-DD, UTC). */
-export function isoDate(d: Date): string {
-  return d.toISOString().slice(0, 10)
 }
 
 export interface SeededObligation {
@@ -174,11 +250,4 @@ export async function fetchObligations(
   )
   expect(response.ok(), await response.text()).toBe(true)
   return (await response.json()).data
-}
-
-/** The local calendar date days from now (YYYY-MM-DD), as the server's "today" reads it. */
-export function localDateFromNow(days: number): string {
-  const d = new Date()
-  d.setDate(d.getDate() + days)
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 }

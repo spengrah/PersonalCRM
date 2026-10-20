@@ -588,8 +588,10 @@ TRUNCATE TABLE
     judgment,
     judgment_appearance,
     judgment_clearing,
+    judgment_clearing_label,
     judgment_example,
     judgment_flag,
+    judgment_flag_label,
     judgment_incomplete,
     judgment_outcome,
     judgment_run,
@@ -1910,6 +1912,18 @@ func (q *Queries) SyntheticDeleteJudgmentAssertionsForThreads(ctx context.Contex
 	return result.RowsAffected(), nil
 }
 
+const SyntheticDeleteJudgmentClearingLabelsForThreads = `-- name: SyntheticDeleteJudgmentClearingLabelsForThreads :execrows
+DELETE FROM judgment_clearing_label WHERE thread_id = ANY($1::uuid[])
+`
+
+func (q *Queries) SyntheticDeleteJudgmentClearingLabelsForThreads(ctx context.Context, threadIds []uuid.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, SyntheticDeleteJudgmentClearingLabelsForThreads, threadIds)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const SyntheticDeleteJudgmentClearingsForThreads = `-- name: SyntheticDeleteJudgmentClearingsForThreads :execrows
 DELETE FROM judgment_clearing
 WHERE judgment_id IN (
@@ -1934,6 +1948,19 @@ DELETE FROM judgment_example WHERE thread_id = ANY($1::uuid[])
 
 func (q *Queries) SyntheticDeleteJudgmentExamplesForThreads(ctx context.Context, threadIds []uuid.UUID) (int64, error) {
 	result, err := q.db.Exec(ctx, SyntheticDeleteJudgmentExamplesForThreads, threadIds)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const SyntheticDeleteJudgmentFlagLabelsForThreads = `-- name: SyntheticDeleteJudgmentFlagLabelsForThreads :execrows
+DELETE FROM judgment_flag_label WHERE thread_id = ANY($1::uuid[])
+`
+
+// The flag labels of the threads, which reference the threads' venue nodes.
+func (q *Queries) SyntheticDeleteJudgmentFlagLabelsForThreads(ctx context.Context, threadIds []uuid.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, SyntheticDeleteJudgmentFlagLabelsForThreads, threadIds)
 	if err != nil {
 		return 0, err
 	}

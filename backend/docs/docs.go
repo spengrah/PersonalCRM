@@ -3790,7 +3790,7 @@ const docTemplate = `{
         },
         "/interactions": {
             "get": {
-                "description": "Every interaction across contacts, newest first: one row per interaction, naming each participant contact. Filters combine. run_id keeps the rows of threads with a judgment appearing in the run, and each row's proposals to those judgments. Each row carries the proposals of the thread judgments whose latest content it holds, compiled into the answers the user reviews.",
+                "description": "Every interaction across contacts, newest first: one row per interaction, naming each participant contact. Filters combine. A row carries no judgment, proposal or review status.",
                 "produces": [
                     "application/json"
                 ],
@@ -3824,20 +3824,13 @@ const docTemplate = `{
                         "enum": [
                             "message",
                             "email",
-                            "calendar",
+                            "event",
                             "call",
                             "other"
                         ],
                         "type": "string",
                         "description": "Interaction type",
                         "name": "type",
-                        "in": "query"
-                    },
-                    {
-                        "type": "string",
-                        "format": "uuid",
-                        "description": "Judgment run ID",
-                        "name": "run_id",
                         "in": "query"
                     }
                 ],
@@ -3985,54 +3978,6 @@ const docTemplate = `{
                 }
             }
         },
-        "/interactions/threads/{thread_id}/content": {
-            "get": {
-                "description": "The thread's messages, oldest first, each once however many per-contact copies hold it: the content its judgments read up to their cut-offs, and the content after them. A meeting's notes are its row's content and are not listed.",
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "interactions"
-                ],
-                "summary": "Get a judged thread's content",
-                "parameters": [
-                    {
-                        "type": "string",
-                        "format": "uuid",
-                        "description": "Thread (venue) ID",
-                        "name": "thread_id",
-                        "in": "path",
-                        "required": true
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "allOf": [
-                                {
-                                    "$ref": "#/definitions/api.APIResponse"
-                                },
-                                {
-                                    "type": "object",
-                                    "properties": {
-                                        "data": {
-                                            "$ref": "#/definitions/handlers.BenchThreadContentResponse"
-                                        }
-                                    }
-                                }
-                            ]
-                        }
-                    },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "$ref": "#/definitions/api.APIResponse"
-                        }
-                    }
-                }
-            }
-        },
         "/interactions/{id}/participants": {
             "get": {
                 "description": "Lists the contacts with an effective participation in the interaction that holds the id (its merged interaction when the id was merged away), ordered by name: the contacts a removal can name.",
@@ -4137,7 +4082,7 @@ const docTemplate = `{
         },
         "/judgment-outcomes/{id}/review": {
             "post": {
-                "description": "Records the right outcome the user states for an outcome of any state and returns the outcome with the verdict the server derives: confirmed when it equals the judged outcome, rejected when it differs and has no effect, corrected otherwise, beside the rows the request names, in its order, as the bench now shows them: each row's proposals and what remains to review across them, as a read of the list narrowed to run_id, when it is given, shows that row. A row naming an unknown judgment is not found, with nothing recorded. The review is its decision's label for every proposal on the same content, and labels no other decision. A first review of an applied or claim outcome gives the thread the right outcome's effect; a review of a decision that already has a label records the label only, except an Add on a negative decision, which has the effect the same review of an unlabeled negative has. keep_current_date, with an open commitment's right outcome, keeps the obligation's current date against the judged later one, and the verdict is corrected.",
+                "description": "Records the right outcome the user states for an outcome of any state and returns the outcome with the verdict the server derives: confirmed when it equals the judged outcome, rejected when it differs and has no effect, corrected otherwise. Given run_id, it also returns the review state in that run of the thread the outcome's judgment judged, as the thread read returns it. The review is its decision's label for every proposal on the same content, and labels no other decision. A first review of an applied or claim outcome gives the thread the right outcome's effect; a review of a decision that already has a label records the label only, except an Add on a negative decision, which has the effect the same review of an unlabeled negative has. keep_current_date, with an open commitment's right outcome, keeps the obligation's current date against the judged later one, and the verdict is corrected.",
                 "consumes": [
                     "application/json"
                 ],
@@ -4160,7 +4105,7 @@ const docTemplate = `{
                     {
                         "type": "string",
                         "format": "uuid",
-                        "description": "Run the bench is narrowed to",
+                        "description": "Run whose review state of the thread the answer carries",
                         "name": "run_id",
                         "in": "query"
                     },
@@ -4294,84 +4239,16 @@ const docTemplate = `{
                 }
             }
         },
-        "/judgments/close": {
-            "post": {
-                "description": "Records the user closing a row: every negative decision without a label of each given proposal (the row's) that holds a label, from whichever proposal on the same content it was made in, is labeled with its judged value, as ordinary reviews that change nothing live. A decision some proposal on the same content holds as an item without a label is not labeled and stays to review; one some proposal holds as a reply its own commitment absorbs is not labeled and is no None to review in any proposal; and a proposal holding no label gains none. It records all of its labels or none, and returns the rows the request names, in its order, as the bench now shows them: each row's proposals and what remains to review across them, as a read of the list narrowed to run_id, when it is given, shows that row. An unknown judgment, closed or in a row, is not found, with nothing recorded.",
-                "consumes": [
-                    "application/json"
-                ],
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "judgments"
-                ],
-                "summary": "Close a bench row",
-                "parameters": [
-                    {
-                        "type": "string",
-                        "format": "uuid",
-                        "description": "Run the bench is narrowed to",
-                        "name": "run_id",
-                        "in": "query"
-                    },
-                    {
-                        "description": "The row's judgments, and the rows the close can change",
-                        "name": "close",
-                        "in": "body",
-                        "required": true,
-                        "schema": {
-                            "$ref": "#/definitions/handlers.CloseBenchRowRequest"
-                        }
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "allOf": [
-                                {
-                                    "$ref": "#/definitions/api.APIResponse"
-                                },
-                                {
-                                    "type": "object",
-                                    "properties": {
-                                        "data": {
-                                            "$ref": "#/definitions/handlers.BenchRowsResponse"
-                                        }
-                                    }
-                                }
-                            ]
-                        }
-                    },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "$ref": "#/definitions/api.APIResponse"
-                        }
-                    },
-                    "404": {
-                        "description": "Not Found",
-                        "schema": {
-                            "$ref": "#/definitions/api.APIResponse"
-                        }
-                    }
-                }
-            }
-        },
         "/judgments/{id}/confirm-nones": {
             "post": {
-                "description": "Labels every negative decision of the judgment's proposal that has no label from any proposal with its judged value, as ordinary reviews that change nothing live, and returns the rows the request names, in its order, as the bench now shows them: each row's proposals and what remains to review across them, as a read of the list narrowed to run_id, when it is given, shows that row. A decision some proposal on the same content holds as an item without a label is not labeled and stays to review; one some proposal holds as a reply its own commitment absorbs is not labeled and is no None to review in any proposal. It records all of its labels or none. A proposal with an item, or one holding no negative decision it would label, is refused. A row naming an unknown judgment is not found, with nothing recorded.",
-                "consumes": [
-                    "application/json"
-                ],
+                "description": "Labels, for the night the judgment makes in the run, as not holding every flag decision without a label of its judged messages that no judgment of a compared method shows as a flag without a label, and labels the night's negative reply decisions without a label with their judged values, as ordinary labels that change nothing live. It records all of its labels or none, and answers with the thread's review state in the run. A night that shows a flag chip, a clearing decision or a reply item, or holds a label, is refused as a conflict, recording nothing. A judgment that is no night of the run is not found.",
                 "produces": [
                     "application/json"
                 ],
                 "tags": [
                     "judgments"
                 ],
-                "summary": "Confirm a proposal's Nones",
+                "summary": "Confirm a night's Nones",
                 "parameters": [
                     {
                         "type": "string",
@@ -4384,17 +4261,10 @@ const docTemplate = `{
                     {
                         "type": "string",
                         "format": "uuid",
-                        "description": "Run the bench is narrowed to",
+                        "description": "Judgment run ID",
                         "name": "run_id",
-                        "in": "query"
-                    },
-                    {
-                        "description": "The rows the bench shows that the save can change",
-                        "name": "rows",
-                        "in": "body",
-                        "schema": {
-                            "$ref": "#/definitions/handlers.BenchRowsRequest"
-                        }
+                        "in": "query",
+                        "required": true
                     }
                 ],
                 "responses": {
@@ -4409,7 +4279,7 @@ const docTemplate = `{
                                     "type": "object",
                                     "properties": {
                                         "data": {
-                                            "$ref": "#/definitions/handlers.BenchRowsResponse"
+                                            "$ref": "#/definitions/handlers.ThreadReviewResponse"
                                         }
                                     }
                                 }
@@ -4584,6 +4454,38 @@ const docTemplate = `{
                                     "properties": {
                                         "error": {
                                             "$ref": "#/definitions/api.APIError"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    }
+                }
+            }
+        },
+        "/review-runs": {
+            "get": {
+                "description": "The historical and scheduled runs of the compared methods, newest first, each with its kind, method, window and start. A scorecard's rerun and a run of a method that is not compared are never listed.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "threads"
+                ],
+                "summary": "List review runs",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/api.APIResponse"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/handlers.ReviewRunsResponse"
                                         }
                                     }
                                 }
@@ -5301,7 +5203,7 @@ const docTemplate = `{
         },
         "/test/judgment-runs": {
             "post": {
-                "description": "Record a decision-model run, its judgments and its incomplete threads through the judgment store. Test-only (CRM_ENV=testing).",
+                "description": "Record a decision-model run, its judgments (with the window, new messages, flag decisions and clearing decisions a run records), its incomplete threads and its unjudged messages through the judgment store. Test-only (CRM_ENV=testing).",
                 "consumes": [
                     "application/json"
                 ],
@@ -5449,6 +5351,380 @@ const docTemplate = `{
                                     }
                                 }
                             ]
+                        }
+                    }
+                }
+            }
+        },
+        "/threads": {
+            "get": {
+                "description": "One row per thread a method can judge (each DM, group chat, email thread and meeting holding content), newest latest message first. type and contact_id narrow the list and combine; type_options lists the interaction types the type filter offers. With run_id, only the threads the run judged are listed, in the same order, each adding its judged count and its status, and the response adds the run's summary.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "threads"
+                ],
+                "summary": "List threads",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "default": 1,
+                        "description": "Page number",
+                        "name": "page",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "default": 20,
+                        "description": "Items per page",
+                        "name": "limit",
+                        "in": "query"
+                    },
+                    {
+                        "enum": [
+                            "message",
+                            "email",
+                            "event"
+                        ],
+                        "type": "string",
+                        "description": "Interaction type",
+                        "name": "type",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "format": "uuid",
+                        "description": "Participant contact ID",
+                        "name": "contact_id",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "format": "uuid",
+                        "description": "Judgment run ID",
+                        "name": "run_id",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/api.APIResponse"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/handlers.ThreadListResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/api.APIResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/api.APIResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/threads/{thread_id}": {
+            "get": {
+                "description": "The thread's header, every message once in thread order, and its place in the list that type, contact_id and run_id keep. With run_id, it adds the run's nights, one per cut-off at which the run recorded or reused a judgment of the thread, each placing its messages once with the flags they show, its clearing decisions, its reply proposal and its status.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "threads"
+                ],
+                "summary": "Get a thread",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "format": "uuid",
+                        "description": "Thread (venue) ID",
+                        "name": "thread_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "enum": [
+                            "message",
+                            "email",
+                            "event"
+                        ],
+                        "type": "string",
+                        "description": "Interaction type",
+                        "name": "type",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "format": "uuid",
+                        "description": "Participant contact ID",
+                        "name": "contact_id",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "format": "uuid",
+                        "description": "Judgment run ID",
+                        "name": "run_id",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/api.APIResponse"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/handlers.ThreadReadResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/api.APIResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/api.APIResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/threads/{thread_id}/clearing-labels": {
+            "post": {
+                "description": "Records whether the commitment is done as of the cut-off as the label of the clearing decision (thread, commitment message, cut-off), replacing any earlier label. The label is shared by every method's clearing decision of that commitment at that cut-off, and changes nothing live. Answers with the thread's review state in the run. A clearing decision no judgment of the thread made, a missing run_id and an unknown thread or run are refused, recording nothing.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "threads"
+                ],
+                "summary": "Label a clearing decision",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "format": "uuid",
+                        "description": "Thread (venue) ID",
+                        "name": "thread_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "format": "uuid",
+                        "description": "Judgment run ID",
+                        "name": "run_id",
+                        "in": "query",
+                        "required": true
+                    },
+                    {
+                        "description": "The label",
+                        "name": "label",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ClearingLabelRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/api.APIResponse"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/handlers.ThreadReviewResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/api.APIResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/api.APIResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/threads/{thread_id}/close": {
+            "post": {
+                "description": "For each night of the run that holds a label, labels as not holding every flag decision without a label of its judged messages, for all three flag kinds, and labels the night's negative reply decisions without a label with their judged values. A flag decision that a compared method's judgment shows as a flag without a label stays unlabeled, whichever run shows it. A night holding no label gains nothing, an unjudged message gains no label and a label that exists is never replaced. It records all of its labels or none, and answers with the thread's review state in the run.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "threads"
+                ],
+                "summary": "Close a thread",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "format": "uuid",
+                        "description": "Thread (venue) ID",
+                        "name": "thread_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "format": "uuid",
+                        "description": "Judgment run ID",
+                        "name": "run_id",
+                        "in": "query",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/api.APIResponse"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/handlers.ThreadReviewResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/api.APIResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/api.APIResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/threads/{thread_id}/flag-labels": {
+            "post": {
+                "description": "Records whether the message holds the flag kind as the label of the flag decision (thread, message, kind), replacing any earlier label. The label is shared by every method, run and cut-off that judged the message and kind, and changes nothing live. Answers with the thread's review state in the run. A kind outside the flag kinds, a message the thread does not hold, a missing run_id and an unknown thread or run are refused, recording nothing.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "threads"
+                ],
+                "summary": "Label a flag decision",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "format": "uuid",
+                        "description": "Thread (venue) ID",
+                        "name": "thread_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "format": "uuid",
+                        "description": "Judgment run ID",
+                        "name": "run_id",
+                        "in": "query",
+                        "required": true
+                    },
+                    {
+                        "description": "The label",
+                        "name": "label",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/handlers.FlagLabelRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/api.APIResponse"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/handlers.ThreadReviewResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/api.APIResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/api.APIResponse"
                         }
                     }
                 }
@@ -6539,18 +6815,6 @@ const docTemplate = `{
                 },
                 "preview": {
                     "$ref": "#/definitions/handlers.InteractionPreviewResponse"
-                },
-                "proposals": {
-                    "type": "array",
-                    "items": {
-                        "$ref": "#/definitions/handlers.BenchProposalResponse"
-                    }
-                },
-                "review_status": {
-                    "type": "string"
-                },
-                "to_review": {
-                    "type": "integer"
                 }
             }
         },
@@ -6711,9 +6975,6 @@ const docTemplate = `{
                         "$ref": "#/definitions/handlers.BenchAdditionResponse"
                     }
                 },
-                "confirm_nones": {
-                    "type": "boolean"
-                },
                 "context_kind": {
                     "type": "string"
                 },
@@ -6747,67 +7008,8 @@ const docTemplate = `{
                 "reply_lists": {
                     "type": "boolean"
                 },
-                "reused_at": {
-                    "type": "string"
-                },
-                "review_status": {
-                    "type": "string"
-                },
                 "thread_id": {
                     "type": "string"
-                },
-                "to_review": {
-                    "type": "integer"
-                }
-            }
-        },
-        "handlers.BenchRowRequest": {
-            "type": "object",
-            "properties": {
-                "judgment_ids": {
-                    "type": "array",
-                    "items": {
-                        "type": "string"
-                    }
-                }
-            }
-        },
-        "handlers.BenchRowStateResponse": {
-            "type": "object",
-            "properties": {
-                "proposals": {
-                    "type": "array",
-                    "items": {
-                        "$ref": "#/definitions/handlers.BenchProposalResponse"
-                    }
-                },
-                "review_status": {
-                    "type": "string"
-                },
-                "to_review": {
-                    "type": "integer"
-                }
-            }
-        },
-        "handlers.BenchRowsRequest": {
-            "type": "object",
-            "properties": {
-                "rows": {
-                    "type": "array",
-                    "items": {
-                        "$ref": "#/definitions/handlers.BenchRowRequest"
-                    }
-                }
-            }
-        },
-        "handlers.BenchRowsResponse": {
-            "type": "object",
-            "properties": {
-                "rows": {
-                    "type": "array",
-                    "items": {
-                        "$ref": "#/definitions/handlers.BenchRowStateResponse"
-                    }
                 }
             }
         },
@@ -6825,17 +7027,6 @@ const docTemplate = `{
                 },
                 "text": {
                     "type": "string"
-                }
-            }
-        },
-        "handlers.BenchThreadContentResponse": {
-            "type": "object",
-            "properties": {
-                "messages": {
-                    "type": "array",
-                    "items": {
-                        "$ref": "#/definitions/handlers.ContentMessageResponse"
-                    }
                 }
             }
         },
@@ -6993,24 +7184,50 @@ const docTemplate = `{
                 }
             }
         },
-        "handlers.CloseBenchRowRequest": {
+        "handlers.ClearingLabelRequest": {
             "type": "object",
             "required": [
-                "judgment_ids"
+                "commitment_message_key",
+                "cut_off",
+                "done"
             ],
             "properties": {
-                "judgment_ids": {
-                    "type": "array",
-                    "minItems": 1,
-                    "items": {
-                        "type": "string"
-                    }
+                "commitment_message_key": {
+                    "type": "string"
                 },
-                "rows": {
-                    "type": "array",
-                    "items": {
-                        "$ref": "#/definitions/handlers.BenchRowRequest"
-                    }
+                "cut_off": {
+                    "type": "string"
+                },
+                "done": {
+                    "type": "boolean"
+                }
+            }
+        },
+        "handlers.ClosestMessageResponse": {
+            "type": "object",
+            "properties": {
+                "message_key": {
+                    "type": "string"
+                },
+                "sender": {
+                    "type": "string"
+                },
+                "sent_at": {
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.ClosestUnflaggedResponse": {
+            "type": "object",
+            "properties": {
+                "kind": {
+                    "type": "string"
+                },
+                "message": {
+                    "$ref": "#/definitions/handlers.ClosestMessageResponse"
+                },
+                "probability": {
+                    "type": "number"
                 }
             }
         },
@@ -7431,6 +7648,42 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "title": {
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.FlagChipResponse": {
+            "type": "object",
+            "properties": {
+                "cleared_at": {
+                    "type": "string"
+                },
+                "kind": {
+                    "type": "string"
+                },
+                "probability": {
+                    "type": "number"
+                },
+                "state": {
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.FlagLabelRequest": {
+            "type": "object",
+            "required": [
+                "holds",
+                "kind",
+                "message_key"
+            ],
+            "properties": {
+                "holds": {
+                    "type": "boolean"
+                },
+                "kind": {
+                    "type": "string"
+                },
+                "message_key": {
                     "type": "string"
                 }
             }
@@ -8158,6 +8411,105 @@ const docTemplate = `{
                 }
             }
         },
+        "handlers.NightClearingResponse": {
+            "type": "object",
+            "properties": {
+                "commitment_message_key": {
+                    "type": "string"
+                },
+                "commitment_sent_at": {
+                    "type": "string"
+                },
+                "cut_off": {
+                    "type": "string"
+                },
+                "done": {
+                    "type": "boolean"
+                },
+                "label": {
+                    "type": "string"
+                },
+                "probability": {
+                    "type": "number"
+                }
+            }
+        },
+        "handlers.NightMessageResponse": {
+            "type": "object",
+            "properties": {
+                "chips": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/handlers.FlagChipResponse"
+                    }
+                },
+                "judged": {
+                    "type": "boolean"
+                },
+                "message_key": {
+                    "type": "string"
+                },
+                "reason": {
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.NightResponse": {
+            "type": "object",
+            "properties": {
+                "clearings": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/handlers.NightClearingResponse"
+                    }
+                },
+                "closest_unflagged": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/handlers.ClosestUnflaggedResponse"
+                    }
+                },
+                "confirm_nones": {
+                    "type": "boolean"
+                },
+                "cut_off": {
+                    "type": "string"
+                },
+                "holds_label": {
+                    "type": "boolean"
+                },
+                "judgment_id": {
+                    "type": "string"
+                },
+                "labeled_none": {
+                    "type": "integer"
+                },
+                "messages": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/handlers.NightMessageResponse"
+                    }
+                },
+                "method_key": {
+                    "type": "string"
+                },
+                "method_version": {
+                    "type": "string"
+                },
+                "new_message_count": {
+                    "type": "integer"
+                },
+                "proposal": {
+                    "$ref": "#/definitions/handlers.BenchProposalResponse"
+                },
+                "to_review": {
+                    "type": "integer"
+                },
+                "window_start": {
+                    "type": "string"
+                }
+            }
+        },
         "handlers.NoteResponse": {
             "type": "object",
             "properties": {
@@ -8381,12 +8733,6 @@ const docTemplate = `{
                 },
                 "right_outcome": {
                     "type": "string"
-                },
-                "rows": {
-                    "type": "array",
-                    "items": {
-                        "$ref": "#/definitions/handlers.BenchRowRequest"
-                    }
                 }
             }
         },
@@ -8414,14 +8760,48 @@ const docTemplate = `{
                 "review": {
                     "$ref": "#/definitions/handlers.JudgmentOutcomeReviewResponse"
                 },
-                "rows": {
-                    "type": "array",
-                    "items": {
-                        "$ref": "#/definitions/handlers.BenchRowStateResponse"
-                    }
-                },
                 "state": {
                     "type": "string"
+                },
+                "thread_review": {
+                    "$ref": "#/definitions/handlers.ThreadReviewResponse"
+                }
+            }
+        },
+        "handlers.ReviewRunResponse": {
+            "type": "object",
+            "properties": {
+                "from": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "kind": {
+                    "type": "string"
+                },
+                "method_key": {
+                    "type": "string"
+                },
+                "method_version": {
+                    "type": "string"
+                },
+                "started_at": {
+                    "type": "string"
+                },
+                "to": {
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.ReviewRunsResponse": {
+            "type": "object",
+            "properties": {
+                "runs": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/handlers.ReviewRunResponse"
+                    }
                 }
             }
         },
@@ -8431,6 +8811,23 @@ const docTemplate = `{
                 "body": {
                     "type": "string",
                     "maxLength": 50000
+                }
+            }
+        },
+        "handlers.SeedClearingRequest": {
+            "type": "object",
+            "properties": {
+                "commitment_cut_off": {
+                    "type": "string"
+                },
+                "commitment_message_key": {
+                    "type": "string"
+                },
+                "done": {
+                    "type": "boolean"
+                },
+                "probability": {
+                    "type": "number"
                 }
             }
         },
@@ -8490,6 +8887,20 @@ const docTemplate = `{
                 }
             }
         },
+        "handlers.SeedFlagRequest": {
+            "type": "object",
+            "properties": {
+                "kind": {
+                    "type": "string"
+                },
+                "message_key": {
+                    "type": "string"
+                },
+                "probability": {
+                    "type": "number"
+                }
+            }
+        },
         "handlers.SeedIncompleteRequest": {
             "type": "object",
             "required": [
@@ -8526,6 +8937,12 @@ const docTemplate = `{
                 "big_moment": {
                     "$ref": "#/definitions/handlers.SeedOutcomeRequest"
                 },
+                "clearings": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/handlers.SeedClearingRequest"
+                    }
+                },
                 "commitments": {
                     "type": "array",
                     "items": {
@@ -8538,8 +8955,20 @@ const docTemplate = `{
                 "cut_off": {
                     "type": "string"
                 },
+                "flags": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/handlers.SeedFlagRequest"
+                    }
+                },
                 "input_hash": {
                     "type": "string"
+                },
+                "new_messages": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
                 },
                 "questions": {
                     "type": "array",
@@ -8548,6 +8977,9 @@ const docTemplate = `{
                     }
                 },
                 "thread_interaction_id": {
+                    "type": "string"
+                },
+                "window_start": {
                     "type": "string"
                 }
             }
@@ -8589,6 +9021,12 @@ const docTemplate = `{
                 },
                 "unfinished": {
                     "type": "boolean"
+                },
+                "unjudged": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/handlers.SeedUnjudgedRequest"
+                    }
                 },
                 "wording_version": {
                     "type": "string"
@@ -8647,6 +9085,29 @@ const docTemplate = `{
                         "type": "number",
                         "format": "float64"
                     }
+                }
+            }
+        },
+        "handlers.SeedUnjudgedRequest": {
+            "type": "object",
+            "required": [
+                "cut_off",
+                "message_key",
+                "reason",
+                "thread_interaction_id"
+            ],
+            "properties": {
+                "cut_off": {
+                    "type": "string"
+                },
+                "message_key": {
+                    "type": "string"
+                },
+                "reason": {
+                    "type": "string"
+                },
+                "thread_interaction_id": {
+                    "type": "string"
                 }
             }
         },
@@ -8741,6 +9202,192 @@ const docTemplate = `{
                 },
                 "suggestion": {
                     "$ref": "#/definitions/handlers.MethodSuggestionResponse"
+                }
+            }
+        },
+        "handlers.ThreadListResponse": {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/handlers.ThreadRowResponse"
+                    }
+                },
+                "summary": {
+                    "$ref": "#/definitions/handlers.ThreadRunSummaryResponse"
+                },
+                "type_options": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/handlers.InteractionTypeOptionResponse"
+                    }
+                }
+            }
+        },
+        "handlers.ThreadMessageResponse": {
+            "type": "object",
+            "properties": {
+                "message_key": {
+                    "type": "string"
+                },
+                "sender": {
+                    "type": "string"
+                },
+                "sent_at": {
+                    "type": "string"
+                },
+                "text": {
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.ThreadParticipantResponse": {
+            "type": "object",
+            "properties": {
+                "contact_id": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.ThreadPositionResponse": {
+            "type": "object",
+            "properties": {
+                "index": {
+                    "type": "integer"
+                },
+                "next_thread_id": {
+                    "type": "string"
+                },
+                "previous_thread_id": {
+                    "type": "string"
+                },
+                "total": {
+                    "type": "integer"
+                }
+            }
+        },
+        "handlers.ThreadReadResponse": {
+            "type": "object",
+            "properties": {
+                "messages": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/handlers.ThreadMessageResponse"
+                    }
+                },
+                "position": {
+                    "$ref": "#/definitions/handlers.ThreadPositionResponse"
+                },
+                "review": {
+                    "$ref": "#/definitions/handlers.ThreadReviewResponse"
+                },
+                "thread": {
+                    "$ref": "#/definitions/handlers.ThreadRowResponse"
+                }
+            }
+        },
+        "handlers.ThreadReviewResponse": {
+            "type": "object",
+            "properties": {
+                "context_messages": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "judged_count": {
+                    "type": "integer"
+                },
+                "later_messages": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "nights": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/handlers.NightResponse"
+                    }
+                },
+                "run": {
+                    "$ref": "#/definitions/handlers.ReviewRunResponse"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "to_review": {
+                    "type": "integer"
+                }
+            }
+        },
+        "handlers.ThreadRowResponse": {
+            "type": "object",
+            "properties": {
+                "is_group": {
+                    "type": "boolean"
+                },
+                "latest_at": {
+                    "type": "string"
+                },
+                "message_count": {
+                    "type": "integer"
+                },
+                "participants": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/handlers.ThreadParticipantResponse"
+                    }
+                },
+                "review": {
+                    "$ref": "#/definitions/handlers.ThreadRowReviewResponse"
+                },
+                "thread_id": {
+                    "type": "string"
+                },
+                "title": {
+                    "type": "string"
+                },
+                "type": {
+                    "type": "string"
+                },
+                "venue": {
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.ThreadRowReviewResponse": {
+            "type": "object",
+            "properties": {
+                "judged_count": {
+                    "type": "integer"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "to_review": {
+                    "type": "integer"
+                }
+            }
+        },
+        "handlers.ThreadRunSummaryResponse": {
+            "type": "object",
+            "properties": {
+                "judged": {
+                    "type": "integer"
+                },
+                "nothing_flagged": {
+                    "type": "integer"
+                },
+                "reviewed": {
+                    "type": "integer"
+                },
+                "to_review": {
+                    "type": "integer"
                 }
             }
         },

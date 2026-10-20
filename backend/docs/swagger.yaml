@@ -65,14 +65,6 @@ definitions:
         type: array
       preview:
         $ref: '#/definitions/handlers.InteractionPreviewResponse'
-      proposals:
-        items:
-          $ref: '#/definitions/handlers.BenchProposalResponse'
-        type: array
-      review_status:
-        type: string
-      to_review:
-        type: integer
     type: object
   handlers.AllInteractionsResponse:
     properties:
@@ -176,8 +168,6 @@ definitions:
         items:
           $ref: '#/definitions/handlers.BenchAdditionResponse'
         type: array
-      confirm_nones:
-        type: boolean
       context_kind:
         type: string
       cut_off:
@@ -200,46 +190,8 @@ definitions:
         type: boolean
       reply_lists:
         type: boolean
-      reused_at:
-        type: string
-      review_status:
-        type: string
       thread_id:
         type: string
-      to_review:
-        type: integer
-    type: object
-  handlers.BenchRowRequest:
-    properties:
-      judgment_ids:
-        items:
-          type: string
-        type: array
-    type: object
-  handlers.BenchRowStateResponse:
-    properties:
-      proposals:
-        items:
-          $ref: '#/definitions/handlers.BenchProposalResponse'
-        type: array
-      review_status:
-        type: string
-      to_review:
-        type: integer
-    type: object
-  handlers.BenchRowsRequest:
-    properties:
-      rows:
-        items:
-          $ref: '#/definitions/handlers.BenchRowRequest'
-        type: array
-    type: object
-  handlers.BenchRowsResponse:
-    properties:
-      rows:
-        items:
-          $ref: '#/definitions/handlers.BenchRowStateResponse'
-        type: array
     type: object
   handlers.BenchSourceMessageResponse:
     properties:
@@ -251,13 +203,6 @@ definitions:
         type: string
       text:
         type: string
-    type: object
-  handlers.BenchThreadContentResponse:
-    properties:
-      messages:
-        items:
-          $ref: '#/definitions/handlers.ContentMessageResponse'
-        type: array
     type: object
   handlers.CalendarEventResponse:
     properties:
@@ -367,19 +312,36 @@ definitions:
           $ref: '#/definitions/handlers.NamespaceCleanupResponse'
         type: object
     type: object
-  handlers.CloseBenchRowRequest:
+  handlers.ClearingLabelRequest:
     properties:
-      judgment_ids:
-        items:
-          type: string
-        minItems: 1
-        type: array
-      rows:
-        items:
-          $ref: '#/definitions/handlers.BenchRowRequest'
-        type: array
+      commitment_message_key:
+        type: string
+      cut_off:
+        type: string
+      done:
+        type: boolean
     required:
-    - judgment_ids
+    - commitment_message_key
+    - cut_off
+    - done
+    type: object
+  handlers.ClosestMessageResponse:
+    properties:
+      message_key:
+        type: string
+      sender:
+        type: string
+      sent_at:
+        type: string
+    type: object
+  handlers.ClosestUnflaggedResponse:
+    properties:
+      kind:
+        type: string
+      message:
+        $ref: '#/definitions/handlers.ClosestMessageResponse'
+      probability:
+        type: number
     type: object
   handlers.ContactMethodOperation:
     description: A single contact-method operation
@@ -700,6 +662,30 @@ definitions:
         type: string
       title:
         type: string
+    type: object
+  handlers.FlagChipResponse:
+    properties:
+      cleared_at:
+        type: string
+      kind:
+        type: string
+      probability:
+        type: number
+      state:
+        type: string
+    type: object
+  handlers.FlagLabelRequest:
+    properties:
+      holds:
+        type: boolean
+      kind:
+        type: string
+      message_key:
+        type: string
+    required:
+    - holds
+    - kind
+    - message_key
     type: object
   handlers.GetGoogleAuthURLResponse:
     properties:
@@ -1191,6 +1177,71 @@ definitions:
       status:
         type: string
     type: object
+  handlers.NightClearingResponse:
+    properties:
+      commitment_message_key:
+        type: string
+      commitment_sent_at:
+        type: string
+      cut_off:
+        type: string
+      done:
+        type: boolean
+      label:
+        type: string
+      probability:
+        type: number
+    type: object
+  handlers.NightMessageResponse:
+    properties:
+      chips:
+        items:
+          $ref: '#/definitions/handlers.FlagChipResponse'
+        type: array
+      judged:
+        type: boolean
+      message_key:
+        type: string
+      reason:
+        type: string
+    type: object
+  handlers.NightResponse:
+    properties:
+      clearings:
+        items:
+          $ref: '#/definitions/handlers.NightClearingResponse'
+        type: array
+      closest_unflagged:
+        items:
+          $ref: '#/definitions/handlers.ClosestUnflaggedResponse'
+        type: array
+      confirm_nones:
+        type: boolean
+      cut_off:
+        type: string
+      holds_label:
+        type: boolean
+      judgment_id:
+        type: string
+      labeled_none:
+        type: integer
+      messages:
+        items:
+          $ref: '#/definitions/handlers.NightMessageResponse'
+        type: array
+      method_key:
+        type: string
+      method_version:
+        type: string
+      new_message_count:
+        type: integer
+      proposal:
+        $ref: '#/definitions/handlers.BenchProposalResponse'
+      to_review:
+        type: integer
+      window_start:
+        type: string
+    type: object
   handlers.NoteResponse:
     properties:
       body:
@@ -1361,10 +1412,6 @@ definitions:
         type: boolean
       right_outcome:
         type: string
-      rows:
-        items:
-          $ref: '#/definitions/handlers.BenchRowRequest'
-        type: array
     required:
     - right_outcome
     type: object
@@ -1384,18 +1431,51 @@ definitions:
         type: string
       review:
         $ref: '#/definitions/handlers.JudgmentOutcomeReviewResponse'
-      rows:
-        items:
-          $ref: '#/definitions/handlers.BenchRowStateResponse'
-        type: array
       state:
         type: string
+      thread_review:
+        $ref: '#/definitions/handlers.ThreadReviewResponse'
+    type: object
+  handlers.ReviewRunResponse:
+    properties:
+      from:
+        type: string
+      id:
+        type: string
+      kind:
+        type: string
+      method_key:
+        type: string
+      method_version:
+        type: string
+      started_at:
+        type: string
+      to:
+        type: string
+    type: object
+  handlers.ReviewRunsResponse:
+    properties:
+      runs:
+        items:
+          $ref: '#/definitions/handlers.ReviewRunResponse'
+        type: array
     type: object
   handlers.SaveNoteRequest:
     properties:
       body:
         maxLength: 50000
         type: string
+    type: object
+  handlers.SeedClearingRequest:
+    properties:
+      commitment_cut_off:
+        type: string
+      commitment_message_key:
+        type: string
+      done:
+        type: boolean
+      probability:
+        type: number
     type: object
   handlers.SeedDeclaredFailure:
     properties:
@@ -1444,6 +1524,15 @@ definitions:
           caller never asked for. Assertions must key off this, never the request.
         type: string
     type: object
+  handlers.SeedFlagRequest:
+    properties:
+      kind:
+        type: string
+      message_key:
+        type: string
+      probability:
+        type: number
+    type: object
   handlers.SeedIncompleteRequest:
     properties:
       cut_off:
@@ -1465,6 +1554,10 @@ definitions:
         type: array
       big_moment:
         $ref: '#/definitions/handlers.SeedOutcomeRequest'
+      clearings:
+        items:
+          $ref: '#/definitions/handlers.SeedClearingRequest'
+        type: array
       commitments:
         items:
           $ref: '#/definitions/handlers.SeedOutcomeRequest'
@@ -1473,13 +1566,23 @@ definitions:
         type: string
       cut_off:
         type: string
+      flags:
+        items:
+          $ref: '#/definitions/handlers.SeedFlagRequest'
+        type: array
       input_hash:
         type: string
+      new_messages:
+        items:
+          type: string
+        type: array
       questions:
         items:
           $ref: '#/definitions/handlers.SeedQuestionRequest'
         type: array
       thread_interaction_id:
+        type: string
+      window_start:
         type: string
     required:
     - context_kind
@@ -1508,6 +1611,10 @@ definitions:
         type: string
       unfinished:
         type: boolean
+      unjudged:
+        items:
+          $ref: '#/definitions/handlers.SeedUnjudgedRequest'
+        type: array
       wording_version:
         type: string
     required:
@@ -1550,6 +1657,22 @@ definitions:
           format: float64
           type: number
         type: object
+    type: object
+  handlers.SeedUnjudgedRequest:
+    properties:
+      cut_off:
+        type: string
+      message_key:
+        type: string
+      reason:
+        type: string
+      thread_interaction_id:
+        type: string
+    required:
+    - cut_off
+    - message_key
+    - reason
+    - thread_interaction_id
     type: object
   handlers.SeededEntityResponse:
     properties:
@@ -1614,6 +1737,127 @@ definitions:
         type: string
       suggestion:
         $ref: '#/definitions/handlers.MethodSuggestionResponse'
+    type: object
+  handlers.ThreadListResponse:
+    properties:
+      items:
+        items:
+          $ref: '#/definitions/handlers.ThreadRowResponse'
+        type: array
+      summary:
+        $ref: '#/definitions/handlers.ThreadRunSummaryResponse'
+      type_options:
+        items:
+          $ref: '#/definitions/handlers.InteractionTypeOptionResponse'
+        type: array
+    type: object
+  handlers.ThreadMessageResponse:
+    properties:
+      message_key:
+        type: string
+      sender:
+        type: string
+      sent_at:
+        type: string
+      text:
+        type: string
+    type: object
+  handlers.ThreadParticipantResponse:
+    properties:
+      contact_id:
+        type: string
+      name:
+        type: string
+    type: object
+  handlers.ThreadPositionResponse:
+    properties:
+      index:
+        type: integer
+      next_thread_id:
+        type: string
+      previous_thread_id:
+        type: string
+      total:
+        type: integer
+    type: object
+  handlers.ThreadReadResponse:
+    properties:
+      messages:
+        items:
+          $ref: '#/definitions/handlers.ThreadMessageResponse'
+        type: array
+      position:
+        $ref: '#/definitions/handlers.ThreadPositionResponse'
+      review:
+        $ref: '#/definitions/handlers.ThreadReviewResponse'
+      thread:
+        $ref: '#/definitions/handlers.ThreadRowResponse'
+    type: object
+  handlers.ThreadReviewResponse:
+    properties:
+      context_messages:
+        items:
+          type: string
+        type: array
+      judged_count:
+        type: integer
+      later_messages:
+        items:
+          type: string
+        type: array
+      nights:
+        items:
+          $ref: '#/definitions/handlers.NightResponse'
+        type: array
+      run:
+        $ref: '#/definitions/handlers.ReviewRunResponse'
+      status:
+        type: string
+      to_review:
+        type: integer
+    type: object
+  handlers.ThreadRowResponse:
+    properties:
+      is_group:
+        type: boolean
+      latest_at:
+        type: string
+      message_count:
+        type: integer
+      participants:
+        items:
+          $ref: '#/definitions/handlers.ThreadParticipantResponse'
+        type: array
+      review:
+        $ref: '#/definitions/handlers.ThreadRowReviewResponse'
+      thread_id:
+        type: string
+      title:
+        type: string
+      type:
+        type: string
+      venue:
+        type: string
+    type: object
+  handlers.ThreadRowReviewResponse:
+    properties:
+      judged_count:
+        type: integer
+      status:
+        type: string
+      to_review:
+        type: integer
+    type: object
+  handlers.ThreadRunSummaryResponse:
+    properties:
+      judged:
+        type: integer
+      nothing_flagged:
+        type: integer
+      reviewed:
+        type: integer
+      to_review:
+        type: integer
     type: object
   handlers.TimelineAssertionResponse:
     properties:
@@ -4410,10 +4654,8 @@ paths:
   /interactions:
     get:
       description: 'Every interaction across contacts, newest first: one row per interaction,
-        naming each participant contact. Filters combine. run_id keeps the rows of
-        threads with a judgment appearing in the run, and each row''s proposals to
-        those judgments. Each row carries the proposals of the thread judgments whose
-        latest content it holds, compiled into the answers the user reviews.'
+        naming each participant contact. Filters combine. A row carries no judgment,
+        proposal or review status.'
       parameters:
       - default: 1
         description: Page number
@@ -4434,16 +4676,11 @@ paths:
         enum:
         - message
         - email
-        - calendar
+        - event
         - call
         - other
         in: query
         name: type
-        type: string
-      - description: Judgment run ID
-        format: uuid
-        in: query
-        name: run_id
         type: string
       produces:
       - application/json
@@ -4604,38 +4841,6 @@ paths:
       summary: Preview an interaction merge
       tags:
       - interactions
-  /interactions/threads/{thread_id}/content:
-    get:
-      description: 'The thread''s messages, oldest first, each once however many per-contact
-        copies hold it: the content its judgments read up to their cut-offs, and the
-        content after them. A meeting''s notes are its row''s content and are not
-        listed.'
-      parameters:
-      - description: Thread (venue) ID
-        format: uuid
-        in: path
-        name: thread_id
-        required: true
-        type: string
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: OK
-          schema:
-            allOf:
-            - $ref: '#/definitions/api.APIResponse'
-            - properties:
-                data:
-                  $ref: '#/definitions/handlers.BenchThreadContentResponse'
-              type: object
-        "400":
-          description: Bad Request
-          schema:
-            $ref: '#/definitions/api.APIResponse'
-      summary: Get a judged thread's content
-      tags:
-      - interactions
   /judgment-outcomes/{id}/review:
     post:
       consumes:
@@ -4643,11 +4848,9 @@ paths:
       description: 'Records the right outcome the user states for an outcome of any
         state and returns the outcome with the verdict the server derives: confirmed
         when it equals the judged outcome, rejected when it differs and has no effect,
-        corrected otherwise, beside the rows the request names, in its order, as the
-        bench now shows them: each row''s proposals and what remains to review across
-        them, as a read of the list narrowed to run_id, when it is given, shows that
-        row. A row naming an unknown judgment is not found, with nothing recorded.
-        The review is its decision''s label for every proposal on the same content,
+        corrected otherwise. Given run_id, it also returns the review state in that
+        run of the thread the outcome''s judgment judged, as the thread read returns
+        it. The review is its decision''s label for every proposal on the same content,
         and labels no other decision. A first review of an applied or claim outcome
         gives the thread the right outcome''s effect; a review of a decision that
         already has a label records the label only, except an Add on a negative decision,
@@ -4661,7 +4864,7 @@ paths:
         name: id
         required: true
         type: string
-      - description: Run the bench is narrowed to
+      - description: Run whose review state of the thread the answer carries
         format: uuid
         in: query
         name: run_id
@@ -4751,19 +4954,15 @@ paths:
       - judgments
   /judgments/{id}/confirm-nones:
     post:
-      consumes:
-      - application/json
-      description: 'Labels every negative decision of the judgment''s proposal that
-        has no label from any proposal with its judged value, as ordinary reviews
-        that change nothing live, and returns the rows the request names, in its order,
-        as the bench now shows them: each row''s proposals and what remains to review
-        across them, as a read of the list narrowed to run_id, when it is given, shows
-        that row. A decision some proposal on the same content holds as an item without
-        a label is not labeled and stays to review; one some proposal holds as a reply
-        its own commitment absorbs is not labeled and is no None to review in any
-        proposal. It records all of its labels or none. A proposal with an item, or
-        one holding no negative decision it would label, is refused. A row naming
-        an unknown judgment is not found, with nothing recorded.'
+      description: Labels, for the night the judgment makes in the run, as not holding
+        every flag decision without a label of its judged messages that no judgment
+        of a compared method shows as a flag without a label, and labels the night's
+        negative reply decisions without a label with their judged values, as ordinary
+        labels that change nothing live. It records all of its labels or none, and
+        answers with the thread's review state in the run. A night that shows a flag
+        chip, a clearing decision or a reply item, or holds a label, is refused as
+        a conflict, recording nothing. A judgment that is no night of the run is not
+        found.
       parameters:
       - description: Judgment ID
         format: uuid
@@ -4771,16 +4970,12 @@ paths:
         name: id
         required: true
         type: string
-      - description: Run the bench is narrowed to
+      - description: Judgment run ID
         format: uuid
         in: query
         name: run_id
+        required: true
         type: string
-      - description: The rows the bench shows that the save can change
-        in: body
-        name: rows
-        schema:
-          $ref: '#/definitions/handlers.BenchRowsRequest'
       produces:
       - application/json
       responses:
@@ -4791,7 +4986,7 @@ paths:
             - $ref: '#/definitions/api.APIResponse'
             - properties:
                 data:
-                  $ref: '#/definitions/handlers.BenchRowsResponse'
+                  $ref: '#/definitions/handlers.ThreadReviewResponse'
               type: object
         "400":
           description: Bad Request
@@ -4805,58 +5000,7 @@ paths:
           description: Conflict
           schema:
             $ref: '#/definitions/api.APIResponse'
-      summary: Confirm a proposal's Nones
-      tags:
-      - judgments
-  /judgments/close:
-    post:
-      consumes:
-      - application/json
-      description: 'Records the user closing a row: every negative decision without
-        a label of each given proposal (the row''s) that holds a label, from whichever
-        proposal on the same content it was made in, is labeled with its judged value,
-        as ordinary reviews that change nothing live. A decision some proposal on
-        the same content holds as an item without a label is not labeled and stays
-        to review; one some proposal holds as a reply its own commitment absorbs is
-        not labeled and is no None to review in any proposal; and a proposal holding
-        no label gains none. It records all of its labels or none, and returns the
-        rows the request names, in its order, as the bench now shows them: each row''s
-        proposals and what remains to review across them, as a read of the list narrowed
-        to run_id, when it is given, shows that row. An unknown judgment, closed or
-        in a row, is not found, with nothing recorded.'
-      parameters:
-      - description: Run the bench is narrowed to
-        format: uuid
-        in: query
-        name: run_id
-        type: string
-      - description: The row's judgments, and the rows the close can change
-        in: body
-        name: close
-        required: true
-        schema:
-          $ref: '#/definitions/handlers.CloseBenchRowRequest'
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: OK
-          schema:
-            allOf:
-            - $ref: '#/definitions/api.APIResponse'
-            - properties:
-                data:
-                  $ref: '#/definitions/handlers.BenchRowsResponse'
-              type: object
-        "400":
-          description: Bad Request
-          schema:
-            $ref: '#/definitions/api.APIResponse'
-        "404":
-          description: Not Found
-          schema:
-            $ref: '#/definitions/api.APIResponse'
-      summary: Close a bench row
+      summary: Confirm a night's Nones
       tags:
       - judgments
   /rematch/contacts/{id}/rescan:
@@ -4945,6 +5089,26 @@ paths:
       summary: Get rematch job
       tags:
       - rematch
+  /review-runs:
+    get:
+      description: The historical and scheduled runs of the compared methods, newest
+        first, each with its kind, method, window and start. A scorecard's rerun and
+        a run of a method that is not compared are never listed.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                data:
+                  $ref: '#/definitions/handlers.ReviewRunsResponse'
+              type: object
+      summary: List review runs
+      tags:
+      - threads
   /sync/{id}/enable:
     patch:
       description: Enable or disable sync for an external data source
@@ -5351,8 +5515,9 @@ paths:
     post:
       consumes:
       - application/json
-      description: Record a decision-model run, its judgments and its incomplete threads
-        through the judgment store. Test-only (CRM_ENV=testing).
+      description: Record a decision-model run, its judgments (with the window, new
+        messages, flag decisions and clearing decisions a run records), its incomplete
+        threads and its unjudged messages through the judgment store. Test-only (CRM_ENV=testing).
       parameters:
       - description: The run
         in: body
@@ -5436,6 +5601,272 @@ paths:
       summary: Seed a spec behavior's declared fixture
       tags:
       - test
+  /threads:
+    get:
+      description: One row per thread a method can judge (each DM, group chat, email
+        thread and meeting holding content), newest latest message first. type and
+        contact_id narrow the list and combine; type_options lists the interaction
+        types the type filter offers. With run_id, only the threads the run judged
+        are listed, in the same order, each adding its judged count and its status,
+        and the response adds the run's summary.
+      parameters:
+      - default: 1
+        description: Page number
+        in: query
+        name: page
+        type: integer
+      - default: 20
+        description: Items per page
+        in: query
+        name: limit
+        type: integer
+      - description: Interaction type
+        enum:
+        - message
+        - email
+        - event
+        in: query
+        name: type
+        type: string
+      - description: Participant contact ID
+        format: uuid
+        in: query
+        name: contact_id
+        type: string
+      - description: Judgment run ID
+        format: uuid
+        in: query
+        name: run_id
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                data:
+                  $ref: '#/definitions/handlers.ThreadListResponse'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.APIResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.APIResponse'
+      summary: List threads
+      tags:
+      - threads
+  /threads/{thread_id}:
+    get:
+      description: The thread's header, every message once in thread order, and its
+        place in the list that type, contact_id and run_id keep. With run_id, it adds
+        the run's nights, one per cut-off at which the run recorded or reused a judgment
+        of the thread, each placing its messages once with the flags they show, its
+        clearing decisions, its reply proposal and its status.
+      parameters:
+      - description: Thread (venue) ID
+        format: uuid
+        in: path
+        name: thread_id
+        required: true
+        type: string
+      - description: Interaction type
+        enum:
+        - message
+        - email
+        - event
+        in: query
+        name: type
+        type: string
+      - description: Participant contact ID
+        format: uuid
+        in: query
+        name: contact_id
+        type: string
+      - description: Judgment run ID
+        format: uuid
+        in: query
+        name: run_id
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                data:
+                  $ref: '#/definitions/handlers.ThreadReadResponse'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.APIResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.APIResponse'
+      summary: Get a thread
+      tags:
+      - threads
+  /threads/{thread_id}/clearing-labels:
+    post:
+      consumes:
+      - application/json
+      description: Records whether the commitment is done as of the cut-off as the
+        label of the clearing decision (thread, commitment message, cut-off), replacing
+        any earlier label. The label is shared by every method's clearing decision
+        of that commitment at that cut-off, and changes nothing live. Answers with
+        the thread's review state in the run. A clearing decision no judgment of the
+        thread made, a missing run_id and an unknown thread or run are refused, recording
+        nothing.
+      parameters:
+      - description: Thread (venue) ID
+        format: uuid
+        in: path
+        name: thread_id
+        required: true
+        type: string
+      - description: Judgment run ID
+        format: uuid
+        in: query
+        name: run_id
+        required: true
+        type: string
+      - description: The label
+        in: body
+        name: label
+        required: true
+        schema:
+          $ref: '#/definitions/handlers.ClearingLabelRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                data:
+                  $ref: '#/definitions/handlers.ThreadReviewResponse'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.APIResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.APIResponse'
+      summary: Label a clearing decision
+      tags:
+      - threads
+  /threads/{thread_id}/close:
+    post:
+      description: For each night of the run that holds a label, labels as not holding
+        every flag decision without a label of its judged messages, for all three
+        flag kinds, and labels the night's negative reply decisions without a label
+        with their judged values. A flag decision that a compared method's judgment
+        shows as a flag without a label stays unlabeled, whichever run shows it. A
+        night holding no label gains nothing, an unjudged message gains no label and
+        a label that exists is never replaced. It records all of its labels or none,
+        and answers with the thread's review state in the run.
+      parameters:
+      - description: Thread (venue) ID
+        format: uuid
+        in: path
+        name: thread_id
+        required: true
+        type: string
+      - description: Judgment run ID
+        format: uuid
+        in: query
+        name: run_id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                data:
+                  $ref: '#/definitions/handlers.ThreadReviewResponse'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.APIResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.APIResponse'
+      summary: Close a thread
+      tags:
+      - threads
+  /threads/{thread_id}/flag-labels:
+    post:
+      consumes:
+      - application/json
+      description: Records whether the message holds the flag kind as the label of
+        the flag decision (thread, message, kind), replacing any earlier label. The
+        label is shared by every method, run and cut-off that judged the message and
+        kind, and changes nothing live. Answers with the thread's review state in
+        the run. A kind outside the flag kinds, a message the thread does not hold,
+        a missing run_id and an unknown thread or run are refused, recording nothing.
+      parameters:
+      - description: Thread (venue) ID
+        format: uuid
+        in: path
+        name: thread_id
+        required: true
+        type: string
+      - description: Judgment run ID
+        format: uuid
+        in: query
+        name: run_id
+        required: true
+        type: string
+      - description: The label
+        in: body
+        name: label
+        required: true
+        schema:
+          $ref: '#/definitions/handlers.FlagLabelRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                data:
+                  $ref: '#/definitions/handlers.ThreadReviewResponse'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.APIResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.APIResponse'
+      summary: Label a flag decision
+      tags:
+      - threads
   /timeline-items/{kind}/{id}/assertions:
     get:
       description: Read-only. Each entry is one assertion beside one displayed content

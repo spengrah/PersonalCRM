@@ -16,7 +16,7 @@ import {
   syncKeys,
   contactTaskKeys,
   interactionKeys,
-  judgmentKeys,
+  threadKeys,
 } from './query-keys'
 
 /**
@@ -36,10 +36,11 @@ export type DomainEvent =
   // Interaction events
   | 'interaction:created' // a manual / system interaction was logged
   | 'interaction:corrected' // interactions were merged or participations removed
-  // Judgment events
-  | 'judgment:reviewed' // the user reviewed a judgment outcome on the bench
-  | 'judgment:nones-confirmed' // the user confirmed a proposal's Nones on the bench
-  | 'judgment:row-closed' // the user closed a row on the bench
+  // Threads events
+  | 'thread:labeled' // the user labeled a flag decision or a clearing decision
+  | 'thread:reply-reviewed' // the user reviewed a reply item of a judgment
+  | 'thread:nones-confirmed' // the user confirmed a night's Nones
+  | 'thread:closed' // the user closed a thread
   // Import events
   | 'import:imported' // imported as new contact
   | 'import:linked' // linked to existing contact
@@ -102,31 +103,38 @@ const invalidationRules: Record<DomainEvent, InvalidationKey[]> = {
   ],
   // A correction can change the timeline, cadence fields and follow-up tasks of
   // every attendee of the corrected interaction, not only the contact it was
-  // made from, so it reaches every contact's keys.
+  // made from, so it reaches every contact's keys. It can also change a
+  // thread's participants, since a participation removed from an interaction
+  // takes its contact out of the thread.
   'interaction:corrected': [
     contactKeys.lists(),
     contactKeys.overdue(),
     contactKeys.details(),
     contactTaskKeys.lists(),
     interactionKeys.all,
+    threadKeys.all,
   ],
 
-  // Judgment events — a review gives the thread the right outcome's effect:
-  // it may open or close obligations (tasks of any contact on the thread) and
-  // end a contact's awaiting-reply wait, and it changes the bench's proposals.
-  'judgment:reviewed': [
-    interactionKeys.allLists(),
-    judgmentKeys.all,
+  // Threads events — a save answers with the thread's review state in the
+  // run, which the save hooks write over the thread's reads in that run. The
+  // thread's reads and the list (its counts and status pills) are read again
+  // after a save, a failed one included, so they show what the server
+  // recorded; a label shows on every run's chip for its message. A label,
+  // Confirm Nones and a close record labels only, changing nothing live.
+  'thread:labeled': [threadKeys.lists(), threadKeys.reads()],
+  'thread:nones-confirmed': [threadKeys.lists(), threadKeys.reads()],
+  'thread:closed': [threadKeys.lists(), threadKeys.reads()],
+  // Reviewing a reply item gives the thread the right outcome's effect: it may
+  // open or close obligations (tasks of any contact on the thread) and end a
+  // contact's awaiting-reply wait.
+  'thread:reply-reviewed': [
+    threadKeys.lists(),
+    threadKeys.reads(),
     contactKeys.lists(),
     contactKeys.overdue(),
     contactKeys.details(),
     contactTaskKeys.lists(),
   ],
-  // Confirming Nones records labels only, changing nothing live; its labels
-  // show in every proposal on the same content.
-  'judgment:nones-confirmed': [interactionKeys.allLists(), judgmentKeys.all],
-  // A close records labels only, like Confirm Nones.
-  'judgment:row-closed': [interactionKeys.allLists(), judgmentKeys.all],
 
   // Import events
   // Importing creates a new contact, so invalidate both imports and contacts.
@@ -231,4 +239,5 @@ export {
   syncKeys,
   contactTaskKeys,
   interactionKeys,
+  threadKeys,
 } from './query-keys'

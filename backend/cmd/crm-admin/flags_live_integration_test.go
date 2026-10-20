@@ -69,7 +69,7 @@ func TestJudgeMonthFlagsChangeNoLiveState(t *testing.T) {
 			th := e.newThread(t)
 			th.say(t, jan(3, 9), true, promise)
 			th.say(t, jan(4, 9), true, kept)
-			v := newVendor(t, false)
+			v := newVendor(t)
 			v.flag, v.clear = tc.flag, func(ask) float64 { return 1 }
 			m := e.method(jevKey, v, roomy)
 
@@ -87,7 +87,7 @@ func TestJudgeMonthFlagsChangeNoLiveState(t *testing.T) {
 		e := newFlagsEnv(t, jevKey)
 		th := e.newThread(t)
 		th.say(t, jan(3, 9), false, "can you send me the recipe")
-		v := newVendor(t, false)
+		v := newVendor(t)
 		v.bic = func(string) string { return "i_owe_reply" }
 		m := e.method(jevKey, v, roomy)
 
@@ -123,7 +123,7 @@ func TestJudgeMonthAppliesReplyObligationsWithinTheWindow(t *testing.T) {
 			th := e.newThread(t)
 			th.sayFiller(t, jan(2, 9), false, 0)
 			th.sayFiller(t, jan(3, 9), false, 1)
-			v := newVendor(t, false)
+			v := newVendor(t)
 			v.bic = func(string) string { return "i_owe_reply" }
 			opening := e.method(jevKey, v, roomy)
 			out := e.judgeMonth(t, methods{jevKey: opening}, jevKey)
@@ -162,7 +162,7 @@ func TestJudgeMonthAppliesReplyObligationsWithinTheWindow(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, judgment.Effects{ObligationsOpened: 1}, effects)
 		th.sayFiller(t, jan(3, 9), false, 0)
-		v := newVendor(t, false)
+		v := newVendor(t)
 		m := e.method(jevKey, v, roomy)
 
 		out := e.judgeMonth(t, methods{jevKey: m}, jevKey)

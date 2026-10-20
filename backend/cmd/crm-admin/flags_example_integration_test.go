@@ -63,8 +63,8 @@ func TestJudgeMonthRecordsOneExamplePerThreadContext(t *testing.T) {
 	t.Run("one method windows the context while another reads it whole", func(t *testing.T) {
 		e, th, keys, hash := setup(t)
 		limit := e.tokensFor(t, fakeDefinition(jevKey, roomy), decision.Request{Context: th.context(t, jan(4, 0))}, keys[3])
-		windowing := e.method(jevKey, newVendor(t, false), decision.Limits{Tokens: limit, Questions: 1 << 20})
-		whole := e.method(clefKey, newVendor(t, false), roomy)
+		windowing := e.method(jevKey, newVendor(t), decision.Limits{Tokens: limit, Questions: 1 << 20})
+		whole := e.method(clefKey, newVendor(t), roomy)
 
 		e.judgeMonth(t, methods{jevKey: windowing}, jevKey)
 		e.judgeMonth(t, methods{clefKey: whole}, clefKey)
@@ -80,8 +80,8 @@ func TestJudgeMonthRecordsOneExamplePerThreadContext(t *testing.T) {
 	t.Run("two methods whose windows start at different messages", func(t *testing.T) {
 		e, th, keys, hash := setup(t)
 		req := decision.Request{Context: th.context(t, jan(4, 0))}
-		jev := e.method(jevKey, newVendor(t, false), decision.Limits{Tokens: e.tokensFor(t, fakeDefinition(jevKey, roomy), req, keys[2]), Questions: 1 << 20})
-		clef := e.method(clefKey, newVendor(t, false), decision.Limits{Tokens: e.tokensFor(t, fakeDefinition(clefKey, roomy), req, keys[4]), Questions: 1 << 20})
+		jev := e.method(jevKey, newVendor(t), decision.Limits{Tokens: e.tokensFor(t, fakeDefinition(jevKey, roomy), req, keys[2]), Questions: 1 << 20})
+		clef := e.method(clefKey, newVendor(t), decision.Limits{Tokens: e.tokensFor(t, fakeDefinition(clefKey, roomy), req, keys[4]), Questions: 1 << 20})
 
 		e.judgeMonth(t, methods{jevKey: jev}, jevKey)
 		e.judgeMonth(t, methods{clefKey: clef}, clefKey)
@@ -97,7 +97,7 @@ func TestJudgeMonthRecordsOneExamplePerThreadContext(t *testing.T) {
 	t.Run("a context that fits every method whole, whose example is the one the same context had before the change", func(t *testing.T) {
 		e, th, _, hash := setup(t)
 		before := e.legacyExample(t, th, jan(4, 0))
-		jev, clef := e.method(jevKey, newVendor(t, false), roomy), e.method(clefKey, newVendor(t, false), roomy)
+		jev, clef := e.method(jevKey, newVendor(t), roomy), e.method(clefKey, newVendor(t), roomy)
 
 		e.judgeMonth(t, methods{jevKey: jev}, jevKey)
 		e.judgeMonth(t, methods{clefKey: clef}, clefKey)

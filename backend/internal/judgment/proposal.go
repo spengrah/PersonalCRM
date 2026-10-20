@@ -17,8 +17,8 @@ import (
 	"github.com/google/uuid"
 )
 
-// A proposal is one judgment as the bench shows it: the question tree
-// compiled into the answers the user reviews. The bench applies no judgment
+// A proposal is one judgment as the Threads tab shows it: the question tree
+// compiled into the answers the user reviews. The client applies no judgment
 // rule of its own; every list, state, mark and act below is decided here.
 
 // ItemAct is one review control: the review it sends.
@@ -36,7 +36,7 @@ type ItemChange struct {
 }
 
 // ThreadMessage is one message of a thread's content, each message once
-// however many per-contact copies hold it: a message the bench shows, among
+// however many per-contact copies hold it: a message the Threads tab shows, among
 // them the one a commitment's judgment names as stating it. Key is the
 // message's key in the thread's content (S1).
 type ThreadMessage struct {
@@ -85,32 +85,22 @@ type ProposalAddition struct {
 	Review    ReviewRequest
 }
 
-// Proposal is one judgment of a thread as the bench shows it. Thread is the
-// judged thread, whose content the bench reads as ThreadContent. CutOff is the
-// judgment's first appearance, as of which its content is shown; ReusedAt is
-// the cut-off of its appearance in the run a view is narrowed to, when that
-// run reused it. ReplyLists is false for a meeting, which ball-in-court is not
-// asked of. ToReview counts the items without a label. ReviewStatus is
-// what remains to review: its items without a label, else its Nones to
-// review, else nothing. ConfirmNones is true exactly when the proposal has no
-// items and holds a negative decision the labeling rule does not spare, so
-// Confirm Nones would label it. Lists holds one entry per list the proposal
-// shows, in display order.
+// Proposal is one judgment of a thread as the Threads tab shows its reply
+// lists. Thread is the judged thread. CutOff is the judgment's first
+// appearance, as of which its content is shown. ReplyLists is false for a
+// meeting, which ball-in-court is not asked of. Lists holds one entry per list
+// the proposal shows, in display order.
 type Proposal struct {
-	JudgmentID   uuid.UUID
-	Thread       threadctx.VenueID
-	Method       MethodRef
-	Production   bool
-	Kind         threadctx.ContextKind
-	CutOff       time.Time
-	ReusedAt     *time.Time
-	ReplyLists   bool
-	Items        []ProposalItem
-	Additions    []ProposalAddition
-	ToReview     int
-	ReviewStatus ReviewStatus
-	ConfirmNones bool
-	Lists        []ProposalListView
+	JudgmentID uuid.UUID
+	Thread     threadctx.VenueID
+	Method     MethodRef
+	Production bool
+	Kind       threadctx.ContextKind
+	CutOff     time.Time
+	ReplyLists bool
+	Items      []ProposalItem
+	Additions  []ProposalAddition
+	Lists      []ProposalListView
 	// Names holds the name of every contact the proposal names.
 	Names map[uuid.UUID]string
 }
@@ -123,100 +113,15 @@ func SourceMessageQuestionID(commitmentQuestionID string) string {
 	return commitmentQuestionID + "/source_message"
 }
 
-// ThreadProposals returns the proposals of a thread's judgments, or of those
-// appearing in run when it is given, in no particular order.
-func (s *Store) ThreadProposals(ctx context.Context, thread threadctx.VenueID, run *RunID) ([]Proposal, error) {
-	rows, err := s.queries.ListJudgmentRows(ctx, db.ListJudgmentRowsParams{
-		Ids: []uuid.UUID{}, ThreadID: &thread, RunID: run, ExampleIds: []string{},
-	})
-	if err != nil {
-		return nil, fmt.Errorf("list thread judgments: %w", err)
-	}
-	return s.threadProposals(ctx, thread, rows, run)
-}
-
-// Rows are rows the bench shows, each named by the judgments of its
-// proposals, resolved to the threads those judged.
-type Rows struct {
-	judgments [][]uuid.UUID
-	threads   map[uuid.UUID]threadctx.VenueID
-}
-
-// ResolveRows resolves rows the bench shows, each named by the judgments of
-// its proposals, for RowStates. It returns ErrNotFound when a judgment is
-// unknown.
-func (s *Store) ResolveRows(ctx context.Context, rows [][]uuid.UUID) (Rows, error) {
-	resolved := Rows{judgments: rows, threads: map[uuid.UUID]threadctx.VenueID{}}
-	ids := slices.Concat(rows...)
-	if len(ids) == 0 {
-		return resolved, nil
-	}
-	found, err := s.queries.ListJudgmentRows(ctx, db.ListJudgmentRowsParams{Ids: ids, ExampleIds: []string{}})
-	if err != nil {
-		return Rows{}, fmt.Errorf("list judgments: %w", err)
-	}
-	for _, j := range found {
-		resolved.threads[j.ID] = j.ThreadID
-	}
-	for _, id := range ids {
-		if _, ok := resolved.threads[id]; !ok {
-			return Rows{}, ErrNotFound
-		}
-	}
-	return resolved, nil
-}
-
-// RowStates returns each row as the bench shows it in a view narrowed to run
-// when it is given, in the order given: each judgment's proposal compiled with
-// the judgments of its thread, as List compiles it, so a row reads the same
-// after a save as after a read of the list.
-func (s *Store) RowStates(ctx context.Context, rows Rows, run *RunID) ([]RowState, error) {
-	compiled := map[threadctx.VenueID]map[uuid.UUID]Proposal{}
-	states := make([]RowState, len(rows.judgments))
-	for i, row := range rows.judgments {
-		var proposals []Proposal
-		for _, id := range row {
-			thread := rows.threads[id]
-			if _, done := compiled[thread]; !done {
-				ps, err := s.ThreadProposals(ctx, thread, run)
-				if err != nil {
-					return nil, err
-				}
-				compiled[thread] = map[uuid.UUID]Proposal{}
-				for _, p := range ps {
-					compiled[thread][p.JudgmentID] = p
-				}
-			}
-			if p, ok := compiled[thread][id]; ok {
-				proposals = append(proposals, p)
-			}
-		}
-		states[i] = rowState(proposals)
-	}
-	return states, nil
-}
-
-// threadProposals compiles the proposals of judgments of one thread.
-func (s *Store) threadProposals(ctx context.Context, thread threadctx.VenueID, rows []*db.ListJudgmentRowsRow, run *RunID) ([]Proposal, error) {
+// threadProposals compiles the proposals of judgments of one thread, in the
+// order of the rows.
+func (s *Store) threadProposals(ctx context.Context, thread threadctx.VenueID, rows []*db.ListJudgmentRowsRow) ([]Proposal, error) {
 	if len(rows) == 0 {
 		return []Proposal{}, nil
 	}
-	ids := judgmentIDs(rows)
 	outcomes, lb, err := loadContent(ctx, s.queries, rows)
 	if err != nil {
 		return nil, err
-	}
-	reused := map[uuid.UUID]time.Time{}
-	if run != nil {
-		appearances, err := s.appearances(ctx, ids, run)
-		if err != nil {
-			return nil, err
-		}
-		for id, as := range appearances {
-			for _, a := range as {
-				reused[id] = a.CutOff
-			}
-		}
 	}
 	live, err := loadLiveState(ctx, s.queries, thread)
 	if err != nil {
@@ -228,9 +133,6 @@ func (s *Store) threadProposals(ctx context.Context, thread threadctx.VenueID, r
 		p, err := s.compile(ctx, pc, j, outcomes[j.ID])
 		if err != nil {
 			return nil, err
-		}
-		if at, ok := reused[j.ID]; ok && !at.Equal(j.CutOff) {
-			p.ReusedAt = &at
 		}
 		proposals[i] = p
 	}
@@ -281,7 +183,7 @@ type proposalContext struct {
 }
 
 // loadContent reads the proposals on the content the given judgments judged:
-// the outcomes of every judgment on that content, whichever run or row it
+// the outcomes of every judgment on that content, whichever run it
 // appears in, by judgment, and the labels of its decisions.
 func loadContent(ctx context.Context, q db.Querier, rows []*db.ListJudgmentRowsRow) (map[uuid.UUID][]*outcomeRecord, labels, error) {
 	examples := make([]ExampleID, len(rows))
@@ -362,22 +264,9 @@ func (s *Store) compile(ctx context.Context, pc *proposalContext, j *db.ListJudg
 				return Proposal{}, err
 			}
 		}
-		if item.Mark == "" {
-			p.ToReview++
-		}
 		p.Items = append(p.Items, item)
 	}
 	p.Additions = additions(outcomes, sorted, pc.labels)
-	nones := len(sorted.nonesToReview(pc.labels)) > 0
-	switch {
-	case p.ToReview > 0:
-		p.ReviewStatus = ReviewStatusToReview
-	case nones:
-		p.ReviewStatus = ReviewStatusNonesToReview
-	default:
-		p.ReviewStatus = ReviewStatusAllReviewed
-	}
-	p.ConfirmNones = len(sorted.confirmNones(pc.labels, pc.spared)) > 0
 	p.Lists = listViews(p.ReplyLists, questions, outcomes, sorted, pc.labels)
 	return p, nil
 }
@@ -460,21 +349,9 @@ func (st sorting) unlabeledNegatives(lb labels, skip func(decisionKey) bool) []*
 }
 
 // nonesToReview are the negative decisions that await the user's review as
-// Nones: those without a label. A proposal's status, its lists' Nones marks
-// and its row's status all read it.
+// Nones: those without a label. A list's Nones mark reads it.
 func (st sorting) nonesToReview(lb labels) []*outcomeRecord {
 	return st.unlabeledNegatives(lb, func(decisionKey) bool { return false })
-}
-
-// confirmNones are the negative decisions Confirm Nones labels: none for a
-// proposal with an item, else its negative decisions without a label that the
-// labeling rule does not spare. The offer of Confirm Nones and its refusal
-// both read it.
-func (st sorting) confirmNones(lb labels, sp spare) []*outcomeRecord {
-	if len(st.items) > 0 {
-		return nil
-	}
-	return st.unlabeledNegatives(lb, sp.spares)
 }
 
 // holdsLabel reports whether any decision of the proposal, an item's or a

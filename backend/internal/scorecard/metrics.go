@@ -1,10 +1,11 @@
-// Package scorecard scores decision-model methods against the user's reviews:
-// it reruns methods over the thread contexts the user reviewed and reports how
-// each method's outcomes compare with the user's right outcomes. Its report
-// and per-run metrics hold only opaque example IDs, run IDs, method keys and
-// versions, outcome values, counts, rates and the methods' terms status, and
-// its failures only a reason, a method key, a run ID and an example ID; it
-// sends nothing itself.
+// Package scorecard scores decision-model methods against the user's reviews
+// and labels: it reruns methods over the thread contexts the user reviewed or
+// labeled and reports how each method's outcomes compare with the user's right
+// outcomes, and its flag and clearing decisions with the user's labels. Its
+// report and per-run metrics hold only opaque example IDs, run IDs, method keys
+// and versions, outcome values, flag kinds, counts, rates and the methods'
+// terms status, and its failures only a reason, a method key, a run ID and an
+// example ID; it sends nothing itself.
 package scorecard
 
 import (
@@ -35,12 +36,23 @@ type RunMetrics struct {
 	// CorrectionsCaused counts the reviewed outcomes the method answered
 	// differently from the user's right outcome.
 	CorrectionsCaused int
+	// Reviewed counts the reviewed outcomes the run covered: the population
+	// IOweMissed and CorrectionsCaused count over.
+	Reviewed int
+	// Flags score each flag kind, every kind present, over the labeled flag
+	// decisions of the judgments appearing in the run; Clearing scores their
+	// labeled clearing decisions. Only flag and clearing labels count here: a
+	// review of an outcome counts toward PerOutcome alone.
+	Flags    map[judgment.FlagKind]FlagMetrics
+	Clearing ClearingMetrics
+	// Messages count the run's new messages.
+	Messages MessageCounts
 }
 
-// OutcomeMetrics score one outcome. A rate whose denominator is zero is 0;
-// the confusion shows the counts behind it.
+// OutcomeMetrics score one outcome. A rate whose denominator is zero has no
+// value; the confusion shows the counts behind it.
 type OutcomeMetrics struct {
-	Recall, Precision float64
+	Recall, Precision Rate
 	// Confusion counts every reviewed outcome of the outcome's question by
 	// the user's right outcome, then the method's judged outcome; the rates
 	// read the cells where either is this outcome.
@@ -98,7 +110,13 @@ func (r *Reader) scored(ctx context.Context, run judgment.RunID) (scoredRun, err
 		}
 	}
 	labels := labelsOf(covered, outcomes)
-	return scoredRun{metrics: score(run, summary.Method, labels), labels: labels, summary: summary}, nil
+	flags, err := r.scoreFlags(ctx, summary)
+	if err != nil {
+		return scoredRun{}, err
+	}
+	metrics := score(run, summary.Method, labels)
+	metrics.Flags, metrics.Clearing, metrics.Messages = flags.flags, flags.clearing, flags.messages
+	return scoredRun{metrics: metrics, labels: labels, summary: summary}, nil
 }
 
 func (r *Reader) finishedRerun(ctx context.Context, run judgment.RunID) (judgment.RunSummary, error) {
@@ -190,7 +208,7 @@ func iOwe(question judgment.Question, value string) bool {
 // score computes a run's metrics from its labels. Every outcome value that
 // is a right or judged outcome of some label gets its metrics.
 func score(run judgment.RunID, method judgment.MethodRef, labels []label) RunMetrics {
-	m := RunMetrics{Run: run, Method: method, PerOutcome: map[string]OutcomeMetrics{}}
+	m := RunMetrics{Run: run, Method: method, PerOutcome: map[string]OutcomeMetrics{}, Reviewed: len(labels)}
 	confusion := map[judgment.Question]map[string]map[string]int{}
 	for _, l := range labels {
 		q := l.key.question
@@ -253,13 +271,6 @@ func outcomeMetrics(cells map[string]map[string]int, value string) OutcomeMetric
 			}
 		}
 	}
-	out.Recall, out.Precision = rate(hit, reviewed), rate(hit, judged)
+	out.Recall, out.Precision = Rate{N: hit, Of: reviewed}, Rate{N: hit, Of: judged}
 	return out
-}
-
-func rate(n, of int) float64 {
-	if of == 0 {
-		return 0
-	}
-	return float64(n) / float64(of)
 }

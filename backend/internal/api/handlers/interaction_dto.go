@@ -204,14 +204,14 @@ type TimelineAssertionsResponse struct {
 	Items []TimelineAssertionResponse `json:"items"`
 }
 
-// AllInteractionsResponse is one page of the all-interactions view (the
-// bench) and the interaction types its type filter offers.
+// AllInteractionsResponse is one page of the all-interactions list and the
+// interaction types its type filter offers.
 type AllInteractionsResponse struct {
 	Items       []AllInteractionItemResponse    `json:"items"`
 	TypeOptions []InteractionTypeOptionResponse `json:"type_options"`
 }
 
-// InteractionTypeOptionResponse is one interaction type the view filters by.
+// InteractionTypeOptionResponse is one interaction type the list filters by.
 type InteractionTypeOptionResponse struct {
 	Key   string `json:"key" tstype:"InteractionType"`
 	Label string `json:"label"`
@@ -219,21 +219,12 @@ type InteractionTypeOptionResponse struct {
 
 // AllInteractionItemResponse is one row: one interaction across contacts,
 // served as the contact history serves it in the participation of
-// context_contact_id, its first participant. proposals are the thread
-// judgments whose latest content the row holds; to_review counts their items
-// awaiting review. review_status, present on a row carrying a proposal, is
-// to_review while any of its proposals' items has no label, else
-// nones_to_review while any holds a None to review, else all_reviewed. A None
-// to review is a negative decision without a label, unless another proposal on
-// the same content holds it as a reply its own commitment absorbs.
+// context_contact_id, its first participant. A row carries no judgment.
 type AllInteractionItemResponse struct {
 	Item             InteractionListItemResponse      `json:"item"`
 	ContextContactID string                           `json:"context_contact_id"`
 	Participants     []InteractionParticipantResponse `json:"participants"`
 	Preview          *InteractionPreviewResponse      `json:"preview,omitempty"`
-	Proposals        []BenchProposalResponse          `json:"proposals"`
-	ToReview         int                              `json:"to_review"`
-	ReviewStatus     *string                          `json:"review_status,omitempty" tstype:"ReviewStatus"`
 }
 
 // InteractionPreviewResponse is the latest content a row shows: a message's
@@ -244,19 +235,11 @@ type InteractionPreviewResponse struct {
 	Note   bool    `json:"note"`
 }
 
-// BenchProposalResponse is one thread judgment compiled into the answers the
-// user reviews. thread_id is the judged thread, whose content
-// /interactions/threads/{thread_id}/content returns; cut_off is its first
-// appearance, as of which its content is shown; reused_at is its appearance in
-// the run the view is narrowed to, when that run reused it. reply_lists is
-// false for a meeting. to_review counts its items without a label;
-// review_status is to_review while it has one, else nones_to_review while it
-// holds a None to review, else all_reviewed. confirm_nones is true exactly
-// when it has no items and holds a negative decision without a label that no
-// proposal on the same content holds as an unreviewed item or an absorbed
-// reply; /judgments/{judgment_id}/confirm-nones labels those. lists has
-// one entry per list it shows, in display order; a meeting's carries no reply
-// lists.
+// BenchProposalResponse is one thread judgment's reply proposal compiled into
+// the answers the user reviews. thread_id is the judged thread; cut_off is the
+// judgment's first appearance, as of which its content is shown. reply_lists is
+// false for a meeting. lists has one entry per list it shows, in display order;
+// a meeting's carries no reply lists.
 type BenchProposalResponse struct {
 	JudgmentID    string                  `json:"judgment_id"`
 	ThreadID      string                  `json:"thread_id"`
@@ -265,13 +248,9 @@ type BenchProposalResponse struct {
 	Production    bool                    `json:"production"`
 	ContextKind   string                  `json:"context_kind"`
 	CutOff        time.Time               `json:"cut_off"`
-	ReusedAt      *time.Time              `json:"reused_at,omitempty"`
 	ReplyLists    bool                    `json:"reply_lists"`
 	Items         []BenchItemResponse     `json:"items"`
 	Additions     []BenchAdditionResponse `json:"additions"`
-	ToReview      int                     `json:"to_review"`
-	ReviewStatus  string                  `json:"review_status" tstype:"ReviewStatus"`
-	ConfirmNones  bool                    `json:"confirm_nones"`
 	Lists         []BenchListResponse     `json:"lists"`
 }
 
@@ -294,12 +273,6 @@ type BenchClosestResponse struct {
 	Contact *BenchPartyResponse `json:"contact,omitempty"`
 	Debtor  *string             `json:"debtor,omitempty" tstype:"Debtor"`
 	Percent int                 `json:"percent"`
-}
-
-// BenchThreadContentResponse is a judged thread's whole conversation, oldest
-// first, each message once.
-type BenchThreadContentResponse struct {
-	Messages []ContentMessageResponse `json:"messages"`
 }
 
 // BenchPartyResponse is a contact a proposal names.

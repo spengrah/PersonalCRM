@@ -165,7 +165,7 @@ func (s *Store) RecordUnjudged(ctx context.Context, run RunID, messages []Unjudg
 	var order []cutOff
 	keys, reasons := map[cutOff][]string{}, map[cutOff][]string{}
 	for _, m := range messages {
-		if !slices.Contains([]UnjudgedReason{UnjudgedReasonCallFailed, UnjudgedReasonMessageOverLimit, UnjudgedReasonBeforeWindow}, m.Reason) {
+		if !slices.Contains(UnjudgedReasons, m.Reason) {
 			return fmt.Errorf("record unjudged: unknown reason %q", m.Reason)
 		}
 		if m.Thread == uuid.Nil || m.MessageKey == "" {
@@ -209,7 +209,7 @@ func (s *Store) RecordJudgment(ctx context.Context, run RunID, j Judgment) (Effe
 		if runMethod(runRow) != j.Method {
 			return fmt.Errorf("judgment method %+v is not run %s's method", j.Method, run)
 		}
-		judgmentID, found, err := findJudgment(ctx, q, j.Method, j.Thread, j.InputHash, readOf(j.WindowStart, j.NewMessages, j.Clearings))
+		judgmentID, found, err := findJudgment(ctx, q, j.Method, j.Thread, j.InputHash, readOf(j))
 		if err != nil {
 			return err
 		}
@@ -344,30 +344,37 @@ func (s *Store) createJudgmentTx(ctx context.Context, tx pgx.Tx, j Judgment) (uu
 		v := int32(*j.Usage.BilledTokens) //nolint:gosec // token counts fit int32
 		billed = &v
 	}
-	read := readOf(j.WindowStart, j.NewMessages, j.Clearings)
-	var windowStart *string
+	read := readOf(j)
+	var windowStart, ballInCourtWindowStart *string
 	if j.WindowStart != "" {
 		windowStart = &j.WindowStart
+		start := read.ballInCourtWindowStart()
+		ballInCourtWindowStart = &start
 	}
-	id, err := q.CreateJudgment(ctx, db.CreateJudgmentParams{
-		MethodKey:      j.Method.Key,
-		MethodVersion:  j.Method.Version,
-		WordingVersion: j.Method.WordingVersion,
-		ExampleID:      example.ID,
-		ContextKind:    string(j.Kind),
-		CutOff:         j.CutOff,
-		JudgedAt:       j.JudgedAt,
-		ContextTokens:  int32(j.Usage.ContextTokens), //nolint:gosec // token counts fit int32
-		QuestionCount:  int32(j.Usage.Questions),     //nolint:gosec // question counts fit int32
-		BilledTokens:   billed,
-		CostUsd:        j.Usage.CostUSD,
-		LatencyNs:      int64(j.Usage.Latency),
-		Questions:      questionsJSON,
-		WindowStart:    windowStart,
-		NewMessages:    nonNil(j.NewMessages),
-		ReadDigest:     read.digest(),
-	})
-	if err != nil {
+	id := j.ID
+	if id == uuid.Nil {
+		id = uuid.New()
+	}
+	if err := q.CreateJudgment(ctx, db.CreateJudgmentParams{
+		ID:                     id,
+		MethodKey:              j.Method.Key,
+		MethodVersion:          j.Method.Version,
+		WordingVersion:         j.Method.WordingVersion,
+		ExampleID:              example.ID,
+		ContextKind:            string(j.Kind),
+		CutOff:                 j.CutOff,
+		JudgedAt:               j.JudgedAt,
+		ContextTokens:          int32(j.Usage.ContextTokens), //nolint:gosec // token counts fit int32
+		QuestionCount:          int32(j.Usage.Questions),     //nolint:gosec // question counts fit int32
+		BilledTokens:           billed,
+		CostUsd:                j.Usage.CostUSD,
+		LatencyNs:              int64(j.Usage.Latency),
+		Questions:              questionsJSON,
+		WindowStart:            windowStart,
+		NewMessages:            nonNil(j.NewMessages),
+		ReadDigest:             read.digest(),
+		BallInCourtWindowStart: ballInCourtWindowStart,
+	}); err != nil {
 		return uuid.Nil, fmt.Errorf("create judgment: %w", err)
 	}
 	if err := createDecisionsTx(ctx, q, id, j); err != nil {
@@ -429,10 +436,19 @@ func createDecisionsTx(ctx context.Context, q *db.Queries, id uuid.UUID, j Judgm
 }
 
 // checkClearingsTx refuses a judgment whose clearing decision names anything
-// but a commitment flag decision of an earlier judgment of the same thread. The
-// schema holds each judgment's answers apart, so the store's writer keeps it.
+// but a commitment flag decision of an earlier judgment of the same thread or
+// of the judgment itself. The schema holds each judgment's answers apart, so
+// the store's writer keeps it.
 func checkClearingsTx(ctx context.Context, q *db.Queries, j Judgment) error {
 	for _, c := range j.Clearings {
+		if c.CommitmentJudgment == j.ID {
+			if !slices.ContainsFunc(j.Flags, func(f FlagDecision) bool {
+				return f.MessageKey == c.CommitmentMessageKey && f.Kind == FlagKindCommitment
+			}) {
+				return fmt.Errorf("clearing decision of message %q names no commitment flag decision of its own judgment", c.CommitmentMessageKey)
+			}
+			continue
+		}
 		earlier, err := q.IsEarlierCommitment(ctx, db.IsEarlierCommitmentParams{
 			JudgmentID: c.CommitmentJudgment, MessageKey: c.CommitmentMessageKey,
 			CommitmentKind: string(FlagKindCommitment), ThreadID: j.Thread, CutOff: j.CutOff,

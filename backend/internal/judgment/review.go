@@ -39,7 +39,7 @@ import (
 //
 // A review labels its own decision only: it never runs the labeling rule
 // (labelNegativesTx), so a proposal's negative decisions gain labels only
-// from Confirm Nones or a close of its row.
+// from a night's Confirm Nones or a thread's close.
 //
 // A review stating an open commitment may keep the obligation's current date:
 // the commitment is kept, its judged date is not taken, and the verdict
@@ -70,7 +70,7 @@ func (s *Store) ReviewOutcome(ctx context.Context, outcomeID uuid.UUID, review R
 		if err != nil {
 			return err
 		}
-		if err := s.recordReviewTx(ctx, tx, o, right, keep); err != nil {
+		if err := s.recordReviewTx(ctx, tx, outcomeReview{outcome: o, right: right, keepsDate: keep}); err != nil {
 			return err
 		}
 		if live && o.state() != OutcomeStateEvidence {

@@ -1,6 +1,6 @@
 # Personal CRM Makefile
 
-.PHONY: help setup dev dev-seed staging-reset tours qa-sanity build crm-admin mac-daemon test test-daemon-local clean docker-up docker-down docker-reset test-cadence-ultra test-cadence-fast model-prices-sync model-prices-apply qa-cost-assert prod staging accelerated testing start start-local stop restart reload status dev-stop dev-restart dev-api-stop dev-api-start dev-api-restart ci-build-backend ci-build-frontend ci-build ci-test test-e2e test-e2e-local e2e-db e2e-pg-ensure e2e-ports-free deploy-mac promote setup-pi setup-mac-deploy dev-native postgres-native sqlc smoke-test test-deploy-scripts worktree-env worktree-deps test-integration-fast test-integration-slow test-clean-clones worktree-test-pg-ensure test-pg-teardown test-pg-reap test-pg-smoke lint-ingest-registry spec-lint spec-coverage spec-drift api-types api-types-check api-docs api-docs-check contact-queries contact-queries-check sqlc-params-check
+.PHONY: help setup dev dev-seed staging-reset tours qa-sanity build crm-admin mac-daemon test test-daemon-local clean docker-up docker-down docker-reset test-cadence-ultra test-cadence-fast model-prices-sync model-prices-apply qa-cost-assert prod staging accelerated testing start start-local stop restart reload status dev-stop dev-restart dev-api-stop dev-api-start dev-api-restart ci-build-backend ci-build-frontend ci-build ci-test test-e2e test-e2e-local e2e-db e2e-env e2e-pg-ensure e2e-ports-free deploy-mac promote setup-pi setup-mac-deploy dev-native postgres-native sqlc smoke-test test-deploy-scripts worktree-env worktree-deps test-integration-fast test-integration-slow test-clean-clones worktree-test-pg-ensure test-pg-teardown test-pg-reap test-pg-smoke lint-ingest-registry spec-lint spec-coverage spec-drift api-types api-types-check api-docs api-docs-check contact-queries contact-queries-check sqlc-params-check
 
 # Repo root (supports running make from subdirectories).
 REPO_ROOT := $(shell git rev-parse --show-toplevel)
@@ -325,21 +325,13 @@ test-e2e: e2e-db ## Run Playwright E2E tests
 	if [ -f "$(REPO_ROOT)/frontend/.env.local.bak" ]; then mv "$(REPO_ROOT)/frontend/.env.local.bak" "$(REPO_ROOT)/frontend/.env.local"; fi; \
 	exit $$EXIT_CODE
 
-test-e2e-local: e2e-db ## Run Playwright E2E tests (honors PLAYWRIGHT_GREP)
-	@echo "Running Playwright E2E tests (local selection)..."
-	@ENV_FILE=$${ENV_FILE:-$(REPO_ROOT)/.env.example.testing}; \
-	if [ ! -f "$$ENV_FILE" ]; then echo "❌ ENV file not found: $$ENV_FILE"; exit 1; fi; \
-	set -a; . "$$ENV_FILE"; set +a; \
-	export DATABASE_URL="$(E2E_DATABASE_URL)"; \
-	if [ -f "$(REPO_ROOT)/frontend/.env.local" ]; then mv "$(REPO_ROOT)/frontend/.env.local" "$(REPO_ROOT)/frontend/.env.local.bak"; fi; \
-	echo "NEXT_PUBLIC_API_KEY=$$API_KEY" > "$(REPO_ROOT)/frontend/.env.local"; \
-	echo "NEXT_PUBLIC_API_URL=http://localhost:$(E2E_BACKEND_PORT)" >> "$(REPO_ROOT)/frontend/.env.local"; \
-	if [ -n "$$PLAYWRIGHT_GREP" ]; then set -- --grep "$$PLAYWRIGHT_GREP"; else set --; fi; \
-	cd "$(REPO_ROOT)/frontend" && DATABASE_URL="$$DATABASE_URL" API_KEY=$$API_KEY NEXT_PUBLIC_API_KEY=$$API_KEY NEXT_PUBLIC_API_URL=http://localhost:$(E2E_BACKEND_PORT) E2E_FRONTEND_PORT="$(E2E_FRONTEND_PORT)" E2E_BACKEND_PORT="$(E2E_BACKEND_PORT)" ./node_modules/.bin/playwright test --project=chromium "$$@"; \
-	EXIT_CODE=$$?; \
-	rm -f "$(REPO_ROOT)/frontend/.env.local"; \
-	if [ -f "$(REPO_ROOT)/frontend/.env.local.bak" ]; then mv "$(REPO_ROOT)/frontend/.env.local.bak" "$(REPO_ROOT)/frontend/.env.local"; fi; \
-	exit $$EXIT_CODE
+test-e2e-local: e2e-db ## Run Playwright E2E tests (honors PLAYWRIGHT_GREP; recipe in scripts/test-e2e-local.sh)
+	@E2E_DATABASE_URL="$(E2E_DATABASE_URL)" E2E_FRONTEND_PORT="$(E2E_FRONTEND_PORT)" E2E_BACKEND_PORT="$(E2E_BACKEND_PORT)" bash "$(REPO_ROOT)/scripts/test-e2e-local.sh"
+
+# Where the prepared E2E stack lives, as shell exports, for
+# scripts/test-e2e-local.sh when it runs without make. Run e2e-db first.
+e2e-env:
+	@echo "export E2E_DATABASE_URL='$(E2E_DATABASE_URL)' E2E_FRONTEND_PORT='$(E2E_FRONTEND_PORT)' E2E_BACKEND_PORT='$(E2E_BACKEND_PORT)'"
 
 # Free the ports the E2E stack owns. A prerequisite of e2e-db (rather than a
 # step in each test-e2e* recipe) because it MUST run before the reset script:

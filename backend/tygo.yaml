@@ -21,11 +21,12 @@ packages:
       - 'contact_dto.go'
       - 'interaction_dto.go'
       - 'judgment_dto.go'
+      - 'thread_dto.go'
     type_mappings:
       time.Time: 'string'
     frontmatter: |
       import type { AssertionStatus } from './assertion'
-      import type { ActKind, BallInCourt, BigMoment, ChangeKind, CommitmentState, Debtor, IncompleteReason, ItemMark, ItemState, OutcomeState, ProposalList, Question, ReviewStatus, RunKind, Verdict } from './judgment'
+      import type { ActKind, BallInCourt, BigMoment, ChangeKind, ChipState, ClearingLabelState, CommitmentState, Debtor, FlagKind, IncompleteReason, ItemMark, ItemState, OutcomeState, ProposalList, Question, RunKind, ThreadStatus, ThreadVenue, UnjudgedReason, Verdict } from './judgment'
       import type { InteractionType } from './interaction-type'
       // ContactMethodType mirrors the `oneof` validation on
       // ContactMethodRequest.Type (backend/internal/api/handlers/contact.go);

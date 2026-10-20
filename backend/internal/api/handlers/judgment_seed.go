@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"time"
 
 	"personal-crm/backend/internal/api"
@@ -18,7 +19,8 @@ import (
 
 // JudgmentSeedHandler records decision-model runs through the judgment store's
 // write seam (S2), so browser tests can review judgments while no method runs.
-// Test-only: registered under CRM_ENV=testing.
+// Everything it records goes through the writers a run uses, so a fixture holds
+// only records a run could write. Test-only: registered under CRM_ENV=testing.
 type JudgmentSeedHandler struct {
 	store        *judgment.Store
 	interactions *repository.InteractionRepository
@@ -85,8 +87,9 @@ func (h *JudgmentSeedHandler) ListObligations(c *gin.Context) {
 }
 
 // SeedJudgmentRunRequest is one run to record: its method, kind and window,
-// the judgments it records (an identity the store already holds is reused) and
-// the threads it reports incomplete. Unfinished leaves the run running.
+// the judgments it records (an identity the store already holds is reused),
+// the threads it reports incomplete and the new messages no judgment of it
+// answered. Unfinished leaves the run running.
 type SeedJudgmentRunRequest struct {
 	Kind           string                  `json:"kind" binding:"required"`
 	MethodKey      string                  `json:"method_key" binding:"required"`
@@ -96,20 +99,59 @@ type SeedJudgmentRunRequest struct {
 	To             *time.Time              `json:"to,omitempty"`
 	Judgments      []SeedJudgmentRequest   `json:"judgments"`
 	Incomplete     []SeedIncompleteRequest `json:"incomplete"`
+	Unjudged       []SeedUnjudgedRequest   `json:"unjudged"`
 	Unfinished     bool                    `json:"unfinished"`
 }
 
 // SeedJudgmentRequest is one judgment of the thread an interaction was
 // recorded in. InputHash defaults to one derived from the thread and cut-off.
+// A judgment that reads a window names its first message (WindowStart), the
+// messages new at its cut-off (NewMessages, message keys in thread order), one
+// flag decision per new message and kind (Flags), and the earlier commitments
+// it re-checked (Clearings); it holds ball-in-court outcomes only. A judgment
+// that names no window start reads its whole context, as a version before
+// migration 099 did.
 type SeedJudgmentRequest struct {
 	ThreadInteractionID string                `json:"thread_interaction_id" binding:"required"`
 	CutOff              time.Time             `json:"cut_off" binding:"required"`
 	InputHash           string                `json:"input_hash"`
 	ContextKind         string                `json:"context_kind" binding:"required"`
+	WindowStart         string                `json:"window_start"`
+	NewMessages         []string              `json:"new_messages"`
+	Flags               []SeedFlagRequest     `json:"flags"`
+	Clearings           []SeedClearingRequest `json:"clearings"`
 	Questions           []SeedQuestionRequest `json:"questions"`
 	BallInCourt         []SeedOutcomeRequest  `json:"ball_in_court"`
 	Commitments         []SeedOutcomeRequest  `json:"commitments"`
 	BigMoment           *SeedOutcomeRequest   `json:"big_moment,omitempty"`
+}
+
+// SeedFlagRequest is a flag decision: the probability that a new message holds
+// a flag kind (commitment, big_moment or claim).
+type SeedFlagRequest struct {
+	MessageKey  string  `json:"message_key"`
+	Kind        string  `json:"kind"`
+	Probability float64 `json:"probability"`
+}
+
+// SeedClearingRequest is a clearing decision: whether an earlier commitment is
+// done as of the judgment's cut-off. The commitment is the message flagged as a
+// commitment by the run's method version at CommitmentCutOff, an earlier cut-off
+// of the thread.
+type SeedClearingRequest struct {
+	CommitmentMessageKey string    `json:"commitment_message_key"`
+	CommitmentCutOff     time.Time `json:"commitment_cut_off"`
+	Done                 bool      `json:"done"`
+	Probability          float64   `json:"probability"`
+}
+
+// SeedUnjudgedRequest is a new message no judgment of the run answered at a
+// cut-off, and why (call_failed, message_over_limit or before_window).
+type SeedUnjudgedRequest struct {
+	ThreadInteractionID string    `json:"thread_interaction_id" binding:"required"`
+	CutOff              time.Time `json:"cut_off" binding:"required"`
+	MessageKey          string    `json:"message_key" binding:"required"`
+	Reason              string    `json:"reason" binding:"required"`
 }
 
 // SeedQuestionRequest is one answered question as the method answered it.
@@ -147,7 +189,7 @@ type SeedJudgmentRunResponse struct {
 
 // SeedRun records one run.
 // @Summary Seed a judgment run
-// @Description Record a decision-model run, its judgments and its incomplete threads through the judgment store. Test-only (CRM_ENV=testing).
+// @Description Record a decision-model run, its judgments (with the window, new messages, flag decisions and clearing decisions a run records), its incomplete threads and its unjudged messages through the judgment store. Test-only (CRM_ENV=testing).
 // @Tags test
 // @Accept json
 // @Produce json
@@ -189,6 +231,21 @@ func (h *JudgmentSeedHandler) SeedRun(c *gin.Context) {
 		}
 		if err := h.store.RecordIncomplete(ctx, run, thread, ir.CutOff, judgment.IncompleteReason(ir.Reason)); err != nil {
 			api.SendValidationError(c, "Invalid incomplete thread", err.Error())
+			return
+		}
+	}
+	if len(req.Unjudged) > 0 {
+		unjudged := make([]judgment.UnjudgedMessage, len(req.Unjudged))
+		for i, ur := range req.Unjudged {
+			thread, err := h.threadOf(c, ur.ThreadInteractionID)
+			if err != nil {
+				api.SendValidationError(c, "Invalid unjudged message", err.Error())
+				return
+			}
+			unjudged[i] = judgment.UnjudgedMessage{Thread: thread, CutOff: ur.CutOff, MessageKey: ur.MessageKey, Reason: judgment.UnjudgedReason(ur.Reason)}
+		}
+		if err := h.store.RecordUnjudged(ctx, run, unjudged); err != nil {
+			api.SendValidationError(c, "Invalid unjudged message", err.Error())
 			return
 		}
 	}
@@ -242,7 +299,30 @@ func (h *JudgmentSeedHandler) judgmentOf(c *gin.Context, method judgment.MethodR
 	j := judgment.Judgment{
 		Method: method, Thread: thread, Kind: threadctx.ContextKind(r.ContextKind),
 		CutOff: r.CutOff, JudgedAt: r.CutOff, InputHash: hash,
-		Usage: judgment.Usage{Questions: len(r.Questions)},
+		Usage:       judgment.Usage{Questions: len(r.Questions)},
+		WindowStart: r.WindowStart, NewMessages: r.NewMessages,
+	}
+	for _, f := range r.Flags {
+		j.Flags = append(j.Flags, judgment.FlagDecision{MessageKey: f.MessageKey, Kind: judgment.FlagKind(f.Kind), Probability: f.Probability})
+	}
+	if len(r.Clearings) > 0 {
+		earlier, err := h.store.JudgmentsThrough(c.Request.Context(), method, thread, r.CutOff)
+		if err != nil {
+			return judgment.Judgment{}, err
+		}
+		for _, cr := range r.Clearings {
+			at := slices.IndexFunc(earlier, func(e judgment.EarlierJudgment) bool {
+				return e.CutOff.Equal(cr.CommitmentCutOff) && slices.ContainsFunc(e.Flags, func(f judgment.FlagDecision) bool {
+					return f.MessageKey == cr.CommitmentMessageKey && f.Kind == judgment.FlagKindCommitment
+				})
+			})
+			if at < 0 {
+				return judgment.Judgment{}, fmt.Errorf("no commitment flag decision of message %q at %s", cr.CommitmentMessageKey, cr.CommitmentCutOff.Format(time.RFC3339))
+			}
+			j.Clearings = append(j.Clearings, judgment.ClearingDecision{
+				CommitmentMessageKey: cr.CommitmentMessageKey, CommitmentJudgment: earlier[at].ID, Done: cr.Done, Probability: cr.Probability,
+			})
+		}
 	}
 	for _, q := range r.Questions {
 		j.Questions = append(j.Questions, judgment.AnsweredQuestion{ID: q.ID, Probabilities: q.Probabilities, OriginalAnswer: q.OriginalAnswer})

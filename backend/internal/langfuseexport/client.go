@@ -17,7 +17,8 @@ import (
 const batchSize = 100
 
 // client sends to one Langfuse project. Langfuse in events-only mode takes
-// traces only over OTLP and scores only as ingestion score events.
+// traces only over OTLP and scores only as ingestion score events, and deletes
+// a score through the public scores API.
 type client struct {
 	host                 string
 	publicKey, secretKey string
@@ -76,6 +77,21 @@ func (c *client) sendScores(ctx context.Context, scores []score) error {
 		if n := len(result.Errors); n > 0 {
 			e := result.Errors[0]
 			return fmt.Errorf("langfuse refused %d of %d scores; first %s: status %d: %s", n, len(batch), e.ID, e.Status, e.Message)
+		}
+	}
+	return nil
+}
+
+// deleteScores deletes each score by its ID. Langfuse accepts the deletion of
+// an ID it does not hold, so a score never sent is deleted harmlessly.
+func (c *client) deleteScores(ctx context.Context, ids []string) error {
+	for _, id := range ids {
+		req, err := http.NewRequestWithContext(ctx, http.MethodDelete, c.url("/api/public/scores/"+url.PathEscape(id)), nil)
+		if err != nil {
+			return fmt.Errorf("build score deletion request: %w", err)
+		}
+		if _, err := c.do(req); err != nil {
+			return err
 		}
 	}
 	return nil

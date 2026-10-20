@@ -1,16 +1,21 @@
-import { keepPreviousData, useMutation, useQueries, useQuery } from '@tanstack/react-query'
-import type { ApiResponseWithMeta } from '@/lib/api-client'
-import { benchApi, type AllInteractionsFilters } from '@/lib/bench-api'
+import { useSyncExternalStore } from 'react'
+import { keepPreviousData, MutationObserver, useQuery } from '@tanstack/react-query'
+import {
+  benchApi,
+  threadsApi,
+  type AllInteractionsFilters,
+  type ThreadFilters,
+  type ThreadListFilters,
+} from '@/lib/bench-api'
 import { queryClient } from '@/lib/query-client'
-import { invalidateFor } from '@/lib/query-invalidation'
-import { interactionKeys, judgmentKeys } from '@/lib/query-keys'
+import { invalidateFor, type DomainEvent } from '@/lib/query-invalidation'
+import { interactionKeys, threadKeys } from '@/lib/query-keys'
 import type {
-  AllInteractionsResponse,
-  BenchProposalResponse,
-  BenchRowRequest,
-  BenchRowStateResponse,
   ReviewJudgmentOutcomeRequest,
+  ThreadReadResponse,
+  ThreadReviewResponse,
 } from '@/types/generated/contact'
+import type { FlagKind } from '@/types/generated/judgment'
 
 export function useAllInteractions(filters: AllInteractionsFilters) {
   return useQuery({
@@ -20,158 +25,330 @@ export function useAllInteractions(filters: AllInteractionsFilters) {
   })
 }
 
-// The whole content of each judged thread.
-export function useThreadContents(threadIds: string[]) {
-  return useQueries({
-    queries: threadIds.map(threadId => ({
-      queryKey: interactionKeys.threadContent(threadId),
-      queryFn: () => benchApi.threadContent(threadId),
-    })),
-  })
-}
-
-export function useJudgmentRuns() {
+// The Threads list; a run narrows it to the threads the run judged.
+export function useThreads(filters: ThreadListFilters, enabled = true) {
   return useQuery({
-    queryKey: judgmentKeys.runs(),
-    queryFn: () => benchApi.runs(),
+    queryKey: threadKeys.list(filters),
+    queryFn: () => threadsApi.list(filters),
+    placeholderData: keepPreviousData,
+    enabled,
+  })
+}
+
+// A thread, its place in the list the filters keep and, with a run in the
+// filters, the run's review of it.
+export function useThread(threadId: string, filters: ThreadFilters) {
+  return useQuery({
+    queryKey: threadKeys.read(threadId, filters),
+    queryFn: () => threadsApi.read(threadId, filters),
+  })
+}
+
+// The runs the user reviews, newest first.
+export function useReviewRuns() {
+  return useQuery({
+    queryKey: threadKeys.runs(),
+    queryFn: () => threadsApi.runs(),
   })
 }
 
 /**
- * Every save on the bench runs in one queue, so a close of a row takes effect
- * after the saves made before it are recorded.
+ * Every Threads save (a flag label, a clearing label, a reply-item review,
+ * Confirm Nones, a close) runs through this one queue, so saves are sent in
+ * the order made and a close is sent after every save made before it is
+ * recorded. A queued save never blocks a click: the caller learns of its end
+ * through the answer it draws, and navigating away does not wait for it.
+ *
+ * The queue lives outside any component. A save that fails after the client's
+ * retries stays in it, with the thread and run it names, and parks its
+ * thread: the saves made after it wait, so a close never infers labels from a
+ * decision the server did not record. Other threads' saves go on. The user
+ * retries the failed save, which sends it and then the saves behind it, or
+ * discards it, which drops it and the thread's closes behind it.
  */
-const BENCH_SAVES = { id: 'bench-saves' }
+type SaveStatus = 'queued' | 'running' | 'failed'
 
-type ListPage = ApiResponseWithMeta<AllInteractionsResponse>
+interface SaveEntry {
+  id: number
+  threadId: string
+  runId: string
+  /** The controls the save came from; only those wait while it is pending. */
+  item: string
+  /** What the user sees named when the save fails. */
+  what: string
+  closes: boolean
+  status: SaveStatus
+  send: () => Promise<void>
+  event: DomainEvent
+  onSuccess?: () => void
+  onError?: (error: Error) => void
+}
 
-/** The cached pages of the view narrowed to the run. */
-function runPages(runId: string | undefined) {
-  return {
-    queryKey: interactionKeys.allLists(),
-    predicate: (query: { queryKey: readonly unknown[] }) =>
-      (query.queryKey[2] as AllInteractionsFilters | undefined)?.run_id === runId,
+let saves: readonly SaveEntry[] = []
+let nextId = 0
+let sending = false
+const listeners = new Set<() => void>()
+
+function setSaves(next: readonly SaveEntry[]) {
+  saves = next
+  listeners.forEach(listener => listener())
+}
+
+function subscribe(listener: () => void) {
+  listeners.add(listener)
+  return () => {
+    listeners.delete(listener)
   }
 }
 
-/** A row the bench shows: its identity and the judgments of its proposals. */
-interface ShownRow {
-  identityId: string
-  judgmentIds: string[]
-}
-
-/**
- * The rows, across the cached pages of the view narrowed to the run, that
- * show a proposal of one of the threads: the rows a save on them can change.
- */
-function rowsShowing(runId: string | undefined, threadIds: string[]): ShownRow[] {
-  const rows = new Map<string, ShownRow>()
-  for (const [, page] of queryClient.getQueriesData<ListPage>(runPages(runId))) {
-    for (const row of page?.data?.items ?? []) {
-      if (row.proposals.some(proposal => threadIds.includes(proposal.thread_id))) {
-        rows.set(row.item.identity.id, {
-          identityId: row.item.identity.id,
-          judgmentIds: row.proposals.map(proposal => proposal.judgment_id),
-        })
-      }
-    }
-  }
-  return [...rows.values()]
-}
-
-/**
- * Sends a save on the threads with the rows it can change, then shows each
- * of those rows as the server returned it, proposals, count and status
- * together, in every page of the view narrowed to the same run, without
- * waiting on the list read. A list read in flight from before the save is
- * cancelled first, so it cannot land over the recorded state; the caller's
- * invalidation reads the list again.
- */
-async function save<T extends { rows: BenchRowStateResponse[] }>(
-  runId: string | undefined,
-  threadIds: string[],
-  send: (rows: BenchRowRequest[]) => Promise<T>
-): Promise<T> {
-  const shown = rowsShowing(runId, threadIds)
-  const recorded = await send(shown.map(row => ({ judgment_ids: row.judgmentIds })))
-  await queryClient.cancelQueries({ queryKey: interactionKeys.allLists() })
-  const rows = new Map(shown.map((row, i) => [row.identityId, recorded.rows[i]]))
-  queryClient.setQueriesData<ListPage>(runPages(runId), page =>
-    page?.data
-      ? {
-          ...page,
-          data: {
-            ...page.data,
-            items: page.data.items.map(row => {
-              const state = rows.get(row.item.identity.id)
-              return state
-                ? {
-                    ...row,
-                    proposals: state.proposals,
-                    to_review: state.to_review,
-                    review_status: state.review_status,
-                  }
-                : row
-            }),
-          },
-        }
-      : page
+// The queue is empty when a page renders on the server.
+const NO_SAVES: readonly SaveEntry[] = []
+const useSaves = () =>
+  useSyncExternalStore(
+    subscribe,
+    () => saves,
+    () => NO_SAVES
   )
-  return recorded
+
+const parked = (threadId: string) =>
+  saves.some(save => save.status === 'failed' && save.threadId === threadId)
+
+function setStatus(id: number, status: SaveStatus) {
+  setSaves(saves.map(save => (save.id === id ? { ...save, status } : save)))
 }
 
-export function useReviewOutcome() {
-  return useMutation({
-    scope: BENCH_SAVES,
-    mutationFn: ({
-      outcomeId,
-      threadId,
-      body,
-      runId,
-    }: {
-      outcomeId: string
-      threadId: string
-      body: ReviewJudgmentOutcomeRequest
-      runId?: string
-    }) => save(runId, [threadId], rows => benchApi.review(outcomeId, { ...body, rows }, runId)),
-    onSuccess: () => invalidateFor('judgment:reviewed'),
-  })
+// Sends one save at a time, the oldest first, past the threads a failure parks.
+// A save's retries are the shared client's mutation retry policy.
+async function sendNext() {
+  if (sending) return
+  const save = saves.find(s => s.status === 'queued' && !parked(s.threadId))
+  if (!save) return
+  sending = true
+  setStatus(save.id, 'running')
+  try {
+    await new MutationObserver(queryClient, { mutationFn: save.send }).mutate()
+    setSaves(saves.filter(s => s.id !== save.id))
+    save.onSuccess?.()
+  } catch (error) {
+    setStatus(save.id, 'failed')
+    save.onError?.(error as Error)
+  } finally {
+    invalidateFor(save.event)
+    sending = false
+    void sendNext()
+  }
 }
 
-// The list read is refreshed after a failure too, so the bench shows what the
-// server recorded.
-export function useConfirmNones() {
-  return useMutation({
-    scope: BENCH_SAVES,
-    mutationFn: ({
-      judgmentId,
-      threadId,
-      runId,
-    }: {
-      judgmentId: string
-      threadId: string
-      runId?: string
-    }) => save(runId, [threadId], rows => benchApi.confirmNones(judgmentId, rows, runId)),
-    onSettled: () => invalidateFor('judgment:nones-confirmed'),
-  })
+function enqueue(save: Omit<SaveEntry, 'id' | 'status'>) {
+  // The user acting again on a failed save's controls replaces the failed save
+  // in its place, so a close queued behind it still waits for the replacement.
+  const entry: SaveEntry = { ...save, id: nextId++, status: 'queued' }
+  const failed = saves.some(s => s.status === 'failed' && s.item === save.item)
+  setSaves(
+    failed
+      ? saves.map(s => (s.status === 'failed' && s.item === save.item ? entry : s))
+      : [...saves, entry]
+  )
+  void sendNext()
 }
 
-// A close is sent for every row the user collapses; the server decides what
-// it labels. The list read is refreshed after a failure too.
-export function useCloseRow() {
-  return useMutation({
-    scope: BENCH_SAVES,
-    mutationFn: ({ proposals, runId }: { proposals: BenchProposalResponse[]; runId?: string }) =>
-      save(
-        runId,
-        proposals.map(proposal => proposal.thread_id),
-        rows =>
-          benchApi.closeRow(
-            proposals.map(proposal => proposal.judgment_id),
-            rows,
-            runId
-          )
+/**
+ * Whether the controls of a save item wait on a pending save (one in flight or
+ * queued behind another).
+ */
+export function usePendingSaves(): (item: string) => boolean {
+  const snapshot = useSaves()
+  return item => snapshot.some(save => save.item === item && save.status !== 'failed')
+}
+
+/** Whether a save item's last save failed and was neither retried nor replaced. */
+export function useFailedSave(): (item: string) => boolean {
+  const snapshot = useSaves()
+  return item => snapshot.some(save => save.item === item && save.status === 'failed')
+}
+
+export interface FailedSave {
+  id: number
+  threadId: string
+  /** The controls the save came from. */
+  item: string
+  runId: string
+  what: string
+  /** Whether a close waits behind the failed save. */
+  closeHeld: boolean
+  retry: () => void
+  discard: () => void
+}
+
+/** The saves that failed and still wait for the user, whatever page they came from. */
+export function useFailedSaves(): FailedSave[] {
+  const snapshot = useSaves()
+  return snapshot
+    .filter(save => save.status === 'failed')
+    .map(save => ({
+      id: save.id,
+      threadId: save.threadId,
+      item: save.item,
+      runId: save.runId,
+      what: save.what,
+      closeHeld: snapshot.some(
+        other => other.closes && other.status === 'queued' && other.threadId === save.threadId
       ),
-    onSettled: () => invalidateFor('judgment:row-closed'),
-  })
+      retry: () => {
+        setStatus(save.id, 'queued')
+        void sendNext()
+      },
+      discard: () => {
+        setSaves(
+          saves.filter(
+            other =>
+              other.id !== save.id &&
+              !(other.closes && other.status === 'queued' && other.threadId === save.threadId)
+          )
+        )
+        void sendNext()
+      },
+    }))
+}
+
+export const saveItem = {
+  flag: (messageKey: string, kind: FlagKind) => `flag:${messageKey}:${kind}`,
+  clearing: (commitmentMessageKey: string, cutOff: string) =>
+    `clearing:${commitmentMessageKey}:${cutOff}`,
+  reply: (outcomeId: string) => `reply:${outcomeId}`,
+  nones: (judgmentId: string) => `nones:${judgmentId}`,
+  close: (threadId: string) => `close:${threadId}`,
+}
+
+/** The thread and run a save names, whose review state its answer carries. */
+interface SaveTarget {
+  threadId: string
+  runId: string
+}
+
+/**
+ * Shows the review state a save's answer carries, as the server computed it,
+ * on every cached read of the thread in the same run. A read in flight from
+ * before the save is cancelled first, so it cannot land over the recorded
+ * state; the save's invalidation reads the thread again after it.
+ */
+async function showRecorded(target: SaveTarget, review: ThreadReviewResponse | undefined) {
+  const reads = threadKeys.forThread(target.threadId)
+  await queryClient.cancelQueries({ queryKey: reads })
+  if (!review) return
+  queryClient.setQueriesData<ThreadReadResponse>(
+    {
+      queryKey: reads,
+      predicate: query => (query.queryKey[3] as ThreadFilters).run_id === target.runId,
+    },
+    read => read && { ...read, review }
+  )
+}
+
+interface SaveCallbacks {
+  onSuccess?: () => void
+  onError?: (error: Error) => void
+}
+
+function useThreadSave<V extends SaveTarget>(
+  itemOf: (vars: V) => string,
+  send: (vars: V) => Promise<ThreadReviewResponse | undefined>,
+  event: DomainEvent,
+  what: string,
+  closes = false
+) {
+  return {
+    mutate: (vars: V, callbacks?: SaveCallbacks) =>
+      enqueue({
+        threadId: vars.threadId,
+        runId: vars.runId,
+        item: itemOf(vars),
+        what,
+        closes,
+        event,
+        send: async () => showRecorded(vars, await send(vars)),
+        ...callbacks,
+      }),
+  }
+}
+
+export interface LabelFlagVars extends SaveTarget {
+  messageKey: string
+  kind: FlagKind
+  holds: boolean
+}
+
+export function useLabelFlag() {
+  return useThreadSave(
+    (v: LabelFlagVars) => saveItem.flag(v.messageKey, v.kind),
+    v =>
+      threadsApi.labelFlag(v.threadId, v.runId, {
+        message_key: v.messageKey,
+        kind: v.kind,
+        holds: v.holds,
+      }),
+    'thread:labeled',
+    'a flag label'
+  )
+}
+
+export interface LabelClearingVars extends SaveTarget {
+  commitmentMessageKey: string
+  cutOff: string
+  done: boolean
+}
+
+export function useLabelClearing() {
+  return useThreadSave(
+    (v: LabelClearingVars) => saveItem.clearing(v.commitmentMessageKey, v.cutOff),
+    v =>
+      threadsApi.labelClearing(v.threadId, v.runId, {
+        commitment_message_key: v.commitmentMessageKey,
+        cut_off: v.cutOff,
+        done: v.done,
+      }),
+    'thread:labeled',
+    'a clearing label'
+  )
+}
+
+export interface ReviewReplyItemVars extends SaveTarget {
+  outcomeId: string
+  review: ReviewJudgmentOutcomeRequest
+}
+
+// A reply item's review gives the thread the right outcome's effect on a first
+// review, so it also reads the contacts and tasks it can change.
+export function useReviewReplyItem() {
+  return useThreadSave(
+    (v: ReviewReplyItemVars) => saveItem.reply(v.outcomeId),
+    async v => (await threadsApi.reviewReplyItem(v.outcomeId, v.runId, v.review)).thread_review,
+    'thread:reply-reviewed',
+    'a reply review'
+  )
+}
+
+export interface ConfirmNonesVars extends SaveTarget {
+  judgmentId: string
+}
+
+export function useConfirmNones() {
+  return useThreadSave(
+    (v: ConfirmNonesVars) => saveItem.nones(v.judgmentId),
+    v => threadsApi.confirmNones(v.judgmentId, v.runId),
+    'thread:nones-confirmed',
+    'Confirm Nones'
+  )
+}
+
+// Done and Next close a thread; the server decides what a close labels, after
+// every save made before it.
+export function useCloseThread() {
+  return useThreadSave(
+    (v: SaveTarget) => saveItem.close(v.threadId),
+    v => threadsApi.close(v.threadId, v.runId),
+    'thread:closed',
+    'Done',
+    true
+  )
 }

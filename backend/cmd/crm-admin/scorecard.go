@@ -8,6 +8,7 @@ import (
 	"maps"
 	"slices"
 
+	"personal-crm/backend/internal/judgment"
 	"personal-crm/backend/internal/scorecard"
 )
 
@@ -43,7 +44,8 @@ func runScorecard(ctx context.Context, opts runOptions, deps adminDeps) error {
 }
 
 // writeScorecard prints the report: example IDs, method keys and versions,
-// outcome values, counts and rates only.
+// outcome values, flag kinds, counts and rates only. A flag or clearing rate
+// with no labeled decision behind it prints none.
 func writeScorecard(w io.Writer, r scorecard.Report) error {
 	p := &printer{w: w}
 	p.printf("scorecard: reviewed_examples=%d\n", r.Examples)
@@ -56,9 +58,21 @@ func writeScorecard(w io.Writer, r scorecard.Report) error {
 		for _, reason := range slices.Sorted(maps.Keys(m.Incomplete)) {
 			p.printf("  incomplete reason=%s n=%d\n", reason, m.Incomplete[reason])
 		}
-		for _, reason := range slices.Sorted(maps.Keys(m.Unjudged)) {
-			p.printf("  unjudged reason=%s n=%d\n", reason, m.Unjudged[reason])
+		p.printf("  messages judged=%d\n", mm.Messages.Judged)
+		for _, reason := range slices.Sorted(maps.Keys(mm.Messages.Unjudged)) {
+			p.printf("  unjudged reason=%s n=%d\n", reason, mm.Messages.Unjudged[reason])
 		}
+		for _, kind := range judgment.FlagKinds {
+			p.printf("  flagged kind=%s n=%d\n", kind, mm.Messages.Flagged[kind])
+		}
+		for _, kind := range judgment.FlagKinds {
+			f := mm.Flags[kind]
+			p.printf("  flag kind=%s precision=%s recall=%s shown_held=%d shown_not_held=%d unshown_held=%d unshown_not_held=%d\n",
+				kind, rateOrNone(f.Precision()), rateOrNone(f.Recall()), f.ShownHeld, f.ShownNotHeld, f.UnshownHeld, f.UnshownNotHeld)
+		}
+		c := mm.Clearing
+		p.printf("  clearing accuracy=%s done_labeled_done=%d done_labeled_not_done=%d not_done_labeled_done=%d not_done_labeled_not_done=%d\n",
+			rateOrNone(c.Accuracy()), c.DoneLabeledDone, c.DoneLabeledNotDone, c.NotDoneLabeledDone, c.NotDoneLabeledNotDone)
 		for _, key := range slices.Sorted(maps.Keys(mm.PerOutcome)) {
 			p.outcome("  ", key, mm.PerOutcome[key])
 		}
@@ -104,13 +118,23 @@ func (p *printer) printf(format string, args ...any) {
 }
 
 func (p *printer) outcome(indent, key string, o scorecard.OutcomeMetrics) {
-	p.printf("%soutcome=%s recall=%.3f precision=%.3f\n", indent, key, o.Recall, o.Precision)
+	recall, _ := o.Recall.Value()
+	precision, _ := o.Precision.Value()
+	p.printf("%soutcome=%s recall=%.3f precision=%.3f\n", indent, key, recall, precision)
 	for _, right := range slices.Sorted(maps.Keys(o.Confusion)) {
 		row := o.Confusion[right]
 		for _, judged := range slices.Sorted(maps.Keys(row)) {
 			p.printf("%s  reviewed=%s judged=%s n=%d\n", indent, right, judged, row[judged])
 		}
 	}
+}
+
+func rateOrNone(r scorecard.Rate) string {
+	v, ok := r.Value()
+	if !ok {
+		return "none"
+	}
+	return fmt.Sprintf("%.3f", v)
 }
 
 func findingOrNone(s string) string {

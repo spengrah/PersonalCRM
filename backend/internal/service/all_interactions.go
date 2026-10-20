@@ -23,21 +23,23 @@ type InteractionTypeOption struct {
 var InteractionTypes = []InteractionTypeOption{
 	{InteractionTypeMessage, "Messages"},
 	{InteractionTypeEmail, "Email"},
-	{InteractionTypeCalendar, "Calendar"},
+	{InteractionTypeEvent, "Events"},
 	{InteractionTypeCall, "Calls"},
 	{InteractionTypeOther, "Other"},
 }
 
-// interactionType is the type of an observation of the source.
-func interactionType(source string) InteractionType {
+// InteractionTypeOf is the type of an observation of the source: the one
+// source-to-type mapping the Interactions tab's and the Threads tab's type
+// filters read.
+func InteractionTypeOf(source string) InteractionType {
 	switch source {
 	case repository.InteractionSourceTelegram, repository.InteractionSourceMessages,
 		repository.InteractionSourceGChat, repository.InteractionSourceWhatsApp:
 		return InteractionTypeMessage
 	case repository.InteractionSourceEmail:
 		return InteractionTypeEmail
-	case repository.InteractionSourceGCal:
-		return InteractionTypeCalendar
+	case repository.InteractionSourceGCal, repository.InteractionSourceAnarlogSessions:
+		return InteractionTypeEvent
 	case repository.InteractionSourcePhoneCalls:
 		return InteractionTypeCall
 	default:
@@ -215,7 +217,7 @@ func (s *InteractionContentService) candidateRows(ctx context.Context) ([]candid
 			row.Participants = append(row.Participants, RowParticipant{ContactID: ep.ContactID, Name: names[ep.ContactID]})
 			for _, member := range ep.Members {
 				row.Observations = append(row.Observations, member.ObservationID)
-				row.Types = append(row.Types, interactionType(member.Source))
+				row.Types = append(row.Types, InteractionTypeOf(member.Source))
 				if venue, ok := venues[member.ObservationID]; ok {
 					row.Threads = append(row.Threads, venue)
 				}

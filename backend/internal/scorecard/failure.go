@@ -22,6 +22,8 @@ const (
 	FailureRunNotRerun        FailureReason = "run is not a rerun"
 	FailureRunNotFinished     FailureReason = "run has not finished"
 	FailureReadRun            FailureReason = "read run"
+	FailureReadLabels         FailureReason = "read flag and clearing labels"
+	FailureReadThreshold      FailureReason = "read display threshold"
 	FailureReference          FailureReason = "evaluate timestamp rule"
 	// FailureUnexplained is a failure no step named; only failureOf makes it.
 	FailureUnexplained FailureReason = "unexplained failure"

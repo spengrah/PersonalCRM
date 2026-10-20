@@ -442,7 +442,7 @@ type Querier interface {
 	// been merged/soft-deleted drops from these reads.
 	CreateEntity(ctx context.Context, arg CreateEntityParams) (*Entity, error)
 	CreateInteraction(ctx context.Context, arg CreateInteractionParams) (*Interaction, error)
-	CreateJudgment(ctx context.Context, arg CreateJudgmentParams) (uuid.UUID, error)
+	CreateJudgment(ctx context.Context, arg CreateJudgmentParams) error
 	CreateJudgmentAppearance(ctx context.Context, arg CreateJudgmentAppearanceParams) (int64, error)
 	// Records a judgment's clearing decisions: one commitment's message key and
 	// earlier judgment, the answer and its probability of done per position of the
@@ -1094,6 +1094,8 @@ type Querier interface {
 	GetTelegramMessageContainer(ctx context.Context, id uuid.UUID) (*GetTelegramMessageContainerRow, error)
 	GetTelegramSession(ctx context.Context) (*TelegramSession, error)
 	GetTelegramUpdateState(ctx context.Context, userID int64) (*TelegramUpdateState, error)
+	// One thread holding content, as ListThreads names it.
+	GetThread(ctx context.Context, venueID uuid.UUID) (*GetThreadRow, error)
 	// One message of a thread by its key: its time, whether the user wrote it, its
 	// text, and the contact a copy attributes it to.
 	GetThreadMessage(ctx context.Context, arg GetThreadMessageParams) (*GetThreadMessageRow, error)
@@ -1160,6 +1162,9 @@ type Querier interface {
 	// not clear deleted_at on conflict).
 	HardDeleteTelegramMessagesByChatIDRange(ctx context.Context, arg HardDeleteTelegramMessagesByChatIDRangeParams) error
 	HasEnrichmentForField(ctx context.Context, arg HasEnrichmentForFieldParams) (bool, error)
+	// Whether a judgment of the thread with the cut-off made a clearing decision
+	// of the commitment's message.
+	HasJudgmentClearing(ctx context.Context, arg HasJudgmentClearingParams) (bool, error)
 	// Returns TRUE if any later inbound/mutual effective participation exists for
 	// the contact after the given outreach time. Used by the FollowUpManager's
 	// out-of-order guard: an outbound event arriving after a response has
@@ -1335,7 +1340,7 @@ type Querier interface {
 	// any participant appears in either position.
 	ListAcceptedSlotNodes(ctx context.Context, arg ListAcceptedSlotNodesParams) ([]*ListAcceptedSlotNodesRow, error)
 	ListActiveMacHosts(ctx context.Context) ([]*MacHost, error)
-	// Reads of the all-interactions view (the bench). Participation comes from the
+	// Reads of the all-interactions list. Participation comes from the
 	// one derivation, the effective_participation view of migration 089; content
 	// comes from the one definition of a thread's content, the thread_content view
 	// of migrations 091 and 096.
@@ -1387,6 +1392,8 @@ type Querier interface {
 	// SET of canonical phones/emails, not the contact mapping, so DISTINCT
 	// collapses the same value across multiple contacts.
 	ListCanonicalIdentifiersByType(ctx context.Context, types []string) ([]string, error)
+	// The messages of the threads that a close labeled for some kind.
+	ListClosedFlagLabelMessages(ctx context.Context, threadIds []uuid.UUID) ([]*ListClosedFlagLabelMessagesRow, error)
 	ListCommsContainersForContact(ctx context.Context, contactID *uuid.UUID) ([]*ListCommsContainersForContactRow, error)
 	// Per-contact content, newest first (backs idx_comms_message_contact_sent).
 	ListCommsMessagesByContact(ctx context.Context, matchedContactID *uuid.UUID) ([]*CommsMessage, error)
@@ -1541,12 +1548,14 @@ type Querier interface {
 	// of every judgment; fresh_only keeps only the appearance whose call produced
 	// each judgment. Oldest recorded first.
 	ListJudgmentAppearances(ctx context.Context, arg ListJudgmentAppearancesParams) ([]*ListJudgmentAppearancesRow, error)
+	ListJudgmentClearingLabels(ctx context.Context, threadIds []uuid.UUID) ([]*ListJudgmentClearingLabelsRow, error)
 	ListJudgmentClearings(ctx context.Context, judgmentIds []uuid.UUID) ([]*JudgmentClearing, error)
 	// The key of the first message of the thread context each given judgment read
 	// when it read the whole context (a judgment before migration 099): the
 	// thread's first message at the judgment's cut-off. A judgment whose thread
 	// held no content then has no row.
 	ListJudgmentFirstMessages(ctx context.Context, judgmentIds []uuid.UUID) ([]*ListJudgmentFirstMessagesRow, error)
+	ListJudgmentFlagLabels(ctx context.Context, threadIds []uuid.UUID) ([]*ListJudgmentFlagLabelsRow, error)
 	ListJudgmentFlags(ctx context.Context, judgmentIds []uuid.UUID) ([]*JudgmentFlag, error)
 	ListJudgmentIncomplete(ctx context.Context) ([]*JudgmentIncomplete, error)
 	// The outcomes of the given judgments, or the given outcomes, each with the
@@ -1580,6 +1589,8 @@ type Querier interface {
 	// excluded — the daemon's set-diff reconciliation requires that rows
 	// the Pi has soft-deleted are NOT reported as known.
 	ListKnownMeetingNoteIDsByHost(ctx context.Context, macHostID *uuid.UUID) ([]*ListKnownMeetingNoteIDsByHostRow, error)
+	// The threads holding a flag or clearing label.
+	ListLabeledThreads(ctx context.Context) ([]uuid.UUID, error)
 	// The user's latest review of each question and contact on each example,
 	// whichever method's outcome it reviewed, ordered by example, question and
 	// contact: the one definition of a decision and its label. keeps_date is
@@ -1689,12 +1700,26 @@ type Querier interface {
 	ListRecentSyncLogs(ctx context.Context, limit int32) ([]*ExternalSyncLog, error)
 	// Every live review with the reviewed outcome's judgment, for the export.
 	ListReviewRecords(ctx context.Context, arg ListReviewRecordsParams) ([]*ListReviewRecordsRow, error)
+	// The historical and scheduled runs of the given methods, newest first.
+	ListReviewRuns(ctx context.Context, methodKeys []string) ([]*JudgmentRun, error)
+	// The appearances of judgments in the run, of the given threads: one per
+	// cut-off at which the run recorded or reused a judgment of the thread.
+	ListRunAppearancesForThreads(ctx context.Context, arg ListRunAppearancesForThreadsParams) ([]*ListRunAppearancesForThreadsRow, error)
+	// The threads a run judged, by a judgment it recorded or reused.
+	ListRunThreads(ctx context.Context, runID uuid.UUID) ([]uuid.UUID, error)
+	// The new messages no judgment of the run answered in the given threads, with
+	// their reasons.
+	ListRunUnjudged(ctx context.Context, arg ListRunUnjudgedParams) ([]*JudgmentUnjudged, error)
 	// Returns all live interactions attributed to a specific anarlog session
 	// (both impromptu / orphan-with-tags entries and walk-in supplementals).
 	// Used by the re-sync diff path in the meeting_note.recorded inline
 	// handler to compute the (existing - desired) set that needs
 	// soft-deleting.
 	ListSessionAttributedInteractions(ctx context.Context, sourceRefPrefix *string) ([]*Interaction, error)
+	// The flag decisions of a thread that a judgment of one of the given methods
+	// shows as a flag: its probability reaches that method's display threshold for
+	// the kind, whichever run holds the judgment.
+	ListShownFlagDecisions(ctx context.Context, arg ListShownFlagDecisionsParams) ([]*ListShownFlagDecisionsRow, error)
 	ListSignalsForSubject(ctx context.Context, subjectNodeID uuid.UUID) ([]*RelationshipSignal, error)
 	// Lists rows with matched_contact_id IS NULL — i.e., rows that the
 	// ingest service accepted into staging but couldn't match to a contact
@@ -1712,15 +1737,26 @@ type Querier interface {
 	ListTelegramMessagesByChatUnprocessed(ctx context.Context, telegramChatID int64) ([]*TelegramMessage, error)
 	ListTelegramMessagesByChatWindow(ctx context.Context, arg ListTelegramMessagesByChatWindowParams) ([]*TelegramMessage, error)
 	ListTelegramMessagesByInteractionIDs(ctx context.Context, interactionIds []uuid.UUID) ([]*TelegramMessage, error)
-	// The live observations holding a copy of the thread's latest content at or
-	// before the cut-off.
-	ListThreadAnchorObservations(ctx context.Context, arg ListThreadAnchorObservationsParams) ([]uuid.UUID, error)
 	// Thread content reads for the thread-context builder (internal/threadctx).
 	// Every content read goes through the thread_content view (migration 091), so
 	// a thread's context, its latest content time and the eligibility window agree.
 	// Every stored copy of every message of one thread at or before the cut-off.
 	// Copies of one message share message_key; the builder keeps each message once.
 	ListThreadContent(ctx context.Context, arg ListThreadContentParams) ([]*ThreadContent, error)
+	// Each message of the given threads once, in thread order: by time, then key.
+	ListThreadMessageKeys(ctx context.Context, venueIds []uuid.UUID) ([]*ListThreadMessageKeysRow, error)
+	// The live contacts that take part in each given thread, by name.
+	ListThreadParticipants(ctx context.Context, venueIds []uuid.UUID) ([]*ListThreadParticipantsRow, error)
+	// Reads of the Threads tab. A thread is a venue holding content; its content
+	// comes from the one definition of a thread's content, the thread_content view
+	// (migrations 091 and 096), and its participants from the effective
+	// observations recorded in the venue (migration 089), so a participant the
+	// user removed from an interaction is no participant of its thread.
+	// Every thread holding content, newest latest message first with the venue ID
+	// as the tie-breaker. sources keeps the venues of those sources (all when
+	// empty); contact_id keeps the threads that contact takes part in; with
+	// only_ids set, only the threads venue_ids names.
+	ListThreads(ctx context.Context, arg ListThreadsParams) ([]*ListThreadsRow, error)
 	// The threads with content after @after, up to and including @up_to.
 	ListThreadsWithContentIn(ctx context.Context, arg ListThreadsWithContentInParams) ([]uuid.UUID, error)
 	// Discovery counts over unmatched rows for one source, grouped by peer.
@@ -1801,8 +1837,6 @@ type Querier interface {
 	// The live contacts with a live interaction in a venue at or before as_of: a
 	// meeting's participants, which meeting notes do not name as contacts.
 	ListVenueContactsAsOf(ctx context.Context, arg ListVenueContactsAsOfParams) ([]uuid.UUID, error)
-	// A venue's live observations, oldest first.
-	ListVenueObservations(ctx context.Context, venueID *uuid.UUID) ([]*ListVenueObservationsRow, error)
 	// The settings surface's chat list. Only groups are ever written here (the gate
 	// returns before touching the repository for a private chat), so this is the
 	// discovered-group list without needing a chat_type filter. Ordered by title
@@ -2626,10 +2660,13 @@ type Querier interface {
 	SyntheticDeleteInteractionsByIds(ctx context.Context, interactionIds []uuid.UUID) (int64, error)
 	SyntheticDeleteJudgmentAppearancesForThreads(ctx context.Context, threadIds []uuid.UUID) (int64, error)
 	SyntheticDeleteJudgmentAssertionsForThreads(ctx context.Context, threadIds []uuid.UUID) (int64, error)
+	SyntheticDeleteJudgmentClearingLabelsForThreads(ctx context.Context, threadIds []uuid.UUID) (int64, error)
 	// The clearing decisions of the threads' judgments, which name the threads' own
 	// earlier judgments.
 	SyntheticDeleteJudgmentClearingsForThreads(ctx context.Context, threadIds []uuid.UUID) (int64, error)
 	SyntheticDeleteJudgmentExamplesForThreads(ctx context.Context, threadIds []uuid.UUID) (int64, error)
+	// The flag labels of the threads, which reference the threads' venue nodes.
+	SyntheticDeleteJudgmentFlagLabelsForThreads(ctx context.Context, threadIds []uuid.UUID) (int64, error)
 	SyntheticDeleteJudgmentFlagsForThreads(ctx context.Context, threadIds []uuid.UUID) (int64, error)
 	SyntheticDeleteJudgmentIncompleteForThreads(ctx context.Context, threadIds []uuid.UUID) (int64, error)
 	// The outcome subtype rows cascade from their nodes.
@@ -3227,6 +3264,7 @@ type Querier interface {
 	// upstream tombstone. There is no production messages delete path. Production
 	// code MUST NOT call this.
 	TestSoftDeleteMessagesMessage(ctx context.Context, id uuid.UUID) error
+	ThreadHoldsMessage(ctx context.Context, arg ThreadHoldsMessageParams) (bool, error)
 	// One-shot wait/run-by-kind read over river_job rows finalized since @cutoff,
 	// before job_exec_sample has accrued. finalized_at is authoritative here (only
 	// finished rows have it); this reads the live River table, not our sample table.
@@ -3488,6 +3526,14 @@ type Querier interface {
 	// this query stores the value verbatim.
 	UpsertExternalContact(ctx context.Context, arg UpsertExternalContactParams) (*ExternalContact, error)
 	UpsertIdentity(ctx context.Context, arg UpsertIdentityParams) (*ExternalIdentity, error)
+	// Records the user's label of a clearing decision (a commitment's message of a
+	// thread at a cut-off), replacing the decision's earlier label.
+	UpsertJudgmentClearingLabel(ctx context.Context, arg UpsertJudgmentClearingLabelParams) error
+	// Records the user's label of a flag decision (message and kind of a thread),
+	// replacing the decision's earlier label: the primary key is the decision.
+	// by_close records that a close labeled the decision, a fact about the close
+	// that a later label's value does not undo, so a replacement only sets it.
+	UpsertJudgmentFlagLabel(ctx context.Context, arg UpsertJudgmentFlagLabelParams) error
 	// Insert with no-op on guid conflict. peer_normalized and matched_contact_id
 	// come from the Pi ingest service identity-match path. mac_host_id is
 	// provenance — multi-host dedup is by guid, not by host. credits_reply is set

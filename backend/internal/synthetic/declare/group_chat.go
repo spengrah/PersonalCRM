@@ -128,21 +128,28 @@ func runGroupChat(ctx context.Context, h *replay.Harness, p *groupChatPlan, st *
 		return Seeded{}, fmt.Errorf("replay group chat %q: %w", p.name, err)
 	}
 
-	last := target.Add(time.Duration(p.messages[len(p.messages)-1].minutes) * time.Minute)
-	earliest := target.Add(time.Duration(p.messages[0].minutes) * time.Minute)
-	for _, handle := range p.members {
+	return readBackGroupChat(ctx, h, st, "group chat", p.name, repository.InteractionSourceGChat, p.members, p.messages, target)
+}
+
+// readBackGroupChat returns a group chat's seeded entity: the latest
+// interaction of the source, between the chat's first and last message, that
+// the first member holding one holds. what names the chat in errors.
+func readBackGroupChat(ctx context.Context, h *replay.Harness, st *runState, what, name, source string, members []string, messages []GroupMessage, target time.Time) (Seeded, error) {
+	first := target.Add(time.Duration(messages[0].minutes) * time.Minute)
+	last := target.Add(time.Duration(messages[len(messages)-1].minutes) * time.Minute)
+	for _, handle := range members {
 		contactID, err := st.contactID(handle)
 		if err != nil {
 			return Seeded{}, err
 		}
 		rows, err := h.InteractionRepo().ListContactInteractions(ctx, contactID, 100, 0)
 		if err != nil {
-			return Seeded{}, fmt.Errorf("read back group chat %q: %w", p.name, err)
+			return Seeded{}, fmt.Errorf("read back %s %q: %w", what, name, err)
 		}
 		var latest *repository.Interaction
 		for i := range rows {
 			r := &rows[i]
-			if r.Source != repository.InteractionSourceGChat || r.OccurredAt.Before(earliest) || r.OccurredAt.After(last) {
+			if r.Source != source || r.OccurredAt.Before(first) || r.OccurredAt.After(last) {
 				continue
 			}
 			if latest == nil || r.OccurredAt.After(latest.OccurredAt) {
@@ -150,8 +157,8 @@ func runGroupChat(ctx context.Context, h *replay.Harness, p *groupChatPlan, st *
 			}
 		}
 		if latest != nil {
-			return Seeded{Kind: "interaction", ID: latest.ID.String(), Name: p.name}, nil
+			return Seeded{Kind: "interaction", ID: latest.ID.String(), Name: name}, nil
 		}
 	}
-	return Seeded{}, fmt.Errorf("group chat %q: no member holds an interaction of it", p.name)
+	return Seeded{}, fmt.Errorf("%s %q: no member holds an interaction of it", what, name)
 }

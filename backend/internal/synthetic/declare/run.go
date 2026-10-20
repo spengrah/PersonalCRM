@@ -621,6 +621,8 @@ func runEntity(
 		return runMessageInteraction(ctx, h, p, st)
 	case *groupChatPlan:
 		return runGroupChat(ctx, h, p, st)
+	case *telegramGroupChatPlan:
+		return runTelegramGroupChat(ctx, h, p, st)
 	case *phoneCallInteractionPlan:
 		return runPhoneCallInteraction(ctx, h, p, st)
 	case *loggedInteractionPlan:

@@ -32,9 +32,9 @@ const (
 // classPredicates are the landing classes, in the order the queries read them.
 var classPredicates = []string{predicateAddition, predicateRemoval, predicateNoEffect}
 
-// questionValues lists each question's outcome values: the one definition the
+// QuestionValues lists each question's outcome values: the one definition the
 // store validates outcomes and right outcomes against.
-var questionValues = map[Question][]string{
+var QuestionValues = map[Question][]string{
 	QuestionBallInCourt:      {string(BallInCourtIOweReply), string(BallInCourtTheyOweReply), string(BallInCourtNobodyOwes), string(BallInCourtNotApplicable)},
 	QuestionCommitmentMine:   {string(CommitmentStateOpen), string(CommitmentStateNone)},
 	QuestionCommitmentTheirs: {string(CommitmentStateOpen), string(CommitmentStateNone)},
@@ -43,7 +43,7 @@ var questionValues = map[Question][]string{
 
 // isOutcomeValue reports whether value is one of question's outcome values.
 func isOutcomeValue(question Question, value string) bool {
-	return slices.Contains(questionValues[question], value)
+	return slices.Contains(QuestionValues[question], value)
 }
 
 // OptionValue is the outcome value an answered option stands for: its key,

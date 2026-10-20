@@ -400,24 +400,25 @@ type JobExecSample struct {
 }
 
 type Judgment struct {
-	ID             uuid.UUID `json:"id"`
-	MethodKey      string    `json:"method_key"`
-	MethodVersion  string    `json:"method_version"`
-	WordingVersion string    `json:"wording_version"`
-	ExampleID      string    `json:"example_id"`
-	ContextKind    string    `json:"context_kind"`
-	CutOff         time.Time `json:"cut_off"`
-	JudgedAt       time.Time `json:"judged_at"`
-	ContextTokens  int32     `json:"context_tokens"`
-	QuestionCount  int32     `json:"question_count"`
-	BilledTokens   *int32    `json:"billed_tokens"`
-	CostUsd        *float64  `json:"cost_usd"`
-	LatencyNs      int64     `json:"latency_ns"`
-	Questions      []byte    `json:"questions"`
-	CreatedAt      time.Time `json:"created_at"`
-	WindowStart    *string   `json:"window_start"`
-	NewMessages    []string  `json:"new_messages"`
-	ReadDigest     string    `json:"read_digest"`
+	ID                     uuid.UUID `json:"id"`
+	MethodKey              string    `json:"method_key"`
+	MethodVersion          string    `json:"method_version"`
+	WordingVersion         string    `json:"wording_version"`
+	ExampleID              string    `json:"example_id"`
+	ContextKind            string    `json:"context_kind"`
+	CutOff                 time.Time `json:"cut_off"`
+	JudgedAt               time.Time `json:"judged_at"`
+	ContextTokens          int32     `json:"context_tokens"`
+	QuestionCount          int32     `json:"question_count"`
+	BilledTokens           *int32    `json:"billed_tokens"`
+	CostUsd                *float64  `json:"cost_usd"`
+	LatencyNs              int64     `json:"latency_ns"`
+	Questions              []byte    `json:"questions"`
+	CreatedAt              time.Time `json:"created_at"`
+	WindowStart            *string   `json:"window_start"`
+	NewMessages            []string  `json:"new_messages"`
+	ReadDigest             string    `json:"read_digest"`
+	BallInCourtWindowStart *string   `json:"ball_in_court_window_start"`
 }
 
 type JudgmentAppearance struct {
@@ -439,6 +440,14 @@ type JudgmentClearing struct {
 	Probability          float64   `json:"probability"`
 }
 
+type JudgmentClearingLabel struct {
+	ThreadID             uuid.UUID `json:"thread_id"`
+	CommitmentMessageKey string    `json:"commitment_message_key"`
+	CutOff               time.Time `json:"cut_off"`
+	Done                 bool      `json:"done"`
+	LabeledAt            time.Time `json:"labeled_at"`
+}
+
 type JudgmentExample struct {
 	ID        string    `json:"id"`
 	ThreadID  uuid.UUID `json:"thread_id"`
@@ -450,6 +459,15 @@ type JudgmentFlag struct {
 	MessageKey  string    `json:"message_key"`
 	Kind        string    `json:"kind"`
 	Probability float64   `json:"probability"`
+}
+
+type JudgmentFlagLabel struct {
+	ThreadID   uuid.UUID `json:"thread_id"`
+	MessageKey string    `json:"message_key"`
+	Kind       string    `json:"kind"`
+	Holds      bool      `json:"holds"`
+	ByClose    bool      `json:"by_close"`
+	LabeledAt  time.Time `json:"labeled_at"`
 }
 
 type JudgmentFlagMethod struct {

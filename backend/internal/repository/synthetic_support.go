@@ -1397,6 +1397,8 @@ func (r *SyntheticSupportRepository) DeleteJudgmentsForThreads(ctx context.Conte
 		r.queries.SyntheticDeleteJudgmentAppearancesForThreads,
 		r.queries.SyntheticDeleteJudgmentClearingsForThreads,
 		r.queries.SyntheticDeleteJudgmentFlagsForThreads,
+		r.queries.SyntheticDeleteJudgmentFlagLabelsForThreads,
+		r.queries.SyntheticDeleteJudgmentClearingLabelsForThreads,
 		r.queries.SyntheticDeleteJudgmentOutcomeNodesForThreads,
 		r.queries.SyntheticDeleteJudgmentsForThreads,
 		r.queries.SyntheticDeleteJudgmentExamplesForThreads,

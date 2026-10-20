@@ -8,12 +8,13 @@
 //
 // Each judgment is one trace, timestamped at its execution time and carrying
 // its cut-off as metadata; each finished run is one trace with its summary;
-// each review is a score on its judgment's trace; each finished rerun run's
-// scorecard metrics are a score on its run's trace. Every trace, span and
+// each review is a score on its judgment's trace; each metric of a finished
+// rerun run's scorecard is a score on its run's trace. Every trace, span and
 // score ID derives from the record it carries. Langfuse never replaces an
 // observation it holds, so each trace's span carries what is fixed once its
 // record exists and is sent once; what changes after that, a review and the
-// metrics computed from reviews, is a score, which Langfuse replaces by ID.
+// metrics computed from reviews, is a score, which Langfuse replaces by ID; a
+// metric left without a value is deleted by its ID.
 package langfuseexport
 
 import (
@@ -83,7 +84,8 @@ type Report struct {
 	// Runs and Judgments count the finished runs and judgments sent; Held the
 	// runs and judgments Langfuse already held, which were not sent again.
 	Runs, Judgments, Held int
-	// Scorecards and Reviews count the scores sent.
+	// Scorecards counts the reruns whose scorecard metrics were sent, and
+	// Reviews the review scores sent.
 	Scorecards, Reviews int
 }
 
@@ -96,7 +98,8 @@ func (r Report) Sent() bool { return len(r.Missing) == 0 }
 // each span is sent only when its trace is not among them, so no span is sent
 // twice. A finished rerun's scorecard metrics, computed from the latest
 // reviews, and every live review are sent as scores on each export, so a
-// changed verdict replaces the earlier verdict and the metrics it changed.
+// changed verdict replaces the earlier verdict and the metrics it changed; each
+// metric the latest labels and reviews leave without a value is deleted.
 func (e *Exporter) Export(ctx context.Context) (Report, error) {
 	if e.client == nil {
 		return Report{Missing: e.missing}, nil
@@ -108,6 +111,7 @@ func (e *Exporter) Export(ctx context.Context) (Report, error) {
 	}
 	var spans []span
 	var scores []score
+	var absent []string
 	for _, run := range runs {
 		for _, j := range run.Judgments {
 			spans = append(spans, judgmentSpan(j))
@@ -122,10 +126,11 @@ func (e *Exporter) Export(ctx context.Context) (Report, error) {
 			if err != nil {
 				return report, fmt.Errorf("read scorecard metrics of run %s: %w", run.Run, err)
 			}
-			scores = append(scores, scorecardScore(*finished, m))
+			sent, unvalued := scorecardScores(*finished, m)
+			scores, absent = append(scores, sent...), append(absent, unvalued...)
+			report.Scorecards++
 		}
 	}
-	report.Scorecards = len(scores)
 	unsent, err := e.unsent(ctx, spans)
 	if err != nil {
 		return report, err
@@ -151,6 +156,9 @@ func (e *Exporter) Export(ctx context.Context) (Report, error) {
 	report.Reviews = len(reviews)
 	if err := e.client.sendScores(ctx, scores); err != nil {
 		return report, fmt.Errorf("send scores: %w", err)
+	}
+	if err := e.client.deleteScores(ctx, absent); err != nil {
+		return report, fmt.Errorf("delete scorecard metrics without a value: %w", err)
 	}
 	return report, nil
 }

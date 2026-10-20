@@ -55,7 +55,12 @@ export type RunKind = typeof RunKindScheduled | typeof RunKindHistorical | typeo
 export const IncompleteReasonOverLimit = "over_limit";
 export const IncompleteReasonCallFailed = "call_failed";
 export const IncompleteReasonInputChanged = "input_changed";
-export type IncompleteReason = typeof IncompleteReasonOverLimit | typeof IncompleteReasonCallFailed | typeof IncompleteReasonInputChanged;
+/**
+ * IncompleteReasonMessageOverLimit: the newest message alone exceeds the
+ * method's limits.
+ */
+export const IncompleteReasonMessageOverLimit = "message_over_limit";
+export type IncompleteReason = typeof IncompleteReasonOverLimit | typeof IncompleteReasonCallFailed | typeof IncompleteReasonInputChanged | typeof IncompleteReasonMessageOverLimit;
 /**
  * OutcomeState is how an outcome landed: applied (it took effect, or had no
  * effect to take), claim (it awaits the user's confirmation) or evidence (its
@@ -125,11 +130,82 @@ export const DebtorMe = "me";
 export const DebtorContact = "contact";
 export type Debtor = typeof DebtorMe | typeof DebtorContact;
 /**
- * ReviewStatus is what remains for the user to review in a proposal or a
- * row: items without a label (to review), else negative decisions without a
- * label (nones to review), else nothing (all reviewed).
+ * FlagKind is what a flag decision flags a message as holding. A flag carries
+ * no category and no extracted content.
  */
-export const ReviewStatusToReview = "to_review";
-export const ReviewStatusNonesToReview = "nones_to_review";
-export const ReviewStatusAllReviewed = "all_reviewed";
-export type ReviewStatus = typeof ReviewStatusToReview | typeof ReviewStatusNonesToReview | typeof ReviewStatusAllReviewed;
+/**
+ * FlagKindCommitment: the message states that someone will do something for
+ * another participant, and the content up to the cut-off does not show it
+ * done.
+ */
+export const FlagKindCommitment = "commitment";
+/**
+ * FlagKindBigMoment: the message reveals a significant moment in a contact's
+ * life.
+ */
+export const FlagKindBigMoment = "big_moment";
+/**
+ * FlagKindClaim: the message states a fact about a contact or someone in a
+ * contact's life.
+ */
+export const FlagKindClaim = "claim";
+export type FlagKind = typeof FlagKindCommitment | typeof FlagKindBigMoment | typeof FlagKindClaim;
+/**
+ * UnjudgedReason is why a new message was answered by no judgment of a run.
+ */
+/**
+ * UnjudgedReasonCallFailed: the cut-off's call failed after its retries.
+ */
+export const UnjudgedReasonCallFailed = "call_failed";
+/**
+ * UnjudgedReasonMessageOverLimit: the cut-off was reported incomplete with
+ * IncompleteReasonMessageOverLimit.
+ */
+export const UnjudgedReasonMessageOverLimit = "message_over_limit";
+/**
+ * UnjudgedReasonBeforeWindow: the message lay before the window's start.
+ */
+export const UnjudgedReasonBeforeWindow = "before_window";
+export type UnjudgedReason = typeof UnjudgedReasonCallFailed | typeof UnjudgedReasonMessageOverLimit | typeof UnjudgedReasonBeforeWindow;
+/**
+ * ThreadVenue is the app a thread lives in, as a Threads row's chip names it.
+ * sourceVenues maps each source the Threads tab serves to one.
+ */
+export const ThreadVenueWhatsApp = "whatsapp";
+export const ThreadVenueTelegram = "telegram";
+export const ThreadVenueIMessage = "imessage";
+export const ThreadVenueGoogleChat = "google_chat";
+export const ThreadVenueEmail = "email";
+export const ThreadVenueCalendar = "calendar";
+export const ThreadVenueAnarlog = "anarlog";
+export type ThreadVenue = typeof ThreadVenueWhatsApp | typeof ThreadVenueTelegram | typeof ThreadVenueIMessage | typeof ThreadVenueGoogleChat | typeof ThreadVenueEmail | typeof ThreadVenueCalendar | typeof ThreadVenueAnarlog;
+/**
+ * ChipState is how a flag chip stands under a night's method: to review (a
+ * shown flag with no label), confirmed or removed (a shown flag with a label
+ * that holds or does not), or added (the user's label that a message holds a
+ * kind the method did not show).
+ */
+export const ChipStateToReview = "to_review";
+export const ChipStateConfirmed = "confirmed";
+export const ChipStateRemoved = "removed";
+export const ChipStateAdded = "added";
+export type ChipState = typeof ChipStateToReview | typeof ChipStateConfirmed | typeof ChipStateRemoved | typeof ChipStateAdded;
+/**
+ * ClearingLabelState is how the user's label stands against a clearing
+ * decision's answer: none (no label), confirmed (the label equals the answer)
+ * or removed (it differs).
+ */
+export const ClearingLabelStateNone = "none";
+export const ClearingLabelStateConfirmed = "confirmed";
+export const ClearingLabelStateRemoved = "removed";
+export type ClearingLabelState = typeof ClearingLabelStateNone | typeof ClearingLabelStateConfirmed | typeof ClearingLabelStateRemoved;
+/**
+ * ThreadStatus is what a thread holds for the user to review in a run:
+ * to review (it shows an item without a label, or a night awaits Confirm
+ * Nones), nothing flagged (it shows nothing) or reviewed (every night holds
+ * one of the user's labels).
+ */
+export const ThreadStatusToReview = "to_review";
+export const ThreadStatusNothingFlagged = "nothing_flagged";
+export const ThreadStatusReviewed = "reviewed";
+export type ThreadStatus = typeof ThreadStatusToReview | typeof ThreadStatusNothingFlagged | typeof ThreadStatusReviewed;

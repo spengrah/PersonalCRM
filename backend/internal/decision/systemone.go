@@ -119,7 +119,7 @@ func (s *systemOne) post(ctx context.Context, w wireRequest) (Answers, error) {
 		}
 		if q.Kind == threadctx.QuestionNoul {
 			if a.Noul != nil {
-				out.ByQuestion[q.ID] = nounAnswer(q, *a.Noul, "")
+				out.ByQuestion[q.ID] = nounAnswer(q, *a.Noul)
 			}
 			continue
 		}
@@ -140,8 +140,8 @@ func (s *systemOne) post(ctx context.Context, w wireRequest) (Answers, error) {
 
 // nounAnswer is a yes/no answer as option probabilities: the first option is
 // yes, the second no.
-func nounAnswer(q wireQuestion, yes float64, chosen string) Answer {
-	return Answer{Probabilities: map[string]float64{q.Options[0].Key: yes, q.Options[1].Key: 1 - yes}, Chosen: chosen}
+func nounAnswer(q wireQuestion, yes float64) Answer {
+	return Answer{Probabilities: map[string]float64{q.Options[0].Key: yes, q.Options[1].Key: 1 - yes}}
 }
 
 // statusError is a call a vendor refused, by HTTP status. Its message carries

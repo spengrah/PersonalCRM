@@ -1,15 +1,7 @@
 import { test, expect, type Locator } from '@playwright/test'
 import { SLOW_TIMEOUT_MS } from './helpers/timeouts'
 import { createTestAPI, TestAPI } from './helpers/test-api'
-import {
-  benchRow,
-  contactRows,
-  entity,
-  expandRow,
-  fetchAllInteractions,
-  rowMessages,
-  seedJudgmentRun,
-} from './helpers/bench'
+import { contactRows, entity, expandRow, interactionRow, rowMessages } from './helpers/bench'
 
 /** The view's rows' identities, in the order shown. */
 async function shownIds(list: Locator): Promise<string[]> {
@@ -23,9 +15,7 @@ async function shownIds(list: Locator): Promise<string[]> {
     )
 }
 
-const minuteAgo = () => new Date(Date.now() - 60_000).toISOString()
-
-test.describe('Interactions bench list @area:interactions', () => {
+test.describe('Interactions tab @area:interactions', () => {
   let testApi: TestAPI
 
   test.beforeEach(async ({ request }, testInfo) => {
@@ -88,13 +78,13 @@ test.describe('Interactions bench list @area:interactions', () => {
     const groupRow = rows.find(row => row.participants.length === 3)
     const meetingRow = rows.find(row => row.item.members[0]?.source === 'gcal')
     expect(groupRow, 'the user’s group message is one row of its three members').toBeTruthy()
-    const groupParticipants = benchRow(page, groupRow!.item.identity.id).locator(
+    const groupParticipants = interactionRow(page, groupRow!.item.identity.id).locator(
       '[data-participants]'
     )
     for (const handle of ['subject', 'member-b', 'member-c']) {
       await expect(groupParticipants).toContainText(entity(seeded, handle).name)
     }
-    const meetingParticipants = benchRow(page, meetingRow!.item.identity.id).locator(
+    const meetingParticipants = interactionRow(page, meetingRow!.item.identity.id).locator(
       '[data-participants]'
     )
     await expect(meetingParticipants).toContainText(subject.name)
@@ -104,7 +94,7 @@ test.describe('Interactions bench list @area:interactions', () => {
 
     // spec: IXN-041.row-sets-out-columns
     const emailRow = rows.find(row => row.item.members[0]?.source === 'email')!
-    const email = benchRow(page, emailRow.item.identity.id)
+    const email = interactionRow(page, emailRow.item.identity.id)
     await expect(email.getByLabel(emailRow.item.direction, { exact: true })).toBeVisible()
     await expect(email.locator('[data-badge]')).toHaveText('Email')
     await expect(
@@ -136,7 +126,7 @@ test.describe('Interactions bench list @area:interactions', () => {
 
     // spec: IXN-041.renders-with-history-row, IXN-041.drill-down-full-width
     const groupRow = rows.find(row => row.participants.length === 3)!
-    const group = benchRow(page, groupRow.item.identity.id)
+    const group = interactionRow(page, groupRow.item.identity.id)
     await expect(group.getByText('Group', { exact: true })).toBeVisible({
       timeout: SLOW_TIMEOUT_MS,
     })
@@ -150,7 +140,7 @@ test.describe('Interactions bench list @area:interactions', () => {
     expect(regionBox!.width).toBeGreaterThan(groupBox!.width * 0.9)
 
     const callRow = rows.find(row => row.item.members[0]?.source === 'phone_calls')!
-    const call = benchRow(page, callRow.item.identity.id)
+    const call = interactionRow(page, callRow.item.identity.id)
     await expect(call.locator('[data-preview]')).toHaveText('Voice call · Answered · 6m 12s')
     await call.getByRole('button', { name: 'More actions' }).click()
     await expect(call.getByRole('menuitem')).toHaveText(['Remove', 'Merge'])
@@ -165,10 +155,10 @@ test.describe('Interactions bench list @area:interactions', () => {
     await page.goto(`/interactions?contact=${subject.id}`)
 
     // spec: IXN-041.renders-with-history-row
-    const call = benchRow(page, callRow.item.identity.id)
+    const call = interactionRow(page, callRow.item.identity.id)
     await call.getByRole('button', { name: 'More actions' }).click({ timeout: SLOW_TIMEOUT_MS })
     await call.getByRole('menuitem', { name: 'Merge' }).click()
-    await benchRow(page, meetingRow.item.identity.id)
+    await interactionRow(page, meetingRow.item.identity.id)
       .getByRole('checkbox', { name: 'Select interaction' })
       .check()
     await page
@@ -184,20 +174,23 @@ test.describe('Interactions bench list @area:interactions', () => {
     expect(after).toHaveLength(rows.length - 1)
     const merged = after.find(row => row.item.members.length === 2)!
     expect(merged.item.members.map(m => m.source).sort()).toEqual(['gcal', 'phone_calls'])
-    const mergedRow = benchRow(page, merged.item.identity.id)
+    const mergedRow = interactionRow(page, merged.item.identity.id)
     await expect(mergedRow.locator('[data-badge]')).toHaveCount(2, { timeout: SLOW_TIMEOUT_MS })
     await expect(
       page.getByRole('list', { name: 'Interactions' }).locator(':scope > [role="listitem"]')
     ).toHaveCount(20)
   })
 
-  test('the main navigation leads to the view', async ({ page }) => {
+  test('the main navigation leads to the tab', async ({ page }) => {
     await page.goto('/dashboard')
     // spec: IXN-041.main-navigation-leads
     await page.getByRole('navigation').getByRole('link', { name: 'Interactions' }).first().click()
     await expect(page).toHaveURL(/\/interactions$/)
     await expect(page.getByRole('heading', { name: 'Interactions', level: 2 })).toBeVisible()
-    await expect(page.getByText('Every interaction across your contacts')).toBeVisible()
+    await expect(page.getByRole('tab', { name: 'Interactions' })).toHaveAttribute(
+      'aria-selected',
+      'true'
+    )
   })
 
   test('filters by contact and type, combined, from the address', async ({ page, request }) => {
@@ -207,21 +200,21 @@ test.describe('Interactions bench list @area:interactions', () => {
     expect(rows).toHaveLength(3)
     await page.goto('/interactions')
     const list = page.getByRole('list', { name: 'Interactions' })
-    const filters = page.getByRole('region', { name: 'All interactions' })
+    const filters = page.getByRole('tabpanel', { name: 'All interactions' })
 
-    // spec: IXN-042.no-other-filter
+    // spec: IXN-042.no-other-filter, IXN-042.type-filter
     await expect(filters.getByRole('group', { name: 'Type' }).getByRole('button')).toHaveText([
       'All',
       'Messages',
       'Email',
-      'Calendar',
+      'Events',
       'Calls',
       'Other',
     ])
     const contactFilter = filters.getByRole('group', { name: 'Contact', exact: true })
-    await expect(filters.getByRole('combobox')).toHaveCount(1)
+    await expect(filters.getByRole('combobox')).toHaveCount(0)
     await expect(contactFilter).toBeVisible()
-    await expect(filters.getByLabel('Run', { exact: true })).toBeVisible()
+    await expect(filters.getByLabel('Run', { exact: true })).toHaveCount(0)
     await expect(filters.getByRole('textbox')).toHaveCount(0)
 
     // spec: IXN-042.contact-chosen-by-search
@@ -268,56 +261,36 @@ test.describe('Interactions bench list @area:interactions', () => {
     await expect(page).toHaveURL(/\/interactions$/)
   })
 
-  test('a run filter keeps the rows of threads judged in the run, a reused judgment included', async ({
+  test('shows no judgment, review indicator or run filter, whether Review is on or off', async ({
     page,
     request,
   }) => {
     const seeded = await testApi.seedBehavior('IXN-042')
     const subject = entity(seeded, 'subject')
     const rows = await contactRows(request, subject.id)
-    const emailRow = rows.find(row => row.item.members[0]?.source === 'email')!
-    const chatRow = rows.find(row => row.item.members[0]?.source === 'gchat')!
-    const cutOff = minuteAgo()
-    const hash = `bench-${seeded.namespace}-email`
-    const judged = await seedJudgmentRun(request, {
-      judgments: [
-        {
-          thread_interaction_id: entity(seeded, 'subject-email').id,
-          cut_off: cutOff,
-          input_hash: hash,
-        },
-      ],
-    })
-    const other = await seedJudgmentRun(request, {
-      judgments: [{ thread_interaction_id: entity(seeded, 'subject-chat').id, cut_off: cutOff }],
-    })
-    const reusing = await seedJudgmentRun(request, {
-      judgments: [
-        {
-          thread_interaction_id: entity(seeded, 'subject-email').id,
-          cut_off: new Date(Date.now() - 30_000).toISOString(),
-          input_hash: hash,
-        },
-      ],
-    })
+    await page.goto(`/interactions?contact=${subject.id}`)
     const list = page.getByRole('list', { name: 'Interactions' })
 
-    // spec: IXN-042.run-filter-includes-reused
-    const shows = (ids: string[]) =>
-      expect.poll(() => shownIds(list), { timeout: SLOW_TIMEOUT_MS }).toEqual(ids)
-    await page.goto(`/interactions?run=${judged.run_id}`)
-    await shows([emailRow.item.identity.id])
-    await page.getByLabel('Run', { exact: true }).selectOption(other.run_id)
-    await expect(page).toHaveURL(new RegExp(`run=${other.run_id}`))
-    await shows([chatRow.item.identity.id])
-    await page.getByLabel('Run', { exact: true }).selectOption(reusing.run_id)
-    await expect(page).toHaveURL(new RegExp(`run=${reusing.run_id}`))
-    await shows([emailRow.item.identity.id])
-    const reused = await fetchAllInteractions(request, { run_id: reusing.run_id })
-    expect(reused.total).toBe(1)
+    for (const review of [false, true]) {
+      if (review) await page.getByRole('switch', { name: 'Review' }).click()
+      await expect(page.getByRole('switch', { name: 'Review' })).toHaveAttribute(
+        'aria-checked',
+        String(review)
+      )
+      await expect(list.locator(':scope > [role="listitem"]')).toHaveCount(rows.length, {
+        timeout: SLOW_TIMEOUT_MS,
+      })
+
+      // spec: IXN-041.no-review-indicator, IXN-042.no-other-filter
+      expect(await shownIds(list)).toEqual(rows.map(row => row.item.identity.id))
+      await expect(list.locator('[data-review-indicator]')).toHaveCount(0)
+      await expect(list.getByText(/to review|Reviewed|Nones/)).toHaveCount(0)
+      await expect(page.getByLabel('Run', { exact: true })).toHaveCount(0)
+      await expect(page.getByRole('tabpanel').getByRole('combobox')).toHaveCount(0)
+    }
   })
 
-  test('the contact history links out to the view filtered to the contact', async ({
+  test('the contact history links out to the Interactions tab filtered to the contact', async ({
     page,
     request,
   }) => {
@@ -325,22 +298,6 @@ test.describe('Interactions bench list @area:interactions', () => {
     const subject = entity(seeded, 'subject')
     const other = entity(seeded, 'other')
     const rows = await contactRows(request, subject.id)
-    await seedJudgmentRun(request, {
-      judgments: [
-        {
-          thread_interaction_id: entity(seeded, 'subject-email').id,
-          cut_off: minuteAgo(),
-          ball_in_court: [
-            {
-              question_id: 'ball_in_court:THEM',
-              contact_id: subject.id,
-              outcome: 'i_owe_reply',
-              confidence: 0.9,
-            },
-          ],
-        },
-      ],
-    })
     await page.goto(`/contacts/${subject.id}`)
     const history = page.getByRole('region', { name: 'Interactions' })
 
@@ -354,7 +311,7 @@ test.describe('Interactions bench list @area:interactions', () => {
       .getByRole('button', { name: 'Expand content' })
       .click()
     await expect(history.locator('[data-content-region]')).toBeVisible({ timeout: SLOW_TIMEOUT_MS })
-    await expect(history.locator('[data-proposal]')).toHaveCount(0)
+    await expect(history.getByRole('group', { name: 'I owe a reply' })).toHaveCount(0)
     await expect(history.getByRole('button', { name: /^Confirm / })).toHaveCount(0)
 
     // spec: IXN-050.history-links-out, IXN-050.link-opens-filtered
@@ -371,7 +328,7 @@ test.describe('Interactions bench list @area:interactions', () => {
     )
     expect(otherOnly.length).toBeGreaterThan(0)
     for (const row of otherOnly) {
-      await expect(benchRow(page, row.item.identity.id)).toHaveCount(0)
+      await expect(interactionRow(page, row.item.identity.id)).toHaveCount(0)
     }
     await expect(
       page

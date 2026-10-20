@@ -65,6 +65,9 @@ const (
 	IncompleteReasonOverLimit    IncompleteReason = "over_limit"
 	IncompleteReasonCallFailed   IncompleteReason = "call_failed"
 	IncompleteReasonInputChanged IncompleteReason = "input_changed"
+	// IncompleteReasonMessageOverLimit: the newest message alone exceeds the
+	// method's limits.
+	IncompleteReasonMessageOverLimit IncompleteReason = "message_over_limit"
 )
 
 // OutcomeState is how an outcome landed: applied (it took effect, or had no
@@ -151,13 +154,82 @@ const (
 	DebtorContact Debtor = "contact"
 )
 
-// ReviewStatus is what remains for the user to review in a proposal or a
-// row: items without a label (to review), else negative decisions without a
-// label (nones to review), else nothing (all reviewed).
-type ReviewStatus string
+// FlagKind is what a flag decision flags a message as holding. A flag carries
+// no category and no extracted content.
+type FlagKind string
 
 const (
-	ReviewStatusToReview      ReviewStatus = "to_review"
-	ReviewStatusNonesToReview ReviewStatus = "nones_to_review"
-	ReviewStatusAllReviewed   ReviewStatus = "all_reviewed"
+	// FlagKindCommitment: the message states that someone will do something for
+	// another participant, and the content up to the cut-off does not show it
+	// done.
+	FlagKindCommitment FlagKind = "commitment"
+	// FlagKindBigMoment: the message reveals a significant moment in a contact's
+	// life.
+	FlagKindBigMoment FlagKind = "big_moment"
+	// FlagKindClaim: the message states a fact about a contact or someone in a
+	// contact's life.
+	FlagKindClaim FlagKind = "claim"
+)
+
+// UnjudgedReason is why a new message was answered by no judgment of a run.
+type UnjudgedReason string
+
+const (
+	// UnjudgedReasonCallFailed: the cut-off's call failed after its retries.
+	UnjudgedReasonCallFailed UnjudgedReason = "call_failed"
+	// UnjudgedReasonMessageOverLimit: the cut-off was reported incomplete with
+	// IncompleteReasonMessageOverLimit.
+	UnjudgedReasonMessageOverLimit UnjudgedReason = "message_over_limit"
+	// UnjudgedReasonBeforeWindow: the message lay before the window's start.
+	UnjudgedReasonBeforeWindow UnjudgedReason = "before_window"
+)
+
+// ThreadVenue is the app a thread lives in, as a Threads row's chip names it.
+// sourceVenues maps each source the Threads tab serves to one.
+type ThreadVenue string
+
+const (
+	ThreadVenueWhatsApp   ThreadVenue = "whatsapp"
+	ThreadVenueTelegram   ThreadVenue = "telegram"
+	ThreadVenueIMessage   ThreadVenue = "imessage"
+	ThreadVenueGoogleChat ThreadVenue = "google_chat"
+	ThreadVenueEmail      ThreadVenue = "email"
+	ThreadVenueCalendar   ThreadVenue = "calendar"
+	ThreadVenueAnarlog    ThreadVenue = "anarlog"
+)
+
+// ChipState is how a flag chip stands under a night's method: to review (a
+// shown flag with no label), confirmed or removed (a shown flag with a label
+// that holds or does not), or added (the user's label that a message holds a
+// kind the method did not show).
+type ChipState string
+
+const (
+	ChipStateToReview  ChipState = "to_review"
+	ChipStateConfirmed ChipState = "confirmed"
+	ChipStateRemoved   ChipState = "removed"
+	ChipStateAdded     ChipState = "added"
+)
+
+// ClearingLabelState is how the user's label stands against a clearing
+// decision's answer: none (no label), confirmed (the label equals the answer)
+// or removed (it differs).
+type ClearingLabelState string
+
+const (
+	ClearingLabelStateNone      ClearingLabelState = "none"
+	ClearingLabelStateConfirmed ClearingLabelState = "confirmed"
+	ClearingLabelStateRemoved   ClearingLabelState = "removed"
+)
+
+// ThreadStatus is what a thread holds for the user to review in a run:
+// to review (it shows an item without a label, or a night awaits Confirm
+// Nones), nothing flagged (it shows nothing) or reviewed (every night holds
+// one of the user's labels).
+type ThreadStatus string
+
+const (
+	ThreadStatusToReview       ThreadStatus = "to_review"
+	ThreadStatusNothingFlagged ThreadStatus = "nothing_flagged"
+	ThreadStatusReviewed       ThreadStatus = "reviewed"
 )

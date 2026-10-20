@@ -50,6 +50,7 @@ type labelsEnv struct {
 	database *db.Database
 	cfg      *config.Config
 	store    *judgment.Store
+	threads  *judgment.Threads
 	asserts  *service.AssertService
 	contexts *threadctx.Builder
 	contacts *repository.ContactRepository
@@ -102,9 +103,11 @@ func newLabelsEnvFor(t *testing.T, productionMethod string) *labelsEnv {
 	contexts := threadctx.NewBuilder(repository.NewThreadContentRepository(database.Queries), repository.NewVenueRepository(database.Queries))
 	cfg := config.TestConfig()
 	cfg.Decision.ProductionMethod = productionMethod
+	store := buildJudgmentStore(cfg, database, asserts, contacts, jobs, contexts)
 	return &labelsEnv{
 		ctx: ctx, database: database, cfg: cfg,
-		store:    buildJudgmentStore(cfg, database, asserts, contacts, jobs, contexts),
+		store:    store,
+		threads:  judgment.NewThreads(store, reusingMethods{}),
 		asserts:  asserts,
 		contexts: contexts,
 		contacts: contacts,
@@ -148,6 +151,13 @@ func (e *labelsEnv) thread(t *testing.T, day int) judged {
 // of the method's kind (scheduled for the production method).
 func (e *labelsEnv) record(t *testing.T, m judgment.MethodRef, th judged, outcomes judgment.Outcomes) uuid.UUID {
 	t.Helper()
+	_, id := e.recordIn(t, m, th, outcomes)
+	return id
+}
+
+// recordIn is record that also returns the run it recorded the judgment in.
+func (e *labelsEnv) recordIn(t *testing.T, m judgment.MethodRef, th judged, outcomes judgment.Outcomes) (judgment.RunID, uuid.UUID) {
+	t.Helper()
 	kind := judgment.RunKindRerun
 	if m == labelsProd {
 		kind = judgment.RunKindScheduled
@@ -164,11 +174,11 @@ func (e *labelsEnv) record(t *testing.T, m judgment.MethodRef, th judged, outcom
 	require.NoError(t, err)
 	for _, v := range views {
 		if v.Method == m {
-			return v.ID
+			return run, v.ID
 		}
 	}
 	require.FailNow(t, "judgment not recorded")
-	return uuid.Nil
+	return run, uuid.Nil
 }
 
 // outcome returns the one outcome of the method's judgment of the thread on
@@ -285,14 +295,19 @@ func confusion(out, outcome string) []string {
 func TestScorecardCountsNegativeLabels(t *testing.T) {
 	e := newLabelsEnv(t)
 	confirmed, inferred, added := e.thread(t, 1), e.thread(t, 2), e.thread(t, 3)
-	require.NoError(t, e.store.ConfirmNones(e.ctx, e.record(t, labelsProd, confirmed, nothing(confirmed.contact))))
+	confirmedRun, confirmedJudgment := e.recordIn(t, labelsProd, confirmed, nothing(confirmed.contact))
+	_, err := e.threads.ConfirmNight(e.ctx, confirmedRun, confirmedJudgment)
+	require.NoError(t, err)
 	owed := nothing(inferred.contact)
 	owed.BallInCourt[0].Outcome = judgment.BallInCourtIOweReply
-	inferredJudgment := e.record(t, labelsProd, inferred, owed)
-	_, err := e.store.ReviewOutcome(e.ctx, e.outcome(t, labelsProd, inferred, judgment.QuestionBallInCourt), judgment.ReviewRequest{RightOutcome: "i_owe_reply"})
+	inferredRun, _ := e.recordIn(t, labelsProd, inferred, owed)
+	_, err = e.store.ReviewOutcome(e.ctx, e.outcome(t, labelsProd, inferred, judgment.QuestionBallInCourt), judgment.ReviewRequest{RightOutcome: "i_owe_reply"})
 	require.NoError(t, err)
-	require.NoError(t, e.store.CloseRow(e.ctx, []uuid.UUID{inferredJudgment}))
-	require.NoError(t, e.store.ConfirmNones(e.ctx, e.record(t, labelsProd, added, nothing(added.contact))))
+	_, err = e.threads.Close(e.ctx, inferredRun, inferred.context.Thread)
+	require.NoError(t, err)
+	addedRun, addedJudgment := e.recordIn(t, labelsProd, added, nothing(added.contact))
+	_, err = e.threads.ConfirmNight(e.ctx, addedRun, addedJudgment)
+	require.NoError(t, err)
 	_, err = e.store.ReviewOutcome(e.ctx, e.outcome(t, labelsProd, added, judgment.QuestionBallInCourt), judgment.ReviewRequest{RightOutcome: "i_owe_reply"})
 	require.NoError(t, err)
 	runner, err := judgerun.New(e.contexts, e.store, reusingMethods{})

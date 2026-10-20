@@ -53,8 +53,8 @@ func (unusedJobs) InsertTx(context.Context, pgx.Tx, river.JobArgs, *river.Insert
 	return nil, errors.New("no job is inserted")
 }
 
-// langfuse is Langfuse at its HTTP API: it holds no traces and records every
-// request body it receives.
+// langfuse is Langfuse at its HTTP API: it holds no traces, records every
+// request body it receives and accepts every score deletion.
 type langfuse struct {
 	server *httptest.Server
 	mu     sync.Mutex
@@ -81,6 +81,10 @@ func newLangfuse(t *testing.T) *langfuse {
 		l.mu.Lock()
 		defer l.mu.Unlock()
 		l.bodies = append(l.bodies, string(raw))
+		if r.Method == http.MethodDelete {
+			w.WriteHeader(http.StatusAccepted)
+			return
+		}
 		switch r.URL.Path {
 		case "/api/public/v2/observations":
 			data := make([]map[string]string, len(l.held))
@@ -507,5 +511,5 @@ func TestExportScoresARerunOnTheJudgmentsItReused(t *testing.T) {
 
 	e.export(t)
 
-	assert.Contains(t, e.langfuse.sent(), `"corrections_caused":0`)
+	assert.Contains(t, e.langfuse.sent(), `"name":"corrections_caused","value":0`)
 }
