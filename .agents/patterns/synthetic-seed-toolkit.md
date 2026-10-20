@@ -96,7 +96,7 @@ Each source has a `Harness.Replay*` adapter in `synthetic/replay/` that composes
 
 | Source | Adapter | Real seam it drives |
 |---|---|---|
-| Gmail | `ReplayGmail` | `GmailSyncProvider.Sync` via `SetFetcherFactoryForTest` + `FakeGmailFetcherFuncs` |
+| Gmail | `ReplayGmail` / `ReplayGmailBatch`; `GmailProvider` when the scan itself is the subject (call `Sync` or `ScanIdentifier`, then `DrainGateB`); payload layouts via `gen.GmailMessageWithShape` | `GmailSyncProvider.Sync` via `SetFetcherFactoryForTest` + `FakeGmailFetcherFuncs` |
 | GChat | `ReplayGChat` | the real chat provider sweep via `SetFetcherFactoryForTest` + `FakeChatFetcherFuncs` |
 | GCal | `ReplayGCal` | `CalendarSyncProvider.Sync` via the extracted `calendarFetcher` seam (`SetFetcherFactoryForTest` + `FakeCalendarFetcherFuncs`) |
 | Telegram (private) | `ReplayTelegram` | `MessageHandler.HandleNewMessage` (nil api client; keeps `PeerMatcher` fidelity) |

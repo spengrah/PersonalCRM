@@ -3,6 +3,7 @@ package factory
 import (
 	"encoding/base64"
 	"fmt"
+	"net/mail"
 	"strings"
 	"time"
 
@@ -87,12 +88,102 @@ type GmailMessageSpec struct {
 	Intent     MatchIntent
 }
 
+// GmailMessageShape describes a Gmail payload beyond the default single
+// text/plain message between the account and one peer. Like GCalEventShape it
+// is a struct rather than more MessageOptions, because none of these knobs mean
+// anything to another source. The zero value is the default message.
+type GmailMessageShape struct {
+	// Calendar lays the payload out as a MIME tree that carries calendar data.
+	// The zero value carries none.
+	Calendar GmailCalendarLayout
+	// ThreadID places the message in an existing thread, such as an earlier
+	// spec's Message.ThreadId. Empty gives the message a thread of its own.
+	ThreadID string
+	// To and Cc are further recipients, after the account or peer the message is
+	// addressed to by default.
+	To []GmailAddress
+	Cc []GmailAddress
+}
+
+// GmailAddress is one mailbox in an address header. An empty Name renders the
+// bare address.
+type GmailAddress struct {
+	Name  string
+	Email string
+}
+
+func (a GmailAddress) header() string {
+	return (&mail.Address{Name: a.Name, Address: a.Email}).String()
+}
+
+// GmailCalendarLayout is a MIME tree that carries a text/calendar part, the
+// signal the Gmail provider reads to drop a calendar message (ING-046).
+type GmailCalendarLayout int
+
+const (
+	// GmailNoCalendar is the default text/plain payload.
+	GmailNoCalendar GmailCalendarLayout = iota
+	// GmailCalendarInline is multipart/alternative holding text/plain and an
+	// inline text/calendar part with no filename, the shape Outlook and Apple
+	// Calendar send.
+	GmailCalendarInline
+	// GmailCalendarNested is multipart/mixed whose multipart/alternative child
+	// holds text/plain, text/html and an inline text/calendar part, beside an
+	// application/ics attachment, the shape Google Calendar sends.
+	GmailCalendarNested
+	// GmailCalendarAttachment is multipart/mixed holding text/plain and a
+	// text/calendar part carried as a named attachment.
+	GmailCalendarAttachment
+)
+
+// gmailPayload returns the MIME tree for a layout, carrying headers at its root.
+func gmailPayload(layout GmailCalendarLayout, headers []*gmailapi.MessagePartHeader) *gmailapi.MessagePart {
+	const body = "synthetic email body"
+	leaf := func(mime, data string) *gmailapi.MessagePart {
+		return &gmailapi.MessagePart{MimeType: mime, Body: &gmailapi.MessagePartBody{Data: encodeBody(data), Size: int64(len(data))}}
+	}
+	attachment := func(filename, mime string) *gmailapi.MessagePart {
+		return &gmailapi.MessagePart{MimeType: mime, Filename: filename, Body: &gmailapi.MessagePartBody{AttachmentId: "att-" + filename, Size: 64}}
+	}
+	multipart := func(mime string, parts ...*gmailapi.MessagePart) *gmailapi.MessagePart {
+		return &gmailapi.MessagePart{MimeType: mime, Parts: parts}
+	}
+	ics := func() *gmailapi.MessagePart {
+		return leaf("text/calendar", "BEGIN:VCALENDAR\r\nMETHOD:REQUEST\r\nEND:VCALENDAR\r\n")
+	}
+
+	var root *gmailapi.MessagePart
+	switch layout {
+	case GmailNoCalendar:
+		root = leaf("text/plain", body)
+	case GmailCalendarInline:
+		root = multipart("multipart/alternative", leaf("text/plain", body), ics())
+	case GmailCalendarNested:
+		root = multipart("multipart/mixed",
+			multipart("multipart/alternative", leaf("text/plain", body), leaf("text/html", "<p>"+body+"</p>"), ics()),
+			attachment("invite.ics", "application/ics"))
+	case GmailCalendarAttachment:
+		root = multipart("multipart/mixed", leaf("text/plain", body), attachment("invite.ics", "text/calendar"))
+	default:
+		panic(fmt.Sprintf("factory: unknown Gmail calendar layout %d", layout))
+	}
+	root.Headers = headers
+	return root
+}
+
 // GmailMessage builds an email between the account and the target contact
 // (MatchSeeded) or an unknown correspondent (MatchUnknown → match-only: no
 // contact, no interaction). Inbound by default (From=contact); WithOutbound()
 // flips it to a sent message (From=account, SENT label). SentAt is anchored
 // before now − safety lag so the Gmail cursor window includes it.
 func (g *Generator) GmailMessage(target ContactSpec, intent MatchIntent, opts ...MessageOption) GmailMessageSpec {
+	return g.GmailMessageWithShape(target, intent, GmailMessageShape{}, opts...)
+}
+
+// GmailMessageWithShape is GmailMessage with the payload shape stated
+// explicitly. It draws the same generator values in the same order as
+// GmailMessage, so the two are interchangeable from the determinism side.
+func (g *Generator) GmailMessageWithShape(target ContactSpec, intent MatchIntent, shape GmailMessageShape, opts ...MessageOption) GmailMessageSpec {
 	mo := applyMessageOptions(opts)
 	account := g.accountEmail()
 	peer := target.Email
@@ -118,23 +209,38 @@ func (g *Generator) GmailMessage(target ContactSpec, intent MatchIntent, opts ..
 	// already-closed window; mo.age shifts it further back for the temporal spread.
 	sentAt := g.at(-(2 * time.Hour) - mo.age)
 	gmailID := g.Prefix() + "gid-" + fmt.Sprint(g.sourceIDSeq)
+	threadID := shape.ThreadID
+	if threadID == "" {
+		threadID = g.Prefix() + "thr-" + fmt.Sprint(g.sourceIDSeq)
+	}
+
+	toHeader := []string{to}
+	for _, a := range shape.To {
+		toHeader = append(toHeader, a.header())
+	}
+	headers := []*gmailapi.MessagePartHeader{
+		{Name: "From", Value: from},
+		{Name: "To", Value: strings.Join(toHeader, ", ")},
+	}
+	if len(shape.Cc) > 0 {
+		cc := make([]string, len(shape.Cc))
+		for i, a := range shape.Cc {
+			cc[i] = a.header()
+		}
+		headers = append(headers, &gmailapi.MessagePartHeader{Name: "Cc", Value: strings.Join(cc, ", ")})
+	}
+	headers = append(headers,
+		&gmailapi.MessagePartHeader{Name: "Subject", Value: "synthetic subject"},
+		&gmailapi.MessagePartHeader{Name: "Message-ID", Value: externalID},
+	)
 
 	msg := &gmailapi.Message{
 		Id:           gmailID,
-		ThreadId:     g.Prefix() + "thr-" + fmt.Sprint(g.sourceIDSeq),
+		ThreadId:     threadID,
 		InternalDate: sentAt.UnixMilli(),
 		Snippet:      "synthetic snippet",
 		LabelIds:     []string{label},
-		Payload: &gmailapi.MessagePart{
-			MimeType: "text/plain",
-			Headers: []*gmailapi.MessagePartHeader{
-				{Name: "From", Value: from},
-				{Name: "To", Value: to},
-				{Name: "Subject", Value: "synthetic subject"},
-				{Name: "Message-ID", Value: externalID},
-			},
-			Body: &gmailapi.MessagePartBody{Data: encodeBody("synthetic email body"), Size: 20},
-		},
+		Payload:      gmailPayload(shape.Calendar, headers),
 	}
 	// The persisted external_id strips the angle brackets.
 	return GmailMessageSpec{
