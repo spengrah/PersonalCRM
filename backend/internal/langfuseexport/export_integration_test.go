@@ -507,5 +507,5 @@ func TestExportScoresARerunOnTheJudgmentsItReused(t *testing.T) {
 
 	e.export(t)
 
-	assert.Contains(t, e.langfuse.sent(), `"corrections_caused":0`)
+	assert.Contains(t, e.langfuse.sent(), `"name":"corrections_caused","value":0`)
 }

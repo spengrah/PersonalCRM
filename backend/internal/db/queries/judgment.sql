@@ -389,6 +389,13 @@ SELECT thread_id, commitment_message_key, cut_off, done FROM judgment_clearing_l
 WHERE thread_id = ANY(sqlc.arg('thread_ids')::uuid[])
 ORDER BY thread_id, commitment_message_key, cut_off;
 
+-- name: ListLabeledThreads :many
+-- The threads holding a flag or clearing label.
+SELECT thread_id FROM judgment_flag_label
+UNION
+SELECT thread_id FROM judgment_clearing_label
+ORDER BY thread_id;
+
 -- name: HasJudgmentClearing :one
 -- Whether a judgment of the thread with the cut-off made a clearing decision
 -- of the commitment's message.

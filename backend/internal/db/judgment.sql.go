@@ -1118,6 +1118,34 @@ func (q *Queries) ListJudgmentUnjudged(ctx context.Context) ([]*JudgmentUnjudged
 	return items, nil
 }
 
+const ListLabeledThreads = `-- name: ListLabeledThreads :many
+SELECT thread_id FROM judgment_flag_label
+UNION
+SELECT thread_id FROM judgment_clearing_label
+ORDER BY thread_id
+`
+
+// The threads holding a flag or clearing label.
+func (q *Queries) ListLabeledThreads(ctx context.Context) ([]uuid.UUID, error) {
+	rows, err := q.db.Query(ctx, ListLabeledThreads)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []uuid.UUID{}
+	for rows.Next() {
+		var thread_id uuid.UUID
+		if err := rows.Scan(&thread_id); err != nil {
+			return nil, err
+		}
+		items = append(items, thread_id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const ListLatestExampleReviews = `-- name: ListLatestExampleReviews :many
 SELECT DISTINCT ON (e.id, o.question, o.contact_id)
     e.id AS example_id, e.thread_id, e.input_hash,

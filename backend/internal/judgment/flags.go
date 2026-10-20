@@ -20,6 +20,9 @@ import (
 // FlagKinds lists the flag kinds, in the order a message's flag decisions read.
 var FlagKinds = []FlagKind{FlagKindCommitment, FlagKindBigMoment, FlagKindClaim}
 
+// UnjudgedReasons lists the reasons a new message is unjudged.
+var UnjudgedReasons = []UnjudgedReason{UnjudgedReasonCallFailed, UnjudgedReasonMessageOverLimit, UnjudgedReasonBeforeWindow}
+
 // ErrNoFlagSettings is returned for a method key with no display threshold or
 // clearing floor.
 var ErrNoFlagSettings = errors.New("no flag thresholds for method")
@@ -32,6 +35,13 @@ type FlagDecision struct {
 	MessageKey  string
 	Kind        FlagKind
 	Probability float64
+}
+
+// Shows reports whether a flag decision of the probability shows under the
+// display threshold: the one rule by which the Threads tab draws a chip and the
+// scorecard counts a decision flagged.
+func Shows(probability, threshold float64) bool {
+	return probability >= threshold
 }
 
 // IsCommitmentAbove reports whether the flag decision is a commitment whose

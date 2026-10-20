@@ -210,6 +210,16 @@ func (s *Store) LabelsByThread(ctx context.Context, thread threadctx.VenueID) (T
 	return byThread[thread], nil
 }
 
+// Labels returns the current flag and clearing labels of every thread holding
+// one, keyed by thread, as LabelsByThread reads each.
+func (s *Store) Labels(ctx context.Context) (map[threadctx.VenueID]ThreadLabels, error) {
+	threads, err := s.queries.ListLabeledThreads(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list labeled threads: %w", err)
+	}
+	return loadDecisionLabels(ctx, s.queries, threads)
+}
+
 // loadClosedMessages reads, per thread, the messages a close labeled for some
 // flag kind.
 func loadClosedMessages(ctx context.Context, q db.Querier, threads []uuid.UUID) (map[uuid.UUID]map[string]bool, error) {

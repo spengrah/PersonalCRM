@@ -202,14 +202,21 @@
 //	                              jobs a run's live effects enqueue).
 //
 //	--scorecard                   Score decision-model methods against the
-//	      [--method KEY           user's reviews: rerun each method as an
-//	      [--compare-method KEY]] evidence-only rerun over every thread
-//	                              context the user reviewed, judging the thread's
-//	                              cut-offs in order from the start of the run the
-//	                              reviewed judgment appeared in (reusing
+//	      [--method KEY           user's reviews and labels: rerun each method
+//	      [--compare-method KEY]] as an evidence-only rerun over every thread
+//	                              context the user reviewed or whose judgment
+//	                              answered a flag or clearing decision the user
+//	                              labeled, judging the thread's cut-offs in
+//	                              order from the start of the run the reviewed
+//	                              or labeled judgment appeared in (reusing
 //	                              judgments the method version holds for what a
 //	                              cut-off reads), and print,
-//	                              per method, per-outcome recall, precision and
+//	                              per method, the new messages judged, left
+//	                              unjudged by reason and flagged per kind; per
+//	                              flag kind, precision and recall over labeled
+//	                              flag decisions; clearing accuracy over
+//	                              labeled clearing decisions; per-outcome
+//	                              recall, precision and
 //	                              confusion, the user's "I owe" outcomes missed,
 //	                              the corrections caused and the method's terms
 //	                              status; the timestamp rule as a reference for
@@ -223,7 +230,7 @@
 //	                              examples that flipped, by example ID. Changes
 //	                              no designation and no live state. Prints a
 //	                              content-free report (IDs, keys, outcome
-//	                              values, counts, rates).
+//	                              values, flag kinds, counts, rates).
 //
 //	--infer-negative-labels       One-time catchup for the judgment bench:
 //	                              label, with its judged value, every negative
@@ -239,8 +246,9 @@
 //	                              extraction project (LANGFUSE_EXTRACTION_HOST,
 //	                              LANGFUSE_EXTRACTION_PUBLIC_KEY,
 //	                              LANGFUSE_EXTRACTION_SECRET_KEY): each
-//	                              judgment, finished run, rerun's scorecard
-//	                              metrics and review, content-free and keyed by
+//	                              judgment, finished run, review and rerun's
+//	                              scorecard metric (each its own numeric score
+//	                              on the rerun's trace), content-free and keyed by
 //	                              example ID, as one record however often it
 //	                              runs. The nightly langfuse_export_nightly job
 //	                              does the same. With a setting unset, sends

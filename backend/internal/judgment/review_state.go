@@ -375,7 +375,7 @@ func (d *reviewData) chip(ctx context.Context, n *Night, key string, kind FlagKi
 		if err != nil {
 			return FlagChip{}, false, err
 		}
-		if p >= threshold {
+		if Shows(p, threshold) {
 			state := ChipStateToReview
 			switch {
 			case labeled && holds:

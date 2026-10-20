@@ -1589,6 +1589,8 @@ type Querier interface {
 	// excluded — the daemon's set-diff reconciliation requires that rows
 	// the Pi has soft-deleted are NOT reported as known.
 	ListKnownMeetingNoteIDsByHost(ctx context.Context, macHostID *uuid.UUID) ([]*ListKnownMeetingNoteIDsByHostRow, error)
+	// The threads holding a flag or clearing label.
+	ListLabeledThreads(ctx context.Context) ([]uuid.UUID, error)
 	// The user's latest review of each question and contact on each example,
 	// whichever method's outcome it reviewed, ordered by example, question and
 	// contact: the one definition of a decision and its label. keeps_date is

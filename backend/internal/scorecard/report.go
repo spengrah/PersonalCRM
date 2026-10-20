@@ -11,6 +11,9 @@ import (
 	"personal-crm/backend/internal/judgerun"
 	"personal-crm/backend/internal/judgment"
 	"personal-crm/backend/internal/repository"
+	"personal-crm/backend/internal/threadctx"
+
+	"github.com/google/uuid"
 )
 
 // Report scores methods over every thread context the user reviewed.
@@ -35,9 +38,6 @@ type MethodScore struct {
 	Terms   decision.TermsStatus
 	// Incomplete counts the examples the rerun reported incomplete, by reason.
 	Incomplete map[judgment.IncompleteReason]int
-	// Unjudged counts the new messages no judgment of the rerun answered, by
-	// reason; never a count of messages answered no.
-	Unjudged map[judgment.UnjudgedReason]int
 }
 
 // Comparison compares a method with a second one over the same examples.
@@ -51,9 +51,15 @@ type Comparison struct {
 	Flips []Flip
 }
 
-// Rates are an outcome's recall and precision.
+// Rates are an outcome's recall and precision, 0 where a rate has no value.
 type Rates struct {
 	Recall, Precision float64
+}
+
+// orZero is the rate's value, 0 when it has none.
+func orZero(r Rate) float64 {
+	v, _ := r.Value()
+	return v
 }
 
 // Flip is one reviewed outcome of an example that the two methods judged
@@ -117,13 +123,15 @@ func New(
 	}
 }
 
-// Report reruns methods over every example the user reviewed and scores
-// them: the method methodKey names, and compareKey's compared with it when
-// set; with no method named, every method in the registry. A named method
-// must be known and available, whether or not the user has reviewed any
-// example; with none named, a method whose route is not configured is listed
-// as unavailable. The report proposes a first production method among the
-// scored methods and changes no designation. Its error is always a *Failure.
+// Report reruns methods over every example the user reviewed, and every
+// example whose judgment answered a flag or clearing decision the user
+// labeled, and scores them: the method methodKey names, and compareKey's
+// compared with it when set; with no method named, every method in the
+// registry. A named method must be known and available, whether or not the
+// user has reviewed or labeled anything; with none named, a method whose route
+// is not configured is listed as unavailable. The report proposes a first
+// production method among the scored methods, by their reviewed outcomes, and
+// changes no designation. Its error is always a *Failure.
 func (s *Scorecard) Report(ctx context.Context, methodKey, compareKey string) (Report, error) {
 	report, err := s.report(ctx, methodKey, compareKey)
 	return report, failureOf(err)
@@ -157,6 +165,54 @@ func (s *Scorecard) targets(ctx context.Context, examples []judgment.Example) ([
 	return targets, nil
 }
 
+// labeledTargets names, for each labeled flag or clearing decision, the
+// examples whose judgments answered it, and those judgments: a flag decision is
+// answered by a judgment holding its message among its new messages, a
+// clearing decision by a judgment at its cut-off that re-checked its
+// commitment. A label belongs to its decision and not to one method's answer,
+// so every method's judgment of the decision is named.
+func (s *Scorecard) labeledTargets(ctx context.Context) ([]judgerun.Target, error) {
+	labels, err := s.reader.store.Labels(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var targets []judgerun.Target
+	for _, thread := range slices.SortedFunc(maps.Keys(labels), func(a, b threadctx.VenueID) int { return slices.Compare(a[:], b[:]) }) {
+		lb := labels[thread]
+		views, err := s.reader.store.ListJudgments(ctx, judgment.JudgmentQuery{Thread: &thread})
+		if err != nil {
+			return nil, err
+		}
+		for _, v := range views {
+			answers := slices.ContainsFunc(lb.Flags, func(l judgment.FlagLabel) bool { return slices.Contains(v.NewMessages, l.MessageKey) }) ||
+				slices.ContainsFunc(lb.Clearings, func(l judgment.ClearingLabel) bool {
+					return l.CutOff.Equal(v.CutOff) && slices.ContainsFunc(v.Clearings, func(c judgment.ClearingDecision) bool {
+						return c.CommitmentMessageKey == l.CommitmentMessageKey
+					})
+				})
+			if answers {
+				targets = addTarget(targets, judgerun.Target{Thread: thread, CutOff: v.CutOff, InputHash: v.InputHash, Judgments: []uuid.UUID{v.ID}})
+			}
+		}
+	}
+	return targets, nil
+}
+
+// addTarget adds a target to the targets, merging it into the one of the same
+// example.
+func addTarget(targets []judgerun.Target, t judgerun.Target) []judgerun.Target {
+	i := slices.IndexFunc(targets, func(o judgerun.Target) bool { return o.Thread == t.Thread && o.InputHash == t.InputHash })
+	if i < 0 {
+		return append(targets, t)
+	}
+	for _, id := range t.Judgments {
+		if !slices.Contains(targets[i].Judgments, id) {
+			targets[i].Judgments = append(targets[i].Judgments, id)
+		}
+	}
+	return targets
+}
+
 func (s *Scorecard) report(ctx context.Context, methodKey, compareKey string) (Report, error) {
 	methods, unavailable, err := s.selectMethods(methodKey, compareKey)
 	if err != nil {
@@ -166,14 +222,20 @@ func (s *Scorecard) report(ctx context.Context, methodKey, compareKey string) (R
 	if err != nil {
 		return Report{}, failed(Failure{Reason: FailureReadReviews}, err)
 	}
-	report := Report{Examples: len(examples), Unavailable: unavailable}
-	if len(examples) == 0 {
-		report.Proposal = Proposal{Reason: ProposalNoReviews}
-		return report, nil
-	}
+	report := Report{Examples: len(examples), Unavailable: unavailable, Proposal: Proposal{Reason: ProposalNoReviews}}
 	targets, err := s.targets(ctx, examples)
 	if err != nil {
 		return Report{}, failed(Failure{Reason: FailureReadReviews}, err)
+	}
+	labeled, err := s.labeledTargets(ctx)
+	if err != nil {
+		return Report{}, failed(Failure{Reason: FailureReadLabels}, err)
+	}
+	for _, t := range labeled {
+		targets = addTarget(targets, t)
+	}
+	if len(targets) == 0 {
+		return report, nil
 	}
 	var runs []scoredRun
 	for _, m := range methods {
@@ -189,7 +251,7 @@ func (s *Scorecard) report(ctx context.Context, methodKey, compareKey string) (R
 		for _, t := range scored.summary.Incomplete {
 			incomplete[t.Reason]++
 		}
-		report.Methods = append(report.Methods, MethodScore{Metrics: scored.metrics, Terms: m.Terms(), Incomplete: incomplete, Unjudged: scored.summary.UnjudgedCounts})
+		report.Methods = append(report.Methods, MethodScore{Metrics: scored.metrics, Terms: m.Terms(), Incomplete: incomplete})
 		runs = append(runs, scored)
 	}
 	if compareKey != "" {
@@ -199,7 +261,9 @@ func (s *Scorecard) report(ctx context.Context, methodKey, compareKey string) (R
 	if err != nil {
 		return Report{}, err
 	}
-	report.Proposal = propose(report.Methods)
+	if len(examples) > 0 {
+		report.Proposal = propose(report.Methods)
+	}
 	return report, nil
 }
 
@@ -247,7 +311,7 @@ func compare(method, other scoredRun) *Comparison {
 	outcomes := slices.Concat(slices.Collect(maps.Keys(method.metrics.PerOutcome)), slices.Collect(maps.Keys(other.metrics.PerOutcome)))
 	for _, key := range outcomes {
 		a, b := method.metrics.PerOutcome[key], other.metrics.PerOutcome[key]
-		c.Difference[key] = Rates{Recall: b.Recall - a.Recall, Precision: b.Precision - a.Precision}
+		c.Difference[key] = Rates{Recall: orZero(b.Recall) - orZero(a.Recall), Precision: orZero(b.Precision) - orZero(a.Precision)}
 	}
 	type at struct {
 		example judgment.ExampleID

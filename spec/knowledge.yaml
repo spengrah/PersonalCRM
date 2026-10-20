@@ -1159,3 +1159,75 @@ behaviors:
     surface: none
     statement: every label, whether a reply-item review, a flag label, a clearing label, Confirm Nones or a close, is recorded by the judgment store's one review writer, and no other code records a label.
     provenance: [.agents/spec/2026-10-18-message-flags-and-threads.md G12, designs/threads.md]
+
+  # --- Flag scorecard and Langfuse metrics ---
+
+  - id: KNW-085
+    title: The scorecard reports flag precision and recall per method and kind over labeled flag decisions
+    type: business-logic
+    status: current
+    surface: none
+    given: flag decisions the user labeled, by a control, a close or Confirm Nones
+    when: crm-admin --scorecard reruns a method and reports it
+    then:
+      - key: rerun-covers-labeled-decisions
+        text: the rerun replays, as it replays a reviewed example (KNW-053), each example whose judgment answered a labeled flag or clearing decision, whichever method's judgment it was
+      - key: shown-at-threshold
+        text: a flag decision counts as flagged when its probability reaches the method's display threshold, a probability equal to the threshold included
+      - key: precision-recall-over-labels
+        text: per flag kind, precision is the share of the rerun's flagged labeled decisions whose message holds the kind, and recall the share of its labeled decisions whose message holds the kind that are flagged; a label a close or Confirm Nones wrote counts as any other
+      - key: unlabeled-counted-in-neither
+        text: a flag decision without a label counts in neither
+      - key: only-flag-labels-count
+        text: only flag and clearing labels count toward a flag metric; a review of an earlier method version's whole-thread commitment or big-moment outcome counts toward none
+      - key: rate-without-labels-none
+        text: a rate with no labeled decision behind it reports none, never 0
+    provenance: [scorecard.Scorecard.labeledTargets, scorecard.Reader.scoreFlags, judgment.Store.Labels, judgment.Shows, crm-admin --scorecard, .agents/spec/2026-10-18-message-flags-and-threads.md G13 SC7 NG4]
+
+  - id: KNW-086
+    title: The scorecard reports clearing accuracy per method over labeled clearing decisions
+    type: business-logic
+    status: current
+    surface: none
+    given: clearing decisions the user labeled
+    when: crm-admin --scorecard reruns a method and reports it
+    then:
+      - key: accuracy-over-labeled-clearings
+        text: clearing accuracy is the share of the rerun's labeled clearing decisions the method answered as the label says, beside the count of each answer against each label
+      - key: unlabeled-clearing-counted-in-neither
+        text: a clearing decision without a label counts in neither
+    provenance: [scorecard.Reader.scoreFlags, crm-admin --scorecard, .agents/spec/2026-10-18-message-flags-and-threads.md G13]
+
+  - id: KNW-087
+    title: The scorecard counts the new messages a method judged, left unjudged and flagged, and never counts an unjudged message as a no
+    type: business-logic
+    status: current
+    surface: none
+    given: a scorecard rerun of a method, or a stored rerun the export reads
+    when: the scorecard counts its new messages
+    then:
+      - key: judged-unjudged-flagged-counted
+        text: per method, the scorecard reports how many new messages the rerun's judgments answered, how many it left unjudged by reason, and per flag kind how many it flagged
+      - key: unjudged-never-a-no
+        text: an unjudged message, whatever its label, is counted unjudged and not judged, and lies outside every precision and recall
+      - key: stage-1-before-window-read
+        text: a stored stage-1 rerun's before_window record is counted unjudged with that reason
+    provenance: [scorecard.Reader.scoreFlags, crm-admin --scorecard, crm-admin --langfuse-export, .agents/spec/2026-10-18-message-flags-and-threads.md G13 SC10, coordinator ruling PR3-R1]
+
+  - id: KNW-088
+    title: The Langfuse export sends each scorecard metric as its own numeric score
+    type: data
+    status: current
+    surface: none
+    given: a finished rerun run and the labels and reviews its scorecard metrics count
+    when: crm-admin --langfuse-export sends it
+    then:
+      - key: each-metric-own-score
+        text: each metric of the rerun's scorecard, flag and ball-in-court alike (per-outcome recall and precision, confusion counts, i_owe_missed, corrections_caused, each flag kind's precision, recall and counts, clearing accuracy and counts, and the message counts), is its own numeric score on the run's trace, carrying the method key and versions
+      - key: later-export-replaces
+        text: each export replaces the run's earlier value of each metric
+      - key: absent-metric-not-sent
+        text: a metric with no labeled decision behind it is not sent, never sent as 0
+      - key: scores-content-free
+        text: the scores carry no message text, sender or contact identity
+    provenance: [langfuseexport.scorecardScores, langfuseexport.Exporter.Export, crm-admin --langfuse-export, .agents/spec/2026-10-18-message-flags-and-threads.md G14 HC3 SC7]

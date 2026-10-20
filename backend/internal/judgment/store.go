@@ -165,7 +165,7 @@ func (s *Store) RecordUnjudged(ctx context.Context, run RunID, messages []Unjudg
 	var order []cutOff
 	keys, reasons := map[cutOff][]string{}, map[cutOff][]string{}
 	for _, m := range messages {
-		if !slices.Contains([]UnjudgedReason{UnjudgedReasonCallFailed, UnjudgedReasonMessageOverLimit, UnjudgedReasonBeforeWindow}, m.Reason) {
+		if !slices.Contains(UnjudgedReasons, m.Reason) {
 			return fmt.Errorf("record unjudged: unknown reason %q", m.Reason)
 		}
 		if m.Thread == uuid.Nil || m.MessageKey == "" {
