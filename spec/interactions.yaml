@@ -1366,7 +1366,7 @@ behaviors:
     when: the Threads list is shown
     then:
       - key: run-filter-lists-runs
-        text: a Run filter lists the compared methods' historical and scheduled runs, each as "{method} · {month}"
+        text: a Run filter lists the compared methods' historical and scheduled runs, each as "{method} · {month} · started {time}", the time being the date and time the run began
       - key: newest-run-default
         text: with no run chosen the filter holds the newest run it lists
       - key: run-keeps-its-threads
@@ -1412,7 +1412,7 @@ behaviors:
       - key: sender-and-time-one-line
         text: a message's sender and time share one line
       - key: earlier-messages-collapsed
-        text: earlier messages sit behind a collapsed toggle
+        text: earlier messages sit behind a collapsed toggle, a bar spanning the card with its label, "{n} earlier messages", centered
     provenance: [.agents/spec/2026-10-18-message-flags-and-threads.md G10 SC12, designs/threads.md]
 
   - id: IXN-080
@@ -1436,7 +1436,7 @@ behaviors:
       - key: box-sections
         text: the box holds the reply lists, Commitments re-checked when the judgment made clearing decisions, and Closest unflagged, which names per flag kind the unflagged message the judgment came closest to flagging, each linking to its message
       - key: later-messages-collapsed
-        text: messages after the run's last night sit behind a collapsed toggle
+        text: messages after the run's last night sit behind a collapsed toggle, a bar spanning the card with its label centered
       - key: header-adds-status-run-done
         text: the header adds the status pill, the run and Done
     provenance: [.agents/spec/2026-10-18-message-flags-and-threads.md G10 G11 SC5, designs/threads.md]
@@ -1608,6 +1608,8 @@ behaviors:
         text: with a run, the read adds the run's nights in cut-off order, each placing its messages, once each
       - key: night-contents
         text: each night carries the flags its messages show, its clearing decisions, its reply proposal, the closest unflagged message per flag kind and its status
+      - key: clearings-of-shown-commitments
+        text: a night carries a clearing decision only when the commitment it re-checks shows as a flag, its probability reaching the display threshold or the user having labeled it held
     provenance: [.agents/spec/2026-10-18-message-flags-and-threads.md G10 G11 SC5, designs/threads.md]
 
   - id: IXN-090

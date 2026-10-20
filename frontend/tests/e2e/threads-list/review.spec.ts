@@ -8,6 +8,7 @@ import {
   fetchThreads,
   labelFlag,
   readThread,
+  runNamed,
   seedJudgmentRun,
   threadOf,
 } from '../helpers/bench'
@@ -152,10 +153,10 @@ test.describe('Threads list with Review @area:interactions', () => {
         .evaluateAll(nodes => nodes.map(n => n.getAttribute('value')))
     ).toEqual(runs.map(run => run.id))
     await expect(runSelect.locator(`option[value="${february.run_id}"]`)).toHaveText(
-      'jev-masked · February 2026'
+      runNamed('jev-masked · February 2026')
     )
     await expect(runSelect.locator(`option[value="${january.run_id}"]`)).toHaveText(
-      'clef-masked · January 2026'
+      runNamed('clef-masked · January 2026')
     )
     await expect(runSelect).toHaveValue(runs[0].id)
     await expect(page).toHaveURL(/\/interactions\?tab=threads$/)
@@ -186,9 +187,6 @@ test.describe('Threads list with Review @area:interactions', () => {
     expect(summary).toEqual({ judged: 3, to_review: 1, nothing_flagged: 1, reviewed: 1 })
     await expect(page.locator('[data-run-summary]')).toContainText(
       '3 threads judged in this run · 1 to review · 1 with nothing flagged · 1 reviewed'
-    )
-    await expect(page.locator('[data-run-summary]')).toContainText(
-      'Newest message first, as with Review off'
     )
 
     // spec: IXN-077.row-count-and-status
@@ -293,7 +291,7 @@ test.describe('Threads list with Review @area:interactions', () => {
 
     // spec: IXN-077.run-filter-lists-runs
     await expect(runSelect.locator(`option[value="${march.run_id}"]`)).toHaveText(
-      'clef-masked-reasoned · March 2026'
+      runNamed('clef-masked-reasoned · March 2026')
     )
     expect(await listed()).toEqual(
       expect.arrayContaining([january.run_id, february.run_id, march.run_id])

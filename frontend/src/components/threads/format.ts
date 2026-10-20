@@ -9,8 +9,19 @@ export function formatConfidence(confidence: number): string {
 }
 
 const month = new Intl.DateTimeFormat('en-US', { month: 'long', year: 'numeric', timeZone: 'UTC' })
+const started = new Intl.DateTimeFormat('en-US', {
+  month: 'short',
+  day: 'numeric',
+  hour: 'numeric',
+  minute: '2-digit',
+})
 
-/** A run as the run filter names it: "{method} · {month}", the month its window starts in. */
+/**
+ * A run as the run filter names it: "{method} · {month} · started {time}", the
+ * month its window starts in and the local date and time it began, which tells
+ * reruns of one month apart.
+ */
 export function runLabel(run: ReviewRunResponse): string {
-  return `${run.method_key} · ${month.format(new Date(run.from ?? run.started_at))}`
+  const from = month.format(new Date(run.from ?? run.started_at))
+  return `${run.method_key} · ${from} · started ${started.format(new Date(run.started_at))}`
 }

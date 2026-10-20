@@ -56,7 +56,7 @@ export function ThreadHeader({ thread, review, onDone, donePending }: ThreadHead
               <>
                 <span aria-hidden="true">·</span>
                 <StatusPill status={review.status} toReview={review.to_review} />
-                <span data-run>{`· ${runLabel(review.run)} run`}</span>
+                <span data-run>{`· ${runLabel(review.run)}`}</span>
               </>
             )}
           </div>

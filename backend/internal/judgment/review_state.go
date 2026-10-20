@@ -154,7 +154,15 @@ type reviewData struct {
 	refs        map[uuid.UUID][]refMessage
 	decisionLb  map[uuid.UUID]ThreadLabels
 	closedLb    map[uuid.UUID]map[string]bool
+	commitments map[commitmentRef]float64
 	thresholds  *thresholdCache
+}
+
+// commitmentRef names a commitment flag decision: the judgment holding it and
+// its message.
+type commitmentRef struct {
+	judgment uuid.UUID
+	message  string
 }
 
 // refMessage is a message of a thread in thread order.
@@ -217,6 +225,9 @@ func (s *Store) loadReviewData(ctx context.Context, run *db.JudgmentRun, threads
 		if d.outcomes, d.outcomeLb, err = loadContent(ctx, q, rows); err != nil {
 			return nil, err
 		}
+		if d.commitments, err = loadRecheckedCommitments(ctx, q, d.reads); err != nil {
+			return nil, err
+		}
 	}
 	unjudged, err := q.ListRunUnjudged(ctx, db.ListRunUnjudgedParams{RunID: run.ID, ThreadIds: threads})
 	if err != nil {
@@ -240,6 +251,32 @@ func (s *Store) loadReviewData(ctx context.Context, run *db.JudgmentRun, threads
 		return nil, err
 	}
 	return d, nil
+}
+
+// loadRecheckedCommitments reads the probability of each commitment flag
+// decision the reads' clearing decisions re-check, wherever its judgment lies.
+func loadRecheckedCommitments(ctx context.Context, q db.Querier, reads map[uuid.UUID]recordedRead) (map[commitmentRef]float64, error) {
+	var ids []uuid.UUID
+	for _, r := range reads {
+		for _, c := range r.clearings {
+			ids = append(ids, c.CommitmentJudgment)
+		}
+	}
+	out := map[commitmentRef]float64{}
+	if len(ids) == 0 {
+		return out, nil
+	}
+	slices.SortFunc(ids, func(a, b uuid.UUID) int { return strings.Compare(a.String(), b.String()) })
+	flags, err := q.ListJudgmentFlags(ctx, slices.Compact(ids))
+	if err != nil {
+		return nil, fmt.Errorf("list re-checked commitments: %w", err)
+	}
+	for _, f := range flags {
+		if FlagKind(f.Kind) == FlagKindCommitment {
+			out[commitmentRef{f.JudgmentID, f.MessageKey}] = f.Probability
+		}
+	}
+	return out, nil
 }
 
 type flagKey struct {
@@ -352,8 +389,15 @@ func (d *reviewData) build(ctx context.Context, thread uuid.UUID) (*ThreadReview
 				}
 			}
 		}
-		n.Clearings = make([]NightClearing, len(read.clearings))
-		for ci, c := range read.clearings {
+		n.Clearings = make([]NightClearing, 0, len(read.clearings))
+		for _, c := range read.clearings {
+			shown, err := d.commitmentShows(ctx, n, c, flagLabels)
+			if err != nil {
+				return nil, err
+			}
+			if !shown {
+				continue
+			}
 			nc := NightClearing{
 				CommitmentMessageKey: c.CommitmentMessageKey, CutOff: n.row.CutOff, Done: c.Done, Probability: c.Probability,
 				Label: ClearingLabelStateNone,
@@ -367,7 +411,7 @@ func (d *reviewData) build(ctx context.Context, thread uuid.UUID) (*ThreadReview
 					nc.Label = ClearingLabelStateConfirmed
 				}
 			}
-			n.Clearings[ci] = nc
+			n.Clearings = append(n.Clearings, nc)
 		}
 		// Clearing decisions read in thread order of their commitments' messages.
 		slices.SortStableFunc(n.Clearings, func(a, b NightClearing) int {
@@ -404,6 +448,26 @@ func (d *reviewData) chip(ctx context.Context, n *Night, key string, kind FlagKi
 		return FlagChip{Kind: kind, State: ChipStateAdded}, true, nil
 	}
 	return FlagChip{}, false, nil
+}
+
+// commitmentShows reports whether the commitment a clearing decision re-checks
+// shows as a chip under the night's method, by the rule chip applies: its
+// probability reaches the display threshold, or the user labeled it held. A
+// night shows only the clearing decisions of commitments that show, since a
+// commitment the user never saw flagged has nothing to clear.
+func (d *reviewData) commitmentShows(ctx context.Context, n *Night, c ClearingDecision, labels map[flagKey]bool) (bool, error) {
+	if holds, labeled := labels[flagKey{c.CommitmentMessageKey, FlagKindCommitment}]; labeled && holds {
+		return true, nil
+	}
+	p, ok := d.commitments[commitmentRef{c.CommitmentJudgment, c.CommitmentMessageKey}]
+	if !ok {
+		return false, nil
+	}
+	threshold, err := d.thresholds.get(ctx, n.Method.Key, FlagKindCommitment)
+	if err != nil {
+		return false, err
+	}
+	return Shows(p, threshold), nil
 }
 
 // place puts the thread's messages in the review's nights: every message from
