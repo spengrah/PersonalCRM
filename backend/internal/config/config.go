@@ -46,7 +46,6 @@ type DecisionConfig struct {
 	// it serves unavailable.
 	OpenRouterAPIKey string // OPENROUTER_API_KEY
 	VeniceAPIKey     string // VENICE_API_KEY
-	SageAPIKey       string // SAGE_API_KEY (Levanto)
 }
 
 // LangfuseExtractionConfig names the Langfuse extraction project, distinct
@@ -607,7 +606,6 @@ func Load() (*Config, error) {
 			ProductionMethod: getEnv("DECISION_PRODUCTION_METHOD", ""),
 			OpenRouterAPIKey: getEnv("OPENROUTER_API_KEY", ""),
 			VeniceAPIKey:     getEnv("VENICE_API_KEY", ""),
-			SageAPIKey:       getEnv("SAGE_API_KEY", ""),
 		},
 		LangfuseExtraction: LangfuseExtractionConfig{
 			Host:      getEnv("LANGFUSE_EXTRACTION_HOST", ""),

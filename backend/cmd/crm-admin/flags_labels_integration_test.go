@@ -43,7 +43,7 @@ func (c labelCase) observe(t *testing.T, labeled bool) labelsSeen {
 	e := newFlagsEnv(t, "")
 	th := e.newThread(t)
 	c.messages(t, th)
-	vendors := map[string]*vendor{clefKey: vendorFlagging(t, true, c.flagP), jevKey: vendorFlagging(t, false, c.flagP)}
+	vendors := map[string]*vendor{clefKey: vendorFlagging(t, c.flagP), jevKey: vendorFlagging(t, c.flagP)}
 	clef, jev := e.method(clefKey, vendors[clefKey], roomy), e.method(jevKey, vendors[jevKey], roomy)
 	set := methods{clefKey: clef, jevKey: jev}
 

@@ -783,7 +783,7 @@ behaviors:
       - key: fits-whole-sent-whole
         text: a context that fits the method's limits is its own window and is sent whole
       - key: over-limit-judged-over-window
-        text: a context over the limits is judged over its window, the newest whole messages ending at the cut-off whose text and every question fit the method's limits
+        text: a context over the limits is judged over its window, the newest whole messages ending at the cut-off whose text and every question fit the method's limits, when that window holds every message new at the cut-off; a night whose new messages it cannot hold is judged in chunks (KNW-068)
       - key: no-message-split
         text: no message is split, so a window starts at a message boundary
       - key: newest-message-over-limit-incomplete
@@ -835,7 +835,7 @@ behaviors:
     when: the cut-off's run ends
     then:
       - key: recorded-unjudged-with-reason
-        text: the message is recorded unjudged with its reason, call_failed, message_over_limit or before_window
+        text: the message is recorded unjudged with its reason, call_failed or message_over_limit; a new method version records none before_window (KNW-071), and a record of an earlier version carrying before_window still reads as unjudged
       - key: counted-unjudged-never-no
         text: the message is counted as unjudged and never as a no
       - key: rerun-judges-it
@@ -979,6 +979,128 @@ behaviors:
       - key: reads-no-review-or-label
         text: no method reads a review or a label, so methods stay comparable
     provenance: [.agents/spec/2026-10-18-message-flags-and-threads.md HC4 A2]
+
+  # --- Chunked nights and the compared methods ---
+
+  - id: KNW-068
+    title: A night whose new messages overflow a window is judged in chunks
+    type: business-logic
+    status: current
+    surface: none
+    given: a thread at a cut-off after its first judged one, whose new messages no one window of the method holds
+    when: the method judges the cut-off
+    then:
+      - key: fewest-chunks-earliest-first
+        text: the night is judged in the fewest chunks that fit, in order from earliest to latest; a number of chunks is passed over only when no division of the new messages into that many, spread evenly, fits
+      - key: window-is-chunk-and-older-context
+        text: each chunk's window is its new messages preceded by as many older messages as fit beside the questions it asks, the commitments it re-checks among them, so a later chunk reads the earlier chunks' messages as context and its window is sized once the chunks before it have answered
+      - key: spread-evenly
+        text: the new messages are spread evenly over the chunks, their counts differing by at most one
+      - key: flagged-once-in-its-chunk
+        text: each new message is flagged once per flag kind, in its chunk
+    provenance: [decision.method.Plan, decision.method.chunk, decision.method.spread, decision.method.window, .agents/spec/2026-10-18-message-flags-and-threads.md G15 SC11, decision 20261019T142354Z-73bbb941ef65]
+
+  - id: KNW-069
+    title: Each chunk of a night re-checks the commitments inside its window
+    type: business-logic
+    status: current
+    surface: none
+    given: a night a method judges in chunks
+    when: each chunk is judged
+    then:
+      - key: chunk-rechecks-inside-its-window
+        text: a chunk re-checks the method's earlier commitments whose messages lie inside its window and that it has not cleared, and neither asks nor clears one whose message lies before its window
+      - key: same-night-commitment-rechecked
+        text: a commitment an earlier chunk of the same night flagged above the clearing floor is re-checked by a later chunk whose window holds its message, its clearing decision naming the night's own judgment
+      - key: cleared-not-asked-again
+        text: a commitment an earlier chunk of the night answered done is not asked again
+      - key: one-clearing-latest-answer
+        text: the night's judgment holds one clearing decision per commitment re-checked, carrying the latest chunk's answer
+    provenance: [decision.method.window, decision.method.Judge, .agents/spec/2026-10-18-message-flags-and-threads.md G15 G3]
+
+  - id: KNW-070
+    title: Ball-in-court is asked once per chunked night, in its last chunk
+    type: business-logic
+    status: current
+    surface: none
+    given: a night a method judges in chunks
+    when: the night is judged
+    then:
+      - key: asked-in-last-chunk
+        text: ball-in-court is asked once, in the last chunk, about the thread's state at the cut-off; no earlier chunk asks it
+      - key: evidence-against-last-chunk-window
+        text: the reply-obligation rule (CAD-061) compares an obligation's evidence with the last chunk's window, so evidence before that window leaves the obligation as it was even when an earlier chunk's window holds it
+    provenance: [decision.windowOf, judgment.Store.landTx, migration 100, .agents/spec/2026-10-18-message-flags-and-threads.md G15 G4]
+
+  - id: KNW-071
+    title: A new method version leaves no new message unjudged for lying before its window
+    type: business-logic
+    status: current
+    surface: none
+    given: a run of a method version that judges overflowing nights in chunks
+    when: the run judges a night
+    then:
+      - key: none-before-window
+        text: no new message is recorded unjudged as before_window
+      - key: oversized-message-unjudged
+        text: a new message that alone exceeds the method's limits is recorded only as unjudged message_over_limit, never among the judgment's new messages and with no flag decision, and the night's other new messages are judged around it
+      - key: oversized-newest-incomplete
+        text: a night whose newest message alone exceeds the limits is reported incomplete with message_over_limit and every new message unjudged message_over_limit, as before chunks (KNW-055)
+    provenance: [judgerun.Runner.judge, decision.Plan.OverLimit, .agents/spec/2026-10-18-message-flags-and-threads.md G15 SC11 D2 T5b]
+
+  - id: KNW-072
+    title: A chunked night reads back as one judgment
+    type: data
+    status: current
+    surface: none
+    given: a night a method judged in chunks
+    when: the judgment store's reads return it, by thread or by run
+    then:
+      - key: one-judgment-per-night
+        text: it is one judgment of that thread, method and cut-off, on the example every method records for that context
+      - key: window-start-first-chunk
+        text: its window start is the first chunk's
+      - key: new-messages-answered-in-order
+        text: its new messages are the night's new messages its chunks answered, in thread order, each with one flag decision per kind
+      - key: unjudged-not-new
+        text: a new message no chunk answered appears among the run's unjudged messages, never among the judgment's new messages, and has no flag decision
+    provenance: [judgment.Store.RecordJudgment, judgment.Store.ListJudgments, .agents/spec/2026-10-18-message-flags-and-threads.md G15 G1 AD2, threads-tab arc S1]
+
+  - id: KNW-073
+    title: A chunked night's judgment is reused only when every chunk read the same
+    type: business-logic
+    status: current
+    surface: none
+    given: a rerun of a method version over a night it judged in chunks
+    when: the rerun reaches the night
+    then:
+      - key: reuse-when-every-chunk-read-same
+        text: the judgment is reused, sending nothing, only when every chunk reads the same window and new messages and re-checks the same earlier judgments, so an unchanged rerun reuses it
+      - key: different-recheck-judged-again
+        text: a night whose chunk now re-checks a different earlier judgment of a commitment is judged again
+      - key: different-chunks-judged-again
+        text: a night that now splits into a different number of chunks is judged again, even when its first window start and new messages are the same
+      - key: different-later-window-judged-again
+        text: a night whose later chunk now reads a different window is judged again, even when its chunks and first window are the same
+    provenance: [judgment.Read.digest, decision.method.chunking, .agents/spec/2026-10-18-message-flags-and-threads.md AD4 G15]
+
+  - id: KNW-074
+    title: Runs and the scorecard accept only the compared methods
+    type: business-logic
+    status: current
+    surface: none
+    given: the compared methods clef-masked, clef-masked-reasoned and jev-masked, and the removed methods sage-masked and clef-flash-masked
+    when: a run, the production designation or the scorecard names a method
+    then:
+      - key: compared-methods
+        text: the method registry lists the compared methods only, and the run, the production designation and the scorecard read that one list
+      - key: removed-refused-before-any-call
+        text: crm-admin --judge-month and --scorecard naming a removed method, as the method or the compared method, are refused before any call
+      - key: designation-refused-as-unknown
+        text: a production designation naming a removed method is refused as one naming an unknown method is
+      - key: stored-judgments-still-read
+        text: a removed method's stored judgments, with their flag decisions, and its runs still read from the judgment store
+    provenance: [decision.NewRegistry, judgerun.New, scorecard.Scorecard.selectMethods, .agents/spec/2026-10-18-message-flags-and-threads.md G16, decisions 20261019T135325Z-b40e61f4e0d5 and 20261019T142002Z-781d8c72e07a]
 
   - id: KNW-075
     title: A flag label belongs to a flag decision and is shared by every method, run and cut-off

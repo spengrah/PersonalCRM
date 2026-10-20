@@ -121,8 +121,13 @@ type Outcomes struct {
 // Clearings record what the method read of it and answered about messages. A
 // judgment of a version before migration 099 sets none of them; one that sets
 // WindowStart records flag and clearing decisions and holds ball-in-court
-// outcomes only.
+// outcomes only. Chunks are the reads of a night the method judged in more
+// than one chunk, and Chunking what decides their windows (Read). ID is the
+// judgment's identity, which a clearing decision names when an earlier chunk
+// of the same night flagged its commitment; the store issues one when it is
+// zero.
 type Judgment struct {
+	ID          uuid.UUID
 	Method      MethodRef
 	Thread      threadctx.VenueID
 	Kind        threadctx.ContextKind
@@ -131,6 +136,8 @@ type Judgment struct {
 	InputHash   string
 	WindowStart string
 	NewMessages []string
+	Chunks      []Read
+	Chunking    string
 	Flags       []FlagDecision
 	Clearings   []ClearingDecision
 	Questions   []AnsweredQuestion

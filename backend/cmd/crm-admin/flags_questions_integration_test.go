@@ -18,11 +18,9 @@ import (
 // versionBeforeFlags is each compared method's version and wording version
 // before the message-flag change.
 var versionBeforeFlags = map[string][2]string{
-	"clef-flash-masked":    {"e07d7df19830", "0cb9ed663195"},
 	"clef-masked":          {"17befc38173f", "0cb9ed663195"},
 	"clef-masked-reasoned": {"37506004e1fa", "48ba87f9d060"},
 	"jev-masked":           {"11d6a6650a01", "0cb9ed663195"},
-	"sage-masked":          {"1f6bc8710679", "0cb9ed663195"},
 }
 
 var allowedQuestion = regexp.MustCompile(`^(flag/(commitment|big_moment|claim)/m\d+|clearing/m\d+|ball_in_court/.+)$`)
@@ -40,9 +38,9 @@ func TestJudgeMonthAsksOnlyFlagClearingAndBallInCourtQuestions(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			e := newFlagsEnv(t, "")
-			openRouter, venice, sage := newVendor(t, false), newVendor(t, false), newVendor(t, true)
-			routeVendors(t, map[string]*vendor{"openrouter.ai": openRouter, "api.venice.ai": venice, "sage.levanto.ai": sage})
-			registry := decision.NewRegistry(config.DecisionConfig{OpenRouterAPIKey: "key", VeniceAPIKey: "key", SageAPIKey: "key"}, e.masker)
+			openRouter, venice := newVendor(t), newVendor(t)
+			routeVendors(t, map[string]*vendor{"openrouter.ai": openRouter, "api.venice.ai": venice})
+			registry := decision.NewRegistry(config.DecisionConfig{OpenRouterAPIKey: "key", VeniceAPIKey: "key"}, e.masker)
 			if tc.conversation {
 				th := e.newThread(t)
 				th.say(t, jan(3, 9), false, promise)
@@ -52,7 +50,7 @@ func TestJudgeMonthAsksOnlyFlagClearingAndBallInCourtQuestions(t *testing.T) {
 				m.note(t, jan(3, 9), promise)
 				m.note(t, jan(4, 9), kept)
 			}
-			vendors := map[string]*vendor{"clef-masked": openRouter, "clef-masked-reasoned": openRouter, "clef-flash-masked": openRouter, "jev-masked": venice, "sage-masked": sage}
+			vendors := map[string]*vendor{"clef-masked": openRouter, "clef-masked-reasoned": openRouter, "jev-masked": venice}
 
 			for _, key := range registry.Keys() {
 				vendors[key].reset()

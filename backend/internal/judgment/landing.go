@@ -35,8 +35,8 @@ const dateFormat = "2006-01-02"
 // removal or no effect), and applied when the catalog lands it accepted. An
 // open obligation the judgment does not mention raises an omission. A judgment
 // that read a window speaks only to the reply obligations whose evidence lies
-// inside it (CAD-061). An outcome that landed before is never landed again.
-// Each landed outcome records the
+// inside the window it asked ball-in-court over (CAD-061). An outcome that
+// landed before is never landed again. Each landed outcome records the
 // obligation its live effect is: the one it opened or found when applied, or
 // the one a removal would take away.
 func (s *Store) landTx(ctx context.Context, tx pgx.Tx, judgmentID uuid.UUID, thread uuid.UUID, cutOff time.Time) (Effects, error) {
@@ -70,8 +70,8 @@ func (s *Store) landTx(ctx context.Context, tx pgx.Tx, judgmentID uuid.UUID, thr
 	slices.SortStableFunc(pending, landingOrder)
 
 	closable := anyObligation
-	if j.WindowStart != nil {
-		if closable, err = s.evidenceInWindow(ctx, tx, thread, cutOff, *j.WindowStart); err != nil {
+	if j.BallInCourtWindowStart != nil {
+		if closable, err = s.evidenceInWindow(ctx, tx, thread, cutOff, *j.BallInCourtWindowStart); err != nil {
 			return Effects{}, err
 		}
 	}

@@ -442,7 +442,7 @@ type Querier interface {
 	// been merged/soft-deleted drops from these reads.
 	CreateEntity(ctx context.Context, arg CreateEntityParams) (*Entity, error)
 	CreateInteraction(ctx context.Context, arg CreateInteractionParams) (*Interaction, error)
-	CreateJudgment(ctx context.Context, arg CreateJudgmentParams) (uuid.UUID, error)
+	CreateJudgment(ctx context.Context, arg CreateJudgmentParams) error
 	CreateJudgmentAppearance(ctx context.Context, arg CreateJudgmentAppearanceParams) (int64, error)
 	// Records a judgment's clearing decisions: one commitment's message key and
 	// earlier judgment, the answer and its probability of done per position of the

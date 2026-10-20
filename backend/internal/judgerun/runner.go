@@ -253,7 +253,7 @@ func (h *history) commitments(floor float64) []decision.Commitment {
 	var out []decision.Commitment
 	for _, e := range h.entries {
 		for _, f := range e.flags {
-			if f.Kind == judgment.FlagKindCommitment && f.Probability > floor && !cleared[key{e.id, f.MessageKey}] {
+			if f.IsCommitmentAbove(floor) && !cleared[key{e.id, f.MessageKey}] {
 				out = append(out, decision.Commitment{Judgment: e.id, MessageKey: f.MessageKey})
 			}
 		}
@@ -352,7 +352,8 @@ func (r *Runner) priorHistory(ctx context.Context, m decision.Method, thread thr
 }
 
 // judge ends one eligible context with a recorded judgment, a reused one or an
-// incomplete report, and records the new messages no judgment answered. A
+// incomplete report, and records the new messages no judgment answered: those
+// over the method's limits, and every one of a cut-off no judgment answers. A
 // judgment the method version already holds for what the cut-off reads is
 // reused and nothing is sent; otherwise the plan is sent, and a failed call is
 // retried before it is reported call_failed.
@@ -360,7 +361,7 @@ func (r *Runner) judge(ctx context.Context, s *Summary, m decision.Method, floor
 	s.Eligible++
 	previous := previousCutOff(c.CutOff)
 	first := len(h.entries) == 0
-	req := decision.Request{Context: c, Commitments: h.commitments(floor)}
+	req := decision.Request{Context: c, Commitments: h.commitments(floor), Floor: floor}
 	if !first {
 		req.NewAfter = &previous
 	}
@@ -378,7 +379,7 @@ func (r *Runner) judge(ctx context.Context, s *Summary, m decision.Method, floor
 		return err
 	}
 	if plan.Incomplete != "" {
-		return r.unanswered(ctx, s, c, plan.Incomplete, newSince)
+		return r.unanswered(ctx, s, c, plan.Incomplete, newSince, nil)
 	}
 	effects, reused, err := r.store.ReuseRead(ctx, s.Run, c.Thread, c.CutOff, c.InputHash, plan.Read)
 	if err != nil {
@@ -398,22 +399,18 @@ func (r *Runner) judge(ctx context.Context, s *Summary, m decision.Method, floor
 			}
 			s.Judged++
 		case decision.Incomplete:
-			return r.unanswered(ctx, s, c, res.Reason, newSince)
+			return r.unanswered(ctx, s, c, res.Reason, newSince, plan.OverLimit)
 		default:
 			return fmt.Errorf("method %s returned an unknown result %T", m.Ref().Key, result)
 		}
 	}
 	s.Effects = addEffects(s.Effects, effects)
-	if !first {
-		var outside []judgment.UnjudgedMessage
-		for _, key := range newSince {
-			if !slices.Contains(plan.Read.NewMessages, key) {
-				outside = append(outside, judgment.UnjudgedMessage{Thread: c.Thread, CutOff: c.CutOff, MessageKey: key, Reason: judgment.UnjudgedReasonBeforeWindow})
-			}
-		}
-		if err := r.unjudged(ctx, s, outside); err != nil {
-			return err
-		}
+	over := make([]judgment.UnjudgedMessage, len(plan.OverLimit))
+	for i, key := range plan.OverLimit {
+		over[i] = judgment.UnjudgedMessage{Thread: c.Thread, CutOff: c.CutOff, MessageKey: key, Reason: judgment.UnjudgedReasonMessageOverLimit}
+	}
+	if err := r.unjudged(ctx, s, over); err != nil {
+		return err
 	}
 	return r.remember(ctx, s, h, c)
 }
@@ -437,17 +434,18 @@ func (r *Runner) remember(ctx context.Context, s *Summary, h *history, c threadc
 }
 
 // unanswered ends a cut-off no judgment answers: it reports the context
-// incomplete and its new messages unjudged for the same reason.
-func (r *Runner) unanswered(ctx context.Context, s *Summary, c threadctx.Context, reason judgment.IncompleteReason, newSince []string) error {
+// incomplete and its new messages unjudged for the same reason, those the plan
+// found over the method's limits as message_over_limit.
+func (r *Runner) unanswered(ctx context.Context, s *Summary, c threadctx.Context, reason judgment.IncompleteReason, newSince, overLimit []string) error {
 	if err := r.incomplete(ctx, s, c, reason); err != nil {
 		return err
 	}
-	unjudged := judgment.UnjudgedReasonCallFailed
-	if reason == judgment.IncompleteReasonMessageOverLimit {
-		unjudged = judgment.UnjudgedReasonMessageOverLimit
-	}
 	messages := make([]judgment.UnjudgedMessage, len(newSince))
 	for i, key := range newSince {
+		unjudged := judgment.UnjudgedReasonCallFailed
+		if reason == judgment.IncompleteReasonMessageOverLimit || slices.Contains(overLimit, key) {
+			unjudged = judgment.UnjudgedReasonMessageOverLimit
+		}
 		messages[i] = judgment.UnjudgedMessage{Thread: c.Thread, CutOff: c.CutOff, MessageKey: key, Reason: unjudged}
 	}
 	return r.unjudged(ctx, s, messages)

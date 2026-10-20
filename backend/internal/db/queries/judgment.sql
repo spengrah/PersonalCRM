@@ -71,20 +71,20 @@ WHERE j.method_key = sqlc.arg('method_key')
   AND e.input_hash = sqlc.arg('input_hash')
   AND j.read_digest = sqlc.arg('read_digest');
 
--- name: CreateJudgment :one
+-- name: CreateJudgment :exec
 INSERT INTO judgment (
-    method_key, method_version, wording_version, example_id, context_kind,
+    id, method_key, method_version, wording_version, example_id, context_kind,
     cut_off, judged_at, context_tokens, question_count, billed_tokens,
-    cost_usd, latency_ns, questions, window_start, new_messages, read_digest
+    cost_usd, latency_ns, questions, window_start, new_messages, read_digest,
+    ball_in_court_window_start
 ) VALUES (
-    sqlc.arg('method_key'), sqlc.arg('method_version'), sqlc.arg('wording_version'),
+    sqlc.arg('id'), sqlc.arg('method_key'), sqlc.arg('method_version'), sqlc.arg('wording_version'),
     sqlc.arg('example_id'), sqlc.arg('context_kind'), sqlc.arg('cut_off'),
     sqlc.arg('judged_at'), sqlc.arg('context_tokens'), sqlc.arg('question_count'),
     sqlc.narg('billed_tokens'), sqlc.narg('cost_usd'), sqlc.arg('latency_ns'),
     sqlc.arg('questions'), sqlc.narg('window_start'), sqlc.arg('new_messages')::text[],
-    sqlc.arg('read_digest')
-)
-RETURNING id;
+    sqlc.arg('read_digest'), sqlc.narg('ball_in_court_window_start')
+);
 
 -- name: CreateJudgmentFlags :exec
 -- Records a judgment's flag decisions: one message key, kind and probability

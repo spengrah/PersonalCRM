@@ -35,7 +35,7 @@ func TestJudgeMonthRecordsAFlagDecisionPerKindForEachNewMessage(t *testing.T) {
 		th := e.chat(t, 6)
 		keys := th.keys(t)
 		limit := e.tokensFor(t, fakeDefinition(jevKey, roomy), decision.Request{Context: th.context(t, jan(4, 0))}, keys[2])
-		m := e.method(jevKey, newVendor(t, false), decision.Limits{Tokens: limit, Questions: 1 << 20})
+		m := e.method(jevKey, newVendor(t), decision.Limits{Tokens: limit, Questions: 1 << 20})
 
 		e.judgeMonth(t, methods{jevKey: m}, jevKey)
 
@@ -54,7 +54,7 @@ func TestJudgeMonthRecordsAFlagDecisionPerKindForEachNewMessage(t *testing.T) {
 		th.sayFiller(t, jan(3, 9), false, 0)
 		th.sayFiller(t, jan(4, 9), true, 1)
 		keys := th.keys(t)
-		v := newVendor(t, false)
+		v := newVendor(t)
 		v.fail = func(c call) bool { return len(c.Texts) == 1 }
 		m := e.method(jevKey, v, roomy)
 
@@ -72,7 +72,7 @@ func TestJudgeMonthRecordsAFlagDecisionPerKindForEachNewMessage(t *testing.T) {
 		th.sayFiller(t, jan(3, 9), false, 0)
 		th.sayFiller(t, jan(4, 9), true, 1)
 		keys := th.keys(t)
-		v := newVendor(t, false)
+		v := newVendor(t)
 		m := e.method(jevKey, v, roomy)
 
 		e.judgeMonth(t, methods{jevKey: m}, jevKey)
@@ -98,7 +98,7 @@ func TestJudgeMonthRecordsAFlagDecisionPerKindForEachNewMessage(t *testing.T) {
 		th.sayFiller(t, jan(4, 0), true, 1)
 		th.sayFiller(t, jan(5, 0), false, 2)
 		keys := th.keys(t)
-		m := e.method(jevKey, newVendor(t, false), roomy)
+		m := e.method(jevKey, newVendor(t), roomy)
 
 		e.judgeMonth(t, methods{jevKey: m}, jevKey)
 
@@ -113,7 +113,7 @@ func TestJudgeMonthRecordsAFlagDecisionPerKindForEachNewMessage(t *testing.T) {
 		th.sayFiller(t, time.Date(2026, time.February, 1, 12, 0, 0, 0, time.Local), true, 1)
 		th.sayFiller(t, time.Date(2026, time.February, 2, 9, 0, 0, 0, time.Local), false, 2)
 		keys := th.keys(t)
-		m := e.method(jevKey, newVendor(t, false), roomy)
+		m := e.method(jevKey, newVendor(t), roomy)
 		set := methods{jevKey: m}
 
 		e.judgeMonth(t, set, jevKey)
@@ -130,7 +130,7 @@ func TestJudgeMonthRecordsAFlagDecisionPerKindForEachNewMessage(t *testing.T) {
 		meeting.note(t, jan(3, 9), "we agreed the garden plan")
 		meeting.note(t, jan(3, 10), "the budget goes to the committee")
 		keys := meeting.keys(t)
-		v := newVendor(t, false)
+		v := newVendor(t)
 		m := e.method(jevKey, v, roomy)
 
 		e.judgeMonth(t, methods{jevKey: m}, jevKey)
@@ -151,7 +151,7 @@ func TestJudgeMonthRecordsAFlagDecisionPerKindForEachNewMessage(t *testing.T) {
 		keys := th.keys(t)
 		threshold, err := e.store.DisplayThreshold(e.ctx, jevKey, judgment.FlagKindCommitment)
 		require.NoError(t, err)
-		v := newVendor(t, false)
+		v := newVendor(t)
 		v.flag = func(a ask) float64 {
 			switch {
 			case a.Flag != judgment.FlagKindCommitment:
@@ -178,7 +178,7 @@ func TestJudgeMonthRecordsAFlagDecisionPerKindForEachNewMessage(t *testing.T) {
 		th.sayFiller(t, jan(3, 9), false, 0)
 		th.sayFiller(t, jan(4, 9), true, 1)
 		keys := th.keys(t)
-		jev, clef := e.method(jevKey, newVendor(t, false), roomy), e.method(clefKey, newVendor(t, false), roomy)
+		jev, clef := e.method(jevKey, newVendor(t), roomy), e.method(clefKey, newVendor(t), roomy)
 
 		e.judgeMonth(t, methods{jevKey: jev}, jevKey)
 		e.judgeMonth(t, methods{clefKey: clef}, clefKey)
@@ -201,7 +201,7 @@ func TestJudgeMonthRecordsMessagesNoJudgmentAnsweredAsUnjudged(t *testing.T) {
 		e := newFlagsEnv(t, "")
 		th := e.chat(t, 3)
 		keys := th.keys(t)
-		v := newVendor(t, false)
+		v := newVendor(t)
 		v.fail = func(call) bool { return true }
 		m := e.method(jevKey, v, roomy)
 		set := methods{jevKey: m}
@@ -236,40 +236,11 @@ func TestJudgeMonthRecordsMessagesNoJudgmentAnsweredAsUnjudged(t *testing.T) {
 		th := e.chat(t, 3)
 		keys := th.keys(t)
 		limit := e.tokensFor(t, fakeDefinition(jevKey, roomy), decision.Request{Context: th.context(t, jan(4, 0))}, keys[2]) - 1
-		m := e.method(jevKey, newVendor(t, false), decision.Limits{Tokens: limit, Questions: 1 << 20})
+		m := e.method(jevKey, newVendor(t), decision.Limits{Tokens: limit, Questions: 1 << 20})
 
 		out := e.judgeMonth(t, methods{jevKey: m}, jevKey)
 
 		assert.Contains(t, out, "unjudged reason=message_over_limit n=3")
 		assert.Empty(t, th.judgments(t, m.Ref()))
-	})
-
-	t.Run("a new message before its cut-off's window start", func(t *testing.T) {
-		e := newFlagsEnv(t, "")
-		th := e.newThread(t)
-		th.sayFiller(t, jan(3, 9), false, 0)
-		for i := 1; i <= 5; i++ {
-			th.sayFiller(t, jan(4, 8+i), i%2 == 0, i)
-		}
-		keys := th.keys(t)
-		previous := jan(4, 0)
-		limit := e.tokensFor(t, fakeDefinition(jevKey, roomy), decision.Request{Context: th.context(t, jan(5, 0)), NewAfter: &previous}, keys[3])
-		m := e.method(jevKey, newVendor(t, false), decision.Limits{Tokens: limit, Questions: 1 << 20})
-
-		out := e.judgeMonth(t, methods{jevKey: m}, jevKey)
-
-		assert.Contains(t, out, "unjudged reason=before_window n=2")
-		j := th.judgmentAt(t, m.Ref(), jan(5, 0))
-		assert.Equal(t, keys[3], j.WindowStart)
-		assert.Equal(t, keys[3:], j.NewMessages)
-		var unjudged []string
-		for _, u := range e.lastRun(t, m.Ref()).Unjudged {
-			assert.Equal(t, judgment.UnjudgedReasonBeforeWindow, u.Reason)
-			unjudged = append(unjudged, u.MessageKey)
-		}
-		assert.ElementsMatch(t, keys[1:3], unjudged)
-		for _, f := range j.Flags {
-			assert.NotContains(t, keys[1:3], f.MessageKey, "an unjudged message is not a flag decision answered no")
-		}
 	})
 }
