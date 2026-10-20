@@ -637,3 +637,20 @@ behaviors:
         text: an outbound one-to-one message still names its peer and records its outbound interaction with its outreach effect
     provenance: [GroupBurstPromoter, IngestService.handleRawMessage, InteractionRecorder.HandleEvent, Engine.promoteIfReplied, messages_group_ingest_test.go, .agents/spec/2026-10-13-interaction-review-readiness.md]
     notes: A group burst credits only the members who spoke in it, so the user's message reaches a member through the burst that member's own message made. Only the user's own group message as ingest stores it credits a reply, recorded on the stored row (migration 086). A message the re-scan added or cleared (ING-042) never does, whatever its processing state, and ingesting an added guid again promotes nothing. The ingest and aggregation promotions read that one marker.
+
+  - id: ING-046
+    title: Gmail calendar messages are not ingested as email
+    type: business-logic
+    status: current
+    surface: none
+    given: a fetched Gmail message with a text/calendar MIME part at any depth, inline or attachment, such as an invitation, an update, a cancellation, or an accept or decline reply
+    when: Gmail sync or an identifier rematch scan processes the message
+    then:
+      - key: no-email-stored
+        text: no email row is stored for any contact the message matches
+      - key: no-interaction-or-cadence
+        text: the message records no interaction and moves no contact's cadence or last-contacted date
+      - key: non-calendar-reply-stored
+        text: a message without a text/calendar part, such as a plain reply in an invitation's thread, is stored and recorded as before
+    provenance: [.agents/spec/2026-10-20-gmail-calendar-invites.md]
+    notes: Calendar sync already records the meeting itself, so an invitation email would count it twice. Every kind of calendar message is dropped, an accept or decline reply with a typed note included.
