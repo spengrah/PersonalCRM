@@ -641,7 +641,7 @@ behaviors:
   - id: ING-046
     title: Gmail calendar messages are not ingested as email
     type: business-logic
-    status: proposed
+    status: current
     surface: none
     given: a fetched Gmail message with a text/calendar MIME part at any depth, inline or attachment, such as an invitation, an update, a cancellation, or an accept or decline reply
     when: Gmail sync or an identifier rematch scan processes the message

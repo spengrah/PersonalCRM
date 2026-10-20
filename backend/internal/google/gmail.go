@@ -12,6 +12,7 @@ import (
 	"net/mail"
 	"net/url"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -545,6 +546,9 @@ func (p *GmailSyncProvider) scanWindowChunks(
 				if msgEpoch == window.EndEpoch {
 					boundaryHashes[idHash] = struct{}{}
 				}
+				if hasCalendarPart(msg.Payload) {
+					continue
+				}
 
 				rows, procErr := p.processMessage(ctx, msg, accountID, knownMap, meSet)
 				if procErr != nil {
@@ -614,6 +618,9 @@ func (p *GmailSyncProvider) scanChunks(
 					// ref.ID is a per-mailbox Gmail message id (third-party);
 					// hash it so the error in River logs carries no raw id.
 					return processed, matched, fmt.Errorf("get message %s: %w", hashGmailMessageID(ref.ID), getErr)
+				}
+				if hasCalendarPart(msg.Payload) {
+					continue
 				}
 				rows, procErr := p.processMessage(ctx, msg, accountID, knownMap, meSet)
 				if procErr != nil {
@@ -1498,6 +1505,18 @@ func computeLocalDay(sentAt time.Time, loc *time.Location) string {
 // epochMillisToTime converts Gmail's internalDate (epoch millis) to a UTC time.
 func epochMillisToTime(millis int64) time.Time {
 	return time.UnixMilli(millis).UTC()
+}
+
+// hasCalendarPart reports whether part or any part below it, inline or
+// attachment, has the content type text/calendar. It is the one definition of
+// a calendar message (an invitation, update, cancellation or reply): both scan
+// loops drop such a message before storage and discovery, because calendar
+// sync already records the meeting (ING-046, IMP-050).
+func hasCalendarPart(part *gmail.MessagePart) bool {
+	if part == nil {
+		return false
+	}
+	return strings.EqualFold(part.MimeType, "text/calendar") || slices.ContainsFunc(part.Parts, hasCalendarPart)
 }
 
 // isAttachmentPart reports whether a MIME part is an attachment: it has a

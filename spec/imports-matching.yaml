@@ -753,7 +753,7 @@ behaviors:
   - id: IMP-050
     title: Gmail calendar messages feed no discovery
     type: business-logic
-    status: proposed
+    status: current
     surface: none
     given: a fetched Gmail message with a text/calendar MIME part at any depth, inline or attachment
     when: discovery evaluates the message
