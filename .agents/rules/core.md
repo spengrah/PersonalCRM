@@ -89,7 +89,7 @@ blocking criteria, proportional fixes, follow-up reviews, and verdict format.
 ### Branch model: `develop` (default) + `main` (prod)
 
 - The default branch is `develop`. ALL PRs target `develop` (protected: requires a PR + green CI).
-- Merge into `develop` autonomously once required CI and the native Codex merge-gate review pass. Production promotion requires human approval; never promote autonomously.
+- Merge into `develop` autonomously once required CI passes and the workflow that produced the PR calls for the merge, such as an arc's landing after its gates. Production promotion requires human approval; never promote autonomously.
 - `main` is prod and is fast-forward-only from `develop` — never commit or open PRs directly against it.
 - Promote with `make promote` (`git push origin develop:main`), which triggers the self-hosted-runner prod deploy via `deploy-prod.yml`.
 - Pushes to `main` skip the local pre-push checks: the content was already reviewed + CI-gated on `develop`, and `deploy-prod.yml` re-verifies CI for the SHA before deploying.
