@@ -2,7 +2,7 @@
 
 // Coverage for the calendar-message exclusion (ING-046, IMP-050), driven
 // through the REAL GmailSyncProvider.Sync and ScanIdentifier against the
-// package's PostgreSQL clone. The synthetic toolkit seeds every contact, builds
+// test's own PostgreSQL clone. The synthetic toolkit seeds every contact, builds
 // every Gmail payload and wires the provider to its harness (fake fetcher, real
 // bus); the Gmail API is the one thing the test cannot run.
 package google_test
@@ -18,6 +18,7 @@ import (
 	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/synthetic"
 	"personal-crm/backend/internal/synthetic/factory"
+	"personal-crm/backend/internal/testdb"
 	"personal-crm/backend/tests/testsupport"
 
 	"github.com/google/uuid"
@@ -33,7 +34,11 @@ type calendarEnv struct {
 
 func newCalendarEnv(t *testing.T) *calendarEnv {
 	t.Helper()
-	database := testsupport.OpenDatabase(t)
+	// The harness starts a River client, so each test gets its own clone
+	// (.agents/rules/testing.md, River-touching tests).
+	cloneURL, drop := testdb.NewEphemeralClone(t)
+	t.Cleanup(drop)
+	database := testsupport.OpenDatabaseAt(t, cloneURL)
 	ctx := t.Context()
 	h := synthetic.NewHarnessForNamespace(t, ctx, database, "cal"+uuid.NewString()[:8], factory.DefaultSeed)
 	return &calendarEnv{
