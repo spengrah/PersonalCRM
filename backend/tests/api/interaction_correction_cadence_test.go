@@ -239,9 +239,8 @@ func TestInteractionCorrection_RecomputesCadence(t *testing.T) {
 func TestInteractionCorrection_ComposesWithDueDatesSetDirectly(t *testing.T) {
 	testsupport.RequireDatabase(t)
 	t.Parallel()
-	database, cfg := newIsolatedRiverTestDB(t, t.Context())
-	e := newCorrectionEnvOn(t, database)
-	todoistSync := newCadenceSync(e, cfg)
+	e := newCorrectionEnv(t)
+	todoistSync := newCadenceSync(e)
 	day := func(contactBy *string) time.Time {
 		d, err := time.Parse(todoist.DateFormat, (*contactBy)[:10])
 		require.NoError(t, err)

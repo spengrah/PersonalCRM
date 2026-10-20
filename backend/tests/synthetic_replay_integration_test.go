@@ -21,9 +21,9 @@ import (
 // These replay integration tests are SLOW-gated (testsupport.RequireLongTests):
 // skipped in CI's fast PR gate, run pre-push (LONG_TESTS=1) + locally via
 // make test-integration, AND nightly via BACKEND_SLOW_TESTS_REGEX (the
-// TestSynthetic name prefix). Each sub-test uses a UNIQUE namespace so
-// shared-test-DB reuse cannot collide; teardown is the harness's auto-registered
-// quiesce + conditional-cleanup closure (D8).
+// TestSynthetic name prefix). Each harness runs on its test's own database
+// clone, which every harness that test builds shares; teardown is the harness's
+// auto-registered quiesce + conditional-cleanup closure (D8).
 
 func newSyntheticDB(t *testing.T) (*db.Database, context.Context) {
 	t.Helper()
@@ -45,10 +45,10 @@ func syntheticNS(t *testing.T) string {
 
 func TestSyntheticReplay_SeededSenderSettled(t *testing.T) {
 	testsupport.RequireLongTests(t)
-	database, ctx := newSyntheticDB(t)
+	ctx := t.Context()
 
 	t.Run("gmail", func(t *testing.T) {
-		h := synthetic.NewHarnessForNamespace(t, ctx, database, syntheticNS(t), factory.DefaultSeed)
+		h := synthetic.NewHarnessForNamespace(t, ctx, syntheticNS(t), factory.DefaultSeed)
 		gen := h.Generator()
 		spec := gen.Contact(factory.WithEmail())
 		contact, err := h.SeedContact(ctx, spec)
@@ -60,7 +60,7 @@ func TestSyntheticReplay_SeededSenderSettled(t *testing.T) {
 	})
 
 	t.Run("telegram", func(t *testing.T) {
-		h := synthetic.NewHarnessForNamespace(t, ctx, database, syntheticNS(t), factory.DefaultSeed)
+		h := synthetic.NewHarnessForNamespace(t, ctx, syntheticNS(t), factory.DefaultSeed)
 		gen := h.Generator()
 		spec := gen.Contact(factory.WithTelegram())
 		contact, err := h.SeedContact(ctx, spec)
@@ -72,7 +72,7 @@ func TestSyntheticReplay_SeededSenderSettled(t *testing.T) {
 	})
 
 	t.Run("gcal", func(t *testing.T) {
-		h := synthetic.NewHarnessForNamespace(t, ctx, database, syntheticNS(t), factory.DefaultSeed)
+		h := synthetic.NewHarnessForNamespace(t, ctx, syntheticNS(t), factory.DefaultSeed)
 		gen := h.Generator()
 		spec := gen.Contact(factory.WithEmail())
 		contact, err := h.SeedContact(ctx, spec)
@@ -84,7 +84,7 @@ func TestSyntheticReplay_SeededSenderSettled(t *testing.T) {
 	})
 
 	t.Run("gchat", func(t *testing.T) {
-		h := synthetic.NewHarnessForNamespace(t, ctx, database, syntheticNS(t), factory.DefaultSeed)
+		h := synthetic.NewHarnessForNamespace(t, ctx, syntheticNS(t), factory.DefaultSeed)
 		gen := h.Generator()
 		spec := gen.Contact(factory.WithEmail())
 		contact, err := h.SeedContact(ctx, spec)
@@ -96,7 +96,7 @@ func TestSyntheticReplay_SeededSenderSettled(t *testing.T) {
 	})
 
 	t.Run("whatsapp", func(t *testing.T) {
-		h := synthetic.NewHarnessForNamespace(t, ctx, database, syntheticNS(t), factory.DefaultSeed)
+		h := synthetic.NewHarnessForNamespace(t, ctx, syntheticNS(t), factory.DefaultSeed)
 		gen := h.Generator()
 		spec := gen.Contact(factory.WithPhone())
 		contact, err := h.SeedContact(ctx, spec)
@@ -108,7 +108,7 @@ func TestSyntheticReplay_SeededSenderSettled(t *testing.T) {
 	})
 
 	t.Run("imessage", func(t *testing.T) {
-		h := synthetic.NewHarnessForNamespace(t, ctx, database, syntheticNS(t), factory.DefaultSeed)
+		h := synthetic.NewHarnessForNamespace(t, ctx, syntheticNS(t), factory.DefaultSeed)
 		gen := h.Generator()
 		spec := gen.Contact(factory.WithPhone())
 		contact, err := h.SeedContact(ctx, spec)
@@ -122,7 +122,7 @@ func TestSyntheticReplay_SeededSenderSettled(t *testing.T) {
 	})
 
 	t.Run("mac_contacts", func(t *testing.T) {
-		h := synthetic.NewHarnessForNamespace(t, ctx, database, syntheticNS(t), factory.DefaultSeed)
+		h := synthetic.NewHarnessForNamespace(t, ctx, syntheticNS(t), factory.DefaultSeed)
 		gen := h.Generator()
 		spec := gen.Contact(factory.WithEmail())
 		contact, err := h.SeedContact(ctx, spec)
@@ -135,7 +135,7 @@ func TestSyntheticReplay_SeededSenderSettled(t *testing.T) {
 	})
 
 	t.Run("todoist", func(t *testing.T) {
-		h := synthetic.NewHarnessForNamespace(t, ctx, database, syntheticNS(t), factory.DefaultSeed)
+		h := synthetic.NewHarnessForNamespace(t, ctx, syntheticNS(t), factory.DefaultSeed)
 		gen := h.Generator()
 		spec := gen.Contact(factory.WithEmail(), factory.WithCadence("weekly"))
 		contact, err := h.SeedContact(ctx, spec)
@@ -162,9 +162,9 @@ func TestSyntheticReplay_SeededSenderSettled(t *testing.T) {
 // must match on.
 func TestReplayTodoistRecurringEdit_UnmanagesViaRealPath(t *testing.T) {
 	testsupport.RequireLongTests(t)
-	database, ctx := newSyntheticDB(t)
+	ctx := t.Context()
 
-	h := synthetic.NewHarnessForNamespace(t, ctx, database, syntheticNS(t), factory.DefaultSeed)
+	h := synthetic.NewHarnessForNamespace(t, ctx, syntheticNS(t), factory.DefaultSeed)
 	gen := h.Generator()
 
 	target, err := h.SeedContact(ctx, gen.Contact(factory.WithEmail(), factory.WithCadence("weekly")))
@@ -184,13 +184,13 @@ func TestReplayTodoistRecurringEdit_UnmanagesViaRealPath(t *testing.T) {
 	// test that catches a regression dropping the scope — a mutation an unscoped run
 	// would perform (unlike the same-namespace bystander, whose already-managed task
 	// stays managed either way).
-	hOther := synthetic.NewHarnessForNamespace(t, ctx, database, syntheticNS(t), factory.DefaultSeed)
+	hOther := synthetic.NewHarnessForNamespace(t, ctx, syntheticNS(t), factory.DefaultSeed)
 	crossNS, err := hOther.SeedContact(ctx, hOther.Generator().Contact(factory.WithEmail(), factory.WithCadence("weekly")))
 	require.NoError(t, err)
 
 	// Both cadence tasks start managed; the target's temp id is finalized to a
 	// Todoist-v1 alphanumeric external id (the id the recurring edit matches on).
-	taskRepo := repository.NewContactTaskRepository(database.Queries)
+	taskRepo := repository.NewContactTaskRepository(h.Database().Queries)
 	targetTask, err := taskRepo.GetContactTaskByContactCadenceDue(ctx, target.ID, todoist.SourceName)
 	require.NoError(t, err)
 	require.Equal(t, repository.ContactTaskStateManaged, targetTask.State, "target starts managed")
@@ -233,9 +233,9 @@ func TestReplayTodoistRecurringEdit_UnmanagesViaRealPath(t *testing.T) {
 // live River client, so DB-wide river_job contention argues against parallelism.
 func TestReplayAssertion_RefreshesKnowledgeCache(t *testing.T) {
 	testsupport.RequireLongTests(t)
-	database, ctx := newSyntheticDB(t)
+	ctx := t.Context()
 
-	h := synthetic.NewHarnessForNamespace(t, ctx, database, syntheticNS(t), factory.DefaultSeed)
+	h := synthetic.NewHarnessForNamespace(t, ctx, syntheticNS(t), factory.DefaultSeed)
 	gen := h.Generator()
 	anchor := gen.Anchor()
 
@@ -292,11 +292,11 @@ func requireSameDate(t *testing.T, want, got time.Time, msg string) {
 
 func TestSyntheticReplay_UnknownSenderPending(t *testing.T) {
 	testsupport.RequireLongTests(t)
-	database, ctx := newSyntheticDB(t)
+	ctx := t.Context()
 
 	// Only the four pending-capable sources (D4 matrix).
 	t.Run("mac_contacts_unmatched", func(t *testing.T) {
-		h := synthetic.NewHarnessForNamespace(t, ctx, database, syntheticNS(t), factory.DefaultSeed)
+		h := synthetic.NewHarnessForNamespace(t, ctx, syntheticNS(t), factory.DefaultSeed)
 		gen := h.Generator()
 		mc, err := gen.MacContact(gen.Contact(factory.WithEmail()), factory.MatchUnknown, h.MacHostID())
 		require.NoError(t, err)
@@ -306,7 +306,7 @@ func TestSyntheticReplay_UnknownSenderPending(t *testing.T) {
 	})
 
 	t.Run("imessage_stranded", func(t *testing.T) {
-		h := synthetic.NewHarnessForNamespace(t, ctx, database, syntheticNS(t), factory.DefaultSeed)
+		h := synthetic.NewHarnessForNamespace(t, ctx, syntheticNS(t), factory.DefaultSeed)
 		gen := h.Generator()
 		imsg, err := gen.IMessage(gen.Contact(factory.WithPhone()), factory.MatchUnknown, h.MacHostID())
 		require.NoError(t, err)
@@ -316,7 +316,7 @@ func TestSyntheticReplay_UnknownSenderPending(t *testing.T) {
 	})
 
 	t.Run("telegram_stranded", func(t *testing.T) {
-		h := synthetic.NewHarnessForNamespace(t, ctx, database, syntheticNS(t), factory.DefaultSeed)
+		h := synthetic.NewHarnessForNamespace(t, ctx, syntheticNS(t), factory.DefaultSeed)
 		gen := h.Generator()
 		res, err := h.ReplayTelegram(ctx, uuid.Nil, gen.TelegramMessage(gen.Contact(factory.WithTelegram()), factory.MatchUnknown))
 		require.NoError(t, err)
@@ -324,7 +324,7 @@ func TestSyntheticReplay_UnknownSenderPending(t *testing.T) {
 	})
 
 	t.Run("gcal_unmatched_attendee", func(t *testing.T) {
-		h := synthetic.NewHarnessForNamespace(t, ctx, database, syntheticNS(t), factory.DefaultSeed)
+		h := synthetic.NewHarnessForNamespace(t, ctx, syntheticNS(t), factory.DefaultSeed)
 		gen := h.Generator()
 		res, err := h.ReplayGCal(ctx, uuid.Nil, gen.GCalEvent(gen.Contact(factory.WithEmail()), factory.MatchUnknown))
 		require.NoError(t, err)
@@ -335,7 +335,7 @@ func TestSyntheticReplay_UnknownSenderPending(t *testing.T) {
 	// row for an unknown sender, while matched_contact_id IS NULL is legal for
 	// whatsapp and the row IS written — it simply never aggregates.
 	t.Run("whatsapp_stranded", func(t *testing.T) {
-		h := synthetic.NewHarnessForNamespace(t, ctx, database, syntheticNS(t), factory.DefaultSeed)
+		h := synthetic.NewHarnessForNamespace(t, ctx, syntheticNS(t), factory.DefaultSeed)
 		gen := h.Generator()
 		target := gen.Contact(factory.WithPhone())
 		contact, err := h.SeedContact(ctx, target)
@@ -360,12 +360,12 @@ func TestSyntheticReplay_UnknownSenderPending(t *testing.T) {
 
 func TestSyntheticReplay_UnknownSenderMatchOnly(t *testing.T) {
 	testsupport.RequireLongTests(t)
-	database, ctx := newSyntheticDB(t)
+	ctx := t.Context()
 
 	// Gmail/GChat unknown sender: match-only (no comms_message row written for
 	// the unknown correspondent, hence no interaction, no contact create).
 	t.Run("gmail_match_only", func(t *testing.T) {
-		h := synthetic.NewHarnessForNamespace(t, ctx, database, syntheticNS(t), factory.DefaultSeed)
+		h := synthetic.NewHarnessForNamespace(t, ctx, syntheticNS(t), factory.DefaultSeed)
 		gen := h.Generator()
 		spec := gen.GmailMessage(gen.Contact(factory.WithEmail()), factory.MatchUnknown)
 		res, err := h.ReplayGmail(ctx, uuid.Nil, spec)
@@ -377,7 +377,7 @@ func TestSyntheticReplay_UnknownSenderMatchOnly(t *testing.T) {
 	})
 
 	t.Run("gchat_match_only", func(t *testing.T) {
-		h := synthetic.NewHarnessForNamespace(t, ctx, database, syntheticNS(t), factory.DefaultSeed)
+		h := synthetic.NewHarnessForNamespace(t, ctx, syntheticNS(t), factory.DefaultSeed)
 		gen := h.Generator()
 		spec := gen.GChatMessage(gen.Contact(factory.WithEmail()), factory.MatchUnknown)
 		res, err := h.ReplayGChat(ctx, uuid.Nil, spec)
@@ -391,9 +391,9 @@ func TestSyntheticReplay_UnknownSenderMatchOnly(t *testing.T) {
 
 func TestSyntheticReplay_IdempotentReReplay(t *testing.T) {
 	testsupport.RequireLongTests(t)
-	database, ctx := newSyntheticDB(t)
+	ctx := t.Context()
 
-	h := synthetic.NewHarnessForNamespace(t, ctx, database, syntheticNS(t), factory.DefaultSeed)
+	h := synthetic.NewHarnessForNamespace(t, ctx, syntheticNS(t), factory.DefaultSeed)
 	gen := h.Generator()
 	spec := gen.Contact(factory.WithEmail())
 	contact, err := h.SeedContact(ctx, spec)

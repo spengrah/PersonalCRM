@@ -173,8 +173,7 @@ func TestInteractionCorrection_IsSP1State(t *testing.T) {
 		// spec: KNW-037.raw-evidence-survives
 		// A database of its own, so the meeting note's linkage window holds the
 		// one calendar event this case syncs.
-		database, _ := newIsolatedRiverTestDB(t, t.Context())
-		e := newCorrectionEnvOn(t, database)
+		e := newCorrectionEnv(t)
 		gen := e.harness.Generator()
 		aSpec := gen.Contact(factory.WithCadence("monthly"), factory.WithEmail())
 		bSpec := gen.Contact(factory.WithCadence("monthly"), factory.WithEmail())

@@ -41,8 +41,9 @@ type contentEnv struct {
 
 func newContentEnv(t *testing.T) *contentEnv {
 	t.Helper()
-	database, ctx := newSyntheticDB(t)
-	h := synthetic.NewHarnessForNamespace(t, ctx, database, syntheticNS(t), factory.DefaultSeed)
+	ctx := t.Context()
+	h := synthetic.NewHarnessForNamespace(t, ctx, syntheticNS(t), factory.DefaultSeed)
+	database := h.Database()
 	contact, err := h.SeedContact(ctx, h.Generator().Contact())
 	require.NoError(t, err)
 	return &contentEnv{ctx: ctx, db: database, contact: contact,
@@ -141,7 +142,7 @@ func TestInteractionContentService_GroupThreadWindow(t *testing.T) {
 	e := newContentEnv(t)
 	base := accelerated.GetCurrentTime().UTC().Truncate(time.Second)
 	interaction := seedInteraction(t, e, e.contact.ID, repository.InteractionSourceGChat, base, nil)
-	h := synthetic.NewHarnessForNamespace(t, e.ctx, e.db, syntheticNS(t)+"-speaker", factory.DefaultSeed)
+	h := synthetic.NewHarnessForNamespace(t, e.ctx, syntheticNS(t)+"-speaker", factory.DefaultSeed)
 	speaker, err := h.SeedContact(e.ctx, h.Generator().Contact())
 	require.NoError(t, err)
 	thread := "window-thread"
@@ -206,7 +207,7 @@ func TestInteractionContentService_ReplicaDedup(t *testing.T) {
 	requireContentIntegration(t)
 	t.Parallel()
 	e := newContentEnv(t)
-	h := synthetic.NewHarnessForNamespace(t, e.ctx, e.db, syntheticNS(t)+"-other", factory.DefaultSeed)
+	h := synthetic.NewHarnessForNamespace(t, e.ctx, syntheticNS(t)+"-other", factory.DefaultSeed)
 	other, err := h.SeedContact(e.ctx, h.Generator().Contact())
 	require.NoError(t, err)
 	when := accelerated.GetCurrentTime().UTC().Truncate(time.Second)

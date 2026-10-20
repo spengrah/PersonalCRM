@@ -5,11 +5,12 @@
 // reaching into the factory/replay sub-packages directly.
 //
 //	ctx := context.Background()                  // the test's long-lived base ctx
-//	h := synthetic.NewHarness(t, ctx, database)  // ctx is MANDATORY (client.Start uses it)
+//	h := synthetic.NewHarness(t, ctx)            // ctx is MANDATORY (client.Start uses it)
 //	gen := h.Generator()                         // seeded, namespaced, live anchor
 //	alice, _ := h.SeedContact(ctx, gen.Contact(factory.WithEmail()))
 //	res, _ := h.ReplayGmail(ctx, alice.ID, gen.GmailMessage(spec, factory.MatchSeeded))
-//	// graph is settled here; assert via h.InteractionRepo() etc.
+//	// graph is settled here; assert via h.InteractionRepo(), or build your own
+//	// services on h.Database(), the test's own clone.
 //
 // SeedParams + SeedAll provide the mode-(b) "fast full-seed" shape (the function
 // surface + a minimal default dataset), which is exactly what the
@@ -41,16 +42,19 @@ func ValidateNamespace(namespace string) error {
 	return replay.ValidateNamespace(namespace)
 }
 
-// NewHarness builds a replay harness for a test. ctx is MANDATORY and is the
-// exact context passed to the River client's Start (NOT a timeout-derived ctx).
-func NewHarness(t *testing.T, ctx context.Context, database *db.Database) *Harness {
-	return replay.NewHarness(t, ctx, database)
+// NewHarness builds a replay harness for a test on a database clone of the
+// test's own, opened on the test's first harness and dropped when it ends;
+// every harness the test builds shares it, through Harness.Database. ctx is
+// MANDATORY and is the exact context passed to the River client's Start (NOT a
+// timeout-derived ctx).
+func NewHarness(t *testing.T, ctx context.Context) *Harness {
+	return replay.NewHarness(t, ctx)
 }
 
-// NewHarnessForNamespace builds a harness with an explicit namespace + seed so
-// each sub-test gets a unique namespace (shared-test-DB isolation).
-func NewHarnessForNamespace(t *testing.T, ctx context.Context, database *db.Database, namespace string, seed uint64) *Harness {
-	return replay.NewHarnessForNamespace(t, ctx, database, namespace, seed)
+// NewHarnessForNamespace is NewHarness with an explicit namespace + seed, for a
+// test that puts several namespaces on its clone.
+func NewHarnessForNamespace(t *testing.T, ctx context.Context, namespace string, seed uint64) *Harness {
+	return replay.NewHarnessForNamespace(t, ctx, namespace, seed)
 }
 
 // NewHarnessWithDB builds a harness without a *testing.T (non-test callers —

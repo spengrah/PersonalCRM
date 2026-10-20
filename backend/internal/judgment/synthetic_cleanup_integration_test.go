@@ -91,7 +91,7 @@ func (e *env) held(t *testing.T, r flagRecords) (judgments, flags, clearings, un
 // threads, and no other namespace's.
 func TestSyntheticCleanupRemovesFlagRecords(t *testing.T) {
 	t.Run("the replay harness's cleanup", func(t *testing.T) {
-		e := newEnv(t, production, withOwnDatabase())
+		e := newEnv(t, production)
 		other := e.thread(t)
 		e.message(t, other, e.contact(t), false, e.day(1))
 		otherRecords := e.recordFlagRecords(t, other, factory.DefaultSeed)
@@ -120,7 +120,7 @@ func TestSyntheticCleanupRemovesFlagRecords(t *testing.T) {
 	})
 
 	t.Run("a declared world's cleanup", func(t *testing.T) {
-		e := newEnv(t, production, withOwnDatabase())
+		e := newEnv(t, production)
 		other := e.thread(t)
 		e.message(t, other, e.contact(t), false, e.day(1))
 		otherRecords := e.recordFlagRecords(t, other, factory.DefaultSeed)

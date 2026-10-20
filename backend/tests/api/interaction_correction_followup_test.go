@@ -335,9 +335,8 @@ func TestInteractionCorrection_CadenceTaskFollowsAtReconciliation(t *testing.T) 
 	// spec: CAD-048.cadence-task-follows-at-reconciliation
 	testsupport.RequireDatabase(t)
 	t.Parallel()
-	database, cfg := newIsolatedRiverTestDB(t, t.Context())
-	e := newCorrectionEnvOn(t, database)
-	todoistSync := newCadenceSync(e, cfg)
+	e := newCorrectionEnv(t)
+	todoistSync := newCadenceSync(e)
 
 	a := e.contact(t, "monthly")
 	e.call(t, a, e.ref("call"), repository.InteractionDirectionInbound, e.at(-40*24))

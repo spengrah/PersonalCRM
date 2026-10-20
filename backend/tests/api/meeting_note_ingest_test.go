@@ -104,16 +104,17 @@ func (e *meetingNoteIngestEnv) newSessionUUID() string {
 
 func setupMeetingNoteIngestEnv(t *testing.T) *meetingNoteIngestEnv {
 	t.Helper()
+	return setupMeetingNoteIngestEnvOn(t, testsupport.OpenDatabase(t))
+}
 
-	databaseURL := testsupport.RequireDatabase(t)
+// setupMeetingNoteIngestEnvOn builds the env on database.
+func setupMeetingNoteIngestEnvOn(t *testing.T, database *db.Database) *meetingNoteIngestEnv {
+	t.Helper()
 
 	ctx := t.Context()
 	cfg := config.TestConfig()
-	cfg.Database.URL = databaseURL
 	cfg.External.APIKey = macHostTestKey
 	cfg.Features.EnableEventBusIngest = true
-
-	database := testsupport.OpenDatabase(t)
 
 	hostRepo := repository.NewMacHostRepository(database.Queries)
 	pairingRepo := repository.NewMacHostPairingTokenRepository(database.Queries)

@@ -21,4 +21,4 @@ When a surface genuinely can't be scoped or mocked — a DB-level singleton like
 
 Use it for unscopable global singletons that multiple spec files mutate, held for the WHOLE file: acquire in a top-level `test.beforeAll` (with `test.setTimeout` raised inside the hook — the contending file may hold the lock for its entire serial run) and release in `test.afterAll` (its own timeout slot). Do not cycle the lock per test: the releasing worker instantly re-acquires for its next serial test, starving the other file's waiter.
 
-Reach for this only when scoping/mocking doesn't apply — it serializes across every worker holding the same lock name, which is a throughput cost. `settings-mac.spec.ts` and `imports-interactions.spec.ts` both hold the `mac-host` lock for this reason.
+Reach for this only when scoping/mocking doesn't apply — it serializes across every worker holding the same lock name, which is a throughput cost. `settings-mac.spec.ts` holds the `mac-host` lock for this reason.

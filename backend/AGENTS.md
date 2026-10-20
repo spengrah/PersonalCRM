@@ -7,7 +7,7 @@ Follow [core rules](../.agents/rules/core.md). These are the essential Go/Gin/Po
 - Use deterministic ordering and explicit tie-breakers; handle null and empty-string semantics deliberately.
 - Preserve unrelated JSONB metadata when updating keys.
 - Publish transaction-bound events before mutation; commit before external HTTP calls. Start River with the root context.
-- Use synthetic factories/harnesses and namespace isolation for tests. Follow the [testing rules](../.agents/rules/testing.md) for shared databases, River isolation, and parallelism.
+- Follow the [testing rules](../.agents/rules/core.md#writing-tests) for test data, shared databases, clones, and parallelism.
 
 Read the relevant entries in [backend troubleshooting](../.agents/guides/backend-troubleshooting.md)
 when changing SQL/schema, repositories, OAuth or sync providers, transactions,

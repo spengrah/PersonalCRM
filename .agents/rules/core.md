@@ -64,6 +64,31 @@ A gate whose self-test needs its own falsification is the wrong tool.
 - Agents may choose focused E2E runs with `make test-e2e-local PLAYWRIGHT_GREP='...'` for the affected behavior; no user-supplied grep is required.
 - Unit tests for business logic, integration tests for DB operations, E2E for user flows
 
+### Writing tests
+
+These rules govern new and substantially rewritten tests. An existing test converts only when a change already rewrites it. Each rule serves one of the suite's goals and names what enforces it; reviewer judgment means the rule is enforced at code review ([code-review.md](code-review.md)).
+
+The goals:
+
+1. **Proof:** every behavior the product promises has a test that fails when it breaks, cited to its spec ID.
+2. **Gating:** regressions are caught before merge.
+3. **Fidelity:** the repository's own code runs against real PostgreSQL; fakes stand in only for what cannot run, and for injected failures.
+4. **Independence:** tests are parallel-safe and deterministic.
+5. **Speed:** the gating lanes stay cheap enough to run on every PR.
+6. **One way:** each kind of test plumbing has one home, so an agent copying the nearest example copies the right one.
+
+The rules:
+
+- **Cite the behavior a test proves** (Proof). Follow the [test-to-behavior citation rules](../../spec/README.md#test--behavior-citations), and cite the behavior the assertions exercise. Enforced by `make spec-lint` and `make spec-coverage` in pre-push and CI.
+- **The proving test gates a merge** (Gating). The test that proves a spec behavior runs in a lane that `.github/workflows/ci.yml` runs on every pull request. The nightly slow lane (`make test-integration-slow`) holds only extra coverage whose measured cost outweighs catching its regression a day late; cost alone never moves a behavior's last proving test there. A second-order test that guards against vacuous passes also gates a merge, as [Second-order verification](#second-order-verification) requires. Enforced by reviewer judgment: `make spec-coverage` records no lane. To route a test to the slow lane, follow "Slow-test routing" in [synthetic-seed-toolkit.md](../patterns/synthetic-seed-toolkit.md#slow-test-routing).
+- **Fake only what a test cannot run** (Fidelity). Fake third-party APIs and their clients, the network, the clock, and a failure the real dependency cannot produce on demand. The repository's own repositories and services run against real PostgreSQL; a fake of the repository's own code exists only to inject a failure. When a failure matters, assert its outcome (retried, skipped, rolled back, or mapped to a status), not only that an error came back. Enforced by reviewer judgment.
+- **Test production code, not a copy of it** (Fidelity). Reach unexported logic from a same-package test or through an exported entry point; never copy it into a test. Enforced by reviewer judgment.
+- **Build domain state with the synthetic toolkit** (One way). When a test needs reusable domain state, build it with `synthetic/factory` in a unit test or the replay harness (`synthetic.NewHarnessForNamespace`) in an integration test, and extend the toolkit when it cannot express that state. A small repository fixture and a same-package test of unexported logic stay as they are: the harness cannot be imported from the packages it depends on. Enforced by reviewer judgment. How-to: [synthetic-seed-toolkit.md](../patterns/synthetic-seed-toolkit.md).
+- **Isolate by namespace, or by a clone when the database is the state** (Independence). On a shared package database, scope every read and assertion to the test's own namespace, never to a database-wide count. Open a per-test clone (`newIsolatedRiverTestDB`) when correctness depends on database-wide state: a database-wide count or delete, a fixed ID, a singleton table, or a started River client. A synthetic-harness test opens nothing: the harness runs on a clone of the test's own, shared by every harness the test builds. Enforced by the harness constructors for harness tests (`backend/internal/synthetic/replay/harness_testdb.go`) and by reviewer judgment for the rest. Recipe and validation: [test-parallelism.md](../patterns/test-parallelism.md).
+- **Parallel by default** (Speed). A backend integration test calls `t.Parallel()`: Go finishes every serial test before the parallel ones start, so each serial test lengthens the run. A test whose subject is the migration runner stays serial. Enforced by reviewer judgment.
+- **Isolate E2E specs by prefix and declared seeds** (Independence). An E2E spec seeds through `testApi.seedBehavior` and builds the identifying strings of rows it creates through the product from `testApi.prefix`, so its cleanup finds them and its assertions read only its own rows. Use serial mode (`test.describe.configure({ mode: 'serial' })`) only to order the tests of one file when a sibling test changes shared state the file reads, and the global lock (`acquireGlobalLock`) for a singleton that several files change. Enforced by reviewer judgment. How-to: [e2e-parallelism.md](../patterns/e2e-parallelism.md) and `frontend/tests/e2e/helpers/test-api.ts`.
+- **Tag E2E specs by area** (Speed). Tag each spec's `describe` block `@area:<surface>` after the functionality it verifies, so a focused run (`PLAYWRIGHT_GREP='@area:<surface>'`) selects it. Enforced by reviewer judgment.
+
 ## Pre-push Hooks
 
 Git pre-push hooks run automatically and may block push:

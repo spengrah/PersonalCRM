@@ -13,7 +13,6 @@ package tests
 
 import (
 	"context"
-	"os"
 	"strings"
 	"testing"
 
@@ -159,8 +158,9 @@ func assertRejected(t *testing.T, err error, column string) {
 // set crm.derived_writer (the freshness rule) — never the shared package
 // pool, whose connections are recycled across tests that DO declare owners.
 func runUnauthorizedRejectionSubtests(t *testing.T, cases []derivedColumnCase) {
-	database, ctx := newSyntheticDB(t)
-	h := synthetic.NewHarnessForNamespace(t, ctx, database, syntheticNS(t), factory.DefaultSeed)
+	ctx := t.Context()
+	h := synthetic.NewHarnessForNamespace(t, ctx, syntheticNS(t), factory.DefaultSeed)
+	database := h.Database()
 	gen := h.Generator()
 	contactRepo := repository.NewContactRepository(database.Queries)
 
@@ -180,7 +180,7 @@ func runUnauthorizedRejectionSubtests(t *testing.T, cases []derivedColumnCase) {
 			// Freshness rule: a dedicated connection that has never run
 			// set_config, so current_setting(..., true) is genuinely NULL
 			// rather than the placeholder's post-set reset value ''.
-			conn, err := pgx.Connect(ctx, os.Getenv("DATABASE_URL"))
+			conn, err := pgx.Connect(ctx, database.Pool.Config().ConnString())
 			require.NoError(t, err)
 			t.Cleanup(func() { _ = conn.Close(ctx) })
 
@@ -221,8 +221,9 @@ func TestDerivedWriterTrigger_RejectsUnauthorizedKnowledgeWrite(t *testing.T) {
 // absence of a declaration.
 func TestDerivedWriterTrigger_RejectsWrongOwner(t *testing.T) {
 	t.Parallel()
-	database, ctx := newSyntheticDB(t)
-	h := synthetic.NewHarnessForNamespace(t, ctx, database, syntheticNS(t), factory.DefaultSeed)
+	ctx := t.Context()
+	h := synthetic.NewHarnessForNamespace(t, ctx, syntheticNS(t), factory.DefaultSeed)
+	database := h.Database()
 	gen := h.Generator()
 	contactRepo := repository.NewContactRepository(database.Queries)
 
@@ -271,8 +272,9 @@ func TestDerivedWriterTrigger_RejectsWrongOwner(t *testing.T) {
 // evidence the trigger works.
 func TestDerivedWriterTrigger_AllowsOwningWrites(t *testing.T) {
 	t.Parallel()
-	database, ctx := newSyntheticDB(t)
-	h := synthetic.NewHarnessForNamespace(t, ctx, database, syntheticNS(t), factory.DefaultSeed)
+	ctx := t.Context()
+	h := synthetic.NewHarnessForNamespace(t, ctx, syntheticNS(t), factory.DefaultSeed)
+	database := h.Database()
 	gen := h.Generator()
 	contactRepo := repository.NewContactRepository(database.Queries)
 
@@ -335,8 +337,9 @@ func TestDerivedWriterTrigger_AllowsOwningWrites(t *testing.T) {
 // declared anywhere. Regression pin — passes identically pre-079.
 func TestDerivedWriterTrigger_IgnoresProfileOnlyUpdate(t *testing.T) {
 	t.Parallel()
-	database, ctx := newSyntheticDB(t)
-	h := synthetic.NewHarnessForNamespace(t, ctx, database, syntheticNS(t), factory.DefaultSeed)
+	ctx := t.Context()
+	h := synthetic.NewHarnessForNamespace(t, ctx, syntheticNS(t), factory.DefaultSeed)
+	database := h.Database()
 	gen := h.Generator()
 	contactRepo := repository.NewContactRepository(database.Queries)
 
@@ -358,8 +361,8 @@ func TestDerivedWriterTrigger_IgnoresProfileOnlyUpdate(t *testing.T) {
 // populate contact_by at create time while leaving last_contacted unset (per
 // CON-001). This is the one test in this file that creates through the
 // repository directly rather than the synthetic harness: the create path
-// itself is the subject under test (testing.md's rule governs building STATE
-// for a test, not exercising the code the test is about).
+// itself is the subject under test (core.md's toolkit rule governs building
+// STATE for a test, not exercising the code the test is about).
 func TestDerivedWriterTrigger_InsertUnaffected(t *testing.T) {
 	t.Parallel()
 	database, _ := newSyntheticDB(t)
@@ -381,12 +384,13 @@ func TestDerivedWriterTrigger_InsertUnaffected(t *testing.T) {
 // t.Parallel(): its subtests share one MaxConns=1 pinned pool and must run in
 // order.
 func TestDerivedWriterGUC_PoolSafety(t *testing.T) {
-	database, ctx := newSyntheticDB(t)
-	h := synthetic.NewHarnessForNamespace(t, ctx, database, syntheticNS(t), factory.DefaultSeed)
+	ctx := t.Context()
+	h := synthetic.NewHarnessForNamespace(t, ctx, syntheticNS(t), factory.DefaultSeed)
+	database := h.Database()
 	gen := h.Generator()
 	contactRepo := repository.NewContactRepository(database.Queries)
 
-	poolCfg, err := pgxpool.ParseConfig(os.Getenv("DATABASE_URL"))
+	poolCfg, err := pgxpool.ParseConfig(database.Pool.Config().ConnString())
 	require.NoError(t, err)
 	poolCfg.MaxConns = 1
 	pool, err := pgxpool.NewWithConfig(ctx, poolCfg)

@@ -27,9 +27,7 @@ import (
 	"personal-crm/backend/internal/service"
 	"personal-crm/backend/internal/synthetic"
 	"personal-crm/backend/internal/synthetic/factory"
-	"personal-crm/backend/internal/testdb"
 	"personal-crm/backend/internal/threadctx"
-	"personal-crm/backend/tests/testsupport"
 
 	"github.com/google/uuid"
 	"github.com/riverqueue/river"
@@ -83,10 +81,9 @@ func newLabelsEnv(t *testing.T) *labelsEnv {
 // none).
 func newLabelsEnvFor(t *testing.T, productionMethod string) *labelsEnv {
 	t.Helper()
-	url, drop := testdb.NewEphemeralClone(t)
-	t.Cleanup(drop)
-	database := testsupport.OpenDatabaseAt(t, url)
 	ctx := t.Context()
+	harness := synthetic.NewHarnessForNamespace(t, ctx, "l"+uuid.NewString()[:8], factory.DefaultSeed)
+	database := harness.Database()
 	workers := river.NewWorkers()
 	river.AddWorker(workers, &noopTaskOps{})
 	river.AddWorker(workers, &noopKnowledge{})
@@ -111,7 +108,7 @@ func newLabelsEnvFor(t *testing.T, productionMethod string) *labelsEnv {
 		asserts:  asserts,
 		contexts: contexts,
 		contacts: contacts,
-		harness:  synthetic.NewHarnessForNamespace(t, ctx, database, "l"+uuid.NewString()[:8], factory.DefaultSeed),
+		harness:  harness,
 		base:     accelerated.GetCurrentTime().UTC().Add(-90 * 24 * time.Hour).Truncate(time.Second),
 	}
 }

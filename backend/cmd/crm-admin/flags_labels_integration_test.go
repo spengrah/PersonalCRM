@@ -141,8 +141,11 @@ func TestJudgeMonthReadsNoLabel(t *testing.T) {
 
 	for i, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			without := c.observe(t, false)
-			with := c.observe(t, true)
+			// Each observation is a test of its own, so its harness runs on a
+			// database clone the other observation never sees.
+			var without, with labelsSeen
+			t.Run("without labels", func(t *testing.T) { without = c.observe(t, false) })
+			t.Run("with labels", func(t *testing.T) { with = c.observe(t, true) })
 
 			assert.Equal(t, wantFebruary[i], without.februaryClearings, "the case re-checks as it is meant to")
 			assert.Equal(t, without, with)

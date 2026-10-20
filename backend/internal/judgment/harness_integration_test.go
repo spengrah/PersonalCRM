@@ -18,10 +18,8 @@ import (
 	"personal-crm/backend/internal/service"
 	"personal-crm/backend/internal/synthetic"
 	"personal-crm/backend/internal/synthetic/factory"
-	"personal-crm/backend/internal/testdb"
 	"personal-crm/backend/internal/threadctx"
 	"personal-crm/backend/internal/todoist"
-	"personal-crm/backend/tests/testsupport"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -61,18 +59,13 @@ type env struct {
 type envOption func(*envWiring)
 
 type envWiring struct {
-	followUp    bool
-	ownDatabase bool
-	assert      func(judgment.Asserter) judgment.Asserter
+	followUp bool
+	assert   func(judgment.Asserter) judgment.Asserter
 }
 
 // withFollowUp wires the follow-up manager into the recording path, so an
 // outbound recording opens the contact's follow-up reminder.
 func withFollowUp() envOption { return func(w *envWiring) { w.followUp = true } }
-
-// withOwnDatabase runs the env on a database clone of its own, so reads
-// across every contact see only what the test seeds.
-func withOwnDatabase() envOption { return func(w *envWiring) { w.ownDatabase = true } }
 
 // withAsserter wraps the store's assertion write path, to inject a failure
 // the real one cannot produce on demand.
@@ -87,15 +80,11 @@ func newEnv(t *testing.T, productionMethod string, opts ...envOption) *env {
 	for _, opt := range opts {
 		opt(&wiring)
 	}
-	var database *db.Database
-	if wiring.ownDatabase {
-		url, drop := testdb.NewEphemeralClone(t)
-		t.Cleanup(drop)
-		database = testsupport.OpenDatabaseAt(t, url)
-	} else {
-		database = testsupport.OpenDatabase(t)
-	}
+	// The env's database is its harness's: a clone of the test's own, so reads
+	// across every contact see only what the test seeds.
 	ctx := t.Context()
+	harness := synthetic.NewHarnessForNamespace(t, ctx, "j"+uuid.NewString()[:8], factory.DefaultSeed)
+	database := harness.Database()
 	jobs := newInsertOnlyClient(t, database)
 	bus := events.NewBus(database.Pool, jobs, repository.NewEventRepository(database.Queries))
 
@@ -140,7 +129,7 @@ func newEnv(t *testing.T, productionMethod string, opts ...envOption) *env {
 	return &env{
 		ctx:      ctx,
 		database: database,
-		harness:  synthetic.NewHarnessForNamespace(t, ctx, database, "j"+uuid.NewString()[:8], factory.DefaultSeed),
+		harness:  harness,
 		store:    store,
 		cadence:  cadence,
 		contacts: contacts,

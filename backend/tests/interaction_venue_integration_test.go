@@ -25,10 +25,10 @@ import (
 // not perturb the contact's cadence columns (the headline-risk regression).
 func TestInteractionVenue_LivePath(t *testing.T) {
 	testsupport.RequireLongTests(t)
-	database, ctx := newSyntheticDB(t)
+	ctx := t.Context()
 	t.Parallel()
 
-	h := synthetic.NewHarnessForNamespace(t, ctx, database, syntheticNS(t), factory.DefaultSeed)
+	h := synthetic.NewHarnessForNamespace(t, ctx, syntheticNS(t), factory.DefaultSeed)
 	gen := h.Generator()
 	spec := gen.Contact(factory.WithTelegram())
 	contact, err := h.SeedContact(ctx, spec)
