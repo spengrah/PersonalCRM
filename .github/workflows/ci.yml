@@ -314,13 +314,12 @@ jobs:
         working-directory: backend
         run: go mod download
 
+      # make test-unit is the one definition of the backend unit lane: short
+      # mode over every package, then the WhatsApp actor race run.
       - name: Run unit tests
-        working-directory: backend
-        run: go test -short ./...
-
-      - name: Run WhatsApp actor race tests
-        working-directory: backend
-        run: go test -race -short ./internal/whatsapp/...
+        env:
+          GOTEST_VERBOSE: ""
+        run: make test-unit
 
       - name: Wait for PostgreSQL
         run: |

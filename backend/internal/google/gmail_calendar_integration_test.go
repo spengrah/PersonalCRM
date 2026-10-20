@@ -18,8 +18,6 @@ import (
 	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/synthetic"
 	"personal-crm/backend/internal/synthetic/factory"
-	"personal-crm/backend/internal/testdb"
-	"personal-crm/backend/tests/testsupport"
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
@@ -34,13 +32,10 @@ type calendarEnv struct {
 
 func newCalendarEnv(t *testing.T) *calendarEnv {
 	t.Helper()
-	// The harness starts a River client, so each test gets its own clone
-	// (.agents/rules/testing.md, River-touching tests).
-	cloneURL, drop := testdb.NewEphemeralClone(t)
-	t.Cleanup(drop)
-	database := testsupport.OpenDatabaseAt(t, cloneURL)
+	// The harness runs on the test's own clone, which its River client needs.
 	ctx := t.Context()
-	h := synthetic.NewHarnessForNamespace(t, ctx, database, "cal"+uuid.NewString()[:8], factory.DefaultSeed)
+	h := synthetic.NewHarnessForNamespace(t, ctx, "cal"+uuid.NewString()[:8], factory.DefaultSeed)
+	database := h.Database()
 	return &calendarEnv{
 		ctx:       ctx,
 		h:         h,

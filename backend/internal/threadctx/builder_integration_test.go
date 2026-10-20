@@ -18,7 +18,6 @@ import (
 	"personal-crm/backend/internal/synthetic"
 	"personal-crm/backend/internal/synthetic/factory"
 	"personal-crm/backend/internal/threadctx"
-	"personal-crm/backend/tests/testsupport"
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
@@ -38,13 +37,14 @@ type builderEnv struct {
 
 func newBuilderEnv(t *testing.T) *builderEnv {
 	t.Helper()
-	database := testsupport.OpenDatabase(t)
 	ctx := t.Context()
+	harness := synthetic.NewHarnessForNamespace(t, ctx, "t"+uuid.NewString()[:8], factory.DefaultSeed)
+	database := harness.Database()
 	venues := repository.NewVenueRepository(database.Queries)
 	return &builderEnv{
 		ctx:      ctx,
 		database: database,
-		harness:  synthetic.NewHarnessForNamespace(t, ctx, database, "t"+uuid.NewString()[:8], factory.DefaultSeed),
+		harness:  harness,
 		builder:  threadctx.NewBuilder(repository.NewThreadContentRepository(database.Queries), venues),
 		comms:    repository.NewCommsMessageRepository(database.Queries),
 		notes:    repository.NewMeetingNoteRepository(database.Queries),

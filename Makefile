@@ -401,9 +401,11 @@ test-daemon-local:
 # Tests
 test: test-unit test-integration test-frontend ## Run all backend tests (unit + integration, includes slow opt-in tests)
 
+# The one definition of the backend unit lane: CI's unit step runs this target.
+# Short mode over every package; DB-backed tests skip themselves in short mode.
 test-unit: ## Run backend unit tests only
 	@echo "Running backend unit tests..."
-	@cd backend && go test ./tests/... ./internal/matching/... ./internal/events/... ./internal/service/... ./internal/contacttask/... ./internal/synthetic ./internal/synthetic/factory/... ./internal/synthetic/replay/... ./internal/synthetic/declare/... ./internal/spec/... ./cmd/spec-lint/... ./cmd/spec-coverage/... ./cmd/spec-drift/... $(GOTEST_VERBOSE) -short
+	@cd backend && go test -short ./... $(GOTEST_VERBOSE)
 	@echo "Running whatsapp actor tests under the race detector..."
 	@# The race detector is the real enforcement for "manager state never escapes
 	@# the loop": with all state loop-owned, any escape is a genuine data race

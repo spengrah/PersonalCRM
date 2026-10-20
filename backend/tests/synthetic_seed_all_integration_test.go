@@ -19,13 +19,13 @@ import (
 // name prefix routes it into the nightly slow suite via BACKEND_SLOW_TESTS_REGEX).
 func TestSyntheticSeedAll(t *testing.T) {
 	testsupport.RequireLongTests(t)
-	database, ctx := newSyntheticDB(t)
+	ctx := t.Context()
 
 	params := synthetic.DefaultParams()
 	params.Namespace = syntheticNS(t) // unique per run for shared-DB isolation
 
 	// Construct the harness for the SAME namespace so identifiers + cleanup align.
-	h := synthetic.NewHarnessForNamespace(t, ctx, database, params.Namespace, params.Seed)
+	h := synthetic.NewHarnessForNamespace(t, ctx, params.Namespace, params.Seed)
 
 	res, err := synthetic.SeedAll(ctx, h, params)
 	require.NoError(t, err)
@@ -58,19 +58,20 @@ func TestSyntheticSeedAll(t *testing.T) {
 // the teardown explicitly via NewHarnessWithDB so it can assert post-cleanup.
 func TestSyntheticSeedAll_CleanupEmptiesNamespace(t *testing.T) {
 	testsupport.RequireLongTests(t)
-	database, ctx := newSyntheticDB(t)
+	ctx := t.Context()
 
 	// Sentinel namespace: seed a contact + settled replay, and DO NOT tear it
 	// down until the end, so we can prove the target's cleanup leaves it alone.
-	sentinel := synthetic.NewHarnessForNamespace(t, ctx, database, syntheticNS(t), 12345)
+	sentinel := synthetic.NewHarnessForNamespace(t, ctx, syntheticNS(t), 12345)
 	sgen := sentinel.Generator()
 	sspec := sgen.Contact(factory.WithEmail())
 	sentinelContact, err := sentinel.SeedContact(ctx, sspec)
 	require.NoError(t, err)
 
 	// Target namespace via the explicit-teardown constructor so we can run the
-	// closure and then assert.
-	target, teardown, err := synthetic.NewHarnessWithDB(ctx, database)
+	// closure and then assert. It shares the sentinel's database so the
+	// sentinel check observes what the target's cleanup touched.
+	target, teardown, err := synthetic.NewHarnessWithDB(ctx, sentinel.Database())
 	require.NoError(t, err)
 	tgen := target.Generator()
 	tspec := tgen.Contact(factory.WithEmail())
@@ -114,12 +115,12 @@ func TestSyntheticSeedAll_CleanupEmptiesNamespace(t *testing.T) {
 // Mirrors the cross-namespace cleanup guard.
 func TestSyntheticTodoistReplay_DoesNotTouchOtherNamespace(t *testing.T) {
 	testsupport.RequireLongTests(t)
-	database, ctx := newSyntheticDB(t)
-	contactTaskRepo := repository.NewContactTaskRepository(database.Queries)
+	ctx := t.Context()
 
 	// Namespace B: a cadence-bearing sentinel contact (eligible for the Todoist
 	// reconcile's global ListContactsWithContactBy enumeration).
-	sentinel := synthetic.NewHarnessForNamespace(t, ctx, database, syntheticNS(t), 24680)
+	sentinel := synthetic.NewHarnessForNamespace(t, ctx, syntheticNS(t), 24680)
+	contactTaskRepo := repository.NewContactTaskRepository(sentinel.Database().Queries)
 	sgen := sentinel.Generator()
 	sentinelContact, err := sentinel.SeedContact(ctx, sgen.Contact(factory.WithEmail(), factory.WithCadence("weekly")))
 	require.NoError(t, err)
@@ -130,7 +131,7 @@ func TestSyntheticTodoistReplay_DoesNotTouchOtherNamespace(t *testing.T) {
 	require.Empty(t, pre, "sentinel contact should have no contact_task before the replay")
 
 	// Namespace A: seed its own cadence contact + run a Todoist replay.
-	a := synthetic.NewHarnessForNamespace(t, ctx, database, syntheticNS(t), 13579)
+	a := synthetic.NewHarnessForNamespace(t, ctx, syntheticNS(t), 13579)
 	agen := a.Generator()
 	aContact, err := a.SeedContact(ctx, agen.Contact(factory.WithEmail(), factory.WithCadence("weekly")))
 	require.NoError(t, err)
@@ -151,16 +152,16 @@ func TestSyntheticTodoistReplay_DoesNotTouchOtherNamespace(t *testing.T) {
 // ListPastEventsNeedingUpdate. Mirrors the Todoist cross-namespace guard.
 func TestSyntheticGCalReplay_DoesNotTouchOtherNamespace(t *testing.T) {
 	testsupport.RequireLongTests(t)
-	database, ctx := newSyntheticDB(t)
-	calendarRepo := repository.NewCalendarEventRepository(database.Queries)
-	support := repository.NewSyntheticSupportRepository(database.Queries)
+	ctx := t.Context()
 
 	// Namespace B: a contact + a past, confirmed calendar_event with the contact
 	// matched and last_contacted_updated=FALSE — i.e. eligible for the global
 	// ListPastEventsNeedingUpdate enumeration but NOT yet processed. Seeded
 	// directly (not via ReplayGCal, which would settle/process it). The
 	// ns-prefixed gcal_event_id keeps the row inside namespace B's cleanup scope.
-	sentinel := synthetic.NewHarnessForNamespace(t, ctx, database, syntheticNS(t), 35791)
+	sentinel := synthetic.NewHarnessForNamespace(t, ctx, syntheticNS(t), 35791)
+	calendarRepo := repository.NewCalendarEventRepository(sentinel.Database().Queries)
+	support := repository.NewSyntheticSupportRepository(sentinel.Database().Queries)
 	sgen := sentinel.Generator()
 	sentinelContact, err := sentinel.SeedContact(ctx, sgen.Contact(factory.WithEmail()))
 	require.NoError(t, err)
@@ -187,7 +188,7 @@ func TestSyntheticGCalReplay_DoesNotTouchOtherNamespace(t *testing.T) {
 	require.Equal(t, int64(0), pre, "sentinel event should be unprocessed before the replay")
 
 	// Namespace A: seed its own email contact + run a GCal replay.
-	a := synthetic.NewHarnessForNamespace(t, ctx, database, syntheticNS(t), 97531)
+	a := synthetic.NewHarnessForNamespace(t, ctx, syntheticNS(t), 97531)
 	agen := a.Generator()
 	aSpec := agen.Contact(factory.WithEmail())
 	aContact, err := a.SeedContact(ctx, aSpec)

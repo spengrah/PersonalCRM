@@ -263,9 +263,8 @@ func TestInteractionRemoval_SurvivesContactMergeIntoObservedContact(t *testing.T
 func TestInteractionRemoval_ContactMergeComposesWithDueDatesSetDirectly(t *testing.T) {
 	testsupport.RequireDatabase(t)
 	t.Parallel()
-	database, cfg := newIsolatedRiverTestDB(t, t.Context())
-	e := newCorrectionEnvOn(t, database)
-	todoistSync := newCadenceSync(e, cfg)
+	e := newCorrectionEnv(t)
+	todoistSync := newCadenceSync(e)
 
 	t.Run("an earlier Todoist deadline stays when a merge-transferred removal leaves last_contacted unchanged", func(t *testing.T) {
 		// spec: CAD-047.due-date-follows-last-contacted, IXN-018.survives-contact-merge

@@ -18,7 +18,6 @@ Load as needed, not upfront:
 - Architecture decisions: `.agents/guides/architecture.md`
 - Feature development: `.agents/guides/feature-development.md`
 - Code patterns: `.agents/patterns/`
-- Testing rules: `.agents/rules/testing.md`
 - Code review standards: `.agents/rules/code-review.md`
 - Behavior specs (intended-behavior SSOT): `spec/README.md`
 - Cross-layer change checklist and troubleshooting: `.agents/guides/change-checklist.md`
@@ -48,7 +47,7 @@ Find all instances of a layer:
 
 - Run focused tests appropriate to the change; pre-push runs static checks, and required CI suites gate merging.
 - Read repository code before using methods (names vary, e.g., `SoftDeleteContact` not `DeleteContact`)
-- Fake only what a test cannot run (third-party APIs, the clock) or a failure; see `.agents/rules/testing.md`
+- Testing rules are in `.agents/rules/core.md` "Writing tests"; read them before writing or reviewing a test
 - Use `accelerated.GetCurrentTime()` not `time.Now()`
 - New worktrees link env files but do not install dependencies. For frontend work, run `make worktree-deps` when needed (main checkout: `cd frontend && bun install --frozen-lockfile`). Backend/docs-only work needs no frontend install.
 

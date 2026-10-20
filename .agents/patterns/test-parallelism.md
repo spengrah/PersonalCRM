@@ -1,6 +1,6 @@
 # Test Parallelism — per-test isolated DB clones
 
-How to make a backend integration test parallel-safe when namespace scoping isn't enough — i.e. it starts a River worker, asserts DB-wide over `river_job`, or uses fixed-ID fixtures. The mechanism is a per-test **ephemeral clone**: its own database (copied from the pre-migrated, content-hashed template) with its own pool and River client, dropped on cleanup. Established by #428. See `.agents/rules/testing.md` → "Backend Integration-Test Parallelism" for when to reach for this vs. namespace scoping on the shared package DB.
+How to make a backend integration test parallel-safe when namespace scoping isn't enough — i.e. its correctness depends on database-wide state: a database-wide count or delete, a fixed ID, a singleton table, or a started River client. The mechanism is a per-test **ephemeral clone**: its own database (copied from the pre-migrated, content-hashed template) with its own pool and River client, dropped on cleanup. Established by #428. A synthetic-harness test needs none of this: its harness opens the test's clone itself. When to reach for a clone rather than namespace scoping is the isolation rule in `.agents/rules/core.md` "Writing tests".
 
 ## The helper (don't call `NewEphemeralClone` directly)
 
@@ -10,7 +10,7 @@ database, cfg := newIsolatedRiverTestDB(t, ctx)
 
 `newIsolatedRiverTestDB` (in `backend/tests/river_isolated_testdb_test.go`) does the `DATABASE_URL=="" → t.Skip`, mints the clone, builds `cfg` with a small pool (`MaxConns=6`, `WorkerConcurrency=2`), and registers `database.Close()` + clone-drop on `t.Cleanup`.
 
-**Why the seam and not `testdb.NewEphemeralClone` directly:** `internal/testdb` compiles only under the `integration_testdb` build tag, but `make test-unit` builds `./tests/...` WITHOUT it. The helper has a no-tag fallback (`river_isolated_testdb_fallback_test.go`) that cleanly `t.Skip`s, so both build paths compile. Importing `testdb` directly from an untagged test file breaks the unit build.
+**Why the seam and not `testdb.NewEphemeralClone` directly:** `internal/testdb` compiles only under the `integration_testdb` build tag, but `make test-unit` builds every package WITHOUT it. The helper has a no-tag fallback (`river_isolated_testdb_fallback_test.go`) that cleanly `t.Skip`s, so both build paths compile. Importing `testdb` directly from an untagged test file breaks the unit build.
 
 ## Conversion recipe
 

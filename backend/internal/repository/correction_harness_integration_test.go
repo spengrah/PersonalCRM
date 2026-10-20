@@ -17,7 +17,6 @@ import (
 	"personal-crm/backend/internal/service"
 	"personal-crm/backend/internal/synthetic"
 	"personal-crm/backend/internal/synthetic/factory"
-	"personal-crm/backend/tests/testsupport"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -47,8 +46,9 @@ type correctionEnv struct {
 
 func newCorrectionEnv(t *testing.T) *correctionEnv {
 	t.Helper()
-	database := testsupport.OpenDatabase(t)
 	ctx := t.Context()
+	harness := synthetic.NewHarnessForNamespace(t, ctx, "r"+uuid.NewString()[:8], factory.DefaultSeed)
+	database := harness.Database()
 
 	contactRepo := repository.NewContactRepository(database.Queries)
 	contactRepo.SetPool(database.Pool)
@@ -66,7 +66,7 @@ func newCorrectionEnv(t *testing.T) *correctionEnv {
 
 	return &correctionEnv{
 		ctx:          ctx,
-		harness:      synthetic.NewHarnessForNamespace(t, ctx, database, "r"+uuid.NewString()[:8], factory.DefaultSeed),
+		harness:      harness,
 		database:     database,
 		contacts:     contacts,
 		interactions: interactions,

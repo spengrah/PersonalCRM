@@ -42,21 +42,16 @@ import (
 // requested namespace token.
 var ErrConstructorResidue = errors.New("synthetic: harness construction left namespaced rows behind")
 
-// NewHarness builds a replay harness for a test. ctx is MANDATORY and is the
-// exact context passed to client.Start (NOT a timeout-derived ctx — River
-// silently stops fetching if its Start ctx cancels). It registers a t.Cleanup
-// closure that stops the client, bounded-waits Gate B, and gates the ENTIRE
-// cleanup on Gate B == 0 (leaving the namespaced dataset intact when unsettled).
-func NewHarness(t *testing.T, ctx context.Context, database *db.Database) *Harness {
+// NewHarness builds a replay harness for a test on the test's own database
+// clone (see testDatabase); the test reaches that database through
+// Harness.Database. ctx is MANDATORY and is the exact context passed to
+// client.Start (NOT a timeout-derived ctx — River silently stops fetching if its
+// Start ctx cancels). It registers a t.Cleanup closure that stops the client,
+// bounded-waits Gate B, and gates the ENTIRE cleanup on Gate B == 0 (leaving the
+// namespaced dataset intact when unsettled).
+func NewHarness(t *testing.T, ctx context.Context) *Harness {
 	t.Helper()
-	h, teardown, err := NewHarnessWithDB(ctx, database)
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		if err := teardown(context.WithoutCancel(t.Context())); err != nil {
-			t.Logf("synthetic harness teardown error (non-fatal): %v", err)
-		}
-	})
-	return h
+	return NewHarnessForNamespace(t, ctx, defaultNamespace(), factory.DefaultSeed)
 }
 
 // NewHarnessWithDB builds a replay harness without a *testing.T (for non-test
@@ -82,12 +77,13 @@ func NewHarnessWithDBForNamespace(ctx context.Context, database *db.Database, na
 	return newHarness(ctx, database, namespace, seed, accelerated.GetCurrentTime())
 }
 
-// NewHarnessForNamespace builds a harness with an explicit namespace + seed.
-// Tests use this to give each sub-test a unique namespace so shared-test-DB
-// reuse cannot collide.
-func NewHarnessForNamespace(t *testing.T, ctx context.Context, database *db.Database, namespace string, seed uint64) *Harness {
+// NewHarnessForNamespace is NewHarness with an explicit namespace + seed. Every
+// harness one test builds shares that test's clone, so a test that puts several
+// namespaces on one database (sentinels, cleanup and cross-namespace
+// confinement checks) builds them all here.
+func NewHarnessForNamespace(t *testing.T, ctx context.Context, namespace string, seed uint64) *Harness {
 	t.Helper()
-	h, teardown, err := newHarness(ctx, database, namespace, seed, accelerated.GetCurrentTime())
+	h, teardown, err := newHarness(ctx, testDatabase(t), namespace, seed, accelerated.GetCurrentTime())
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		if err := teardown(context.WithoutCancel(t.Context())); err != nil {

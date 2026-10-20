@@ -7,7 +7,6 @@ import (
 	"testing"
 	"time"
 
-	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/synthetic"
 	"personal-crm/backend/internal/synthetic/factory"
@@ -27,25 +26,25 @@ import (
 // same interactions, the same directions, the same relative timing, and the same
 // contact cadence columns as N sequential single replays.
 //
-// Every test in this file uses newIsolatedRiverTestDB. The harness starts a live
+// Every test in this file runs on a database clone of its own: the harness
+// opens one per test, and the two tests that drive the explicit-teardown
+// constructor open theirs with newIsolatedRiverTestDB. The harness starts a live
 // River client, and namespace scoping does not isolate river_job CONSUMPTION —
 // a client draining on a shared database steals sibling tests' jobs. The clone
 // additionally makes the GCal drain loop testable at all: its past-event read
 // takes a DB-wide LIMIT with the namespace filter applied after it, so on a
 // shared database another namespace owning the oldest page is deterministic
-// starvation rather than a flake. (The neighbouring synthetic profile suite uses
-// the shared package database for its long test; that is a pre-existing
-// precedent, not one to copy.)
+// starvation rather than a flake.
 //
 // None of these call t.Parallel(). Each clone costs about seven connections
 // against a 100-connection stock local container, and this file mints more than
 // a dozen; they are slow-lane routed, where wall-clock is already accepted, and
 // running serially keeps concurrent clones near one.
 
-// batchTestHarness builds a harness for a fresh namespace on the given clone.
-func batchTestHarness(t *testing.T, ctx context.Context, database *db.Database) *synthetic.Harness {
+// batchTestHarness builds a harness for a fresh namespace on the test's clone.
+func batchTestHarness(t *testing.T, ctx context.Context) *synthetic.Harness {
 	t.Helper()
-	return synthetic.NewHarnessForNamespace(t, ctx, database, syntheticNS(t), factory.DefaultSeed)
+	return synthetic.NewHarnessForNamespace(t, ctx, syntheticNS(t), factory.DefaultSeed)
 }
 
 // --- equivalence fingerprints ------------------------------------------------
@@ -162,10 +161,9 @@ func messageOptions(p payloadPlan) []factory.MessageOption {
 func TestSyntheticBatchReplay_Gmail_EquivalentToSingles(t *testing.T) {
 	testsupport.RequireLongTests(t)
 	ctx := t.Context()
-	database, _ := newIsolatedRiverTestDB(t, ctx)
 
 	singles := func() []contactFingerprint {
-		h := batchTestHarness(t, ctx, database)
+		h := batchTestHarness(t, ctx)
 		gen := h.Generator()
 		var ids []uuid.UUID
 		for i := 0; i < 3; i++ {
@@ -182,7 +180,7 @@ func TestSyntheticBatchReplay_Gmail_EquivalentToSingles(t *testing.T) {
 	}()
 
 	batched := func() []contactFingerprint {
-		h := batchTestHarness(t, ctx, database)
+		h := batchTestHarness(t, ctx)
 		gen := h.Generator()
 		var ids []uuid.UUID
 		var items []replay.GmailBatchItem
@@ -251,10 +249,9 @@ func gmailAge(it replay.GmailBatchItem) time.Duration {
 func TestSyntheticBatchReplay_GChat_EquivalentToSingles(t *testing.T) {
 	testsupport.RequireLongTests(t)
 	ctx := t.Context()
-	database, _ := newIsolatedRiverTestDB(t, ctx)
 
 	singles := func() []contactFingerprint {
-		h := batchTestHarness(t, ctx, database)
+		h := batchTestHarness(t, ctx)
 		gen := h.Generator()
 		var ids []uuid.UUID
 		for i := 0; i < 3; i++ {
@@ -271,7 +268,7 @@ func TestSyntheticBatchReplay_GChat_EquivalentToSingles(t *testing.T) {
 	}()
 
 	batched := func() []contactFingerprint {
-		h := batchTestHarness(t, ctx, database)
+		h := batchTestHarness(t, ctx)
 		gen := h.Generator()
 		var ids []uuid.UUID
 		var items []replay.GChatBatchItem
@@ -306,10 +303,9 @@ func TestSyntheticBatchReplay_GChat_EquivalentToSingles(t *testing.T) {
 func TestSyntheticBatchReplay_GCal_EquivalentToSingles(t *testing.T) {
 	testsupport.RequireLongTests(t)
 	ctx := t.Context()
-	database, _ := newIsolatedRiverTestDB(t, ctx)
 
 	singles := func() []contactFingerprint {
-		h := batchTestHarness(t, ctx, database)
+		h := batchTestHarness(t, ctx)
 		gen := h.Generator()
 		var ids []uuid.UUID
 		for i := 0; i < 3; i++ {
@@ -326,7 +322,7 @@ func TestSyntheticBatchReplay_GCal_EquivalentToSingles(t *testing.T) {
 	}()
 
 	batched := func() []contactFingerprint {
-		h := batchTestHarness(t, ctx, database)
+		h := batchTestHarness(t, ctx)
 		gen := h.Generator()
 		var ids []uuid.UUID
 		var items []replay.GCalBatchItem
@@ -361,10 +357,9 @@ func TestSyntheticBatchReplay_GCal_EquivalentToSingles(t *testing.T) {
 func TestSyntheticBatchReplay_Telegram_EquivalentToSingles(t *testing.T) {
 	testsupport.RequireLongTests(t)
 	ctx := t.Context()
-	database, _ := newIsolatedRiverTestDB(t, ctx)
 
 	singles := func() []contactFingerprint {
-		h := batchTestHarness(t, ctx, database)
+		h := batchTestHarness(t, ctx)
 		gen := h.Generator()
 		var ids []uuid.UUID
 		for i := 0; i < 3; i++ {
@@ -381,7 +376,7 @@ func TestSyntheticBatchReplay_Telegram_EquivalentToSingles(t *testing.T) {
 	}()
 
 	batched := func() []contactFingerprint {
-		h := batchTestHarness(t, ctx, database)
+		h := batchTestHarness(t, ctx)
 		gen := h.Generator()
 		var ids []uuid.UUID
 		var items []replay.TelegramBatchItem
@@ -416,10 +411,9 @@ func TestSyntheticBatchReplay_Telegram_EquivalentToSingles(t *testing.T) {
 func TestSyntheticBatchReplay_IMessage_EquivalentToSingles(t *testing.T) {
 	testsupport.RequireLongTests(t)
 	ctx := t.Context()
-	database, _ := newIsolatedRiverTestDB(t, ctx)
 
 	singles := func() []contactFingerprint {
-		h := batchTestHarness(t, ctx, database)
+		h := batchTestHarness(t, ctx)
 		gen := h.Generator()
 		var ids []uuid.UUID
 		for i := 0; i < 3; i++ {
@@ -438,7 +432,7 @@ func TestSyntheticBatchReplay_IMessage_EquivalentToSingles(t *testing.T) {
 	}()
 
 	batched := func() []contactFingerprint {
-		h := batchTestHarness(t, ctx, database)
+		h := batchTestHarness(t, ctx)
 		gen := h.Generator()
 		var ids []uuid.UUID
 		var items []replay.IMessageBatchItem
@@ -476,9 +470,8 @@ func TestSyntheticBatchReplay_IMessage_EquivalentToSingles(t *testing.T) {
 func TestSyntheticBatchReplay_RejectsInvalidInput(t *testing.T) {
 	testsupport.RequireLongTests(t)
 	ctx := t.Context()
-	database, _ := newIsolatedRiverTestDB(t, ctx)
 
-	h := batchTestHarness(t, ctx, database)
+	h := batchTestHarness(t, ctx)
 	gen := h.Generator()
 	spec := gen.Contact(factory.WithEmail())
 	contact, err := h.SeedContact(ctx, spec)
@@ -540,9 +533,8 @@ func TestSyntheticBatchReplay_RejectsInvalidInput(t *testing.T) {
 func TestSyntheticBatchReplay_RejectsUnownedIdentifier(t *testing.T) {
 	testsupport.RequireLongTests(t)
 	ctx := t.Context()
-	database, _ := newIsolatedRiverTestDB(t, ctx)
 
-	h := batchTestHarness(t, ctx, database)
+	h := batchTestHarness(t, ctx)
 	gen := h.Generator()
 
 	ownerSpec := gen.Contact(factory.WithEmail())
@@ -596,12 +588,11 @@ func cloneTelegramReply(outbound factory.TelegramMessageSpec) factory.TelegramMe
 func TestSyntheticBatchReplay_PromotionBarrier(t *testing.T) {
 	testsupport.RequireLongTests(t)
 	ctx := t.Context()
-	database, _ := newIsolatedRiverTestDB(t, ctx)
 
 	const repetitions = 3
 
 	withBarrier := func(t *testing.T) int {
-		h := batchTestHarness(t, ctx, database)
+		h := batchTestHarness(t, ctx)
 		gen := h.Generator()
 		spec := gen.Contact(factory.WithTelegram())
 		contact, err := h.SeedContact(ctx, spec)
@@ -634,7 +625,7 @@ func TestSyntheticBatchReplay_PromotionBarrier(t *testing.T) {
 	// one-sided rows the race normally leaves — so any other shape fails here
 	// rather than being silently bucketed into either.
 	withoutBarrier := func(t *testing.T) bool {
-		h := batchTestHarness(t, ctx, database)
+		h := batchTestHarness(t, ctx)
 		gen := h.Generator()
 		spec := gen.Contact(factory.WithTelegram())
 		contact, err := h.SeedContact(ctx, spec)
@@ -737,10 +728,9 @@ func TestSyntheticBatchReplay_PromotionBarrier(t *testing.T) {
 func TestSyntheticBatchReplay_TelegramOrderPromotesMutual(t *testing.T) {
 	testsupport.RequireLongTests(t)
 	ctx := t.Context()
-	database, _ := newIsolatedRiverTestDB(t, ctx)
 
 	t.Run("chronological_promotes", func(t *testing.T) {
-		h := batchTestHarness(t, ctx, database)
+		h := batchTestHarness(t, ctx)
 		gen := h.Generator()
 		spec := gen.Contact(factory.WithTelegram())
 		contact, err := h.SeedContact(ctx, spec)
@@ -768,7 +758,7 @@ func TestSyntheticBatchReplay_TelegramOrderPromotesMutual(t *testing.T) {
 		// reply bridge requires the outbound to precede the inbound in time. So
 		// what this proves is that the timing contract is load-bearing on its own,
 		// independent of drive order.
-		h := batchTestHarness(t, ctx, database)
+		h := batchTestHarness(t, ctx)
 		gen := h.Generator()
 		spec := gen.Contact(factory.WithTelegram())
 		contact, err := h.SeedContact(ctx, spec)
@@ -811,7 +801,6 @@ func TestSyntheticBatchReplay_TelegramOrderPromotesMutual(t *testing.T) {
 func TestSyntheticBatchReplay_GmailSameLocalDayPromotion(t *testing.T) {
 	testsupport.RequireLongTests(t)
 	ctx := t.Context()
-	database, _ := newIsolatedRiverTestDB(t, ctx)
 
 	// pair builds an outbound/inbound Gmail pair at the SAME age sharing one
 	// thread — the two conditions the consumer's aggregation key requires.
@@ -846,7 +835,7 @@ func TestSyntheticBatchReplay_GmailSameLocalDayPromotion(t *testing.T) {
 	}
 
 	t.Run("with_barrier", func(t *testing.T) {
-		h := batchTestHarness(t, ctx, database)
+		h := batchTestHarness(t, ctx)
 		spec := h.Generator().Contact(factory.WithEmail())
 		contact, err := h.SeedContact(ctx, spec)
 		require.NoError(t, err)
@@ -870,7 +859,7 @@ func TestSyntheticBatchReplay_GmailSameLocalDayPromotion(t *testing.T) {
 	})
 
 	t.Run("without_barrier", func(t *testing.T) {
-		h := batchTestHarness(t, ctx, database)
+		h := batchTestHarness(t, ctx)
 		spec := h.Generator().Contact(factory.WithEmail())
 		contact, err := h.SeedContact(ctx, spec)
 		require.NoError(t, err)
@@ -906,9 +895,8 @@ func TestSyntheticBatchReplay_GmailSameLocalDayPromotion(t *testing.T) {
 func TestSyntheticBatchReplay_GmailSpanBoundRejected(t *testing.T) {
 	testsupport.RequireLongTests(t)
 	ctx := t.Context()
-	database, _ := newIsolatedRiverTestDB(t, ctx)
 
-	h := batchTestHarness(t, ctx, database)
+	h := batchTestHarness(t, ctx)
 	gen := h.Generator()
 	spec := gen.Contact(factory.WithEmail())
 	contact, err := h.SeedContact(ctx, spec)
@@ -953,11 +941,10 @@ func TestSyntheticBatchReplay_GmailSpanBoundRejected(t *testing.T) {
 func TestSyntheticBatchReplay_GCalDrainsOverLimit(t *testing.T) {
 	testsupport.RequireLongTests(t)
 	ctx := t.Context()
-	database, _ := newIsolatedRiverTestDB(t, ctx)
 
 	const events = 120
 
-	h := batchTestHarness(t, ctx, database)
+	h := batchTestHarness(t, ctx)
 	gen := h.Generator()
 	spec := gen.Contact(factory.WithEmail())
 	contact, err := h.SeedContact(ctx, spec)
@@ -1040,7 +1027,6 @@ func cloneGChatMessage(base factory.GChatMessageSpec, suffix string, outbound bo
 func TestSyntheticBatchReplay_GChatBucketsAcrossBudget(t *testing.T) {
 	testsupport.RequireLongTests(t)
 	ctx := t.Context()
-	database, _ := newIsolatedRiverTestDB(t, ctx)
 
 	const spaces = 60
 
@@ -1060,7 +1046,7 @@ func TestSyntheticBatchReplay_GChatBucketsAcrossBudget(t *testing.T) {
 	}
 
 	t.Run("bucketed_completes", func(t *testing.T) {
-		h := batchTestHarness(t, ctx, database)
+		h := batchTestHarness(t, ctx)
 		items := buildBatch(h)
 
 		res, err := h.ReplayGChatBatch(ctx, items)
@@ -1083,7 +1069,7 @@ func TestSyntheticBatchReplay_GChatBucketsAcrossBudget(t *testing.T) {
 		// a pure drain over the whole space list, which is exactly the shape the
 		// shared page budget defeats: each sweep re-pays for the spaces it already
 		// processed and reaches a little further, until it reaches no further.
-		h := batchTestHarness(t, ctx, database)
+		h := batchTestHarness(t, ctx)
 		items := buildBatch(h)
 
 		// Bucketing off, and generous drain slack: the point is to reach the
@@ -1115,7 +1101,7 @@ func TestSyntheticBatchReplay_GChatBucketsAcrossBudget(t *testing.T) {
 		// The contrast case: K messages sharing ONE cloned space cost one space's
 		// pages, not K spaces' — which is what makes a burst conversation
 		// affordable at all.
-		h := batchTestHarness(t, ctx, database)
+		h := batchTestHarness(t, ctx)
 		gen := h.Generator()
 		spec := gen.Contact(factory.WithEmail())
 		contact, err := h.SeedContact(ctx, spec)
@@ -1156,9 +1142,8 @@ func TestSyntheticBatchReplay_GChatBucketsAcrossBudget(t *testing.T) {
 func TestSyntheticBatchReplay_GChatPromotionBarrier(t *testing.T) {
 	testsupport.RequireLongTests(t)
 	ctx := t.Context()
-	database, _ := newIsolatedRiverTestDB(t, ctx)
 
-	h := batchTestHarness(t, ctx, database)
+	h := batchTestHarness(t, ctx)
 	gen := h.Generator()
 	spec := gen.Contact(factory.WithEmail())
 	contact, err := h.SeedContact(ctx, spec)

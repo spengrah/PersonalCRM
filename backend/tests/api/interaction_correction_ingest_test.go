@@ -55,8 +55,8 @@ func TestInteractionCorrection_HoldsThroughCallIngest(t *testing.T) {
 
 	t.Run("a re-ingested removed call stays removed", func(t *testing.T) {
 		// spec: ING-040.no-sync-restores-correction, IXN-018.re-observation-stays-removed
-		env := setupPhoneCallIngestEnv(t)
-		e := newCorrectionEnvOn(t, env.database)
+		e := newCorrectionEnv(t)
+		env := setupPhoneCallIngestEnvOn(t, e.database)
 		callID := env.sourcePrefix + "removed"
 		ev := buildCallEvent(t, events.KindCallReceived, env.pairedHostID, callID, env.seededPhone, nil)
 		require.Equal(t, 1, parseIngestResp(t, postIngestCall(t, env, map[string]any{"events": []any{ev}})).Accepted)
@@ -76,10 +76,10 @@ func TestInteractionCorrection_HoldsThroughCallIngest(t *testing.T) {
 
 	t.Run("an outbound whose only later response was removed gets the follow-up the rules give", func(t *testing.T) {
 		// spec: ING-040.excluded-response-is-no-response
-		env := setupPhoneCallIngestEnv(t, func(context.Context) (*todoist.Settings, string, error) {
+		e := newCorrectionEnv(t)
+		env := setupPhoneCallIngestEnvOn(t, e.database, func(context.Context) (*todoist.Settings, string, error) {
 			return &todoist.Settings{ProjectID: "proj", LabelName: "followup", IntegrationInstanceID: "inst"}, "token", nil
 		})
-		e := newCorrectionEnvOn(t, env.database)
 		seeded, err := env.contactRepo.GetContact(t.Context(), env.seededContact)
 		require.NoError(t, err)
 		monthly := "monthly"
@@ -119,8 +119,8 @@ func TestInteractionCorrection_HoldsThroughAnarlogIngest(t *testing.T) {
 
 	t.Run("a session re-linked by ingest leaves a removed participant excluded", func(t *testing.T) {
 		// spec: ING-040.no-sync-restores-correction
-		env := setupMeetingNoteIngestEnv(t)
-		e := newCorrectionEnvOn(t, env.database)
+		e := newCorrectionEnv(t)
+		env := setupMeetingNoteIngestEnvOn(t, e.database)
 		suffix := strings.TrimSuffix(strings.TrimPrefix(env.sourceIDPrefix, "mn-ingest-"), "-")
 		anarlogA := env.seedAnarlogHumanResolvingTo(t, fmt.Sprintf("mn-test-0-%s@example.invalid", suffix))
 		anarlogB := env.seedAnarlogHumanResolvingTo(t, fmt.Sprintf("mn-test-1-%s@example.invalid", suffix))
@@ -145,8 +145,8 @@ func TestInteractionCorrection_HoldsThroughAnarlogIngest(t *testing.T) {
 
 	t.Run("a session re-linked by the user's link resolution leaves a removed participant excluded", func(t *testing.T) {
 		// spec: ING-040.no-sync-restores-correction
-		env := setupMeetingNoteIngestEnv(t)
-		e := newCorrectionEnvOn(t, env.database)
+		e := newCorrectionEnv(t)
+		env := setupMeetingNoteIngestEnvOn(t, e.database)
 		suffix := strings.TrimSuffix(strings.TrimPrefix(env.sourceIDPrefix, "mn-ingest-"), "-")
 		anarlogA := env.seedAnarlogHumanResolvingTo(t, fmt.Sprintf("mn-test-0-%s@example.invalid", suffix))
 		sessionUUID := env.newSessionUUID()
@@ -173,8 +173,8 @@ func TestInteractionCorrection_HoldsThroughAnarlogIngest(t *testing.T) {
 
 	t.Run("ingest acknowledges an event whose observation a correction excludes, and dedupes its re-delivery", func(t *testing.T) {
 		// spec: ING-040.excluded-evidence-acknowledged, IXN-018.everyone-covers-later-observed
-		env := setupMeetingNoteIngestEnv(t)
-		e := newCorrectionEnvOn(t, env.database)
+		e := newCorrectionEnv(t)
+		env := setupMeetingNoteIngestEnvOn(t, e.database)
 		suffix := strings.TrimSuffix(strings.TrimPrefix(env.sourceIDPrefix, "mn-ingest-"), "-")
 		anarlogA := env.seedAnarlogHumanResolvingTo(t, fmt.Sprintf("mn-test-0-%s@example.invalid", suffix))
 		anarlogB := env.seedAnarlogHumanResolvingTo(t, fmt.Sprintf("mn-test-1-%s@example.invalid", suffix))

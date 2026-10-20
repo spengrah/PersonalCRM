@@ -51,8 +51,9 @@ var judgmentMethod = judgment.MethodRef{Key: judgmentProduction, Version: "v1", 
 
 func newJudgmentEnv(t *testing.T) *judgmentEnv {
 	t.Helper()
-	database := testsupport.OpenDatabase(t)
 	ctx := t.Context()
+	harness := synthetic.NewHarnessForNamespace(t, ctx, "b"+uuid.NewString()[:8], factory.DefaultSeed)
+	database := harness.Database()
 	jobs, err := river.NewClient(riverpgxv5.New(database.Pool), &river.Config{SkipUnknownJobCheck: true})
 	require.NoError(t, err)
 	bus := events.NewBus(database.Pool, jobs, repository.NewEventRepository(database.Queries))
@@ -73,7 +74,7 @@ func newJudgmentEnv(t *testing.T) *judgmentEnv {
 	return &judgmentEnv{
 		ctx:      ctx,
 		database: database,
-		harness:  synthetic.NewHarnessForNamespace(t, ctx, database, "b"+uuid.NewString()[:8], factory.DefaultSeed),
+		harness:  harness,
 		store:    store,
 		router:   router,
 		comms:    repository.NewCommsMessageRepository(database.Queries),

@@ -18,8 +18,8 @@
 //     inside a t.Cleanup func literal are exempt: teardown errors have no
 //     test to fail.
 //
-// Test files carry `//go:build integration_testdb` (or its negation), so the
-// module is type-checked twice, once per tag state, and findings are merged.
+// Some test files carry `//go:build integration_testdb` (or its negation), so
+// the module is type-checked twice, once per tag state, and findings are merged.
 //
 // Design: same as sole_writer_static_test.go. Hits are compared with a
 // per-(file, function, rule) allowlist. An allowlist entry needs a reason.

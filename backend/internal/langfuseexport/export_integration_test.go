@@ -28,7 +28,6 @@ import (
 	"personal-crm/backend/internal/synthetic"
 	"personal-crm/backend/internal/synthetic/factory"
 	"personal-crm/backend/internal/threadctx"
-	"personal-crm/backend/tests/testsupport"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -222,8 +221,8 @@ type exportEnv struct {
 func newExportEnv(t *testing.T, messages int) *exportEnv {
 	t.Helper()
 	ctx := t.Context()
-	database := testsupport.OpenDatabase(t)
-	harness := synthetic.NewHarnessForNamespace(t, ctx, database, "x"+uuid.NewString()[:8], factory.DefaultSeed)
+	harness := synthetic.NewHarnessForNamespace(t, ctx, "x"+uuid.NewString()[:8], factory.DefaultSeed)
+	database := harness.Database()
 	seeded, err := harness.SeedContact(ctx, harness.Generator().Contact())
 	require.NoError(t, err)
 

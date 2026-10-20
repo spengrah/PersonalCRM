@@ -42,7 +42,7 @@ func newBenchEnv(t *testing.T, opts ...envOption) *benchEnv {
 // newBenchEnvFor is the env whose store designates productionMethod.
 func newBenchEnvFor(t *testing.T, productionMethod string, opts ...envOption) *benchEnv {
 	t.Helper()
-	e := newEnv(t, productionMethod, append([]envOption{withOwnDatabase()}, opts...)...)
+	e := newEnv(t, productionMethod, opts...)
 	q := e.database.Queries
 	content := service.NewInteractionContentService(
 		repository.NewInteractionRepository(q), repository.NewCommsMessageRepository(q),

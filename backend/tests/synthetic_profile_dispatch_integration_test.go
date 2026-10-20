@@ -76,13 +76,13 @@ func TestSyntheticProfile_DispatchesEveryValidProfile(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(string(tc.profile), func(t *testing.T) {
-			database, ctx := newSyntheticDB(t)
+			ctx := t.Context()
 
 			params, err := synthetic.ProfileParams(tc.profile)
 			require.NoError(t, err)
 			params.Namespace = syntheticNS(t)
 
-			h := synthetic.NewHarnessForNamespace(t, ctx, database, params.Namespace, params.Seed)
+			h := synthetic.NewHarnessForNamespace(t, ctx, params.Namespace, params.Seed)
 			res, err := synthetic.RunProfile(ctx, h, params)
 			require.NoError(t, err, "profile %q must dispatch and seed", tc.profile)
 

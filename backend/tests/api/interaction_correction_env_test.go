@@ -23,7 +23,6 @@ import (
 	"personal-crm/backend/internal/synthetic"
 	"personal-crm/backend/internal/synthetic/factory"
 	"personal-crm/backend/internal/todoist"
-	"personal-crm/backend/tests/testsupport"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -35,7 +34,8 @@ import (
 
 // correctionEnv serves the interaction correction routes (POST
 // /api/v1/interactions/merge, /merge/preview, /:id/removals), the timeline
-// reads and GET /api/v1/contacts/:id over real services on one database. Observations are
+// reads and GET /api/v1/contacts/:id over real services on the harness's
+// database, a clone the test owns. Observations are
 // recorded through ContactService's recording path. Follow-up tasks run
 // through the real FollowUpManager; Todoist is faked at its client boundary
 // (todoist.Client) and its op jobs are enqueued on a River client that is
@@ -62,17 +62,14 @@ type correctionEnv struct {
 	base         time.Time
 }
 
-// newCorrectionEnv builds the env on the shared package database.
+// newCorrectionEnv builds the env on the database of its harness, which is the
+// test's own clone.
 func newCorrectionEnv(t *testing.T) *correctionEnv {
-	t.Helper()
-	return newCorrectionEnvOn(t, testsupport.OpenDatabase(t))
-}
-
-// newCorrectionEnvOn builds the env on database.
-func newCorrectionEnvOn(t *testing.T, database *db.Database) *correctionEnv {
 	t.Helper()
 	ctx := t.Context()
 	cfg := config.TestConfig()
+	harness := synthetic.NewHarnessForNamespace(t, ctx, "x"+uuid.NewString()[:8], factory.DefaultSeed)
+	database := harness.Database()
 
 	workers := river.NewWorkers()
 	river.AddWorker(workers, &apiTestCadenceShim{})
@@ -132,7 +129,7 @@ func newCorrectionEnvOn(t *testing.T, database *db.Database) *correctionEnv {
 	return &correctionEnv{
 		ctx:          ctx,
 		database:     database,
-		harness:      synthetic.NewHarnessForNamespace(t, ctx, database, "x"+uuid.NewString()[:8], factory.DefaultSeed),
+		harness:      harness,
 		router:       router,
 		contacts:     contactService,
 		contactRepo:  contactRepo,
@@ -206,7 +203,8 @@ func (f *correctionTodoist) Sync(_ context.Context, _ string, resourceTypes []st
 
 // cadenceSync is the real Todoist cadence sync (CadenceSyncProvider.Sync) over
 // the env, with Todoist faked at its client boundary. It reconciles every
-// contact with a next-contact date, so it runs on a database the test owns.
+// contact with a next-contact date, which the env's own clone confines to the
+// test.
 type cadenceSync struct {
 	e        *correctionEnv
 	provider *todoist.CadenceSyncProvider
@@ -215,13 +213,12 @@ type cadenceSync struct {
 
 const correctionTodoistLabel = "crm"
 
-// newCadenceSync builds the cadence sync over e, whose database is the
-// isolated database with config cfg.
-func newCadenceSync(e *correctionEnv, cfg *config.Config) *cadenceSync {
+// newCadenceSync builds the cadence sync over e.
+func newCadenceSync(e *correctionEnv) *cadenceSync {
 	return &cadenceSync{
 		e: e,
 		provider: todoist.NewCadenceSyncProvider(correctionOAuth{}, e.tasks, e.contactRepo,
-			repository.NewSyncRepositoryWithPool(e.database.Queries, e.database.Pool), cfg, e.bus, e.cadence, e.database.Pool,
+			repository.NewSyncRepositoryWithPool(e.database.Queries, e.database.Pool), config.TestConfig(), e.bus, e.cadence, e.database.Pool,
 			func(string) todoist.Client { return e.todoist }, e.riverClient, true),
 		account: e.harness.Generator().Prefix() + "todoist",
 	}

@@ -32,8 +32,8 @@ limitation is not itself a blocker; explain what required behavior remains
 unfinished if it prevents approval.
 
 Do not require new tests for documentation, formatting, or mechanical edits
-without a meaningful regression risk. Tests fake only what they cannot run, or a
-failure; see `.agents/rules/testing.md` for that rule and proportional verification guidance.
+without a meaningful regression risk. Judge tests by the rules in
+[core.md "Writing tests"](core.md#writing-tests).
 
 ## Review Process
 
@@ -67,8 +67,7 @@ RESULT=FAIL
 
 ## Convention Reference
 
-- `.agents/rules/core.md` - Critical rules and patterns
-- `.agents/rules/testing.md` - Testing requirements
+- `.agents/rules/core.md` - Critical rules and patterns, including testing requirements
 - `.agents/guides/feature-development.md` - Feature development guide
 - `.agents/guides/architecture.md` - Architecture context
 - `.agents/patterns/` - Common code patterns

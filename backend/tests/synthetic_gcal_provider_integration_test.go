@@ -33,9 +33,9 @@ func cancelledStubFor(gcalEventID string) *calendarapi.Event {
 
 func TestSyntheticGCalProvider_InitialSync_MatchedAttendeeSettled(t *testing.T) {
 	testsupport.RequireLongTests(t)
-	database, ctx := newSyntheticDB(t)
+	ctx := t.Context()
 
-	h := synthetic.NewHarnessForNamespace(t, ctx, database, syntheticNS(t), factory.DefaultSeed)
+	h := synthetic.NewHarnessForNamespace(t, ctx, syntheticNS(t), factory.DefaultSeed)
 	gen := h.Generator()
 	spec := gen.Contact(factory.WithEmail())
 	contact, err := h.SeedContact(ctx, spec)
@@ -54,9 +54,9 @@ func TestSyntheticGCalProvider_InitialSync_MatchedAttendeeSettled(t *testing.T) 
 
 func TestSyntheticGCalProvider_IncrementalSync_SecondEventSettles(t *testing.T) {
 	testsupport.RequireLongTests(t)
-	database, ctx := newSyntheticDB(t)
+	ctx := t.Context()
 
-	h := synthetic.NewHarnessForNamespace(t, ctx, database, syntheticNS(t), factory.DefaultSeed)
+	h := synthetic.NewHarnessForNamespace(t, ctx, syntheticNS(t), factory.DefaultSeed)
 	gen := h.Generator()
 	spec := gen.Contact(factory.WithEmail())
 	contact, err := h.SeedContact(ctx, spec)
@@ -82,9 +82,9 @@ func TestSyntheticGCalProvider_IncrementalSync_SecondEventSettles(t *testing.T) 
 
 func TestSyntheticGCalProvider_Incremental410_FallsBackAndSettles(t *testing.T) {
 	testsupport.RequireLongTests(t)
-	database, ctx := newSyntheticDB(t)
+	ctx := t.Context()
 
-	h := synthetic.NewHarnessForNamespace(t, ctx, database, syntheticNS(t), factory.DefaultSeed)
+	h := synthetic.NewHarnessForNamespace(t, ctx, syntheticNS(t), factory.DefaultSeed)
 	gen := h.Generator()
 	spec := gen.Contact(factory.WithEmail())
 	contact, err := h.SeedContact(ctx, spec)
@@ -127,9 +127,9 @@ func TestSyntheticGCalProvider_Incremental410_FallsBackAndSettles(t *testing.T) 
 
 func TestSyntheticGCalProvider_UnmatchedAttendee_ImportCandidate(t *testing.T) {
 	testsupport.RequireLongTests(t)
-	database, ctx := newSyntheticDB(t)
+	ctx := t.Context()
 
-	h := synthetic.NewHarnessForNamespace(t, ctx, database, syntheticNS(t), factory.DefaultSeed)
+	h := synthetic.NewHarnessForNamespace(t, ctx, syntheticNS(t), factory.DefaultSeed)
 	gen := h.Generator()
 	// Unknown attendee → no matched contact; the provider stores an import
 	// candidate keyed by the (synthetic, ns-prefixed) attendee email.
@@ -145,9 +145,9 @@ func TestSyntheticGCalProvider_UnmatchedAttendee_ImportCandidate(t *testing.T) {
 
 func TestSyntheticGCalProvider_DeclineCleanup_ThroughRealConsumer(t *testing.T) {
 	testsupport.RequireLongTests(t)
-	database, ctx := newSyntheticDB(t)
+	ctx := t.Context()
 
-	h := synthetic.NewHarnessForNamespace(t, ctx, database, syntheticNS(t), factory.DefaultSeed)
+	h := synthetic.NewHarnessForNamespace(t, ctx, syntheticNS(t), factory.DefaultSeed)
 	gen := h.Generator()
 	spec := gen.Contact(factory.WithEmail())
 	contact, err := h.SeedContact(ctx, spec)
@@ -181,9 +181,9 @@ func TestSyntheticGCalProvider_DeclineCleanup_ThroughRealConsumer(t *testing.T) 
 
 func TestSyntheticGCalProvider_IdempotentInitialReplay(t *testing.T) {
 	testsupport.RequireLongTests(t)
-	database, ctx := newSyntheticDB(t)
+	ctx := t.Context()
 
-	h := synthetic.NewHarnessForNamespace(t, ctx, database, syntheticNS(t), factory.DefaultSeed)
+	h := synthetic.NewHarnessForNamespace(t, ctx, syntheticNS(t), factory.DefaultSeed)
 	gen := h.Generator()
 	spec := gen.Contact(factory.WithEmail())
 	contact, err := h.SeedContact(ctx, spec)

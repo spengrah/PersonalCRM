@@ -20,10 +20,8 @@ import (
 	"personal-crm/backend/internal/service"
 	"personal-crm/backend/internal/synthetic"
 	"personal-crm/backend/internal/synthetic/factory"
-	"personal-crm/backend/internal/testdb"
 	"personal-crm/backend/internal/threadctx"
 	"personal-crm/backend/internal/todoist"
-	"personal-crm/backend/tests/testsupport"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -138,8 +136,8 @@ func commitmentMine(c uuid.UUID) judgment.Outcomes {
 // obligationEnv opens obligations through the judgment store and syncs their
 // tasks through the Todoist provider, with the Todoist API faked. The provider
 // publishes on the real event bus, and a started River client runs the real
-// interaction recorder on what it published. The database is a per-test clone
-// so this client works only this test's jobs.
+// interaction recorder on what it published. The database is the harness's
+// per-test clone, so this client works only this test's jobs.
 type obligationEnv struct {
 	ctx          context.Context
 	harness      *synthetic.Harness
@@ -157,10 +155,9 @@ type obligationEnv struct {
 
 func newObligationEnv(t *testing.T) *obligationEnv {
 	t.Helper()
-	cloneURL, drop := testdb.NewEphemeralClone(t)
-	t.Cleanup(drop)
-	database := testsupport.OpenDatabaseAt(t, cloneURL)
 	ctx := t.Context()
+	harness := synthetic.NewHarnessForNamespace(t, ctx, "o"+uuid.NewString()[:8], factory.DefaultSeed)
+	database := harness.Database()
 
 	// The recorder needs the bus and the bus needs the client, so the
 	// recorder worker is filled in once both exist, before the client starts.
@@ -215,7 +212,7 @@ func newObligationEnv(t *testing.T) *obligationEnv {
 		config.TestConfig(), bus, cadence, database.Pool, func(string) todoist.Client { return feed }, jobs, false)
 	return &obligationEnv{
 		ctx:          ctx,
-		harness:      synthetic.NewHarnessForNamespace(t, ctx, database, "o"+uuid.NewString()[:8], factory.DefaultSeed),
+		harness:      harness,
 		store:        store,
 		tasks:        tasks,
 		people:       contactRepo,

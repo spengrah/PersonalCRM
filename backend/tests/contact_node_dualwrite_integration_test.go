@@ -337,9 +337,9 @@ func TestContactNodeDualWrite_Integration(t *testing.T) {
 // harness spins up a River client.
 func TestContactNodeDualWrite_HarnessSeedCreatesNode(t *testing.T) {
 	testsupport.RequireLongTests(t)
-	database, ctx := newSyntheticDB(t)
+	ctx := t.Context()
 
-	h := synthetic.NewHarnessForNamespace(t, ctx, database, syntheticNS(t), factory.DefaultSeed)
+	h := synthetic.NewHarnessForNamespace(t, ctx, syntheticNS(t), factory.DefaultSeed)
 	support := repository.NewSyntheticSupportRepository(h.Database().Queries)
 
 	spec := h.Generator().Contact()

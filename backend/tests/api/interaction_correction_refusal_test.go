@@ -70,8 +70,7 @@ func (e *correctionEnv) jobs(t *testing.T) []*rivertype.JobRow {
 func TestInteractionCorrection_Refusals(t *testing.T) {
 	testsupport.RequireDatabase(t)
 	t.Parallel()
-	database, _ := newIsolatedRiverTestDB(t, t.Context())
-	e := newCorrectionEnvOn(t, database)
+	e := newCorrectionEnv(t)
 
 	a, b, stranger := e.contact(t, "monthly"), e.contact(t, "monthly"), e.contact(t, "monthly")
 	ev := e.event(t)
@@ -165,8 +164,7 @@ func TestInteractionCorrection_Refusals(t *testing.T) {
 func TestInteractionCorrection_PublishesOneEvent(t *testing.T) {
 	testsupport.RequireDatabase(t)
 	t.Parallel()
-	database, _ := newIsolatedRiverTestDB(t, t.Context())
-	e := newCorrectionEnvOn(t, database)
+	e := newCorrectionEnv(t)
 
 	// actOf returns the act id a correction assertion's locator names.
 	actOf := func(t *testing.T, node uuid.UUID, predicate string) string {

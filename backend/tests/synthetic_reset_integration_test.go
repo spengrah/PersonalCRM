@@ -7,12 +7,10 @@ import (
 	"strings"
 	"testing"
 
-	"personal-crm/backend/internal/config"
 	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/synthetic"
 	"personal-crm/backend/internal/synthetic/factory"
-	"personal-crm/backend/internal/testdb"
 
 	"github.com/stretchr/testify/require"
 )
@@ -91,29 +89,23 @@ var wipedTables = []string{
 var catalogExclusions = []string{"predicate", "entity_type", "judgment_flag_method", "judgment_flag_threshold"}
 
 // TestSyntheticResetSyntheticData_WipesEveryDataTable is the DESTRUCTIVE,
-// DB-wide reset test. It runs against a per-test CLONE DB (never the shared
-// personal_crm_test) so a TRUNCATE-of-everything cannot wipe sibling tests. It
+// DB-wide reset test. It runs against the harness's per-test CLONE DB (never the
+// shared personal_crm_test) so a TRUNCATE-of-everything cannot wipe sibling tests. It
 // asserts: every wiped table is empty after the reset, schema_migrations
 // survives, and the catalog guard (every public table is accounted for).
 func TestSyntheticResetSyntheticData_WipesEveryDataTable(t *testing.T) {
 	testsupport.RequireDatabase(t)
 
 	ctx := t.Context()
-	cloneURL, drop := testdb.NewEphemeralClone(t)
-	t.Cleanup(drop)
-
-	cfg := config.TestConfig()
-	cfg.Database.URL = cloneURL
-	database := testsupport.OpenDatabaseAt(t, cfg.Database.URL)
-
-	support := repository.NewSyntheticSupportRepository(database.Queries)
 
 	// Seed a synthetic world (covers the relational core: contact, contact_method,
 	// interaction, event, comms_message, external_*, mac_host, meeting_note, ...)
-	// plus standalone markers for the harness-untouched wiped tables. The clone is
-	// dropped after the test, so the harness's own cleanup is irrelevant — the
-	// reset wipes everything regardless.
-	h := synthetic.NewHarnessForNamespace(t, ctx, database, "reset", factory.DefaultSeed)
+	// plus standalone markers for the harness-untouched wiped tables. The harness
+	// runs on this test's own clone, which is dropped after the test, so the
+	// harness's own cleanup is irrelevant — the reset wipes everything regardless.
+	h := synthetic.NewHarnessForNamespace(t, ctx, "reset", factory.DefaultSeed)
+	database := h.Database()
+	support := repository.NewSyntheticSupportRepository(database.Queries)
 	gen := h.Generator()
 	spec := gen.Contact(factory.WithEmail())
 	contact, err := h.SeedContact(ctx, spec)
@@ -245,17 +237,11 @@ func TestSyntheticReset_InvalidNamespaceLeavesDataIntact(t *testing.T) {
 	testsupport.RequireDatabase(t)
 
 	ctx := t.Context()
-	cloneURL, drop := testdb.NewEphemeralClone(t)
-	t.Cleanup(drop)
-
-	cfg := config.TestConfig()
-	cfg.Database.URL = cloneURL
-	database := testsupport.OpenDatabaseAt(t, cfg.Database.URL)
-
-	support := repository.NewSyntheticSupportRepository(database.Queries)
 
 	// Seed a representative live-data row so a stray TRUNCATE would be observable.
-	h := synthetic.NewHarnessForNamespace(t, ctx, database, "reset", factory.DefaultSeed)
+	// The harness runs on this test's own clone.
+	h := synthetic.NewHarnessForNamespace(t, ctx, "reset", factory.DefaultSeed)
+	support := repository.NewSyntheticSupportRepository(h.Database().Queries)
 	gen := h.Generator()
 	spec := gen.Contact(factory.WithEmail())
 	_, err := h.SeedContact(ctx, spec)

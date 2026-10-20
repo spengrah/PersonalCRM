@@ -30,9 +30,9 @@ import (
 // the event's occurred_at (~1h before the anchor).
 func TestSyntheticReplay_GCalDerivesLastContacted(t *testing.T) {
 	testsupport.RequireLongTests(t)
-	database, ctx := newSyntheticDB(t)
+	ctx := t.Context()
 
-	h := synthetic.NewHarnessForNamespace(t, ctx, database, syntheticNS(t), factory.DefaultSeed)
+	h := synthetic.NewHarnessForNamespace(t, ctx, syntheticNS(t), factory.DefaultSeed)
 	gen := h.Generator()
 
 	spec := gen.Contact(factory.WithEmail())

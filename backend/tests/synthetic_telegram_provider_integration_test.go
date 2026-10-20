@@ -24,9 +24,9 @@ import (
 
 func TestSyntheticTelegramProvider_PrivateCoalescesThroughPipeline(t *testing.T) {
 	testsupport.RequireLongTests(t)
-	database, ctx := newSyntheticDB(t)
+	ctx := t.Context()
 
-	h := synthetic.NewHarnessForNamespace(t, ctx, database, syntheticNS(t), factory.DefaultSeed)
+	h := synthetic.NewHarnessForNamespace(t, ctx, syntheticNS(t), factory.DefaultSeed)
 	gen := h.Generator()
 	spec := gen.Contact(factory.WithTelegram())
 	contact, err := h.SeedContact(ctx, spec)
@@ -53,9 +53,9 @@ func TestSyntheticTelegramProvider_PrivateCoalescesThroughPipeline(t *testing.T)
 
 func TestSyntheticTelegramProvider_StrandedProducesDiscoveryCandidate(t *testing.T) {
 	testsupport.RequireLongTests(t)
-	database, ctx := newSyntheticDB(t)
+	ctx := t.Context()
 
-	h := synthetic.NewHarnessForNamespace(t, ctx, database, syntheticNS(t), factory.DefaultSeed)
+	h := synthetic.NewHarnessForNamespace(t, ctx, syntheticNS(t), factory.DefaultSeed)
 	gen := h.Generator()
 
 	// Unknown peer; send enough messages to cross the discovery threshold (the
@@ -80,9 +80,9 @@ func TestSyntheticTelegramProvider_StrandedProducesDiscoveryCandidate(t *testing
 
 func TestSyntheticTelegramProvider_IdempotentReReplay(t *testing.T) {
 	testsupport.RequireLongTests(t)
-	database, ctx := newSyntheticDB(t)
+	ctx := t.Context()
 
-	h := synthetic.NewHarnessForNamespace(t, ctx, database, syntheticNS(t), factory.DefaultSeed)
+	h := synthetic.NewHarnessForNamespace(t, ctx, syntheticNS(t), factory.DefaultSeed)
 	gen := h.Generator()
 	spec := gen.Contact(factory.WithTelegram())
 	contact, err := h.SeedContact(ctx, spec)
@@ -107,9 +107,9 @@ func TestSyntheticTelegramProvider_IdempotentReReplay(t *testing.T) {
 
 func TestSyntheticTelegramGroup_TrackedMatchedInteraction(t *testing.T) {
 	testsupport.RequireLongTests(t)
-	database, ctx := newSyntheticDB(t)
+	ctx := t.Context()
 
-	h := synthetic.NewHarnessForNamespace(t, ctx, database, syntheticNS(t), factory.DefaultSeed)
+	h := synthetic.NewHarnessForNamespace(t, ctx, syntheticNS(t), factory.DefaultSeed)
 	gen := h.Generator()
 	spec := gen.Contact(factory.WithTelegram())
 	contact, err := h.SeedContact(ctx, spec)
@@ -138,9 +138,9 @@ func TestSyntheticTelegramGroup_TrackedMatchedInteraction(t *testing.T) {
 
 func TestSyntheticTelegramGroup_UntrackedOverSizeNotStored(t *testing.T) {
 	testsupport.RequireLongTests(t)
-	database, ctx := newSyntheticDB(t)
+	ctx := t.Context()
 
-	h := synthetic.NewHarnessForNamespace(t, ctx, database, syntheticNS(t), factory.DefaultSeed)
+	h := synthetic.NewHarnessForNamespace(t, ctx, syntheticNS(t), factory.DefaultSeed)
 	gen := h.Generator()
 	spec := gen.Contact(factory.WithTelegram())
 	contact, err := h.SeedContact(ctx, spec)
@@ -166,9 +166,9 @@ func TestSyntheticTelegramGroup_UntrackedOverSizeNotStored(t *testing.T) {
 
 func TestSyntheticTelegramGroup_ParticipantCountRefresh(t *testing.T) {
 	testsupport.RequireLongTests(t)
-	database, ctx := newSyntheticDB(t)
+	ctx := t.Context()
 
-	h := synthetic.NewHarnessForNamespace(t, ctx, database, syntheticNS(t), factory.DefaultSeed)
+	h := synthetic.NewHarnessForNamespace(t, ctx, syntheticNS(t), factory.DefaultSeed)
 	gen := h.Generator()
 	spec := gen.Contact(factory.WithTelegram())
 	contact, err := h.SeedContact(ctx, spec)
@@ -194,9 +194,9 @@ func TestSyntheticTelegramGroup_ParticipantCountRefresh(t *testing.T) {
 
 func TestSyntheticTelegramGroup_UnknownSenderStrandedDiscovery(t *testing.T) {
 	testsupport.RequireLongTests(t)
-	database, ctx := newSyntheticDB(t)
+	ctx := t.Context()
 
-	h := synthetic.NewHarnessForNamespace(t, ctx, database, syntheticNS(t), factory.DefaultSeed)
+	h := synthetic.NewHarnessForNamespace(t, ctx, syntheticNS(t), factory.DefaultSeed)
 	gen := h.Generator()
 
 	// Tracked group, unknown sender, enough messages to cross the discovery

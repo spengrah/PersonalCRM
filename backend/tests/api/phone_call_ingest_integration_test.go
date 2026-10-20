@@ -117,11 +117,20 @@ func (f *failingPhoneCallWriter) MarkProcessedTx(ctx context.Context, tx pgx.Tx,
 func setupPhoneCallIngestEnv(t *testing.T, todoistSettings ...consumer.TodoistSettingsFunc) *phoneCallIngestEnv {
 	t.Helper()
 
-	ctx := t.Context()
 	// Records interactions INLINE (no async worker), but pairs the singleton
 	// mac_host with a DB-wide DeleteAllMacHosts teardown that collides on the
 	// shared package DB, so it runs on a per-test clone.
-	database, cfg := newIsolatedRiverTestDB(t, ctx)
+	database, _ := newIsolatedRiverTestDB(t, t.Context())
+	return setupPhoneCallIngestEnvOn(t, database, todoistSettings...)
+}
+
+// setupPhoneCallIngestEnvOn builds the env on database, which the test must own
+// (see setupPhoneCallIngestEnv).
+func setupPhoneCallIngestEnvOn(t *testing.T, database *db.Database, todoistSettings ...consumer.TodoistSettingsFunc) *phoneCallIngestEnv {
+	t.Helper()
+
+	ctx := t.Context()
+	cfg := config.TestConfig()
 	cfg.External.APIKey = macHostTestKey
 	cfg.Features.EnableEventBusIngest = true
 
