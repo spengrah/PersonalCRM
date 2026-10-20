@@ -358,10 +358,12 @@ LIMIT 1;
 -- name: UpsertJudgmentFlagLabel :exec
 -- Records the user's label of a flag decision (message and kind of a thread),
 -- replacing the decision's earlier label: the primary key is the decision.
-INSERT INTO judgment_flag_label (thread_id, message_key, kind, holds, labeled_at)
-VALUES (sqlc.arg('thread_id'), sqlc.arg('message_key'), sqlc.arg('kind'), sqlc.arg('holds'), sqlc.arg('labeled_at'))
+-- by_close records that a close labeled the decision, a fact about the close
+-- that a later label's value does not undo, so a replacement only sets it.
+INSERT INTO judgment_flag_label (thread_id, message_key, kind, holds, by_close, labeled_at)
+VALUES (sqlc.arg('thread_id'), sqlc.arg('message_key'), sqlc.arg('kind'), sqlc.arg('holds'), sqlc.arg('by_close'), sqlc.arg('labeled_at'))
 ON CONFLICT (thread_id, message_key, kind)
-DO UPDATE SET holds = EXCLUDED.holds, labeled_at = EXCLUDED.labeled_at;
+DO UPDATE SET holds = EXCLUDED.holds, by_close = judgment_flag_label.by_close OR EXCLUDED.by_close, labeled_at = EXCLUDED.labeled_at;
 
 -- name: UpsertJudgmentClearingLabel :exec
 -- Records the user's label of a clearing decision (a commitment's message of a
@@ -375,6 +377,12 @@ DO UPDATE SET done = EXCLUDED.done, labeled_at = EXCLUDED.labeled_at;
 SELECT thread_id, message_key, kind, holds FROM judgment_flag_label
 WHERE thread_id = ANY(sqlc.arg('thread_ids')::uuid[])
 ORDER BY thread_id, message_key, kind;
+
+-- name: ListClosedFlagLabelMessages :many
+-- The messages of the threads that a close labeled for some kind.
+SELECT DISTINCT thread_id, message_key FROM judgment_flag_label
+WHERE thread_id = ANY(sqlc.arg('thread_ids')::uuid[]) AND by_close
+ORDER BY thread_id, message_key;
 
 -- name: ListJudgmentClearingLabels :many
 SELECT thread_id, commitment_message_key, cut_off, done FROM judgment_clearing_label

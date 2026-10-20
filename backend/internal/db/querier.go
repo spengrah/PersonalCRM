@@ -1392,6 +1392,8 @@ type Querier interface {
 	// SET of canonical phones/emails, not the contact mapping, so DISTINCT
 	// collapses the same value across multiple contacts.
 	ListCanonicalIdentifiersByType(ctx context.Context, types []string) ([]string, error)
+	// The messages of the threads that a close labeled for some kind.
+	ListClosedFlagLabelMessages(ctx context.Context, threadIds []uuid.UUID) ([]*ListClosedFlagLabelMessagesRow, error)
 	ListCommsContainersForContact(ctx context.Context, contactID *uuid.UUID) ([]*ListCommsContainersForContactRow, error)
 	// Per-contact content, newest first (backs idx_comms_message_contact_sent).
 	ListCommsMessagesByContact(ctx context.Context, matchedContactID *uuid.UUID) ([]*CommsMessage, error)
@@ -3527,6 +3529,8 @@ type Querier interface {
 	UpsertJudgmentClearingLabel(ctx context.Context, arg UpsertJudgmentClearingLabelParams) error
 	// Records the user's label of a flag decision (message and kind of a thread),
 	// replacing the decision's earlier label: the primary key is the decision.
+	// by_close records that a close labeled the decision, a fact about the close
+	// that a later label's value does not undo, so a replacement only sets it.
 	UpsertJudgmentFlagLabel(ctx context.Context, arg UpsertJudgmentFlagLabelParams) error
 	// Insert with no-op on guid conflict. peer_normalized and matched_contact_id
 	// come from the Pi ingest service identity-match path. mac_host_id is

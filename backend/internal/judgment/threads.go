@@ -443,7 +443,7 @@ func (t *Threads) Close(ctx context.Context, run RunID, thread uuid.UUID) (*Thre
 			nights = append(nights, n)
 		}
 	}
-	if err := t.labelNights(ctx, thread, data, nights); err != nil {
+	if err := t.labelNights(ctx, thread, data, nights, true); err != nil {
 		return nil, err
 	}
 	return t.store.reviewStateOf(ctx, runRow, thread)
@@ -487,7 +487,7 @@ func (t *Threads) ConfirmNight(ctx context.Context, run RunID, judgment uuid.UUI
 	if night.shows || night.HoldsLabel {
 		return nil, ErrConfirmNonesRefused
 	}
-	if err := t.labelNights(ctx, thread, data, []Night{night}); err != nil {
+	if err := t.labelNights(ctx, thread, data, []Night{night}, false); err != nil {
 		return nil, err
 	}
 	return t.store.reviewStateOf(ctx, runRow, thread)
@@ -496,8 +496,9 @@ func (t *Threads) ConfirmNight(ctx context.Context, run RunID, judgment uuid.UUI
 // labelNights records, in one transaction, the labels a close or Confirm Nones
 // gives the nights: the flag decisions without a label of their judged messages
 // as not holding, but for those a compared method's judgment shows as a flag,
-// then their negative reply decisions with their judged values.
-func (t *Threads) labelNights(ctx context.Context, thread uuid.UUID, data *reviewData, nights []Night) error {
+// then their negative reply decisions with their judged values. Only a close's
+// flag labels are marked as a close's (byClose), for the footer to count.
+func (t *Threads) labelNights(ctx context.Context, thread uuid.UUID, data *reviewData, nights []Night, byClose bool) error {
 	if len(nights) == 0 {
 		return nil
 	}
@@ -521,7 +522,7 @@ func (t *Threads) labelNights(ctx context.Context, thread uuid.UUID, data *revie
 					if skip[flagKey{key, kind}] {
 						continue
 					}
-					if err := t.store.recordReviewTx(ctx, tx, flagReview{thread: thread, messageKey: key, kind: kind, holds: false}); err != nil {
+					if err := t.store.recordReviewTx(ctx, tx, flagReview{thread: thread, messageKey: key, kind: kind, holds: false, byClose: byClose}); err != nil {
 						return err
 					}
 					skip[flagKey{key, kind}] = true

@@ -6,7 +6,10 @@
 -- decision, not to any method's judgment of it, so every method, run and
 -- cut-off that judged the decision reads the same label.
 --
---   judgment_flag_label      holds: whether the message holds the kind
+--   judgment_flag_label      holds:    whether the message holds the kind
+--                            by_close: whether a close ever labeled the decision,
+--                                      which is what a night's footer counts;
+--                                      a later label replaces holds and keeps it
 --   judgment_clearing_label  done:  whether the commitment is done as of the
 --                                   cut-off
 --
@@ -27,6 +30,7 @@ CREATE TABLE judgment_flag_label (
     message_key TEXT NOT NULL,
     kind TEXT NOT NULL CHECK (kind IN ('commitment', 'big_moment', 'claim')),
     holds BOOLEAN NOT NULL,
+    by_close BOOLEAN NOT NULL DEFAULT FALSE,
     labeled_at TIMESTAMPTZ NOT NULL,
     PRIMARY KEY (thread_id, message_key, kind)
 );

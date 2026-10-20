@@ -465,6 +465,7 @@ type JudgmentFlagLabel struct {
 	MessageKey string    `json:"message_key"`
 	Kind       string    `json:"kind"`
 	Holds      bool      `json:"holds"`
+	ByClose    bool      `json:"by_close"`
 	LabeledAt  time.Time `json:"labeled_at"`
 }
 

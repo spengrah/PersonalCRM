@@ -551,6 +551,38 @@ func (q *Queries) IsEarlierCommitment(ctx context.Context, arg IsEarlierCommitme
 	return exists, err
 }
 
+const ListClosedFlagLabelMessages = `-- name: ListClosedFlagLabelMessages :many
+SELECT DISTINCT thread_id, message_key FROM judgment_flag_label
+WHERE thread_id = ANY($1::uuid[]) AND by_close
+ORDER BY thread_id, message_key
+`
+
+type ListClosedFlagLabelMessagesRow struct {
+	ThreadID   uuid.UUID `json:"thread_id"`
+	MessageKey string    `json:"message_key"`
+}
+
+// The messages of the threads that a close labeled for some kind.
+func (q *Queries) ListClosedFlagLabelMessages(ctx context.Context, threadIds []uuid.UUID) ([]*ListClosedFlagLabelMessagesRow, error) {
+	rows, err := q.db.Query(ctx, ListClosedFlagLabelMessages, threadIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []*ListClosedFlagLabelMessagesRow{}
+	for rows.Next() {
+		var i ListClosedFlagLabelMessagesRow
+		if err := rows.Scan(&i.ThreadID, &i.MessageKey); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const ListJudgmentAppearances = `-- name: ListJudgmentAppearances :many
 SELECT a.run_id, a.judgment_id, a.cut_off, e.thread_id, e.id AS example_id
 FROM judgment_appearance a
@@ -1641,10 +1673,10 @@ func (q *Queries) UpsertJudgmentClearingLabel(ctx context.Context, arg UpsertJud
 }
 
 const UpsertJudgmentFlagLabel = `-- name: UpsertJudgmentFlagLabel :exec
-INSERT INTO judgment_flag_label (thread_id, message_key, kind, holds, labeled_at)
-VALUES ($1, $2, $3, $4, $5)
+INSERT INTO judgment_flag_label (thread_id, message_key, kind, holds, by_close, labeled_at)
+VALUES ($1, $2, $3, $4, $5, $6)
 ON CONFLICT (thread_id, message_key, kind)
-DO UPDATE SET holds = EXCLUDED.holds, labeled_at = EXCLUDED.labeled_at
+DO UPDATE SET holds = EXCLUDED.holds, by_close = judgment_flag_label.by_close OR EXCLUDED.by_close, labeled_at = EXCLUDED.labeled_at
 `
 
 type UpsertJudgmentFlagLabelParams struct {
@@ -1652,17 +1684,21 @@ type UpsertJudgmentFlagLabelParams struct {
 	MessageKey string    `json:"message_key"`
 	Kind       string    `json:"kind"`
 	Holds      bool      `json:"holds"`
+	ByClose    bool      `json:"by_close"`
 	LabeledAt  time.Time `json:"labeled_at"`
 }
 
 // Records the user's label of a flag decision (message and kind of a thread),
 // replacing the decision's earlier label: the primary key is the decision.
+// by_close records that a close labeled the decision, a fact about the close
+// that a later label's value does not undo, so a replacement only sets it.
 func (q *Queries) UpsertJudgmentFlagLabel(ctx context.Context, arg UpsertJudgmentFlagLabelParams) error {
 	_, err := q.db.Exec(ctx, UpsertJudgmentFlagLabel,
 		arg.ThreadID,
 		arg.MessageKey,
 		arg.Kind,
 		arg.Holds,
+		arg.ByClose,
 		arg.LabeledAt,
 	)
 	return err

@@ -87,12 +87,14 @@ type outcomeReview struct {
 }
 
 // flagReview is the user's label of a flag decision: whether the message holds
-// the kind.
+// the kind. byClose is true for a label a close wrote, which a night's footer
+// counts; a later label of the decision replaces holds and keeps that fact.
 type flagReview struct {
 	thread     uuid.UUID
 	messageKey string
 	kind       FlagKind
 	holds      bool
+	byClose    bool
 }
 
 // clearingReview is the user's label of a clearing decision: whether the
@@ -122,7 +124,7 @@ func (s *Store) recordReviewTx(ctx context.Context, tx pgx.Tx, r review) error {
 		return s.recordOutcomeReviewTx(ctx, tx, r)
 	case flagReview:
 		if err := db.New(tx).UpsertJudgmentFlagLabel(ctx, db.UpsertJudgmentFlagLabelParams{
-			ThreadID: r.thread, MessageKey: r.messageKey, Kind: string(r.kind), Holds: r.holds, LabeledAt: now(),
+			ThreadID: r.thread, MessageKey: r.messageKey, Kind: string(r.kind), Holds: r.holds, ByClose: r.byClose, LabeledAt: now(),
 		}); err != nil {
 			return fmt.Errorf("record flag label: %w", err)
 		}
@@ -206,6 +208,23 @@ func (s *Store) LabelsByThread(ctx context.Context, thread threadctx.VenueID) (T
 		return ThreadLabels{}, err
 	}
 	return byThread[thread], nil
+}
+
+// loadClosedMessages reads, per thread, the messages a close labeled for some
+// flag kind.
+func loadClosedMessages(ctx context.Context, q db.Querier, threads []uuid.UUID) (map[uuid.UUID]map[string]bool, error) {
+	rows, err := q.ListClosedFlagLabelMessages(ctx, threads)
+	if err != nil {
+		return nil, fmt.Errorf("list closed flag labels: %w", err)
+	}
+	out := map[uuid.UUID]map[string]bool{}
+	for _, r := range rows {
+		if out[r.ThreadID] == nil {
+			out[r.ThreadID] = map[string]bool{}
+		}
+		out[r.ThreadID][r.MessageKey] = true
+	}
+	return out, nil
 }
 
 // loadDecisionLabels reads the flag and clearing labels of the given threads.

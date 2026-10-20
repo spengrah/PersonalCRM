@@ -634,3 +634,64 @@ func TestLabelsByThread(t *testing.T) {
 		assert.Empty(t, labels.Clearings)
 	})
 }
+
+// The footer count describes what a close labeled: a label made by hand, and
+// Confirm Nones, are not a close.
+func TestLabeledNoneCountsOnlyWhatACloseLabeled(t *testing.T) {
+	t.Run("a flag added and removed by hand is no close", func(t *testing.T) {
+		// spec: IXN-083.footer-reports-nones
+		b := newBenchEnv(t)
+		x, y := b.contact(t), b.contact(t)
+		th, keys := b.chat(t, 2, x, y)
+		m := b.compared(0)
+		run := b.startRun(t, judgment.RunKindHistorical, m)
+		b.judgedWith(t, run, m, th, b.cutAfter(2), keys[0], keys, nil, owedAndNone(x, y))
+		require.Equal(t, http.StatusOK, b.labelFlag(t, th, run, keys[0], "claim", true).Code)
+		require.Equal(t, http.StatusOK, b.labelFlag(t, th, run, keys[0], "claim", false).Code)
+
+		assert.Zero(t, b.reviewOf(t, th, run).Nights[0].LabeledNone, "the claim label alone is no close")
+
+		w := b.closeThread(t, th, run)
+
+		require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+		assert.Equal(t, 2, decodeData[handlers.ThreadReviewResponse](t, w).Nights[0].LabeledNone, "the close labeled both messages' other kinds")
+	})
+
+	t.Run("a label made by hand after a close keeps the close's count", func(t *testing.T) {
+		// spec: IXN-083.footer-reports-nones
+		b := newBenchEnv(t)
+		x, y := b.contact(t), b.contact(t)
+		th, keys := b.chat(t, 2, x, y)
+		m := b.compared(0)
+		run := b.startRun(t, judgment.RunKindHistorical, m)
+		b.judgedWith(t, run, m, th, b.cutAfter(2), keys[0], keys, nil, owedAndNone(x, y))
+		require.Equal(t, http.StatusOK, b.labelFlag(t, th, run, keys[0], "claim", true).Code)
+		require.Equal(t, http.StatusOK, b.labelFlag(t, th, run, keys[0], "claim", false).Code)
+		require.Equal(t, http.StatusOK, b.closeThread(t, th, run).Code)
+		require.Equal(t, 2, b.reviewOf(t, th, run).Nights[0].LabeledNone)
+
+		for _, kind := range judgment.FlagKinds {
+			require.Equal(t, http.StatusOK, b.labelFlag(t, th, run, keys[1], string(kind), false).Code)
+		}
+
+		assert.Equal(t, 2, b.reviewOf(t, th, run).Nights[0].LabeledNone, "relabeling a decision the close labeled does not unlabel the close")
+	})
+
+	t.Run("Confirm Nones is no close", func(t *testing.T) {
+		// spec: IXN-083.footer-reports-nones
+		b := newBenchEnv(t)
+		x := b.contact(t)
+		th, keys := b.conversation(t, 2)
+		m := b.compared(0)
+		run := b.startRun(t, judgment.RunKindHistorical, m)
+		night := b.judgedWith(t, run, m, th, b.cutAfter(2), keys[0], keys, nil, judgment.Outcomes{
+			BallInCourt: []judgment.ParticipantOutcome[judgment.BallInCourt]{bic(x, judgment.BallInCourtNobodyOwes, 0.8)},
+		})
+
+		w := b.post(t, "/api/v1/judgments/"+night.String()+"/confirm-nones?run_id="+run.String(), nil)
+
+		require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+		assert.Zero(t, decodeData[handlers.ThreadReviewResponse](t, w).Nights[0].LabeledNone)
+		assert.Zero(t, b.reviewOf(t, th, run).Nights[0].LabeledNone, "and so does every later read")
+	})
+}

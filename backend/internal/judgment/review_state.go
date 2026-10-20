@@ -85,8 +85,8 @@ type ClosestUnflagged struct {
 // clearing decision or reply item and holds no label. HoldsLabel is true when a
 // flag decision of one of its messages, one of its clearing decisions or a
 // decision of its reply proposal has a label. LabeledNone counts the judged
-// messages it shows no chip for that hold a label (each such label says the
-// message holds nothing). Proposal is its judgment's reply proposal; nil when
+// messages it shows no chip for that a close labeled for some kind (each such
+// label says the message holds nothing). Proposal is its judgment's reply proposal; nil when
 // the read leaves it out.
 type Night struct {
 	JudgmentID      uuid.UUID
@@ -142,6 +142,7 @@ type reviewData struct {
 	unjudged    map[uuid.UUID][]*db.JudgmentUnjudged
 	refs        map[uuid.UUID][]refMessage
 	decisionLb  map[uuid.UUID]ThreadLabels
+	closedLb    map[uuid.UUID]map[string]bool
 	thresholds  *thresholdCache
 }
 
@@ -222,6 +223,9 @@ func (s *Store) loadReviewData(ctx context.Context, run *db.JudgmentRun, threads
 		d.refs[r.VenueID] = append(d.refs[r.VenueID], refMessage{key: r.MessageKey, sentAt: r.SentAt})
 	}
 	if d.decisionLb, err = loadDecisionLabels(ctx, q, threads); err != nil {
+		return nil, err
+	}
+	if d.closedLb, err = loadClosedMessages(ctx, q, threads); err != nil {
 		return nil, err
 	}
 	return d, nil
@@ -356,7 +360,7 @@ func (d *reviewData) build(ctx context.Context, thread uuid.UUID) (*ThreadReview
 			return cmp.Or(a.CommitmentSentAt.Compare(b.CommitmentSentAt), strings.Compare(a.CommitmentMessageKey, b.CommitmentMessageKey))
 		})
 		n.Closest = d.closest(n, refs, index)
-		n.status(d, hasFlagLabel, refs)
+		n.status(d, hasFlagLabel, d.closedLb[thread], refs)
 	}
 	review.JudgedCount = len(judged)
 	review.Status, review.ToReview = threadStatus(nights)
@@ -469,7 +473,7 @@ func (d *reviewData) closest(n *Night, refs []refMessage, index map[string]int) 
 }
 
 // status computes what the night shows and what of it awaits a label.
-func (n *Night) status(d *reviewData, hasFlagLabel map[string]bool, refs []refMessage) {
+func (n *Night) status(d *reviewData, hasFlagLabel, closed map[string]bool, refs []refMessage) {
 	n.sorted = sortOutcomes(d.outcomes[n.JudgmentID], d.outcomeLb)
 	chips, unlabeled, labeledNone := 0, 0, 0
 	for _, m := range n.Messages {
@@ -479,7 +483,7 @@ func (n *Night) status(d *reviewData, hasFlagLabel map[string]bool, refs []refMe
 				unlabeled++
 			}
 		}
-		if m.Judged && len(m.Chips) == 0 && hasFlagLabel[m.Key] {
+		if m.Judged && len(m.Chips) == 0 && closed[m.Key] {
 			labeledNone++
 		}
 		if hasFlagLabel[m.Key] {
