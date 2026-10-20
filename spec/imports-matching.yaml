@@ -749,3 +749,18 @@ behaviors:
       - message storage and inbound-outbound classification are unchanged by the own-domain list
     provenance: ['#789', 2026-08-11-gmail-participant-discovery.md]
     notes: The user operates aliases on a personal domain; the domain list is per-account runtime configuration and is never hardcoded in code, fixtures, or tests (repo PII rule).
+
+  - id: IMP-050
+    title: Gmail calendar messages feed no discovery
+    type: business-logic
+    status: proposed
+    surface: none
+    given: a fetched Gmail message with a text/calendar MIME part at any depth, inline or attachment
+    when: discovery evaluates the message
+    then:
+      - key: no-create-candidate
+        text: no gmail_participant create candidate is produced from it
+      - key: no-correspondence-evidence
+        text: it adds no message count or co-occurrence evidence to any gmail_correspondence link candidate
+    provenance: [.agents/spec/2026-10-20-gmail-calendar-invites.md]
+    notes: Pairs with ING-046, which drops the same messages from storage.
