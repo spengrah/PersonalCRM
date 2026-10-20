@@ -222,6 +222,96 @@ test.describe('Threads list with Review @area:interactions', () => {
     )
   })
 
+  test('the Run filter lists no rerun or removed method’s run, and a judged count leaves out a message no judgment answered', async ({
+    page,
+    request,
+  }) => {
+    const { seeded, family, mail, january, february } = await judgedWorld(request)
+    const familyMessages = (await readThread(request, family.thread_id)).messages
+    const mailMessages = (await readThread(request, mail.thread_id)).messages
+    const afterwards = (sentAt: string) =>
+      new Date(new Date(sentAt).getTime() + 30_000).toISOString()
+
+    // A March run judges the twelve-message chat in one night whose sixth
+    // message is over the method's limit: new at the cut-off, answered by no
+    // judgment, while its neighbors are judged.
+    const nightEnd = afterwards(familyMessages[familyMessages.length - 1].sent_at)
+    const oversized = familyMessages[5].message_key
+    const march = await seedJudgmentRun(request, {
+      method_key: COMPARED_METHODS.reasoned,
+      from: '2026-03-01T00:00:00Z',
+      to: '2026-03-31T00:00:00Z',
+      judgments: [
+        {
+          thread_interaction_id: entity(seeded, 'family').id,
+          cut_off: nightEnd,
+          window_start: familyMessages[0].message_key,
+          new_messages: familyMessages
+            .map(message => message.message_key)
+            .filter(key => key !== oversized),
+        },
+      ],
+      unjudged: [
+        {
+          thread_interaction_id: entity(seeded, 'family').id,
+          cut_off: nightEnd,
+          message_key: oversized,
+          reason: 'message_over_limit',
+        },
+      ],
+    })
+
+    // Runs the filter must never list, each judging the email thread and each
+    // started after every compared run, so the newest run of all is one of them.
+    const mailNight = {
+      thread_interaction_id: entity(seeded, 'mail').id,
+      cut_off: afterwards(mailMessages[0].sent_at),
+      window_start: mailMessages[0].message_key,
+      new_messages: [mailMessages[0].message_key],
+    }
+    const excluded: string[] = []
+    for (const run of [
+      { kind: 'rerun' as const, method_key: COMPARED_METHODS.clef },
+      { kind: 'historical' as const, method_key: 'sage-masked' },
+      { kind: 'historical' as const, method_key: 'clef-flash-masked' },
+    ]) {
+      const seededRun = await seedJudgmentRun(request, {
+        ...run,
+        from: '2026-04-01T00:00:00Z',
+        to: '2026-04-30T00:00:00Z',
+        judgments: [mailNight],
+      })
+      excluded.push(seededRun.run_id)
+    }
+
+    const runSelect = page.getByLabel('Run', { exact: true })
+    const listed = () =>
+      runSelect.locator('option').evaluateAll(nodes => nodes.map(n => n.getAttribute('value')))
+    await page.goto('/interactions?tab=threads')
+    await expect(rows(page).first()).toBeVisible({ timeout: SLOW_TIMEOUT_MS })
+    await reviewSwitch(page).click()
+
+    // spec: IXN-077.run-filter-lists-runs
+    await expect(runSelect.locator(`option[value="${march.run_id}"]`)).toHaveText(
+      'clef-masked-reasoned · March 2026'
+    )
+    expect(await listed()).toEqual(
+      expect.arrayContaining([january.run_id, february.run_id, march.run_id])
+    )
+    for (const run of excluded) {
+      expect(await listed()).not.toContain(run)
+    }
+
+    // spec: IXN-077.newest-run-default
+    await expect(runSelect).toHaveValue((await listed())[0]!)
+
+    // spec: IXN-077.row-count-and-status
+    await runSelect.selectOption(march.run_id)
+    await expect(rows(page)).toHaveCount(1, { timeout: SLOW_TIMEOUT_MS })
+    const familyRow = page.locator(`[role="listitem"][data-thread-id="${family.thread_id}"]`)
+    await expect(familyRow.locator('[data-count]')).toHaveText('11 judged in this run')
+  })
+
   test('Review off shows no judgment, whatever run the address names, in the order Review on shows', async ({
     page,
     request,
