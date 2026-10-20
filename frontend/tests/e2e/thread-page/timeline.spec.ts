@@ -331,7 +331,7 @@ test.describe('Thread page timeline with Review on @area:interactions', () => {
     await expect(later.locator('[data-message-flags]')).toHaveCount(0)
   })
 
-  test('names, per flag kind, the unflagged message a judgment came closest to flagging, or none above 5%', async ({
+  test('names, per flag kind, the unflagged message a judgment came closest to flagging, or none at 20% or more', async ({
     page,
     request,
   }) => {
@@ -366,9 +366,22 @@ test.describe('Thread page timeline with Review on @area:interactions', () => {
       'true'
     )
     await expect(closest.locator('[data-closest-kind="big_moment"]')).toHaveText(
-      'Big moment none above 5%'
+      'Big moment none at 20% or more'
     )
-    await expect(closest.locator('[data-closest-kind="claim"]')).toHaveText('Claim none above 5%')
+
+    // A message showing no chip names the kind it came closest to, at 20% or more.
+    await expect(
+      page.locator(`[data-message-key="${messages[2].message_key}"]`).locator('[data-near-miss]')
+    ).toHaveText('Commitment 20%')
+    await expect(
+      page.locator(`[data-message-key="${messages[3].message_key}"]`).locator('[data-near-miss]')
+    ).toHaveCount(0)
+    await expect(
+      page.locator(`[data-message-key="${messages[1].message_key}"]`).locator('[data-near-miss]')
+    ).toHaveCount(0)
+    await expect(closest.locator('[data-closest-kind="claim"]')).toHaveText(
+      'Claim none at 20% or more'
+    )
   })
 
   test('the header adds the status pill, the run and Done', async ({ page, request }) => {

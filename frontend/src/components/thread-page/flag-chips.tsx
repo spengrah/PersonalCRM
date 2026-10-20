@@ -5,7 +5,7 @@ import { clsx } from 'clsx'
 import { Check, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { saveItem, useFailedSave, usePendingSaves, useLabelFlag } from '@/hooks/use-bench'
-import type { FlagChipResponse } from '@/types/generated/contact'
+import type { FlagChipResponse, NearMissResponse } from '@/types/generated/contact'
 import type { ChipState, FlagKind } from '@/types/generated/judgment'
 import { FLAG_KINDS, FLAG_KIND_ORDER } from '@/components/threads/flag-kinds'
 import { SAVE_ERROR, formatConfidence } from '@/components/threads/format'
@@ -159,17 +159,37 @@ function FlagMenu({ target, kinds }: { target: MessageTarget; kinds: FlagKind[] 
 }
 
 /**
+ * The kind a message showing no chip came closest to flagging, muted and
+ * display only. "+ Flag" adds it when the message does hold it.
+ */
+function NearMiss({ nearMiss }: { nearMiss: NearMissResponse }) {
+  const { name, icon: Icon } = FLAG_KINDS[nearMiss.kind]
+  return (
+    <span
+      data-near-miss={nearMiss.kind}
+      title="Closest flag, below the display threshold"
+      className="inline-flex items-center gap-1 text-xs text-gray-500"
+    >
+      <Icon aria-hidden="true" className="h-3.5 w-3.5" />
+      {name} {formatConfidence(nearMiss.probability)}
+    </span>
+  )
+}
+
+/**
  * A new message's flag chips and its "+ Flag" control. The chips and their
  * states are the server's: a control saves a label through the one ordered
  * queue and the chip then shows what the server recorded. "+ Flag" offers each
- * kind the message shows no chip for.
+ * kind the message shows no chip for. A message showing no chip may carry the
+ * server's near miss.
  */
 export function MessageFlags({
   threadId,
   runId,
   messageKey,
   chips,
-}: MessageTarget & { chips: FlagChipResponse[] }) {
+  nearMiss,
+}: MessageTarget & { chips: FlagChipResponse[]; nearMiss?: NearMissResponse }) {
   const isFailed = useFailedSave()
   const failed = FLAG_KIND_ORDER.some(kind => isFailed(saveItem.flag(messageKey, kind)))
   const target = { threadId, runId, messageKey }
@@ -179,6 +199,7 @@ export function MessageFlags({
       {chips.map(chip => (
         <Chip key={chip.kind} target={target} chip={chip} />
       ))}
+      {nearMiss && <NearMiss nearMiss={nearMiss} />}
       <FlagMenu target={target} kinds={FLAG_KIND_ORDER.filter(kind => !shown.has(kind))} />
       {failed && <span className="text-xs text-red-700">{SAVE_ERROR}</span>}
     </div>

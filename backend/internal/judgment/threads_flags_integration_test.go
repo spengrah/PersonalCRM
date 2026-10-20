@@ -256,21 +256,54 @@ func TestReadThreadNightContents(t *testing.T) {
 		return handlers.ClosestUnflaggedResponse{}
 	}
 
-	t.Run("a kind whose highest unflagged probability is 0.05 names none", func(t *testing.T) {
+	t.Run("a kind whose highest unflagged probability is just below the floor names none", func(t *testing.T) {
 		// spec: IXN-089.night-contents
-		got := closest(t, judgment.FlagKindClaim, 0.05, 0.02)
+		got := closest(t, judgment.FlagKindClaim, judgment.ClosestFloor-0.01, 0.02)
 
 		assert.Nil(t, got.Message)
 		assert.Nil(t, got.Probability)
 	})
 
-	t.Run("a kind whose only unflagged probability above zero is 0.06 names that message", func(t *testing.T) {
+	t.Run("a kind whose only unflagged probability above zero is at the floor names that message", func(t *testing.T) {
 		// spec: IXN-089.night-contents
-		got := closest(t, judgment.FlagKindClaim, 0, 0.06)
+		got := closest(t, judgment.FlagKindClaim, 0, judgment.ClosestFloor)
 
 		require.NotNil(t, got.Message)
 		require.NotNil(t, got.Probability)
-		assert.Equal(t, 0.06, *got.Probability)
+		assert.Equal(t, judgment.ClosestFloor, *got.Probability)
+	})
+
+	t.Run("a judged message showing no chip carries its highest kind at or above the floor as its near miss", func(t *testing.T) {
+		b := newBenchEnv(t)
+		floor := judgment.ClosestFloor
+		require.Less(t, floor+0.05, b.threshold(t, b.compared(0), judgment.FlagKindBigMoment), "below the display threshold")
+		s := b.judgedNight(t,
+			[3]float64{floor + 0.01, floor + 0.05, 0}, // both reach the floor: the higher, big moment
+			[3]float64{floor - 0.01, 0, 0},            // below the floor: none
+			[3]float64{floor, floor, 0},               // a tie: the first kind
+		)
+
+		messages := b.reviewOf(t, s.th, s.run).Nights[0].Messages
+
+		require.Len(t, messages, 3)
+		require.NotNil(t, messages[0].NearMiss)
+		assert.Equal(t, "big_moment", messages[0].NearMiss.Kind)
+		assert.Equal(t, floor+0.05, messages[0].NearMiss.Probability)
+		assert.Nil(t, messages[1].NearMiss)
+		require.NotNil(t, messages[2].NearMiss)
+		assert.Equal(t, "commitment", messages[2].NearMiss.Kind)
+	})
+
+	t.Run("a message showing a chip carries no near miss", func(t *testing.T) {
+		b := newBenchEnv(t)
+		shown := b.threshold(t, b.compared(0), judgment.FlagKindCommitment) + 0.1
+		s := b.judgedNight(t, [3]float64{shown, judgment.ClosestFloor + 0.05, 0})
+
+		messages := b.reviewOf(t, s.th, s.run).Nights[0].Messages
+
+		require.NotEmpty(t, messages)
+		require.Len(t, messages[0].Chips, 1)
+		assert.Nil(t, messages[0].NearMiss)
 	})
 
 	t.Run("unflagged messages below the threshold and a shown chip name the highest unflagged one", func(t *testing.T) {

@@ -14,9 +14,10 @@ import (
 	"github.com/google/uuid"
 )
 
-// closestFloor is the probability a message must exceed for a night to name it
-// as the unflagged message its method came closest to flagging.
-const closestFloor = 0.05
+// ClosestFloor is the probability a message must reach for the thread page to
+// name it as close to a flag: as a night's closest unflagged message of a
+// kind, and as a message's near miss.
+const ClosestFloor = 0.2
 
 // ReviewRun is a run as the Threads tab names it.
 type ReviewRun struct {
@@ -46,12 +47,22 @@ type FlagChip struct {
 
 // NightMessage is a message placed in a night. Judged is true when the night's
 // judgment answered it; an unjudged message carries the reason the run
-// recorded for it, if any.
+// recorded for it, if any. NearMiss is set on a judged message showing no
+// chip: the kind its method gave the highest probability, when that reaches
+// ClosestFloor. It is display only.
 type NightMessage struct {
-	Key    string
-	Judged bool
-	Reason UnjudgedReason
-	Chips  []FlagChip
+	Key      string
+	Judged   bool
+	Reason   UnjudgedReason
+	Chips    []FlagChip
+	NearMiss *NearMiss
+}
+
+// NearMiss is the flag kind a message came closest to showing, with its
+// probability.
+type NearMiss struct {
+	Kind        FlagKind
+	Probability float64
 }
 
 // NightClearing is a clearing decision of a night: the method's answer to
@@ -68,8 +79,8 @@ type NightClearing struct {
 }
 
 // ClosestUnflagged is, for a flag kind, the judged message of a night showing
-// no chip of the kind whose probability for it is highest and above
-// closestFloor. It is display only. Message is nil when there is none.
+// no chip of the kind whose probability for it is highest and at least
+// ClosestFloor. It is display only. Message is nil when there is none.
 type ClosestUnflagged struct {
 	Kind        FlagKind
 	Message     *ThreadMessage
@@ -317,6 +328,9 @@ func (d *reviewData) build(ctx context.Context, thread uuid.UUID) (*ThreadReview
 					m.Chips = append(m.Chips, chip)
 				}
 			}
+			if m.Judged && len(m.Chips) == 0 {
+				m.NearMiss = n.nearMiss(key)
+			}
 			n.Messages = append(n.Messages, m)
 		}
 		// A commitment chip names the first later night whose clearing
@@ -450,7 +464,7 @@ func (d *reviewData) unjudgedOf(thread uuid.UUID) (map[string]UnjudgedReason, ma
 }
 
 // closest names, per flag kind, the judged message of the night that shows no
-// chip of the kind and has the highest probability for it above closestFloor;
+// chip of the kind and has the highest probability for it above ClosestFloor;
 // the earliest message wins a tie.
 func (d *reviewData) closest(n *Night, refs []refMessage, index map[string]int) []ClosestUnflagged {
 	out := make([]ClosestUnflagged, len(FlagKinds))
@@ -458,7 +472,7 @@ func (d *reviewData) closest(n *Night, refs []refMessage, index map[string]int) 
 		out[ki] = ClosestUnflagged{Kind: kind}
 		for _, m := range n.Messages {
 			p, ok := n.flagProbs[m.Key][kind]
-			if !m.Judged || !ok || p <= closestFloor || (out[ki].Message != nil && p <= out[ki].Probability) {
+			if !m.Judged || !ok || p < ClosestFloor || (out[ki].Message != nil && p <= out[ki].Probability) {
 				continue
 			}
 			if slices.ContainsFunc(m.Chips, func(c FlagChip) bool { return c.Kind == kind }) {
@@ -468,6 +482,21 @@ func (d *reviewData) closest(n *Night, refs []refMessage, index map[string]int) 
 			out[ki].Message = &ThreadMessage{Key: m.Key, SentAt: ref.sentAt}
 			out[ki].Probability = p
 		}
+	}
+	return out
+}
+
+// nearMiss is the kind the night's method gave the message the highest
+// probability, when that reaches ClosestFloor; the first kind in FlagKinds
+// order wins a tie. Nil when no kind reaches it.
+func (n *Night) nearMiss(key string) *NearMiss {
+	var out *NearMiss
+	for _, kind := range FlagKinds {
+		p, ok := n.flagProbs[key][kind]
+		if !ok || p < ClosestFloor || (out != nil && p <= out.Probability) {
+			continue
+		}
+		out = &NearMiss{Kind: kind, Probability: p}
 	}
 	return out
 }

@@ -158,9 +158,11 @@ function Clearing({
 
 function ClosestUnflagged({
   entries,
+  floor,
   onShow,
 }: {
   entries: ClosestUnflaggedResponse[]
+  floor: number
   onShow: (messageKey: string) => void
 }) {
   return (
@@ -174,7 +176,7 @@ function ClosestUnflagged({
               {formatConfidence(probability)}
             </MessageLink>
           ) : (
-            `${FLAG_KINDS[kind].name} none above 5%`
+            `${FLAG_KINDS[kind].name} none at ${formatConfidence(floor)} or more`
           )}
         </span>
       ))}
@@ -217,6 +219,8 @@ interface JudgmentBoxProps {
   night: NightResponse
   /** The thread's messages by key, for the first message the judgment read. */
   messages: Map<string, ThreadMessageResponse>
+  /** The probability a message must reach to be named closest. */
+  closestFloor: number
   onShow: (messageKey: string) => void
 }
 
@@ -226,7 +230,14 @@ interface JudgmentBoxProps {
  * shows nothing and holds no label, Confirm Nones. The server decides every
  * state shown.
  */
-export function JudgmentBox({ threadId, runId, night, messages, onShow }: JudgmentBoxProps) {
+export function JudgmentBox({
+  threadId,
+  runId,
+  night,
+  messages,
+  closestFloor,
+  onShow,
+}: JudgmentBoxProps) {
   const first = messages.get(night.window_start)
   const firstTime = first ? formatDateTime(first.sent_at) : null
   return (
@@ -270,7 +281,7 @@ export function JudgmentBox({ threadId, runId, night, messages, onShow }: Judgme
         </Section>
       )}
       <Section>
-        <ClosestUnflagged entries={night.closest_unflagged} onShow={onShow} />
+        <ClosestUnflagged entries={night.closest_unflagged} floor={closestFloor} onShow={onShow} />
       </Section>
       {(night.confirm_nones || night.labeled_none > 0) && (
         <Section>

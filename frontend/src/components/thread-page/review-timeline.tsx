@@ -94,6 +94,7 @@ export function ReviewTimeline({
                       runId={review.run.id}
                       messageKey={message.message_key}
                       chips={placedMessage.chips}
+                      nearMiss={placedMessage.near_miss}
                     />
                   </div>
                 </Message>
@@ -105,6 +106,7 @@ export function ReviewTimeline({
                 runId={review.run.id}
                 night={night}
                 messages={byKey}
+                closestFloor={review.closest_floor}
                 onShow={onShow}
               />
             </div>
