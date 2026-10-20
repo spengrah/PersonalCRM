@@ -266,8 +266,8 @@ func TestLangfuseExportSendsEachScorecardMetric(t *testing.T) {
 		assertContentFree(t, l.sent(), s.thr)
 	})
 
-	// Coordinator ruling PR3-R1: a stored stage-1 rerun's before_window record
-	// is read where the export reads that rerun through the scorecard.
+	// A new rerun writes no before_window record, so a stored stage-1 rerun's
+	// record is read where the export reads that rerun through the scorecard.
 	t.Run("a stage-1 record unjudged before_window", func(t *testing.T) {
 		// spec: KNW-087.stage-1-before-window-read, KNW-087.unjudged-never-a-no
 		e := newFlagsEnv(t, "")
