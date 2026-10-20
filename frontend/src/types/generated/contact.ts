@@ -853,8 +853,8 @@ export interface ThreadReviewResponse {
  * confirm_nones is true when it shows none of them and holds no label;
  * holds_label is true when a flag decision of one of its messages, one of its
  * clearing decisions or a decision of its reply proposal has a label;
- * labeled_none counts its judged messages showing no chip that hold a label,
- * each of which says the message holds nothing.
+ * labeled_none counts its judged messages showing no chip that hold a label a
+ * close wrote, each of which says the message holds nothing.
  */
 export interface NightResponse {
   judgment_id: string;
