@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button'
 import { runLabel } from '@/components/threads/format'
 import { StatusPill } from '@/components/threads/status-pill'
 import { GroupChip, VenueChip } from '@/components/threads/venue'
+import { THREAD_PAGE_COLUMN } from './column'
 import type { ThreadReviewResponse, ThreadRowResponse } from '@/types/generated/contact'
 
 interface ThreadHeaderProps {
@@ -24,7 +25,9 @@ interface ThreadHeaderProps {
 export function ThreadHeader({ thread, review, onDone, donePending }: ThreadHeaderProps) {
   return (
     <header data-thread-header className="border-b border-gray-200 bg-white">
-      <div className="mx-auto flex max-w-4xl items-start justify-between gap-4 px-4 py-3 sm:px-6 lg:px-8">
+      <div
+        className={`mx-auto flex ${THREAD_PAGE_COLUMN} items-start justify-between gap-4 px-4 py-3 sm:px-6 lg:px-8`}
+      >
         <div className="min-w-0 space-y-1">
           <div className="flex flex-wrap items-center gap-2">
             {thread.title && (

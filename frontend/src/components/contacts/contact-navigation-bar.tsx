@@ -27,6 +27,8 @@ interface ContactNavigationBarProps {
   noun?: 'contact' | 'thread'
   /** Controls at the right of the bar, before the pager. */
   controls?: ReactNode
+  /** The page's content column, which the bar's contents align with. */
+  column?: string
 }
 
 /**
@@ -34,9 +36,10 @@ interface ContactNavigationBarProps {
  *
  * Shows: [Back to list] ... [controls] [‹ N of M ›]
  *
- * The bar background is full-bleed; its contents are constrained to the same
- * max-w-4xl column as the detail body so "Back to list" aligns with the
- * contact name (left) and the pager aligns with the action buttons (right).
+ * The bar background is full-bleed; its contents are constrained to the page's
+ * content column (max-w-4xl, the contact detail body's, unless the page passes
+ * its own) so "Back to list" aligns with the page's title (left) and the pager
+ * aligns with its action buttons (right).
  *
  * Visual states:
  * - Enabled: text-gray-500, hover:text-gray-700
@@ -55,6 +58,7 @@ export function ContactNavigationBar({
   isLoading = false,
   noun = 'contact',
   controls,
+  column = 'max-w-4xl',
 }: ContactNavigationBarProps) {
   const isPrevDisabled = !canGoBack || isEditMode || isLoading
   const isNextDisabled = !canGoForward || isEditMode || isLoading
@@ -76,7 +80,7 @@ export function ContactNavigationBar({
 
   return (
     <div className="py-1.5 bg-gray-100 border-b border-gray-200">
-      <div className="max-w-4xl mx-auto sm:px-6 lg:px-8 flex items-center justify-between">
+      <div className={`${column} mx-auto sm:px-6 lg:px-8 flex items-center justify-between`}>
         <button
           onClick={onBack}
           disabled={isBackDisabled}

@@ -16,6 +16,7 @@ import {
 } from '@/hooks/use-bench'
 import { useKeyboardNavigation } from '@/hooks/use-keyboard-navigation'
 import { THREAD_PAGE_SIZE, type ThreadListFilters } from '@/lib/bench-api'
+import { THREAD_PAGE_COLUMN } from './column'
 import { messageDomId } from './message'
 import { PlainThread } from './plain-thread'
 import { ReviewTimeline } from './review-timeline'
@@ -98,6 +99,7 @@ function LoadedThread({
       <div data-thread-top className="sticky top-[65px] z-40">
         <ContactNavigationBar
           noun="thread"
+          column={THREAD_PAGE_COLUMN}
           onBack={back}
           onPrevious={goBack}
           onNext={goForward}
@@ -118,7 +120,7 @@ function LoadedThread({
         )}
       </div>
       <SaveFailures current={threadId} />
-      <main className="mx-auto max-w-4xl px-4 py-6 sm:px-6 lg:px-8">
+      <main className={`mx-auto ${THREAD_PAGE_COLUMN} px-4 py-6 sm:px-6 lg:px-8`}>
         {read.isError ? (
           <p className="text-sm text-red-700">Failed to load the thread.</p>
         ) : !data ? (
