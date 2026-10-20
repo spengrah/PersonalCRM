@@ -251,3 +251,12 @@ export async function fetchObligations(
   expect(response.ok(), await response.text()).toBe(true)
   return (await response.json()).data
 }
+
+/**
+ * A run's name as the Run filter and thread header read it: the given
+ * "{method} · {month}" followed by the local time the run started.
+ */
+export function runNamed(methodAndMonth: string): RegExp {
+  const escaped = methodAndMonth.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  return new RegExp(`^${escaped} · started [A-Z][a-z]{2} \\d{1,2}, \\d{1,2}:\\d{2}\\s[AP]M$`)
+}

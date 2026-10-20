@@ -1,9 +1,10 @@
 import { test, expect, type Page } from '@playwright/test'
 import { SHORT_TIMEOUT_MS, SLOW_TIMEOUT_MS } from '../helpers/timeouts'
 import { createTestAPI, TestAPI } from '../helpers/test-api'
-import { COMPARED_METHODS } from '../helpers/bench'
+import { COMPARED_METHODS, runNamed } from '../helpers/bench'
 import {
   afterwards,
+  expectAccordionBar,
   flag,
   nightsOf,
   reviewOf,
@@ -324,6 +325,7 @@ test.describe('Thread page timeline with Review on @area:interactions', () => {
       name: "10 later messages, after this run's last night",
     })
     await expect(toggle).toHaveAttribute('aria-expanded', 'false')
+    await expectAccordionBar(toggle, page.locator('[data-review-timeline]'))
     expect(await shownKeys(page)).toEqual(messages.slice(0, 20).map(m => m.message_key))
     await toggle.click()
     expect(await shownKeys(page)).toEqual(messages.map(m => m.message_key))
@@ -401,7 +403,7 @@ test.describe('Thread page timeline with Review on @area:interactions', () => {
       timeZone: 'UTC',
     }).format(new Date(review.run.from!))
     await expect(header.locator('[data-run]')).toHaveText(
-      `· ${COMPARED_METHODS.clef} · ${month} run`
+      runNamed(`· ${COMPARED_METHODS.clef} · ${month}`)
     )
     await expect(header.getByRole('button', { name: 'Done' })).toBeVisible()
   })

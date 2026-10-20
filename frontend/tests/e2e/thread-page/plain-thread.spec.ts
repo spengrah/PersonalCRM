@@ -2,7 +2,7 @@ import { test, expect, type Page } from '@playwright/test'
 import { SLOW_TIMEOUT_MS } from '../helpers/timeouts'
 import { createTestAPI, TestAPI } from '../helpers/test-api'
 import { entity, readThread, threadOf } from '../helpers/bench'
-import { reviewWorld, startWithReview, threadUrl } from './helpers'
+import { expectAccordionBar, reviewWorld, startWithReview, threadUrl } from './helpers'
 
 /** The color a utility class draws text in, as the browser computes it. */
 function colorOf(page: Page, className: string): Promise<string> {
@@ -45,8 +45,9 @@ test.describe('Thread page with Review off @area:interactions', () => {
     expect(
       await shown.evaluateAll(nodes => nodes.map(n => n.getAttribute('data-message-key')))
     ).toEqual(recent)
-    const toggle = card.getByRole('button', { name: 'Earlier messages' })
+    const toggle = card.getByRole('button', { name: '10 earlier messages', exact: true })
     await expect(toggle).toHaveAttribute('aria-expanded', 'false')
+    await expectAccordionBar(toggle, card)
     const toggleBox = await toggle.boundingBox()
     const firstBox = await shown.first().boundingBox()
     expect(toggleBox!.y, 'the toggle sits at the top').toBeLessThan(firstBox!.y)

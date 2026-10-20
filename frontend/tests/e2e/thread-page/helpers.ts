@@ -1,4 +1,4 @@
-import { expect, type APIRequestContext, type Page } from '@playwright/test'
+import { expect, type APIRequestContext, type Locator, type Page } from '@playwright/test'
 import type { ThreadReviewResponse } from '../../../src/types/generated/contact'
 import type { FlagKind } from '../../../src/types/generated/judgment'
 import {
@@ -228,4 +228,21 @@ export async function holdSaves(page: Page) {
     }
   )
   return { events, sent, release }
+}
+
+/**
+ * Asserts a collapsed toggle draws as an accordion bar: as wide as its card's
+ * content, on a gray background, its label centered.
+ */
+export async function expectAccordionBar(toggle: Locator, card: Locator) {
+  const [bar, content] = await Promise.all([
+    toggle.boundingBox(),
+    card.evaluate(node => {
+      const style = getComputedStyle(node)
+      return node.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight)
+    }),
+  ])
+  expect(bar!.width, 'the bar spans the card').toBeGreaterThanOrEqual(content - 1)
+  await expect(toggle).toHaveCSS('justify-content', 'center')
+  await expect(toggle).not.toHaveCSS('background-color', 'rgba(0, 0, 0, 0)')
 }

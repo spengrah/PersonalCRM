@@ -37,13 +37,10 @@ function SummaryLine({ summary }: { summary: ThreadRunSummaryResponse }) {
   return (
     <div
       data-run-summary
-      className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 border-b border-gray-200 bg-gray-50 px-4 py-2 text-sm text-gray-700 sm:px-6"
+      className="border-b border-gray-200 bg-gray-50 px-4 py-2 text-sm text-gray-700 sm:px-6"
     >
-      <span>
-        {summary.judged} threads judged in this run · {summary.to_review} to review ·{' '}
-        {summary.nothing_flagged} with nothing flagged · {summary.reviewed} reviewed
-      </span>
-      <span className="text-xs text-gray-500">Newest message first, as with Review off</span>
+      {summary.judged} threads judged in this run · {summary.to_review} to review ·{' '}
+      {summary.nothing_flagged} with nothing flagged · {summary.reviewed} reviewed
     </div>
   )
 }

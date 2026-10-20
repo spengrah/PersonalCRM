@@ -230,6 +230,37 @@ func TestReadThreadNightContents(t *testing.T) {
 		assert.False(t, night.ConfirmNones)
 	})
 
+	t.Run("a night shows the clearing decisions only of commitments that show", func(t *testing.T) {
+		// spec: IXN-089.clearings-of-shown-commitments
+		b := newBenchEnv(t)
+		m := b.compared(0)
+		threshold := b.threshold(t, m, judgment.FlagKindCommitment)
+		hot, faint := threshold+0.2, threshold-0.1
+		th, keys := b.conversation(t, 4)
+		run := b.startRun(t, judgment.RunKindHistorical, m)
+		first := b.judged(t, run, m, th, b.cutAfter(3), keys[0], keys[:3],
+			map[string][3]float64{keys[0]: {hot, 0, 0}, keys[1]: {faint, 0, 0}, keys[2]: {faint, 0, 0}})
+		later := windowed(m, th, b.cutAfter(4), "h-later", keys[0], keys[3:], judgment.Outcomes{})
+		later.Flags = flagsOf(keys[3], 0, 0, 0)
+		later.Clearings = []judgment.ClearingDecision{
+			{CommitmentMessageKey: keys[0], CommitmentJudgment: first, Done: true, Probability: 0.9},
+			{CommitmentMessageKey: keys[1], CommitmentJudgment: first, Done: true, Probability: 0.9},
+			{CommitmentMessageKey: keys[2], CommitmentJudgment: first, Done: true, Probability: 0.9},
+		}
+		_, err := b.store.RecordJudgment(b.ctx, run, later)
+		require.NoError(t, err)
+		b.labeled(t, th, run, keys[2], "commitment", true)
+
+		night := b.reviewOf(t, th, run).Nights[1]
+
+		var shown []string
+		for _, c := range night.Clearings {
+			shown = append(shown, c.CommitmentMessageKey)
+		}
+		assert.Equal(t, []string{keys[0], keys[2]}, shown, "the commitment below the display threshold, never shown, is not re-checked on screen; the one the user added is")
+		assert.Equal(t, 2, night.ToReview, "only the clearing decisions shown await a label")
+	})
+
 	closest := func(t *testing.T, kind judgment.FlagKind, probabilities ...float64) handlers.ClosestUnflaggedResponse {
 		t.Helper()
 		b := newBenchEnv(t)
