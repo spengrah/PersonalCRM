@@ -375,6 +375,7 @@ func threadReviewResponse(r *judgment.ThreadReview) ThreadReviewResponse {
 	out := ThreadReviewResponse{
 		Run: reviewRunResponse(r.Run), Status: string(r.Status), ToReview: r.ToReview, JudgedCount: r.JudgedCount,
 		Nights: make([]NightResponse, len(r.Nights)), ContextMessages: r.ContextMessages, LaterMessages: r.LaterMessages,
+		ClosestFloor: judgment.ClosestFloor,
 	}
 	for i, n := range r.Nights {
 		out.Nights[i] = nightResponse(n, r.Names)
@@ -396,6 +397,9 @@ func nightResponse(n judgment.Night, names map[uuid.UUID]string) NightResponse {
 		if m.Reason != "" {
 			reason := string(m.Reason)
 			out.Messages[i].Reason = &reason
+		}
+		if nm := m.NearMiss; nm != nil {
+			out.Messages[i].NearMiss = &NearMissResponse{Kind: string(nm.Kind), Probability: nm.Probability}
 		}
 		for j, c := range m.Chips {
 			out.Messages[i].Chips[j] = FlagChipResponse{Kind: string(c.Kind), State: string(c.State), Probability: c.Probability, ClearedAt: c.ClearedAt}

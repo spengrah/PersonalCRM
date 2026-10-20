@@ -1177,6 +1177,13 @@ definitions:
       status:
         type: string
     type: object
+  handlers.NearMissResponse:
+    properties:
+      kind:
+        type: string
+      probability:
+        type: number
+    type: object
   handlers.NightClearingResponse:
     properties:
       commitment_message_key:
@@ -1202,6 +1209,8 @@ definitions:
         type: boolean
       message_key:
         type: string
+      near_miss:
+        $ref: '#/definitions/handlers.NearMissResponse'
       reason:
         type: string
     type: object
@@ -1795,6 +1804,11 @@ definitions:
     type: object
   handlers.ThreadReviewResponse:
     properties:
+      closest_floor:
+        description: |-
+          ClosestFloor is the probability a message must reach to be named as a
+          near miss or as a night's closest unflagged message.
+        type: number
       context_messages:
         items:
           type: string

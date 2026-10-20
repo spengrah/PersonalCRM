@@ -118,6 +118,9 @@ type ThreadReviewResponse struct {
 	Nights          []NightResponse   `json:"nights"`
 	ContextMessages []string          `json:"context_messages"`
 	LaterMessages   []string          `json:"later_messages"`
+	// ClosestFloor is the probability a message must reach to be named as a
+	// near miss or as a night's closest unflagged message.
+	ClosestFloor float64 `json:"closest_floor"`
 }
 
 // NightResponse is one judgment the run recorded or reused for the thread, at a
@@ -152,12 +155,22 @@ type NightResponse struct {
 // NightMessageResponse is a message placed in a night. judged is true when the
 // night's judgment answered it; an unjudged message carries the reason the run
 // recorded for it, if any. chips are the flags it shows under the night's
-// method, in flag kind order.
+// method, in flag kind order. near_miss, on a judged message showing no chip,
+// is the kind the method gave the highest probability when that reaches the
+// review's closest_floor; display only.
 type NightMessageResponse struct {
 	MessageKey string             `json:"message_key"`
 	Judged     bool               `json:"judged"`
 	Reason     *string            `json:"reason,omitempty" tstype:"UnjudgedReason"`
 	Chips      []FlagChipResponse `json:"chips"`
+	NearMiss   *NearMissResponse  `json:"near_miss,omitempty"`
+}
+
+// NearMissResponse is the flag kind a message came closest to showing, with
+// its probability.
+type NearMissResponse struct {
+	Kind        string  `json:"kind" tstype:"FlagKind"`
+	Probability float64 `json:"probability"`
 }
 
 // FlagChipResponse is a flag a message shows. probability is absent for an
@@ -186,8 +199,8 @@ type NightClearingResponse struct {
 }
 
 // ClosestUnflaggedResponse is, for a flag kind, the judged message of the night
-// showing no chip of the kind whose probability for it is highest and above
-// 0.05; display only. message and probability are absent when there is none.
+// showing no chip of the kind whose probability for it is highest and
+// reaches the review's closest_floor; display only. message and probability are absent when there is none.
 type ClosestUnflaggedResponse struct {
 	Kind        string                  `json:"kind" tstype:"FlagKind"`
 	Message     *ClosestMessageResponse `json:"message,omitempty"`

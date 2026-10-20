@@ -8411,6 +8411,17 @@ const docTemplate = `{
                 }
             }
         },
+        "handlers.NearMissResponse": {
+            "type": "object",
+            "properties": {
+                "kind": {
+                    "type": "string"
+                },
+                "probability": {
+                    "type": "number"
+                }
+            }
+        },
         "handlers.NightClearingResponse": {
             "type": "object",
             "properties": {
@@ -8448,6 +8459,9 @@ const docTemplate = `{
                 },
                 "message_key": {
                     "type": "string"
+                },
+                "near_miss": {
+                    "$ref": "#/definitions/handlers.NearMissResponse"
                 },
                 "reason": {
                     "type": "string"
@@ -9293,6 +9307,10 @@ const docTemplate = `{
         "handlers.ThreadReviewResponse": {
             "type": "object",
             "properties": {
+                "closest_floor": {
+                    "description": "ClosestFloor is the probability a message must reach to be named as a\nnear miss or as a night's closest unflagged message.",
+                    "type": "number"
+                },
                 "context_messages": {
                     "type": "array",
                     "items": {
