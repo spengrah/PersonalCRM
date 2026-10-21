@@ -200,6 +200,21 @@ type ThreadLabels struct {
 	Clearings []ClearingLabel
 }
 
+// RejectedCommitments are the messages the user rejected as commitments: those
+// whose commitment label says they hold none, whichever route wrote it (the
+// chip removed, a close or Confirm Nones). A clearing decision of a rejected
+// commitment is shown on no night and counted in no clearing metric; its own
+// label stays stored.
+func (l ThreadLabels) RejectedCommitments() map[string]bool {
+	out := map[string]bool{}
+	for _, f := range l.Flags {
+		if f.Kind == FlagKindCommitment && !f.Holds {
+			out[f.MessageKey] = true
+		}
+	}
+	return out
+}
+
 // LabelsByThread returns the thread's current flag and clearing labels, each
 // decision once. A label a close or Confirm Nones wrote reads as any other.
 func (s *Store) LabelsByThread(ctx context.Context, thread threadctx.VenueID) (ThreadLabels, error) {

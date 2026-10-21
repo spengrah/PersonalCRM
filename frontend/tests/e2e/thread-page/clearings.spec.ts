@@ -87,7 +87,7 @@ test.describe('Clearing decisions in a judgment box @area:interactions', () => {
     )
   })
 
-  test('confirm and remove label the clearing decision, recording done or not done as the user states', async ({
+  test('Done and Not done label the clearing decision with their own answer, whatever the method answered', async ({
     page,
     request,
   }) => {
@@ -100,34 +100,40 @@ test.describe('Clearing decisions in a judgment box @area:interactions', () => {
       }
     })
     const items = box.locator('[data-clearing]')
+    const control = (i: number, name: 'Done' | 'Not done') =>
+      items.nth(i).getByRole('button', { name, exact: true })
+    const mark = (i: number) => items.nth(i).locator('[data-clearing-mark]')
 
-    // spec: IXN-082.confirm-remove
-    await items.nth(0).getByRole('button', { name: 'Confirm clearing' }).click() // judged done, confirmed: done
-    await items.nth(1).getByRole('button', { name: 'Remove clearing' }).click() // judged not done, removed: done
-    await items.nth(2).getByRole('button', { name: 'Remove clearing' }).click() // judged done, removed: not done
-    await items.nth(3).getByRole('button', { name: 'Confirm clearing' }).click() // judged not done, confirmed: not done
-    await expect(items.nth(3)).toHaveAttribute('data-clearing-label', 'confirmed')
-    await expect(items.nth(0)).toHaveAttribute('data-clearing-label', 'confirmed')
-    await expect(items.nth(1)).toHaveAttribute('data-clearing-label', 'removed')
-    await expect(items.nth(2)).toHaveAttribute('data-clearing-label', 'removed')
+    // spec: IXN-082.done-not-done
+    await expect(items.nth(3).getByRole('button')).toHaveText(['Done', 'Not done'])
+    await control(0, 'Not done').click() // judged done
+    await expect(mark(0)).toHaveText('Marked not done')
+    await control(1, 'Done').click() // judged not done
+    await expect(mark(1)).toHaveText('Marked done')
+    await control(2, 'Done').click() // judged done
+    await expect(mark(2)).toHaveText('Marked done')
+    await expect(items.nth(2).getByRole('button')).toHaveText(['Change'])
+
+    // spec: IXN-082.done-not-done
+    await items.nth(2).getByRole('button', { name: 'Change the clearing review' }).click()
+    await expect(items.nth(2).getByRole('button')).toHaveText(['Done', 'Not done', 'Cancel'])
+    await control(2, 'Not done').click()
+    await expect(mark(2)).toHaveText('Marked not done')
+
     expect(sent).toEqual([
-      { key: messages[0].message_key, done: true },
+      { key: messages[0].message_key, done: false },
       { key: messages[1].message_key, done: true },
+      { key: messages[2].message_key, done: true },
       { key: messages[2].message_key, done: false },
-      { key: messages[3].message_key, done: false },
     ])
     const night = (await reviewOf(request, threadId, runId)).nights[1]
-    expect(night.clearings.map(c => c.label)).toEqual([
-      'confirmed',
-      'removed',
-      'removed',
-      'confirmed',
-    ])
+    expect(night.clearings.map(c => c.label)).toEqual(['removed', 'removed', 'removed', 'none'])
 
-    // A reviewed decision offers Change, not the first review's controls.
-    await expect(
-      items.nth(0).getByRole('button', { name: 'Change the clearing review' })
-    ).toBeVisible()
-    await expect(items.nth(0).getByRole('button', { name: 'Confirm clearing' })).toHaveCount(0)
+    // spec: IXN-082.done-not-done
+    await page.reload()
+    await expect(mark(0)).toHaveText('Marked not done', { timeout: SLOW_TIMEOUT_MS })
+    await expect(mark(1)).toHaveText('Marked done')
+    await expect(mark(2)).toHaveText('Marked not done')
+    await expect(mark(3)).toHaveCount(0)
   })
 })

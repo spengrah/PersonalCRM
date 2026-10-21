@@ -408,6 +408,171 @@ func TestReadThreadNightContents(t *testing.T) {
 	})
 }
 
+// recheckIn records, in a new run of the method, the thread's first message
+// judged a commitment at the probability on a first night, and a second night
+// that flags nothing and re-checks that commitment, answering done. It returns
+// the run and the second night's cut-off.
+func (b *benchEnv) recheckIn(t *testing.T, th thread, keys []string, m judgment.MethodRef, p float64) (judgment.RunID, time.Time) {
+	t.Helper()
+	run := b.startRun(t, judgment.RunKindHistorical, m)
+	first := b.judged(t, run, m, th, b.cutAfter(1), keys[0], keys[:1], map[string][3]float64{keys[0]: {p, 0, 0}})
+	later := windowed(m, th, b.cutAfter(2), "h-later", keys[0], keys[1:2], judgment.Outcomes{})
+	later.Flags = flagsOf(keys[1], 0, 0, 0)
+	later.Clearings = []judgment.ClearingDecision{{CommitmentMessageKey: keys[0], CommitmentJudgment: first, Done: true, Probability: 0.9}}
+	_, err := b.store.RecordJudgment(b.ctx, run, later)
+	require.NoError(t, err)
+	return run, b.cutAfter(2)
+}
+
+// rowReview is the thread's row of the threads list narrowed to the run.
+func (b *benchEnv) rowReview(t *testing.T, th thread, run judgment.RunID) handlers.ThreadRowReviewResponse {
+	t.Helper()
+	list, _ := b.threadList(t, "run_id="+run.String())
+	for _, row := range list.Items {
+		if row.ThreadID == th.id.String() {
+			require.NotNil(t, row.Review)
+			return *row.Review
+		}
+	}
+	require.Fail(t, "the run lists the thread")
+	return handlers.ThreadRowReviewResponse{}
+}
+
+// A night carries a clearing decision only when its commitment shows as a chip
+// and the user has not rejected it; a hidden re-check is absent from every
+// count, status and test the night's contents decide.
+func TestReadThreadHidesRechecksOfRejectedCommitments(t *testing.T) {
+	// hidden asserts that the run's second night shows no re-check and that
+	// nothing counts one.
+	hidden := func(t *testing.T, b *benchEnv, th thread, run judgment.RunID) {
+		t.Helper()
+		review := b.reviewOf(t, th, run)
+		require.Len(t, review.Nights, 2)
+		night := review.Nights[1]
+		assert.Empty(t, night.Clearings)
+		assert.Zero(t, night.ToReview)
+		assert.False(t, night.HoldsLabel)
+		assert.True(t, night.ConfirmNones, "a night that otherwise shows nothing")
+		row := b.rowReview(t, th, run)
+		assert.Equal(t, review.Status, row.Status)
+		assert.Equal(t, review.ToReview, row.ToReview)
+	}
+
+	t.Run("a commitment rejected by removing its chip, whose probability reaches the display threshold", func(t *testing.T) {
+		// spec: IXN-089.rechecks-of-rejected-hidden
+		b := newBenchEnv(t)
+		m := b.compared(0)
+		th, keys := b.conversation(t, 2)
+		run, _ := b.recheckIn(t, th, keys, m, b.threshold(t, m, judgment.FlagKindCommitment)+0.2)
+		require.Len(t, b.reviewOf(t, th, run).Nights[1].Clearings, 1)
+
+		b.labeled(t, th, run, keys[0], "commitment", false)
+
+		hidden(t, b, th, run)
+		review := b.reviewOf(t, th, run)
+		assert.Equal(t, "removed", chipOf(review.Nights[0], keys[0], judgment.FlagKindCommitment).State)
+		assert.Equal(t, "to_review", review.Status)
+		assert.Equal(t, 1, review.ToReview, "the second night's Confirm Nones, not the re-check")
+	})
+
+	t.Run("a commitment rejected by a close of another method's run", func(t *testing.T) {
+		// spec: IXN-089.rechecks-of-rejected-hidden
+		b := newBenchEnv(t)
+		first, second := b.compared(0), b.compared(1)
+		th, keys := b.conversation(t, 2)
+		closed := b.startRun(t, judgment.RunKindHistorical, first)
+		b.judged(t, closed, first, th, b.cutAfter(1), keys[0], keys[:1], map[string][3]float64{keys[0]: {0.01, 0, 0}})
+		b.labeled(t, th, closed, keys[0], "claim", true)
+		require.Equal(t, http.StatusOK, b.closeThread(t, th, closed).Code)
+		require.Equal(t, false, b.flagLabelsOf(t, th)[labelKey(keys[0], judgment.FlagKindCommitment)], "the close rejected the commitment")
+
+		run, _ := b.recheckIn(t, th, keys, second, b.threshold(t, second, judgment.FlagKindCommitment)+0.2)
+
+		hidden(t, b, th, run)
+	})
+
+	t.Run("a commitment rejected by Confirm Nones on another method's run", func(t *testing.T) {
+		// spec: IXN-089.rechecks-of-rejected-hidden
+		b := newBenchEnv(t)
+		first, second := b.compared(0), b.compared(1)
+		th, keys := b.conversation(t, 2)
+		confirmed := b.startRun(t, judgment.RunKindHistorical, first)
+		night := b.judged(t, confirmed, first, th, b.cutAfter(1), keys[0], keys[:1], map[string][3]float64{keys[0]: {0.01, 0, 0}})
+		require.Equal(t, http.StatusOK, b.post(t, "/api/v1/judgments/"+night.String()+"/confirm-nones?run_id="+confirmed.String(), nil).Code)
+		require.Equal(t, false, b.flagLabelsOf(t, th)[labelKey(keys[0], judgment.FlagKindCommitment)], "Confirm Nones rejected the commitment")
+
+		run, _ := b.recheckIn(t, th, keys, second, b.threshold(t, second, judgment.FlagKindCommitment)+0.2)
+
+		hidden(t, b, th, run)
+	})
+
+	t.Run("a hidden re-check holding a label leaves its night offering Confirm Nones, holding no label for Reviewed or a close", func(t *testing.T) {
+		// spec: IXN-089.rechecks-of-rejected-hidden
+		b := newBenchEnv(t)
+		m := b.compared(0)
+		th, keys := b.conversation(t, 2)
+		run, cutOff := b.recheckIn(t, th, keys, m, b.threshold(t, m, judgment.FlagKindCommitment)+0.2)
+		require.Equal(t, http.StatusOK, b.labelClearing(t, th, run, keys[0], cutOff, true).Code)
+		b.labeled(t, th, run, keys[0], "commitment", false)
+
+		hidden(t, b, th, run)
+		review := b.reviewOf(t, th, run)
+		assert.Equal(t, "to_review", review.Status, "not reviewed: the second night holds no label")
+
+		require.Equal(t, http.StatusOK, b.closeThread(t, th, run).Code)
+		_, labeled := b.flagLabelsOf(t, th)[labelKey(keys[1], judgment.FlagKindClaim)]
+		assert.False(t, labeled, "the close gives the second night nothing")
+
+		require.Equal(t, http.StatusOK, b.post(t, "/api/v1/judgments/"+review.Nights[1].JudgmentID+"/confirm-nones?run_id="+run.String(), nil).Code)
+		assert.Equal(t, "reviewed", b.reviewOf(t, th, run).Status)
+		assert.Equal(t, "reviewed", b.rowReview(t, th, run).Status)
+	})
+
+	t.Run("the rejected commitment labeled held again shows the re-check with its stored label", func(t *testing.T) {
+		// spec: IXN-089.rechecks-of-rejected-hidden
+		b := newBenchEnv(t)
+		m := b.compared(0)
+		th, keys := b.conversation(t, 2)
+		run, cutOff := b.recheckIn(t, th, keys, m, b.threshold(t, m, judgment.FlagKindCommitment)+0.2)
+		require.Equal(t, http.StatusOK, b.labelClearing(t, th, run, keys[0], cutOff, false).Code)
+		b.labeled(t, th, run, keys[0], "commitment", false)
+		require.Empty(t, b.reviewOf(t, th, run).Nights[1].Clearings)
+
+		b.labeled(t, th, run, keys[0], "commitment", true)
+
+		night := b.reviewOf(t, th, run).Nights[1]
+		require.Len(t, night.Clearings, 1)
+		assert.Equal(t, keys[0], night.Clearings[0].CommitmentMessageKey)
+		assert.Equal(t, "removed", night.Clearings[0].Label, "the stored not-done label against the method's done")
+		assert.True(t, night.HoldsLabel)
+	})
+
+	t.Run("an unlabeled commitment at the display threshold keeps its re-check", func(t *testing.T) {
+		// spec: IXN-089.clearings-of-shown-commitments
+		b := newBenchEnv(t)
+		m := b.compared(0)
+		th, keys := b.conversation(t, 2)
+		run, _ := b.recheckIn(t, th, keys, m, b.threshold(t, m, judgment.FlagKindCommitment))
+
+		night := b.reviewOf(t, th, run).Nights[1]
+
+		require.Len(t, night.Clearings, 1)
+		assert.Equal(t, "none", night.Clearings[0].Label)
+		assert.Equal(t, 1, night.ToReview)
+		assert.False(t, night.ConfirmNones)
+	})
+
+	t.Run("an unlabeled commitment below the display threshold has its re-check hidden", func(t *testing.T) {
+		// spec: IXN-089.clearings-of-shown-commitments
+		b := newBenchEnv(t)
+		m := b.compared(0)
+		th, keys := b.conversation(t, 2)
+		run, _ := b.recheckIn(t, th, keys, m, b.threshold(t, m, judgment.FlagKindCommitment)-0.01)
+
+		hidden(t, b, th, run)
+	})
+}
+
 func indexOfKind(kind judgment.FlagKind) int {
 	for i, k := range judgment.FlagKinds {
 		if k == kind {

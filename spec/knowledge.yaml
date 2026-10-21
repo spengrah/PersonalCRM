@@ -1196,7 +1196,9 @@ behaviors:
         text: clearing accuracy is the share of the rerun's labeled clearing decisions the method answered as the label says, beside the count of each answer against each label
       - key: unlabeled-clearing-counted-in-neither
         text: a clearing decision without a label counts in neither
-    provenance: [scorecard.Reader.scoreFlags, crm-admin --scorecard, .agents/spec/2026-10-18-message-flags-and-threads.md G13]
+      - key: rejected-commitment-clearings-skipped
+        text: a labeled clearing decision of a commitment the user rejected (its message holding a commitment label saying it holds none) counts in neither, in the scorecard and in the export that reads the same metrics, so a run whose only labeled clearing decisions are of rejected commitments has no clearing accuracy
+    provenance: [scorecard.Reader.scoreFlags, crm-admin --scorecard, crm-admin --langfuse-export, .agents/spec/2026-10-18-message-flags-and-threads.md G13, .agents/spec/2026-10-21-threads-review-fixes.md G2 SC2]
 
   - id: KNW-087
     title: The scorecard counts the new messages a method judged, left unjudged and flagged, and never counts an unjudged message as a no

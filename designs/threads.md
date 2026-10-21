@@ -108,15 +108,15 @@ Every new message has a "+ Flag" outline button after its chips. It opens a menu
 A box with a blue-50 tint (#f3f8ff), a blue-300 border, 10 px radius and a faint shadow, set apart from the white timeline. Light blue-100 lines separate its sections.
 
 - **Heading:** "Judgment · read {first message's time} to {cut-off}", where the first time is a link that scrolls to that message and highlights it. The status ("{n} to review") sits at the heading's right while anything in the box or the night's chips has no label.
-- **Replies:** "I owe a reply" and "Owes me a reply" side by side, as the shipped bench draws them, items and "Add" included. An empty list reads "None · closest: {name} {n}%" as today.
-- **Commitments re-checked** (only when the judgment made clearing decisions): one item per clearing decision, "Commitment from {date, time} · judged done" or "· judged not done", with a "Show in thread ↑" link to the commitment's message, its probability, and confirm and remove controls. The commitment's text is not repeated.
+- **Replies:** "I owe a reply" and "Owes me a reply" side by side, as the shipped bench draws them, items and "Add" included. Each list's Add offers every participant the list holds no item for, whatever the participant's label, so adding a participant whose item sits in the other list moves it, marked "Added by you". An empty list reads "None · closest: {name} {n}%" as today.
+- **Commitments re-checked** (only when the night shows clearing decisions): one item per clearing decision of a commitment that shows as a chip and that the user has not rejected, "Commitment from {date, time} · judged done" or "· judged not done", with a "Show in thread ↑" link to the commitment's message, its probability, and two controls, "Done" and "Not done", each labeling the decision with its own answer. A labeled item reads "Marked done" or "Marked not done" with Change, which offers the same two controls. The commitment's text is not repeated.
 - **Closest unflagged:** one gray line, "Closest unflagged:" then, per kind, "{Kind} {sender}, {time} ↑ {n}%", each linking to its message, or "{Kind} none above 5%". Display only.
 - **Footer:** "Confirm Nones" (outline, green-800 check) while the night shows no flag, no clearing and no reply item and has no label. After a close, the footer reads "{n} unflagged new messages labeled none when you moved on" in green-800.
 
 ## Labeling and closing
 
 - A **close** is Done or Next (the pager's › or the right-arrow key). Back to list, ‹ and leaving the page are not closes.
-- A close labels "no", for all three kinds, every unflagged flag decision without a label among the new messages of each night that holds at least one of the user's labels. A label on a chip, a reply item or a clearing decision counts. A shown flag without a label stays to review, and a close never labels a flag decision that any compared method's judgment shows as a flag without a label; removed methods' judgments never hold a close back.
+- A close labels "no", for all three kinds, every unflagged flag decision without a label among the new messages of each night that holds at least one of the user's labels. A label on a chip, a reply item or a clearing decision the night shows counts. A shown flag without a label stays to review, and a close never labels a flag decision that any compared method's judgment shows as a flag without a label; removed methods' judgments never hold a close back.
 - A night that shows nothing gets its label from Confirm Nones; a close alone gives it none.
 - A thread is **Reviewed** when every night in it holds at least one of the user's labels.
 - No save waits before the user's next click (spec SC9): saves are recorded in order, and a close takes effect after every save made on the page is recorded.
@@ -129,7 +129,7 @@ T5 draws a thread step by step. Step 1: the user confirmed the commitment and th
 |---|---|
 | Chip states | To review, Confirmed, Removed, Added |
 | Cleared commitment | cleared {date} |
-| Clearing section | Commitments re-checked; judged done / judged not done |
+| Clearing section | Commitments re-checked; judged done / judged not done; Done, Not done; Marked done / Marked not done |
 | Near misses | Closest unflagged |
 | List status | {n} to review, Nothing flagged, Reviewed |
 | Night divider | {night} · {n} new messages |
