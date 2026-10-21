@@ -20,6 +20,7 @@ import (
 )
 
 func TestEmailQuoteTrim_StoredBodies(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	h := synthetic.NewHarnessForNamespace(t, ctx, "qt"+uuid.NewString()[:8], factory.DefaultSeed)
 	contact, err := h.SeedContact(ctx, h.Generator().Contact(factory.WithEmail()))
@@ -29,7 +30,7 @@ func TestEmailQuoteTrim_StoredBodies(t *testing.T) {
 	sentAt := h.Generator().Anchor()
 
 	// store writes a row the way the pre-ING-047 ingest did.
-	store := func(gmailID, threadID, body, html string, accountID *string) uuid.UUID {
+	store := func(gmailID, threadID, subject, body, html string, accountID *string) uuid.UUID {
 		t.Helper()
 		metadata, err := json.Marshal(map[string]string{"html": html})
 		require.NoError(t, err)
@@ -37,6 +38,7 @@ func TestEmailQuoteTrim_StoredBodies(t *testing.T) {
 			Source:           repository.InteractionSourceEmail,
 			ExternalID:       "<" + uuid.NewString() + "@example.com>",
 			ThreadID:         &threadID,
+			Subject:          &subject,
 			Body:             &body,
 			Direction:        "inbound",
 			SentAt:           sentAt,
@@ -57,23 +59,28 @@ func TestEmailQuoteTrim_StoredBodies(t *testing.T) {
 	}
 
 	const quoted = "See you then.\n\nOn Mon, Contact A wrote:\n> Meet Tuesday?\n"
-	reply := store("g2", "g1", quoted, "", &account)
-	starter := store("g1", "g1", quoted, "", &account)
-	noAccountReply := store("g3", "g1", quoted, "", nil)
-	html := `<div>See you then.</div><div class="gmail_quote">On Mon, Contact A wrote:<blockquote>Meet Tuesday?</blockquote></div>`
-	htmlReply := store("g4", "g1", "See you then. On Mon, Contact A wrote: Meet Tuesday?", html, &account)
+	reply := store("g2", "g1", "Re: Plan", quoted, "", &account)
+	starter := store("g1", "g1", "Plan", quoted, "", &account)
+	forward := store("g5", "g1", "Fwd: Plan", quoted, "", &account)
+	noAccountReply := store("g3", "g1", "Re: Plan", quoted, "", nil)
+	html := `<div>See you then.</div><div class="gmail_quote"><div class="gmail_attr">On Mon, Contact A wrote:</div><blockquote>Meet Tuesday?</blockquote></div>`
+	htmlReply := store("g4", "g1", "Re: Plan", "See you then. On Mon, Contact A wrote: Meet Tuesday?", html, &account)
+	want := map[uuid.UUID]string{
+		reply:          "See you then.",
+		starter:        quoted,
+		forward:        quoted,
+		noAccountReply: "See you then.",
+		htmlReply:      "See you then.",
+	}
 
+	// The service scans every email row in the clone, so the assertions read
+	// this test's rows rather than the run's counts.
 	svc := google.NewEmailQuoteTrimService(comms)
-	first, err := svc.TrimStoredBodies(ctx)
-	require.NoError(t, err)
-	require.GreaterOrEqual(t, first.Trimmed, 3)
-
-	require.Equal(t, "See you then.", bodyOf(reply))
-	require.Equal(t, quoted, bodyOf(starter))
-	require.Equal(t, "See you then.", bodyOf(noAccountReply))
-	require.Equal(t, "See you then.", bodyOf(htmlReply))
-
-	second, err := svc.TrimStoredBodies(ctx)
-	require.NoError(t, err)
-	require.Zero(t, second.Trimmed, "a second run changes nothing")
+	for run := 1; run <= 2; run++ {
+		_, err := svc.TrimStoredBodies(ctx)
+		require.NoError(t, err)
+		for id, body := range want {
+			require.Equal(t, body, bodyOf(id), "run %d", run)
+		}
+	}
 }

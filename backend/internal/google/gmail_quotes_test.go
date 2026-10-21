@@ -1,6 +1,7 @@
 package google
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -8,166 +9,147 @@ import (
 	"google.golang.org/api/gmail/v1"
 )
 
-func TestTrimQuotedText(t *testing.T) {
-	cases := []struct {
-		name string
-		in   string
-		want string
-	}{
-		{
-			name: "gmail top-posted reply",
-			in:   "Sounds good, see you then.\n\nOn Mon, Oct 20, 2026 at 3:14 PM Contact A <a@example.com> wrote:\n\n> Want to meet Tuesday?\n> \n> > Earlier quote\n",
-			want: "Sounds good, see you then.",
-		},
-		{
-			name: "attribution wrapped onto two lines",
-			in:   "Yes.\r\n\r\nOn Mon, Oct 20, 2026 at 3:14 PM Contact A With A Long Name <\r\na@example.com> wrote:\r\n> Are you in?\r\n",
-			want: "Yes.",
-		},
-		{
-			name: "signature above the attribution stays",
-			in:   "Thanks!\n-- \nMe\n\nOn Tue, Contact A wrote:\n> hi\n",
-			want: "Thanks!\n-- \nMe",
-		},
-		{
-			name: "non-English attribution line stays, quote goes",
-			in:   "Ja.\n\nAm Mo., 20. Okt. 2026 schrieb Contact A:\n> Kommst du?\n",
-			want: "Ja.\n\nAm Mo., 20. Okt. 2026 schrieb Contact A:",
-		},
-		{
-			name: "outlook original message",
-			in:   "Confirmed.\n\n-----Original Message-----\nFrom: Contact A\nSent: Monday\nSubject: Plan\n\nAre we on?",
-			want: "Confirmed.",
-		},
-		{
-			name: "outlook header block under an underscore rule",
-			in:   "Confirmed.\n\n________________________________\nFrom: Contact A <a@example.com>\nSent: Monday, October 20, 2026 3:14 PM\nTo: Me\nSubject: Plan\n\nAre we on?",
-			want: "Confirmed.",
-		},
-		{
-			name: "gmail forward header is not an outlook header",
-			in:   "FYI\n\n---------- Forwarded message ---------\nFrom: Contact A <a@example.com>\nDate: Mon, Oct 20, 2026\nSubject: Plan\n\nAre we on?",
-			want: "FYI\n\n---------- Forwarded message ---------\nFrom: Contact A <a@example.com>\nDate: Mon, Oct 20, 2026\nSubject: Plan\n\nAre we on?",
-		},
-		{
-			name: "inline reply keeps quotes followed by new text",
-			in:   "> First question?\nFirst answer.\n> Second question?\nSecond answer.",
-			want: "> First question?\nFirst answer.\n> Second question?\nSecond answer.",
-		},
-		{
-			name: "wrote line without a quote below stays",
-			in:   "Here is what I wrote:\nthe draft",
-			want: "Here is what I wrote:\nthe draft",
-		},
-		{
-			name: "no quote returns the body byte for byte",
-			in:   "plain reply\n\n",
-			want: "plain reply\n\n",
-		},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			require.Equal(t, tc.want, trimQuotedText(tc.in))
-			require.Equal(t, tc.want, trimQuotedText(tc.want), "trimming is idempotent")
-		})
-	}
+// quotedCase is one inbound message run through processMessage: its ids,
+// subject and payload, and the body it must store.
+type quotedCase struct {
+	name     string
+	gmailID  string
+	threadID string
+	subject  string
+	payload  *gmail.MessagePart
+	want     string
 }
 
-func TestTrimQuotedHTML(t *testing.T) {
-	cases := []struct {
-		name string
-		in   string
-		want string
-	}{
-		{
-			name: "gmail quote container",
-			in:   `<div dir="ltr">Sounds good</div><br><div class="gmail_quote gmail_quote_container"><div class="gmail_attr">On Mon, Contact A wrote:</div><blockquote>Meet?</blockquote></div>`,
-			want: `<div dir="ltr">Sounds good</div><br>`,
-		},
-		{
-			name: "apple mail blockquote",
-			in:   `<div>Yes</div><div><br><blockquote type="cite">Are you in?</blockquote></div>`,
-			want: `<div>Yes</div><div><br>`,
-		},
-		{
-			name: "outlook reply header",
-			in:   `<p>Confirmed</p><div id="appendonsend"></div><hr><div id="divRplyFwdMsg">From: Contact A</div><div>Are we on?</div>`,
-			want: `<p>Confirmed</p>`,
-		},
-		{
-			name: "no marker unchanged",
-			in:   `<p>hello</p>`,
-			want: `<p>hello</p>`,
-		},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			require.Equal(t, tc.want, trimQuotedHTML(tc.in))
-		})
-	}
+// reply is a message that is neither its thread's start nor a forward.
+func reply(name string, payload *gmail.MessagePart, want string) quotedCase {
+	return quotedCase{name: name, gmailID: "g2", threadID: "g1", subject: "Re: Plan", payload: payload, want: want}
 }
 
-func TestStartsThread(t *testing.T) {
-	require.True(t, startsThread("g1", "g1"))
-	require.True(t, startsThread("g1", ""))
-	require.True(t, startsThread("", "g1"))
-	require.False(t, startsThread("g2", "g1"))
-}
-
-// processQuotedMessage runs one inbound message with the given payload through
-// processMessage and returns its stored body.
-func processQuotedMessage(t *testing.T, gmailID, threadID string, payload *gmail.MessagePart) string {
+// runQuotedCases stores each case's message and asserts its body.
+func runQuotedCases(t *testing.T, cases []quotedCase) {
 	t.Helper()
-	contactA := uuid.New()
-	knownMap := map[string][]uuid.UUID{"contact@example.com": {contactA}}
-	meSet := map[string]struct{}{"me@example.com": {}}
-	msg := buildMessage(t, gmailID, threadID, "Contact A <contact@example.com>",
-		[]string{"me@example.com"}, nil, nil, "Re: Plan", "", "<m1@example.com>", 1700000000000)
-	payload.Headers = msg.Payload.Headers
-	msg.Payload = payload
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			contactA := uuid.New()
+			knownMap := map[string][]uuid.UUID{"contact@example.com": {contactA}}
+			meSet := map[string]struct{}{"me@example.com": {}}
+			msg := buildMessage(t, tc.gmailID, tc.threadID, "Contact A <contact@example.com>",
+				[]string{"me@example.com"}, nil, nil, tc.subject, "", "<m1@example.com>", 1700000000000)
+			tc.payload.Headers = msg.Payload.Headers
+			msg.Payload = tc.payload
 
-	rows, err := newProviderForResolution().RunProcessMessageForTest(t.Context(), msg, "me@example.com", knownMap, meSet)
-	require.NoError(t, err)
-	require.Len(t, rows, 1)
-	require.NotNil(t, rows[0].Body)
-	return *rows[0].Body
+			rows, err := newProviderForResolution().RunProcessMessageForTest(t.Context(), msg, "me@example.com", knownMap, meSet)
+			require.NoError(t, err)
+			require.Len(t, rows, 1)
+			require.NotNil(t, rows[0].Body)
+			require.Equal(t, tc.want, *rows[0].Body)
+		})
+	}
 }
 
-func TestProcessMessage_QuotedMail(t *testing.T) {
-	const quoted = "Sounds good.\n\nOn Mon, Oct 20, 2026 at 3:14 PM Contact A <contact@example.com> wrote:\n> Meet Tuesday?\n"
-
-	t.Run("reply drops the trailing quote", func(t *testing.T) {
-		// spec: ING-047.reply-drops-trailing-quote
-		require.Equal(t, "Sounds good.", processQuotedMessage(t, "g2", "g1", plainTextPart(quoted)))
+// spec: ING-047.reply-drops-trailing-quote
+func TestQuotedMail_ReplyDropsTrailingQuote(t *testing.T) {
+	runQuotedCases(t, []quotedCase{
+		reply("gmail top-posted reply",
+			plainTextPart("Sounds good, see you then.\n\nOn Mon, Oct 20, 2026 at 3:14 PM Contact A <a@example.com> wrote:\n\n> Want to meet Tuesday?\n> \n> > Earlier quote\n"),
+			"Sounds good, see you then."),
+		reply("attribution wrapped onto two lines",
+			plainTextPart("Yes.\r\n\r\nOn Mon, Oct 20, 2026 at 3:14 PM Contact A With A Long Name <\r\na@example.com> wrote:\r\n> Are you in?\r\n"),
+			"Yes."),
+		reply("signature above the attribution stays",
+			plainTextPart("Thanks!\n-- \nMe\n\nOn Tue, Contact A wrote:\n> hi\n"),
+			"Thanks!\n-- \nMe"),
+		reply("non-English attribution line stays, quote goes",
+			plainTextPart("Ja.\n\nAm Mo., 20. Okt. 2026 schrieb Contact A:\n> Kommst du?\n"),
+			"Ja.\n\nAm Mo., 20. Okt. 2026 schrieb Contact A:"),
 	})
+}
 
-	t.Run("reply drops an outlook original", func(t *testing.T) {
-		// spec: ING-047.reply-drops-outlook-original
-		body := "Confirmed.\n\n-----Original Message-----\nFrom: Contact A\nSent: Monday\n\nAre we on?"
-		require.Equal(t, "Confirmed.", processQuotedMessage(t, "g2", "g1", plainTextPart(body)))
+// spec: ING-047.reply-drops-outlook-original
+func TestQuotedMail_ReplyDropsOutlookOriginal(t *testing.T) {
+	runQuotedCases(t, []quotedCase{
+		reply("original message line",
+			plainTextPart("Confirmed.\n\n-----Original Message-----\nFrom: Contact A\nSent: Monday\nSubject: Plan\n\nAre we on?"),
+			"Confirmed."),
+		reply("header block under an underscore rule",
+			plainTextPart("Confirmed.\n\n________________________________\nFrom: Contact A <a@example.com>\nSent: Monday, October 20, 2026 3:14 PM\nTo: Me\nSubject: Plan\n\nAre we on?"),
+			"Confirmed."),
 	})
+}
 
-	t.Run("html-only reply keeps the text before the quote", func(t *testing.T) {
-		// spec: ING-047.html-only-reply-drops-quote
-		raw := `<div>Sounds good.</div><div class="gmail_quote"><div class="gmail_attr">On Mon, Contact A wrote:</div><blockquote>Meet Tuesday?</blockquote></div>`
-		require.Equal(t, "Sounds good.", processQuotedMessage(t, "g2", "g1", htmlPart(raw)))
+// spec: ING-047.html-only-reply-drops-quote
+func TestQuotedMail_HTMLOnlyReplyDropsQuote(t *testing.T) {
+	gmailQuote := `<div class="gmail_quote gmail_quote_container"><div dir="ltr" class="gmail_attr">On Mon, Oct 20, 2026 at 3:14 PM Contact A &lt;<a href="mailto:a@example.com">a@example.com</a>&gt; wrote:<br></div><blockquote class="gmail_quote">Meet Tuesday?</blockquote></div>`
+	runQuotedCases(t, []quotedCase{
+		reply("gmail quote container",
+			htmlPart(`<div dir="ltr">Sounds good &amp; see you.</div><br>`+gmailQuote),
+			"Sounds good & see you."),
+		reply("apple mail blockquote",
+			htmlPart(`<div>Yes</div><div><br><blockquote type="cite"><div>On Oct 20, 2026, at 3:14 PM, Contact A wrote:</div><div>Are you in?</div></blockquote></div>`),
+			"Yes"),
+		reply("outlook reply header",
+			htmlPart(`<p>Confirmed</p><hr><div id="divRplyFwdMsg"><b>From:</b> Contact A<br><b>Sent:</b> Monday<br><b>Subject:</b> Plan</div><div>Are we on?</div>`),
+			"Confirmed"),
+		reply("yahoo quote container",
+			htmlPart(`<div>Works for me</div><div class="yahoo_quoted"><div>On Monday, Contact A wrote:</div><div><div>Lunch?</div></div></div>`),
+			"Works for me"),
+		reply("non-ASCII text before the quote",
+			htmlPart(`<div>İstanbul confirmed</div>`+gmailQuote),
+			"İstanbul confirmed"),
+		reply("text that changes byte length when lowercased",
+			htmlPart(`<div>`+strings.Repeat("Ⱥ", 120)+`</div>`+gmailQuote),
+			strings.Repeat("Ⱥ", 120)),
 	})
+}
 
-	t.Run("inline reply keeps its quotes", func(t *testing.T) {
-		// spec: ING-047.inline-reply-keeps-quotes
-		body := "> Tuesday?\nYes.\n> Where?\nThe cafe."
-		require.Equal(t, body, processQuotedMessage(t, "g2", "g1", plainTextPart(body)))
+// spec: ING-047.inline-reply-keeps-quotes
+func TestQuotedMail_InlineReplyKeepsQuotes(t *testing.T) {
+	runQuotedCases(t, []quotedCase{
+		reply("plain inline answers",
+			plainTextPart("> First question?\nFirst answer.\n> Second question?\nSecond answer."),
+			"> First question?\nFirst answer.\n> Second question?\nSecond answer."),
+		reply("html inline answers",
+			htmlPart(`<div>Answers:</div><blockquote>Question one?</blockquote><div>First answer.</div><blockquote>Question two?</blockquote><div>Second answer.</div>`),
+			"Answers: Question one? First answer. Question two? Second answer."),
 	})
+}
 
-	t.Run("thread start keeps everything", func(t *testing.T) {
-		// spec: ING-047.thread-start-kept-whole
-		require.Equal(t, quoted, processQuotedMessage(t, "g1", "g1", plainTextPart(quoted)))
-		raw := `<div>FYI</div><div class="gmail_quote">---------- Forwarded message ---------<br>Plan details</div>`
-		require.Equal(t, "FYI ---------- Forwarded message --------- Plan details", processQuotedMessage(t, "g1", "g1", htmlPart(raw)))
+// spec: ING-047.thread-start-kept-whole
+func TestQuotedMail_ThreadStartKeptWhole(t *testing.T) {
+	const quoted = "Introducing you two.\n\nOn Mon, Contact A wrote:\n> Know anyone?\n"
+	const quotedHTML = `<div>Introducing you two.</div><blockquote>Know anyone?</blockquote>`
+	runQuotedCases(t, []quotedCase{
+		{name: "first message, plain", gmailID: "g1", threadID: "g1", subject: "Intro", payload: plainTextPart(quoted), want: quoted},
+		{name: "first message, html", gmailID: "g1", threadID: "g1", subject: "Intro", payload: htmlPart(quotedHTML), want: "Introducing you two. Know anyone?"},
+		{name: "unknown thread id, plain", gmailID: "g2", threadID: "", subject: "Re: Intro", payload: plainTextPart(quoted), want: quoted},
+		{name: "unknown thread id, html", gmailID: "g2", threadID: "", subject: "Re: Intro", payload: htmlPart(quotedHTML), want: "Introducing you two. Know anyone?"},
+		{name: "unknown message id, plain", gmailID: "", threadID: "g1", subject: "Re: Intro", payload: plainTextPart(quoted), want: quoted},
+		{name: "unknown message id, html", gmailID: "", threadID: "g1", subject: "Re: Intro", payload: htmlPart(quotedHTML), want: "Introducing you two. Know anyone?"},
 	})
+}
 
-	t.Run("unquoted reply unchanged", func(t *testing.T) {
-		// spec: ING-047.unquoted-body-unchanged
-		require.Equal(t, "Just a reply.\n", processQuotedMessage(t, "g2", "g1", plainTextPart("Just a reply.\n")))
+// spec: ING-047.forward-kept-whole
+func TestQuotedMail_ForwardKeptWhole(t *testing.T) {
+	appleForward := "FYI\n\nBegin forwarded message:\n\nFrom: Contact A <a@example.com>\nSent: Monday, October 20, 2026\nSubject: Plan\n\n> Are we on?"
+	runQuotedCases(t, []quotedCase{
+		{name: "forward subject keeps a forwarded header block", gmailID: "g2", threadID: "g1", subject: "Fwd: Plan",
+			payload: plainTextPart(appleForward), want: appleForward},
+		{name: "outlook FW subject keeps quoted html", gmailID: "g2", threadID: "g1", subject: "FW: Plan",
+			payload: htmlPart(`<div>FYI</div><blockquote>Are we on?</blockquote>`), want: "FYI Are we on?"},
+		reply("gmail forward header in a reply is not an outlook header",
+			plainTextPart("FYI\n\n---------- Forwarded message ---------\nFrom: Contact A <a@example.com>\nDate: Mon, Oct 20, 2026\nSubject: Plan\n\nAre we on?"),
+			"FYI\n\n---------- Forwarded message ---------\nFrom: Contact A <a@example.com>\nDate: Mon, Oct 20, 2026\nSubject: Plan\n\nAre we on?"),
+		reply("gmail html forward in a reply is not a quote",
+			htmlPart(`<div>FYI</div><div class="gmail_quote">---------- Forwarded message ---------<br>From: Contact A<br>Date: Mon<br><br><div>Plan details</div></div>`),
+			"FYI ---------- Forwarded message --------- From: Contact A Date: Mon Plan details"),
+	})
+}
+
+// spec: ING-047.unquoted-body-unchanged
+func TestQuotedMail_UnquotedBodyUnchanged(t *testing.T) {
+	runQuotedCases(t, []quotedCase{
+		reply("plain body byte for byte", plainTextPart("Just a reply.\n\n"), "Just a reply.\n\n"),
+		reply("wrote line with no quote below", plainTextPart("Here is what I wrote:\nthe draft"), "Here is what I wrote:\nthe draft"),
+		reply("html body as stripped text", htmlPart(`<p>Hi &amp; bye</p><br>`), "Hi & bye"),
 	})
 }

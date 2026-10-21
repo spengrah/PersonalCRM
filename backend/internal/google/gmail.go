@@ -1227,10 +1227,10 @@ func (p *GmailSyncProvider) processMessage(
 	if err != nil {
 		return nil, fmt.Errorf("extract content: %w", err)
 	}
-	body := messageText(plain, htmlBody, startsThread(msg.Id, msg.ThreadId))
 
 	headers := newHeaderLookup(msg.Payload)
 	subject := headers.first("Subject")
+	body := messageText(plain, htmlBody, keepsQuotedMail(msg.Id, msg.ThreadId, subject))
 	fromRaw, fromNorm, fromName := parseSingleAddress(headers.first("From"))
 	toRaw, toNorm, toNames := parseAddressList(headers.first("To"))
 	ccRaw, ccNorm, ccNames := parseAddressList(headers.first("Cc"))

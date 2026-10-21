@@ -721,12 +721,13 @@ ORDER BY source, thread_id, sent_at DESC, id DESC;
 -- Keyset-paged email bodies for the one-time quote trim (crm-admin
 -- --trim-email-quotes), paged by id > @after_id. gmail_message_id is the
 -- observing account's per-mailbox gmail id (the upsert's account_gmail_ids
--- key, '__unknown__' when account_id is NULL); with thread_id it tells a
--- thread's first message from a reply. html is the stored source HTML, '' when
--- absent.
+-- key, '__unknown__' when account_id is NULL); with thread_id and subject it
+-- tells a message stored whole from a reply. html is the stored source HTML,
+-- '' when absent.
 SELECT
     cm.id,
     COALESCE(cm.thread_id, '')::text AS thread_id,
+    COALESCE(cm.subject, '')::text AS subject,
     COALESCE(cm.body, '')::text AS body,
     COALESCE(cm.source_metadata->'account_gmail_ids'->>COALESCE(cm.account_id, '__unknown__'), '')::text AS gmail_message_id,
     COALESCE(cm.source_metadata->>'html', '')::text AS html

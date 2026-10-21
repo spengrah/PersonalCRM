@@ -819,6 +819,7 @@ const ListEmailBodiesForQuoteTrim = `-- name: ListEmailBodiesForQuoteTrim :many
 SELECT
     cm.id,
     COALESCE(cm.thread_id, '')::text AS thread_id,
+    COALESCE(cm.subject, '')::text AS subject,
     COALESCE(cm.body, '')::text AS body,
     COALESCE(cm.source_metadata->'account_gmail_ids'->>COALESCE(cm.account_id, '__unknown__'), '')::text AS gmail_message_id,
     COALESCE(cm.source_metadata->>'html', '')::text AS html
@@ -839,6 +840,7 @@ type ListEmailBodiesForQuoteTrimParams struct {
 type ListEmailBodiesForQuoteTrimRow struct {
 	ID             uuid.UUID `json:"id"`
 	ThreadID       string    `json:"thread_id"`
+	Subject        string    `json:"subject"`
 	Body           string    `json:"body"`
 	GmailMessageID string    `json:"gmail_message_id"`
 	Html           string    `json:"html"`
@@ -847,9 +849,9 @@ type ListEmailBodiesForQuoteTrimRow struct {
 // Keyset-paged email bodies for the one-time quote trim (crm-admin
 // --trim-email-quotes), paged by id > @after_id. gmail_message_id is the
 // observing account's per-mailbox gmail id (the upsert's account_gmail_ids
-// key, '__unknown__' when account_id is NULL); with thread_id it tells a
-// thread's first message from a reply. html is the stored source HTML, ” when
-// absent.
+// key, '__unknown__' when account_id is NULL); with thread_id and subject it
+// tells a message stored whole from a reply. html is the stored source HTML,
+// ” when absent.
 func (q *Queries) ListEmailBodiesForQuoteTrim(ctx context.Context, arg ListEmailBodiesForQuoteTrimParams) ([]*ListEmailBodiesForQuoteTrimRow, error) {
 	rows, err := q.db.Query(ctx, ListEmailBodiesForQuoteTrim, arg.AfterID, arg.BatchSize)
 	if err != nil {
@@ -862,6 +864,7 @@ func (q *Queries) ListEmailBodiesForQuoteTrim(ctx context.Context, arg ListEmail
 		if err := rows.Scan(
 			&i.ID,
 			&i.ThreadID,
+			&i.Subject,
 			&i.Body,
 			&i.GmailMessageID,
 			&i.Html,

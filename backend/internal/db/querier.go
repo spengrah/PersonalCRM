@@ -1489,9 +1489,9 @@ type Querier interface {
 	// Keyset-paged email bodies for the one-time quote trim (crm-admin
 	// --trim-email-quotes), paged by id > @after_id. gmail_message_id is the
 	// observing account's per-mailbox gmail id (the upsert's account_gmail_ids
-	// key, '__unknown__' when account_id is NULL); with thread_id it tells a
-	// thread's first message from a reply. html is the stored source HTML, '' when
-	// absent.
+	// key, '__unknown__' when account_id is NULL); with thread_id and subject it
+	// tells a message stored whole from a reply. html is the stored source HTML,
+	// '' when absent.
 	ListEmailBodiesForQuoteTrim(ctx context.Context, arg ListEmailBodiesForQuoteTrimParams) ([]*ListEmailBodiesForQuoteTrimRow, error)
 	// Returns (value_normalized, contact_id) for every email contact_method of a
 	// non-deleted contact. MANY-TO-ONE allowed: a shared address (joint inbox /

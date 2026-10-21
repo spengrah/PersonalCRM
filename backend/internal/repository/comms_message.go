@@ -1129,11 +1129,12 @@ func (r *CommsMessageRepository) HardDeleteBySourceAndExternalIDPrefix(ctx conte
 }
 
 // EmailBodyRow is one stored email body with what the one-time quote trim
-// needs to re-apply the ingest rule: the thread id, the observing account's
-// gmail id, and the stored source HTML ("" when absent).
+// needs to re-apply the ingest rule: the thread id, the subject, the observing
+// account's gmail id, and the stored source HTML ("" when absent).
 type EmailBodyRow struct {
 	ID             uuid.UUID
 	ThreadID       string
+	Subject        string
 	Body           string
 	GmailMessageID string
 	HTML           string
@@ -1154,6 +1155,7 @@ func (r *CommsMessageRepository) ListEmailBodies(ctx context.Context, afterID uu
 		out = append(out, EmailBodyRow{
 			ID:             row.ID,
 			ThreadID:       row.ThreadID,
+			Subject:        row.Subject,
 			Body:           row.Body,
 			GmailMessageID: row.GmailMessageID,
 			HTML:           row.Html,

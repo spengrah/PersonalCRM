@@ -668,12 +668,14 @@ behaviors:
       - key: reply-drops-outlook-original
         text: a reply's stored body drops an Outlook original-message header and everything after it
       - key: html-only-reply-drops-quote
-        text: a reply with no plain-text part stores the text of its HTML before the first quote container
+        text: a reply with no plain-text part stores the text of its HTML under the same rule, where text inside a blockquote or a Yahoo quote container is quoted
       - key: inline-reply-keeps-quotes
         text: quoted lines followed by new text, as in an inline reply, are kept
       - key: thread-start-kept-whole
-        text: the message that starts its thread in the mailbox, such as a forward or an introduction received fresh, keeps everything it carries
+        text: the message that starts its thread in the mailbox, such as an introduction received fresh, keeps everything it carries, as does a message whose Gmail id or thread id is unknown
+      - key: forward-kept-whole
+        text: a forward, whose subject starts with Fwd or Fw, keeps everything it carries, and a forwarded-message block in a reply is never treated as quoted mail
       - key: unquoted-body-unchanged
         text: a body with no quoted mail is stored unchanged
-    provenance: [messageText, startsThread, trimQuotedText, trimQuotedHTML]
+    provenance: [messageText, keepsQuotedMail, trimQuotedText, trimQuotedHTML]
     notes: Each earlier message in a thread is stored as its own message, so a reply's quoted copy only repeats it. The source_metadata HTML stays verbatim. crm-admin --trim-email-quotes applies the same rule once to bodies stored before it.

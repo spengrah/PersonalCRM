@@ -75,5 +75,5 @@ func storedMessageText(row repository.EmailBodyRow) string {
 	if row.HTML != "" && stripHTML(row.HTML) == row.Body {
 		plain = ""
 	}
-	return messageText(plain, row.HTML, startsThread(row.GmailMessageID, row.ThreadID))
+	return messageText(plain, row.HTML, keepsQuotedMail(row.GmailMessageID, row.ThreadID, row.Subject))
 }
