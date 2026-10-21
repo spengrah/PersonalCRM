@@ -54,7 +54,7 @@ The January review read the masked text of the 122 messages jev-masked flagged a
 - **G2 Masking knows more names.** The dictionary adds the user's own names (G5) as ME and every display name seen in a sender or recipient field of any stored message (user ruling, 2026-10-21).
 - **G3 New method versions.** Each method gets a new version when the masker changes, so a rerun judges again instead of reusing judgments made on the old masking.
 - **G4 A day range.** `crm-admin --judge-month YYYY-MM` is replaced by `--judge-start-day YYYY-MM-DD --judge-end-day YYYY-MM-DD` (user ruling, 2026-10-21): a historical run judges the nightly cut-offs that close each day of the range, inclusive, with `--method` and `--measure` as today. `--judge-month` is removed, not kept beside it; the one caller outside the repository, a script on the Pi, is updated by hand.
-- **G5 The user's names in configuration.** The user has no contact record, so the user's own names come from an environment setting, with no UI (user ruling, 2026-10-21).
+- **G5 The user's names in configuration.** The user has no contact record, so the user's own names come from the environment setting `OWN_NAMES`, with no UI (user ruling, 2026-10-21). The setting is general, not decision-specific: other features may read the user's names.
 
 ## Non-Goals
 
@@ -70,7 +70,7 @@ The January review read the masked text of the 122 messages jev-masked flagged a
 
 ## Hard constraints
 
-- **HC1** No masking change lets a name through that today's masker hides.
+- **HC1** No masking change lets a name through that today's masker hides, except a common English word written in lower case that is also a name ("talked to will"), which G1 lets through (user ruling, 2026-10-21: common names are among the least identifying).
 - **HC2** No content at rest off the Pi.
 
 ## Success criteria
