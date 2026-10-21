@@ -196,4 +196,61 @@ test.describe('Reply lists in a judgment box @area:interactions', () => {
       { right_outcome: 'nobody_owes' },
     ])
   })
+
+  /**
+   * The quiet chat, whose one participant is cai, judged on one night to be
+   * owed a reply by the user: cai is the only choice either list's picker can
+   * offer.
+   */
+  async function openOneParticipant(page: Page, request: Parameters<typeof reviewWorld>[1]) {
+    const world = await reviewWorld(testApi, request)
+    const { interactionId, thread, messages } = world.quiet
+    const [night] = nightsOf(messages, [{ from: 0, to: messages.length - 1 }])
+    night.ball_in_court = [
+      {
+        question_id: 'ball_in_court:P1',
+        contact_id: world.cai.id,
+        outcome: 'i_owe_reply',
+        confidence: 0.9,
+      },
+    ]
+    night.questions = [
+      asked('ball_in_court:P1', { i_owe_reply: 0.9, they_owe_reply: 0.06, nobody_owes: 0.04 }),
+    ]
+    const runId = await seedRun(request, interactionId, { nights: [night] })
+    await startWithReview(page, true)
+    await page.goto(threadUrl(thread.thread_id, { contact: world.cai.id, run: runId }))
+    const box = page.locator('[data-judgment-box]')
+    await expect(box).toBeVisible({ timeout: SLOW_TIMEOUT_MS })
+    return {
+      cai: world.cai,
+      iOwe: proposalList(box, 'I owe a reply'),
+      owesMe: proposalList(box, 'Owes me a reply'),
+    }
+  }
+
+  for (const act of ['Remove', 'Confirm'] as const) {
+    test(`after the user ${act === 'Remove' ? 'removes' : 'confirms'} the one participant’s I-owe item, Owes me offers Add with them, which moves the item`, async ({
+      page,
+      request,
+    }) => {
+      const { cai, iOwe, owesMe } = await openOneParticipant(page, request)
+      await iOwe.getByRole('button', { name: `${act} ${cai.name}` }).click()
+      await expect(listItem(iOwe, cai.name)).toHaveAttribute(
+        'data-mark',
+        act === 'Remove' ? 'removed' : 'confirmed',
+        { timeout: SLOW_TIMEOUT_MS }
+      )
+
+      // spec: IXN-086.add-picker-any-participant
+      await owesMe.getByRole('button', { name: 'Add', exact: true }).click()
+      const picker = owesMe.getByRole('group', { name: 'Add to Owes me a reply' })
+      await expect(picker.getByRole('button', { name: /^(?!Close)/ })).toHaveText([cai.name])
+      await picker.getByRole('button', { name: cai.name }).click()
+      const moved = listItem(owesMe, cai.name)
+      await expect(moved).toHaveAttribute('data-mark', 'added', { timeout: SLOW_TIMEOUT_MS })
+      await expect(moved).toContainText('Added by you')
+      await expect(iOwe.locator('[data-item]')).toHaveCount(0)
+    })
+  }
 })

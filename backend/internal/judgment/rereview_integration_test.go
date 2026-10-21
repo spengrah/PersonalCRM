@@ -436,20 +436,129 @@ func TestBenchAddAfterLabels(t *testing.T) {
 		assert.Equal(t, "they_owe_reply", b.labels(t)[decision(judgment.QuestionBallInCourt, &x)])
 	})
 
-	t.Run("an unlabeled positive decision of the other reply list stays offered, a labeled one is offered nowhere", func(t *testing.T) {
+}
+
+// Each reply list's Add picker offers every participant whose ball-in-court
+// decision the list holds no item for, whatever the decision's label. An Add on
+// a labeled decision relabels it, moving its item to the list, and changes
+// nothing live; no participant is held by both reply lists.
+func TestBenchAddOffersEveryParticipantAListLacks(t *testing.T) {
+	// owed is a one-to-one thread whose acting judgment says the user owes x a
+	// reply, with the "I owe" item reviewed by the act.
+	owed := func(t *testing.T, b *benchEnv, act string) (uuid.UUID, thread) {
+		t.Helper()
+		x, th := b.oneToOne(t)
+		b.run(t, judgment.RunKindScheduled, judgmentOf(prodMethod, th, b.day(1).Add(time.Minute), "h1", judgment.Outcomes{
+			BallInCourt: []judgment.ParticipantOutcome[judgment.BallInCourt]{bic(x, judgment.BallInCourtIOweReply, 0.9)},
+		}))
+		b.act(t, item(t, b.proposal(t, x, prodMethod), "i_owe_reply", x), act)
+		return x, th
+	}
+	// moved asserts that x's item sits in "Owes me" alone, added by the user.
+	moved := func(t *testing.T, p handlers.BenchProposalResponse, x uuid.UUID) {
+		t.Helper()
+		assert.Equal(t, ptr("added"), item(t, p, "owes_me_reply", x).Mark)
+		assert.Empty(t, listContacts(p, "i_owe_reply"), "the list the item left no longer holds it")
+		assert.False(t, hasAddition(p, "owes_me_reply", x))
+		assert.True(t, hasAddition(p, "i_owe_reply", x))
+	}
+
+	t.Run("a positive I-owe decision the user removed, added to Owes me", func(t *testing.T) {
+		// spec: IXN-059.offers-labeled-positives
+		b := newBenchEnv(t)
+		x, th := owed(t, b, "remove")
+		p := b.proposal(t, x, prodMethod)
+		require.True(t, hasAddition(p, "owes_me_reply", x))
+		assert.False(t, hasAddition(p, "i_owe_reply", x), "the removed item stays in I owe")
+		open := b.openObligations(t, th)
+
+		b.add(t, addition(t, p, "owes_me_reply", x))
+
+		moved(t, b.proposal(t, x, prodMethod), x)
+		assert.Equal(t, open, b.openObligations(t, th), "a re-review records the label only")
+		assert.Equal(t, "they_owe_reply", b.labels(t)[decision(judgment.QuestionBallInCourt, &x)])
+	})
+
+	t.Run("a positive I-owe decision the user confirmed, added to Owes me, changes no obligation", func(t *testing.T) {
+		// spec: IXN-059.offers-labeled-positives
+		b := newBenchEnv(t)
+		x, th := owed(t, b, "confirm")
+		open := b.openObligations(t, th)
+		require.Len(t, open, 1)
+		require.Equal(t, repository.ObligationDebtorUser, open[0].Debtor)
+		p := b.proposal(t, x, prodMethod)
+		require.False(t, hasAddition(p, "i_owe_reply", x))
+
+		b.add(t, addition(t, p, "owes_me_reply", x))
+
+		moved(t, b.proposal(t, x, prodMethod), x)
+		assert.Equal(t, open, b.openObligations(t, th), "no task opened, closed or redated")
+	})
+
+	t.Run("a labeled negative decision is offered in both reply lists", func(t *testing.T) {
+		// spec: IXN-059.offers-negatives
+		b := newBenchEnv(t)
+		x, th := b.oneToOne(t)
+		b.run(t, judgment.RunKindScheduled, judgmentOf(prodMethod, th, b.day(1), "h1", nothingFound(x)))
+		require.Equal(t, http.StatusOK, b.confirmNones(t, b.proposal(t, x, prodMethod)).Code)
+
+		p := b.proposal(t, x, prodMethod)
+
+		assert.True(t, hasAddition(p, "i_owe_reply", x))
+		assert.True(t, hasAddition(p, "owes_me_reply", x))
+	})
+
+	t.Run("an unlabeled positive decision of the other reply list stays offered", func(t *testing.T) {
 		// spec: IXN-059.offers-negatives
 		b := newBenchEnv(t)
 		x, th := b.oneToOne(t)
 		b.run(t, judgment.RunKindScheduled, judgmentOf(prodMethod, th, b.day(1).Add(time.Minute), "h1", judgment.Outcomes{
 			BallInCourt: []judgment.ParticipantOutcome[judgment.BallInCourt]{bic(x, judgment.BallInCourtIOweReply, 0.9)},
 		}))
-		unlabeled := b.proposal(t, x, prodMethod)
-		b.act(t, item(t, unlabeled, "i_owe_reply", x), "confirm")
 
-		labeled := b.proposal(t, x, prodMethod)
+		p := b.proposal(t, x, prodMethod)
 
-		assert.True(t, hasAddition(unlabeled, "owes_me_reply", x))
-		assert.False(t, hasAddition(labeled, "owes_me_reply", x))
-		assert.False(t, hasAddition(labeled, "i_owe_reply", x))
+		assert.True(t, hasAddition(p, "owes_me_reply", x))
+		assert.False(t, hasAddition(p, "i_owe_reply", x))
 	})
+
+	t.Run("an unlabeled negative decision is offered in both reply lists", func(t *testing.T) {
+		// spec: IXN-059.offers-negatives
+		b := newBenchEnv(t)
+		x, th := b.oneToOne(t)
+		b.run(t, judgment.RunKindScheduled, judgmentOf(prodMethod, th, b.day(1), "h1", nothingFound(x)))
+
+		p := b.proposal(t, x, prodMethod)
+
+		assert.True(t, hasAddition(p, "i_owe_reply", x))
+		assert.True(t, hasAddition(p, "owes_me_reply", x))
+	})
+
+	t.Run("a group thread offers each list exactly the participants it holds no item for", func(t *testing.T) {
+		// spec: IXN-059.offers-negatives, IXN-059.offers-labeled-positives
+		b := newBenchEnv(t)
+		x, y := b.contact(t), b.contact(t)
+		th := b.group(t, x, y)
+		b.run(t, judgment.RunKindScheduled, judgmentOf(prodMethod, th, b.day(2).Add(time.Minute), "h1", judgment.Outcomes{
+			BallInCourt: []judgment.ParticipantOutcome[judgment.BallInCourt]{
+				bic(x, judgment.BallInCourtIOweReply, 0.9), bic(y, judgment.BallInCourtNobodyOwes, 0.8),
+			},
+		}))
+
+		p := b.proposal(t, x, prodMethod)
+
+		assert.ElementsMatch(t, []string{y.String()}, additionContacts(p, "i_owe_reply"))
+		assert.ElementsMatch(t, []string{x.String(), y.String()}, additionContacts(p, "owes_me_reply"))
+	})
+}
+
+// additionContacts are the contacts the list's Add picker offers.
+func additionContacts(p handlers.BenchProposalResponse, list string) []string {
+	var ids []string
+	for _, a := range p.Additions {
+		if a.List == list && a.Contact != nil {
+			ids = append(ids, a.Contact.ContactID)
+		}
+	}
+	return ids
 }

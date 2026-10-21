@@ -303,6 +303,7 @@ func (d *reviewData) build(ctx context.Context, thread uuid.UUID) (*ThreadReview
 	hasFlagLabel := map[string]bool{}
 	clearingLabels := map[clearingKey]bool{}
 	labels := d.decisionLb[thread]
+	rejected := labels.RejectedCommitments()
 	for _, l := range labels.Flags {
 		flagLabels[flagKey{l.MessageKey, l.Kind}] = l.Holds
 		hasFlagLabel[l.MessageKey] = true
@@ -391,7 +392,7 @@ func (d *reviewData) build(ctx context.Context, thread uuid.UUID) (*ThreadReview
 		}
 		n.Clearings = make([]NightClearing, 0, len(read.clearings))
 		for _, c := range read.clearings {
-			shown, err := d.commitmentShows(ctx, n, c, flagLabels)
+			shown, err := d.commitmentShows(ctx, n, c, flagLabels, rejected)
 			if err != nil {
 				return nil, err
 			}
@@ -451,11 +452,15 @@ func (d *reviewData) chip(ctx context.Context, n *Night, key string, kind FlagKi
 }
 
 // commitmentShows reports whether the commitment a clearing decision re-checks
-// shows as a chip under the night's method, by the rule chip applies: its
-// probability reaches the display threshold, or the user labeled it held. A
-// night shows only the clearing decisions of commitments that show, since a
-// commitment the user never saw flagged has nothing to clear.
-func (d *reviewData) commitmentShows(ctx context.Context, n *Night, c ClearingDecision, labels map[flagKey]bool) (bool, error) {
+// shows as a chip the user has not rejected, under the night's method: the
+// user labeled it held, or it has no label and its probability reaches the
+// display threshold, by the rule chip applies. A night shows only the clearing
+// decisions of these commitments, since a commitment the user never saw
+// flagged, or rejected, has nothing to clear.
+func (d *reviewData) commitmentShows(ctx context.Context, n *Night, c ClearingDecision, labels map[flagKey]bool, rejected map[string]bool) (bool, error) {
+	if rejected[c.CommitmentMessageKey] {
+		return false, nil
+	}
 	if holds, labeled := labels[flagKey{c.CommitmentMessageKey, FlagKindCommitment}]; labeled && holds {
 		return true, nil
 	}

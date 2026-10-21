@@ -249,6 +249,69 @@ func TestScorecardScoresClearingDecisions(t *testing.T) {
 	})
 }
 
+// Clearing accuracy, in the scorecard and in the export, counts a labeled
+// clearing decision only when the user has not rejected its commitment.
+func TestScorecardSkipsClearingsOfRejectedCommitments(t *testing.T) {
+	t.Run("a labeled re-check of a rejected commitment, beside one of a commitment with no label", func(t *testing.T) {
+		// spec: KNW-086.rejected-commitment-clearings-skipped
+		v := vendorFlagging(t, 0.9)
+		v.clear = func(ask) float64 { return 0.9 }
+		s := judgeThread(t, v, said{3, promise}, said{3, "i will call you tomorrow"}, said{4, filler(0)})
+		recheck := s.judgmentAt(t, s.set[jevKey].Ref(), jan(5, 0))
+		require.Len(t, recheck.Clearings, 2)
+		for _, c := range recheck.Clearings {
+			_, err := s.threads.LabelClearing(s.e.ctx, s.run, s.venue, c.CommitmentMessageKey, recheck.CutOff, true)
+			require.NoError(t, err)
+		}
+		s.label(t, 0, judgment.FlagKindCommitment, false)
+
+		out := s.scorecard(t)
+
+		assert.Equal(t, "clearing accuracy=1.000 done_labeled_done=1 done_labeled_not_done=0 not_done_labeled_done=0 not_done_labeled_not_done=0",
+			line(t, out, "clearing "), "only the re-check of the commitment the user did not reject")
+	})
+
+	t.Run("a labeled re-check of a commitment labeled held, included", func(t *testing.T) {
+		// spec: KNW-086.rejected-commitment-clearings-skipped
+		s := clearedThread(t, 0.9)
+		s.label(t, 0, judgment.FlagKindCommitment, true)
+		s.labelClearing(t, jan(5, 0), false)
+
+		out := s.scorecard(t)
+
+		assert.Equal(t, "clearing accuracy=0.000 done_labeled_done=0 done_labeled_not_done=1 not_done_labeled_done=0 not_done_labeled_not_done=0",
+			line(t, out, "clearing "))
+	})
+
+	t.Run("a labeled re-check of a commitment with no label, included", func(t *testing.T) {
+		// spec: KNW-086.rejected-commitment-clearings-skipped
+		s := clearedThread(t, 0.9)
+		s.labelClearing(t, jan(5, 0), true)
+
+		out := s.scorecard(t)
+
+		assert.Equal(t, "clearing accuracy=1.000 done_labeled_done=1 done_labeled_not_done=0 not_done_labeled_done=0 not_done_labeled_not_done=0",
+			line(t, out, "clearing "))
+	})
+
+	t.Run("a run whose only labeled re-check is of a rejected commitment has no clearing accuracy, in the scorecard or the export", func(t *testing.T) {
+		// spec: KNW-086.rejected-commitment-clearings-skipped, KNW-088.absent-metric-not-sent
+		s := clearedThread(t, 0.9)
+		s.labelClearing(t, jan(5, 0), true)
+		s.label(t, 0, judgment.FlagKindCommitment, false)
+
+		out := s.scorecard(t)
+		l := newFakeLangfuse(t)
+		s.e.langfuseExport(t, l)
+
+		assert.Equal(t, "clearing accuracy=none done_labeled_done=0 done_labeled_not_done=0 not_done_labeled_done=0 not_done_labeled_not_done=0",
+			line(t, out, "clearing "))
+		scores := l.runScores(t, s.e.lastRun(t, s.set[jevKey].Ref()).ID)
+		assert.NotContains(t, scores, "clearing.accuracy", "no value, never 0")
+		assert.InDelta(t, 0, value(t, scores, "clearing.done_labeled_done"), 1e-9)
+	})
+}
+
 // The scorecard reports, per method, how many new messages its rerun judged,
 // left unjudged by reason, and flagged per kind; no metric counts an unjudged
 // message as a no.

@@ -1,8 +1,7 @@
 'use client'
 
 import { useState, type ReactNode } from 'react'
-import { clsx } from 'clsx'
-import { Check, X } from 'lucide-react'
+import { Check } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { formatDateTime } from '@/components/timeline'
 import { ReplyLists } from '@/components/threads/reply-lists'
@@ -78,6 +77,10 @@ function Clearing({
   const pending = isPending(item)
   const failed = useFailedSave()(item)
   const reviewing = clearing.label === 'none' || changing
+  // The label records the user's answer; its state says how it stands against
+  // the method's.
+  const marked =
+    clearing.label === 'none' ? null : (clearing.label === 'confirmed') === clearing.done
   const send = (done: boolean) =>
     label.mutate(
       {
@@ -107,39 +110,26 @@ function Clearing({
         {formatConfidence(clearing.probability)}
       </span>
       <span className="flex-1" />
-      {clearing.label !== 'none' && !changing && (
+      {marked !== null && !changing && (
         <span
-          data-clearing-mark={clearing.label}
-          className={clsx(
-            'text-xs font-medium',
-            clearing.label === 'confirmed' ? 'text-green-800' : 'text-gray-500'
-          )}
+          data-clearing-mark={marked ? 'done' : 'not_done'}
+          className="text-xs font-medium text-gray-700"
         >
-          {clearing.label === 'confirmed' ? 'Confirmed' : 'Removed'}
+          {marked ? 'Marked done' : 'Marked not done'}
         </span>
       )}
-      {reviewing && (
-        <>
+      {reviewing &&
+        ([true, false] as const).map(done => (
           <button
+            key={String(done)}
             type="button"
-            aria-label="Confirm clearing"
             disabled={pending}
-            onClick={() => send(clearing.done)}
-            className="flex h-8 w-8 items-center justify-center rounded-md border border-gray-300 bg-white text-green-800 hover:bg-gray-50 disabled:opacity-50"
+            onClick={() => send(done)}
+            className="rounded-md border border-gray-300 bg-white px-2 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
           >
-            <Check aria-hidden="true" className="h-4 w-4" />
+            {done ? 'Done' : 'Not done'}
           </button>
-          <button
-            type="button"
-            aria-label="Remove clearing"
-            disabled={pending}
-            onClick={() => send(!clearing.done)}
-            className="flex h-8 w-8 items-center justify-center rounded-md border border-gray-300 bg-white text-gray-700 hover:bg-gray-50 disabled:opacity-50"
-          >
-            <X aria-hidden="true" className="h-4 w-4" />
-          </button>
-        </>
-      )}
+        ))}
       {clearing.label !== 'none' && (
         <button
           type="button"

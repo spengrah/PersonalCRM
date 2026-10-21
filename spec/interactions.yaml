@@ -1047,18 +1047,20 @@ behaviors:
     provenance: [.agents/spec/2026-10-17-bench-negative-decisions.md G7 SC7 HC4 NG2]
 
   - id: IXN-059
-    title: The Add pickers offer every negative decision, and an Add on one has the effect it has unlabeled
+    title: The Add pickers offer every participant or pair a list does not hold, and an Add relabels its decision
     type: api
     status: current
     surface: api
-    given: a proposal whose negative decisions have labels from Confirm Nones or inference
+    given: a proposal whose decisions have labels from the user's reviews, Confirm Nones or inference, or none
     when: the user adds a participant or pair through an addition
     then:
       - key: offers-negatives
-        text: the pickers offer every participant or pair not already in the list whose decision is negative, labeled or not, and one whose decision has no label, never one whose decision is positive and labeled
+        text: the pickers offer every participant or pair not already in the list whose decision is negative, labeled or not, and one whose decision has no label
+      - key: offers-labeled-positives
+        text: each reply list's picker offers every participant whose ball-in-court decision the list holds no item for, a positive decision with a label among them; an Add on such a decision relabels it with the list's value, so its item moves to that list marked added and the list it left no longer holds it, and it records the label only, opening, closing or redating nothing; no participant is held by both reply lists
       - key: add-effect
         text: an Add on a negative decision becomes the decision's label, the scorecard's included, and opens what the same Add opens on an unlabeled negative where the proposal acts, recording the label only where it does not
-    provenance: [.agents/spec/2026-10-17-bench-negative-decisions.md G7 SC6 HC4]
+    provenance: [.agents/spec/2026-10-17-bench-negative-decisions.md G7 SC6 HC4, .agents/spec/2026-10-21-threads-review-fixes.md G4 A1 HC1]
 
   - id: IXN-060
     title: An item whose label and live state disagree carries its live state beside its mark
@@ -1464,7 +1466,7 @@ behaviors:
     provenance: [.agents/spec/2026-10-18-message-flags-and-threads.md G11 SC6 AD2, designs/threads.md]
 
   - id: IXN-082
-    title: A judgment box lists each clearing decision its judgment made, for the user to confirm or remove
+    title: A judgment box lists each clearing decision its judgment made, for the user to mark done or not done
     type: ux
     status: current
     surface: ui
@@ -1475,9 +1477,9 @@ behaviors:
         text: the box lists each clearing decision its judgment made, without repeating the commitment's text
       - key: show-in-thread-and-probability
         text: each decision offers "Show in thread ↑" to its commitment's message and shows its probability
-      - key: confirm-remove
-        text: each decision offers confirm and remove, which label the clearing decision
-    provenance: [.agents/spec/2026-10-18-message-flags-and-threads.md G11 T5a, designs/threads.md]
+      - key: done-not-done
+        text: each decision offers exactly two controls, "Done" and "Not done", each labeling the clearing decision with its own answer whatever the method answered; a labeled decision reads "Marked done" or "Marked not done" with Change, and Change offers the same two controls
+    provenance: [.agents/spec/2026-10-18-message-flags-and-threads.md G11 T5a, .agents/spec/2026-10-21-threads-review-fixes.md G3 SC3, designs/threads.md]
 
   - id: IXN-083
     title: Done and Next close a thread, and nothing else does
@@ -1545,9 +1547,11 @@ behaviors:
         text: a reviewed item offers Change
       - key: add-picker-negatives
         text: an Add picker offers negative decisions
+      - key: add-picker-any-participant
+        text: once the user removes or confirms a participant's item in one reply list, the other list offers Add with that participant, and adding them moves the item to that list, marked "Added by you"
       - key: empty-list-names-closest
         text: an empty list names the decision the judgment came closest to making
-    provenance: [.agents/spec/2026-10-18-message-flags-and-threads.md G10 G12, designs/threads.md]
+    provenance: [.agents/spec/2026-10-18-message-flags-and-threads.md G10 G12, .agents/spec/2026-10-21-threads-review-fixes.md G4 SC4 SC5, designs/threads.md]
     notes: The rules the server applies to reply items are IXN-053, IXN-055, IXN-058, IXN-059 and IXN-060.
 
   - id: IXN-087
@@ -1610,7 +1614,9 @@ behaviors:
         text: each night carries the flags its messages show, its clearing decisions, its reply proposal, the closest unflagged message per flag kind and its status
       - key: clearings-of-shown-commitments
         text: a night carries a clearing decision only when the commitment it re-checks shows as a flag, its probability reaching the display threshold or the user having labeled it held
-    provenance: [.agents/spec/2026-10-18-message-flags-and-threads.md G10 G11 SC5, designs/threads.md]
+      - key: rechecks-of-rejected-hidden
+        text: a night carries no clearing decision of a commitment the user rejected, its message holding a commitment label saying it holds none, whichever route wrote the label; such a re-check counts in no night status, to-review count or thread status, never stops a night from offering Confirm Nones, and shows again with any label it had once the user labels the commitment held
+    provenance: [.agents/spec/2026-10-18-message-flags-and-threads.md G10 G11 SC5, .agents/spec/2026-10-21-threads-review-fixes.md G1 SC1, designs/threads.md]
 
   - id: IXN-090
     title: The flag label route records whether a message holds a flag kind
@@ -1669,7 +1675,7 @@ behaviors:
       - key: answers-review-state
         text: the route answers with the thread's review state in the run, each night reporting how many unflagged messages the close labeled
     provenance: [.agents/spec/2026-10-18-message-flags-and-threads.md G11 T6 SC6, .agents/spec/2026-10-17-bench-negative-decisions.md G4, designs/threads.md]
-    notes: A label on a flag chip, a clearing decision or a reply item counts as the night's label.
+    notes: A label on a flag chip, a clearing decision the night shows or a reply item counts as the night's label; a label on a re-check of a commitment the user rejected, which the night does not show, does not (IXN-089).
 
   - id: IXN-093
     title: Confirm Nones labels a night that shows nothing and holds no label

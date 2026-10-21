@@ -44,7 +44,9 @@ func (f FlagMetrics) Recall() Rate {
 }
 
 // ClearingMetrics count a rerun's labeled clearing decisions by the method's
-// answer, then the user's label. A decision without a label counts in no cell.
+// answer, then the user's label. A decision without a label, and one of a
+// commitment the user rejected (judgment.ThreadLabels.RejectedCommitments),
+// counts in no cell.
 type ClearingMetrics struct {
 	DoneLabeledDone, DoneLabeledNotDone, NotDoneLabeledDone, NotDoneLabeledNotDone int
 }
@@ -94,6 +96,7 @@ func (r *Reader) scoreFlags(ctx context.Context, run judgment.RunSummary) (flagS
 		return flagScore{}, failed(Failure{Reason: FailureReadRun, Run: run.ID}, err)
 	}
 	flagLabels, clearingLabels := map[flagKey]bool{}, map[clearingKey]bool{}
+	rejected := map[threadctx.VenueID]map[string]bool{}
 	read := map[threadctx.VenueID]bool{}
 	for _, v := range views {
 		if read[v.Thread] {
@@ -110,6 +113,7 @@ func (r *Reader) scoreFlags(ctx context.Context, run judgment.RunSummary) (flagS
 		for _, l := range labels.Clearings {
 			clearingLabels[clearingKey{l.Thread, l.CommitmentMessageKey, l.CutOff.UTC()}] = l.Done
 		}
+		rejected[v.Thread] = labels.RejectedCommitments()
 	}
 	out := flagScore{
 		flags:    map[judgment.FlagKind]FlagMetrics{},
@@ -155,7 +159,7 @@ func (r *Reader) scoreFlags(ctx context.Context, run judgment.RunSummary) (flagS
 		}
 		for _, c := range v.Clearings {
 			done, labeled := clearingLabels[clearingKey{v.Thread, c.CommitmentMessageKey, v.CutOff.UTC()}]
-			if !labeled {
+			if !labeled || rejected[v.Thread][c.CommitmentMessageKey] {
 				continue
 			}
 			switch {

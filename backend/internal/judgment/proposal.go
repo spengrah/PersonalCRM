@@ -266,7 +266,7 @@ func (s *Store) compile(ctx context.Context, pc *proposalContext, j *db.ListJudg
 		}
 		p.Items = append(p.Items, item)
 	}
-	p.Additions = additions(outcomes, sorted, pc.labels)
+	p.Additions = additions(outcomes, sorted)
 	p.Lists = listViews(p.ReplyLists, questions, outcomes, sorted, pc.labels)
 	return p, nil
 }
@@ -511,13 +511,13 @@ func actsOf(pl placement, change ChangeKind) []ItemAct {
 	}
 }
 
-// additions are the pickers' choices: for each answered outcome whose
-// decision has no label or is a negative decision, labeled or not, each list
-// of its question that does not already hold an item of the same debtor and
-// the party the list names it by (any item, for a list that names none). A
-// decision that is positive and has a label is changed only through its
-// item's controls.
-func additions(outcomes []*outcomeRecord, sorted sorting, lb labels) []ProposalAddition {
+// additions are the pickers' choices: for each answered outcome, whatever its
+// decision's label, each list of its question that does not already hold an
+// item of the same debtor and the party the list names it by (any item, for a
+// list that names none). An Add on a decision with a label relabels it, so its
+// item moves to the list. A question with one list holds every item of its
+// decision in that list, so an item moves only between the reply lists.
+func additions(outcomes []*outcomeRecord, sorted sorting) []ProposalAddition {
 	has := func(list ProposalList, debtor Debtor, contact *uuid.UUID) bool {
 		return slices.ContainsFunc(sorted.items, func(pl placement) bool {
 			return pl.list == list && debtorOf(pl.o.Question) == debtor &&
@@ -526,7 +526,7 @@ func additions(outcomes []*outcomeRecord, sorted sorting, lb labels) []ProposalA
 	}
 	out := []ProposalAddition{}
 	for _, o := range outcomes {
-		if o.QuestionID == "" || (lb.of(o) != nil && !slices.Contains(sorted.negatives, o)) {
+		if o.QuestionID == "" {
 			continue
 		}
 		for _, spec := range listSpecs {
