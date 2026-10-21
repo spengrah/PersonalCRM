@@ -815,6 +815,67 @@ func (q *Queries) ListCommsMessagesMissingParticipantNames(ctx context.Context, 
 	return items, nil
 }
 
+const ListEmailBodiesForQuoteTrim = `-- name: ListEmailBodiesForQuoteTrim :many
+SELECT
+    cm.id,
+    COALESCE(cm.thread_id, '')::text AS thread_id,
+    COALESCE(cm.body, '')::text AS body,
+    COALESCE(cm.source_metadata->'account_gmail_ids'->>COALESCE(cm.account_id, '__unknown__'), '')::text AS gmail_message_id,
+    COALESCE(cm.source_metadata->>'html', '')::text AS html
+FROM comms_message cm
+WHERE cm.source = 'email'
+  AND cm.deleted_at IS NULL
+  AND cm.body IS NOT NULL
+  AND cm.id > $1
+ORDER BY cm.id
+LIMIT $2
+`
+
+type ListEmailBodiesForQuoteTrimParams struct {
+	AfterID   uuid.UUID `json:"after_id"`
+	BatchSize int32     `json:"batch_size"`
+}
+
+type ListEmailBodiesForQuoteTrimRow struct {
+	ID             uuid.UUID `json:"id"`
+	ThreadID       string    `json:"thread_id"`
+	Body           string    `json:"body"`
+	GmailMessageID string    `json:"gmail_message_id"`
+	Html           string    `json:"html"`
+}
+
+// Keyset-paged email bodies for the one-time quote trim (crm-admin
+// --trim-email-quotes), paged by id > @after_id. gmail_message_id is the
+// observing account's per-mailbox gmail id (the upsert's account_gmail_ids
+// key, '__unknown__' when account_id is NULL); with thread_id it tells a
+// thread's first message from a reply. html is the stored source HTML, ” when
+// absent.
+func (q *Queries) ListEmailBodiesForQuoteTrim(ctx context.Context, arg ListEmailBodiesForQuoteTrimParams) ([]*ListEmailBodiesForQuoteTrimRow, error) {
+	rows, err := q.db.Query(ctx, ListEmailBodiesForQuoteTrim, arg.AfterID, arg.BatchSize)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []*ListEmailBodiesForQuoteTrimRow{}
+	for rows.Next() {
+		var i ListEmailBodiesForQuoteTrimRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.ThreadID,
+			&i.Body,
+			&i.GmailMessageID,
+			&i.Html,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const ListUnmatchedCommsPeerCounts = `-- name: ListUnmatchedCommsPeerCounts :many
 SELECT peer_handle,
        COALESCE(MAX(peer_normalized), '')::text       AS peer_normalized,
@@ -1461,6 +1522,28 @@ func (q *Queries) TestInsertCommsMessageLinked(ctx context.Context, arg TestInse
 		&i.CreatedAt,
 	)
 	return &i, err
+}
+
+const UpdateCommsMessageBody = `-- name: UpdateCommsMessageBody :execrows
+UPDATE comms_message
+SET body = $1
+WHERE id = $2
+  AND deleted_at IS NULL
+`
+
+type UpdateCommsMessageBodyParams struct {
+	Body *string   `json:"body"`
+	ID   uuid.UUID `json:"id"`
+}
+
+// Rewrite one stored body. Only the one-time quote trim writes here; ingest
+// never rewrites content (UpsertCommsMessage keeps the first writer's).
+func (q *Queries) UpdateCommsMessageBody(ctx context.Context, arg UpdateCommsMessageBodyParams) (int64, error) {
+	result, err := q.db.Exec(ctx, UpdateCommsMessageBody, arg.Body, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const UpsertChatCommsMessageMatched = `-- name: UpsertChatCommsMessageMatched :one

@@ -654,3 +654,26 @@ behaviors:
         text: a message without a text/calendar part, such as a plain reply in an invitation's thread, is stored and recorded as before
     provenance: [.agents/spec/2026-10-20-gmail-calendar-invites.md]
     notes: Calendar sync already records the meeting itself, so an invitation email would count it twice. Every kind of calendar message is dropped, an accept or decline reply with a typed note included.
+
+  - id: ING-047
+    title: A Gmail reply stores only its new text
+    type: data
+    status: current
+    surface: none
+    given: a fetched Gmail message that carries quoted earlier mail
+    when: Gmail sync or an identifier rematch scan stores the message
+    then:
+      - key: reply-drops-trailing-quote
+        text: a reply's stored body drops the trailing block of quoted lines and the attribution line that introduces it
+      - key: reply-drops-outlook-original
+        text: a reply's stored body drops an Outlook original-message header and everything after it
+      - key: html-only-reply-drops-quote
+        text: a reply with no plain-text part stores the text of its HTML before the first quote container
+      - key: inline-reply-keeps-quotes
+        text: quoted lines followed by new text, as in an inline reply, are kept
+      - key: thread-start-kept-whole
+        text: the message that starts its thread in the mailbox, such as a forward or an introduction received fresh, keeps everything it carries
+      - key: unquoted-body-unchanged
+        text: a body with no quoted mail is stored unchanged
+    provenance: [messageText, startsThread, trimQuotedText, trimQuotedHTML]
+    notes: Each earlier message in a thread is stored as its own message, so a reply's quoted copy only repeats it. The source_metadata HTML stays verbatim. crm-admin --trim-email-quotes applies the same rule once to bodies stored before it.

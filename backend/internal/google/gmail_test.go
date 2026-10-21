@@ -209,12 +209,13 @@ func TestExtractContent_PlainTextOnly(t *testing.T) {
 	require.Empty(t, atts)
 }
 
-func TestExtractContent_HTMLOnly_StripsToBody_RetainsHTML(t *testing.T) {
+func TestExtractContent_HTMLOnly_RetainsHTML(t *testing.T) {
 	raw := "<html><body><p>Hi &amp; bye</p><br></body></html>"
-	body, htmlBody, _, err := extractContent(htmlPart(raw))
+	plain, htmlBody, _, err := extractContent(htmlPart(raw))
 	require.NoError(t, err)
-	require.Equal(t, "Hi & bye", body)
+	require.Empty(t, plain)
 	require.Equal(t, raw, htmlBody)
+	require.Equal(t, "Hi & bye", messageText(plain, htmlBody, true))
 }
 
 func TestExtractContent_MultipartAlternative_PrefersPlain_RetainsHTML(t *testing.T) {

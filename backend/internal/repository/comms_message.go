@@ -1127,3 +1127,42 @@ func (r *CommsMessageRepository) HardDeleteBySourceAndExternalIDPrefix(ctx conte
 		ExternalIDPrefix: externalIDPrefix,
 	})
 }
+
+// EmailBodyRow is one stored email body with what the one-time quote trim
+// needs to re-apply the ingest rule: the thread id, the observing account's
+// gmail id, and the stored source HTML ("" when absent).
+type EmailBodyRow struct {
+	ID             uuid.UUID
+	ThreadID       string
+	Body           string
+	GmailMessageID string
+	HTML           string
+}
+
+// ListEmailBodies returns a keyset page of live email rows with a body, ordered
+// by id, after afterID.
+func (r *CommsMessageRepository) ListEmailBodies(ctx context.Context, afterID uuid.UUID, batchSize int32) ([]EmailBodyRow, error) {
+	rows, err := r.queries.ListEmailBodiesForQuoteTrim(ctx, db.ListEmailBodiesForQuoteTrimParams{
+		AfterID:   afterID,
+		BatchSize: batchSize,
+	})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]EmailBodyRow, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, EmailBodyRow{
+			ID:             row.ID,
+			ThreadID:       row.ThreadID,
+			Body:           row.Body,
+			GmailMessageID: row.GmailMessageID,
+			HTML:           row.Html,
+		})
+	}
+	return out, nil
+}
+
+// UpdateBody rewrites one live row's stored body; nil stores no body.
+func (r *CommsMessageRepository) UpdateBody(ctx context.Context, id uuid.UUID, body *string) (int64, error) {
+	return r.queries.UpdateCommsMessageBody(ctx, db.UpdateCommsMessageBodyParams{ID: id, Body: body})
+}

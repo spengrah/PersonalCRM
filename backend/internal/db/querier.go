@@ -1486,6 +1486,13 @@ type Querier interface {
 	// migration 089; none derives participation of its own.
 	// One row per effective participation of the contact, latest first.
 	ListEffectiveParticipationForContact(ctx context.Context, contactID uuid.UUID) ([]*EffectiveParticipation, error)
+	// Keyset-paged email bodies for the one-time quote trim (crm-admin
+	// --trim-email-quotes), paged by id > @after_id. gmail_message_id is the
+	// observing account's per-mailbox gmail id (the upsert's account_gmail_ids
+	// key, '__unknown__' when account_id is NULL); with thread_id it tells a
+	// thread's first message from a reply. html is the stored source HTML, '' when
+	// absent.
+	ListEmailBodiesForQuoteTrim(ctx context.Context, arg ListEmailBodiesForQuoteTrimParams) ([]*ListEmailBodiesForQuoteTrimRow, error)
 	// Returns (value_normalized, contact_id) for every email contact_method of a
 	// non-deleted contact. MANY-TO-ONE allowed: a shared address (joint inbox /
 	// collision) maps to multiple contacts and each pair is returned so the Gmail
@@ -3304,6 +3311,9 @@ type Querier interface {
 	// Dedup re-aggregate: on a corroborating write, raise confidence (SP1 rule:
 	// max(existing, incoming)) and recompute trust_tier. trust_tier is nullable.
 	UpdateAssertionConfidenceTrust(ctx context.Context, arg UpdateAssertionConfidenceTrustParams) error
+	// Rewrite one stored body. Only the one-time quote trim writes here; ingest
+	// never rewrites content (UpsertCommsMessage keeps the first writer's).
+	UpdateCommsMessageBody(ctx context.Context, arg UpdateCommsMessageBodyParams) (int64, error)
 	// Profile-only update path. Writes name, cadence, profile_photo — NEVER
 	// writes last_contacted, last_outreach_at, last_response_at, contact_by,
 	// or the location/birthday/how_met cache columns (those flow from the
