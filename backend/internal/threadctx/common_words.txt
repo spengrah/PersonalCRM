@@ -6,7 +6,9 @@
 # International Dictionary lists it, or the word an -s, -es, -ed, -d or -ing
 # ending inflects, in lower case, or when it is a contraction: a word ending in
 # n't, 'll, 're, 've, 'd or 'm; a word ending in 's whose first part also takes
-# 'll, 're, 've, 'd or 'm among the frequent words ("it's" beside "it'll"); or
+# 'll, 're, 've, 'd or 'm among the frequent words ("it's" beside "it'll"), or
+# is let, here, now, when, all, whatever, whoever or an indefinite pronoun
+# ("let's", "here's", "something's"); or
 # a part of at most two letters before an apostrophe and a word of the
 # dictionary or another part of at most two letters ("y'all", "ma'am"). Any
 # other word written with an apostrophe is left out: a name's ("teal'c") or a
@@ -248,6 +250,7 @@ alike
 alimony
 alive
 all
+all's
 allegations
 alleged
 allegiance
@@ -357,10 +360,13 @@ anxiety
 anxious
 any
 anybody
+anybody's
 anyhow
 anyone
+anyone's
 anyplace
 anything
+anything's
 anyway
 anyways
 anywhere
@@ -2661,9 +2667,12 @@ ever
 everlasting
 every
 everybody
+everybody's
 everyday
 everyone
+everyone's
 everything
+everything's
 everywhere
 evicted
 evidence
@@ -3594,6 +3603,7 @@ her
 herbal
 herbs
 here
+here's
 hereby
 hero
 heroes
@@ -4350,6 +4360,7 @@ lesser
 lesson
 lessons
 let
+let's
 lethal
 lets
 letter
@@ -5017,6 +5028,7 @@ ninth
 nip
 no
 nobody
+nobody's
 nod
 nods
 noise
@@ -5045,6 +5057,7 @@ note
 noted
 notes
 nothing
+nothing's
 notice
 noticed
 notices
@@ -5056,6 +5069,7 @@ notorious
 novel
 novels
 now
+now's
 nowadays
 nowhere
 nuclear
@@ -7099,11 +7113,14 @@ solved
 solving
 some
 somebody
+somebody's
 someday
 somehow
 someone
+someone's
 someplace
 something
+something's
 sometime
 sometimes
 somewhat
@@ -8477,9 +8494,11 @@ what'll
 what're
 what's
 what've
+whatever's
 whatsoever
 wheel
 when
+when's
 whenever
 where
 where'd
@@ -8514,6 +8533,7 @@ who's
 who've
 whoa
 whoever
+whoever's
 whole
 wholesome
 whom

@@ -234,10 +234,17 @@ func TestMask_KeepsOrdinaryWords(t *testing.T) {
 		})
 	}
 
-	for _, text := range []string{"It's good to see you", "It’s good to see you"} {
-		t.Run("a contraction ending in 's with a contact whose name holds its first part: "+text, func(t *testing.T) {
-			masked := maskWith(t, contactsNamed("It Sorensen"), dm(text)).Entries()[0].Text
-			assert.Equal(t, text, masked)
+	for _, tc := range []struct{ contact, text string }{
+		{"It Sorensen", "It's good to see you"},
+		{"It Sorensen", "It’s good to see you"},
+		{"Let Hartigan", "Let's meet tomorrow"},
+		{"Let Hartigan", "Let’s meet tomorrow"},
+		{"Here Hartigan", "Here's the plan"},
+		{"Here Hartigan", "Here’s the plan"},
+	} {
+		t.Run("a contraction ending in 's with a contact whose name holds its first part: "+tc.text, func(t *testing.T) {
+			masked := maskWith(t, contactsNamed(tc.contact), dm(tc.text)).Entries()[0].Text
+			assert.Equal(t, tc.text, masked)
 		})
 	}
 
