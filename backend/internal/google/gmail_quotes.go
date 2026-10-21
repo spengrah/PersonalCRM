@@ -122,7 +122,8 @@ func carriesForward(lines []bodyLine) bool {
 		if l.quoted {
 			continue
 		}
-		intro := strings.ToLower(strings.Trim(strings.TrimSpace(l.text), "-: "))
+		// Fields collapses the spaces HTML tags and &nbsp; leave inside a line.
+		intro := strings.ToLower(strings.Trim(strings.Join(strings.Fields(l.text), " "), "-: "))
 		if intro == "forwarded message" || intro == "begin forwarded message" {
 			return true
 		}
