@@ -111,6 +111,12 @@ func TestQuotedMail_InlineReplyKeepsQuotes(t *testing.T) {
 		reply("html inline answers",
 			htmlPart(`<div>Answers:</div><blockquote>Question one?</blockquote><div>First answer.</div><blockquote>Question two?</blockquote><div>Second answer.</div>`),
 			"Answers: Question one? First answer. Question two? Second answer."),
+		reply("outlook header inside the quote is not a boundary",
+			htmlPart(`<div>Answers:</div><blockquote><div>From: Contact A</div><div>Sent: Monday</div><div>Question?</div></blockquote><div>New answer.</div>`),
+			"Answers: From: Contact A Sent: Monday Question? New answer."),
+		reply("plain outlook header inside the quote is not a boundary",
+			plainTextPart("> From: Contact A\n> Sent: Monday\n> Question?\nNew answer."),
+			"> From: Contact A\n> Sent: Monday\n> Question?\nNew answer."),
 	})
 }
 
@@ -139,6 +145,12 @@ func TestQuotedMail_ForwardKeptWhole(t *testing.T) {
 		reply("gmail forward header in a reply is not an outlook header",
 			plainTextPart("FYI\n\n---------- Forwarded message ---------\nFrom: Contact A <a@example.com>\nDate: Mon, Oct 20, 2026\nSubject: Plan\n\nAre we on?"),
 			"FYI\n\n---------- Forwarded message ---------\nFrom: Contact A <a@example.com>\nDate: Mon, Oct 20, 2026\nSubject: Plan\n\nAre we on?"),
+		reply("forwarded block with a Sent header in a reply",
+			plainTextPart("FYI\n\nBegin forwarded message:\n\nFrom: Contact A <a@example.com>\nSent: Monday\nSubject: Plan\n\nCarried content."),
+			"FYI\n\nBegin forwarded message:\n\nFrom: Contact A <a@example.com>\nSent: Monday\nSubject: Plan\n\nCarried content."),
+		reply("html forwarded block with a Sent header in a reply",
+			htmlPart(`<div>FYI</div><div>Begin forwarded message:</div><div><b>From:</b> Contact A</div><div><b>Sent:</b> Monday</div><div>Carried content.</div>`),
+			"FYI Begin forwarded message: From: Contact A Sent: Monday Carried content."),
 		reply("gmail html forward in a reply is not a quote",
 			htmlPart(`<div>FYI</div><div class="gmail_quote">---------- Forwarded message ---------<br>From: Contact A<br>Date: Mon<br><br><div>Plan details</div></div>`),
 			"FYI ---------- Forwarded message --------- From: Contact A Date: Mon Plan details"),

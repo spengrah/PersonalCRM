@@ -86,23 +86,42 @@ scan:
 // quoted original begins, or -1. Outlook quotes without ">" markers or a
 // blockquote, behind an "-----Original Message-----" line or a header block
 // whose "From:" line is followed by "Sent:". An underscore rule directly above
-// the header is part of it.
+// the header is part of it. A line already quoted is never the boundary, and
+// neither is a header block that a forwarded-message line introduces.
 func outlookHeaderLine(lines []bodyLine) int {
 	for i, l := range lines {
+		if l.quoted {
+			continue
+		}
 		line := strings.TrimSpace(l.text)
 		if strings.EqualFold(line, "-----Original Message-----") {
 			return i
 		}
 		if strings.HasPrefix(line, "From:") && i+1 < len(lines) && strings.HasPrefix(strings.TrimSpace(lines[i+1].text), "Sent:") {
+			start := i
 			if i > 0 {
 				if above := strings.TrimSpace(lines[i-1].text); above != "" && strings.Trim(above, "_") == "" {
-					return i - 1
+					start = i - 1
 				}
 			}
-			return i
+			if !forwardIntroAbove(lines, start) {
+				return start
+			}
 		}
 	}
 	return -1
+}
+
+// forwardIntroAbove reports whether the nearest non-blank line above lines[i]
+// introduces a forwarded message, as "Begin forwarded message:" or
+// "---------- Forwarded message ---------" do.
+func forwardIntroAbove(lines []bodyLine, i int) bool {
+	for j := i - 1; j >= 0; j-- {
+		if line := strings.TrimSpace(lines[j].text); line != "" {
+			return strings.Contains(strings.ToLower(line), "forwarded message")
+		}
+	}
+	return false
 }
 
 // trimQuotedText removes the quoted earlier messages from a plain-text body,
