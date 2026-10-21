@@ -716,3 +716,33 @@ SELECT DISTINCT ON (source, thread_id) source, thread_id, subject AS latest_subj
 FROM comms_message
 WHERE matched_contact_id = @contact_id AND thread_id IS NOT NULL AND deleted_at IS NULL
 ORDER BY source, thread_id, sent_at DESC, id DESC;
+
+-- name: ListEmailBodiesForQuoteTrim :many
+-- Keyset-paged email bodies for the one-time quote trim (crm-admin
+-- --trim-email-quotes), paged by id > @after_id. gmail_message_id is the
+-- observing account's per-mailbox gmail id (the upsert's account_gmail_ids
+-- key, '__unknown__' when account_id is NULL); with thread_id and subject it
+-- tells a message stored whole from a reply. html is the stored source HTML,
+-- '' when absent.
+SELECT
+    cm.id,
+    COALESCE(cm.thread_id, '')::text AS thread_id,
+    COALESCE(cm.subject, '')::text AS subject,
+    COALESCE(cm.body, '')::text AS body,
+    COALESCE(cm.source_metadata->'account_gmail_ids'->>COALESCE(cm.account_id, '__unknown__'), '')::text AS gmail_message_id,
+    COALESCE(cm.source_metadata->>'html', '')::text AS html
+FROM comms_message cm
+WHERE cm.source = 'email'
+  AND cm.deleted_at IS NULL
+  AND cm.body IS NOT NULL
+  AND cm.id > @after_id
+ORDER BY cm.id
+LIMIT @batch_size;
+
+-- name: UpdateCommsMessageBody :execrows
+-- Rewrite one stored body. Only the one-time quote trim writes here; ingest
+-- never rewrites content (UpsertCommsMessage keeps the first writer's).
+UPDATE comms_message
+SET body = @body
+WHERE id = @id
+  AND deleted_at IS NULL;

@@ -45,6 +45,13 @@
 //	                              the Gmail fetch loop, not here; this subcommand
 //	                              only backfills display names.
 //
+//	--trim-email-quotes
+//	                              One-time catchup: apply the ingest's quote
+//	                              rule (ING-047) to stored email bodies, so a
+//	                              reply keeps only its new text. Reads only
+//	                              stored rows; no Gmail calls. Prints counts
+//	                              only. Idempotent — safe to re-run.
+//
 //	--reset-gmail-backfill-cursors
 //	                              Rewind enabled Gmail sync cursors to each
 //	                              row's backfill floor, mark them due, and
@@ -349,6 +356,12 @@ type rederiveRunner interface {
 	RederiveNames(ctx context.Context, since time.Time) (google.CorrespondenceRederiveResult, error)
 }
 
+// emailQuoteTrimmer is the narrow interface --trim-email-quotes needs.
+// Production wires this to *google.EmailQuoteTrimService.TrimStoredBodies.
+type emailQuoteTrimmer interface {
+	TrimStoredBodies(ctx context.Context) (google.EmailQuoteTrimResult, error)
+}
+
 // gmailBackfillCursorResetter is the narrow interface
 // --reset-gmail-backfill-cursors needs. Production wires this to
 // *service.EmailBackfillCursorResetService.ResetGmailBackfillCursors.
@@ -430,6 +443,7 @@ type adminDeps struct {
 	// unconditionally would break every other subcommand on a Google-less host.
 	// Nil for all other subcommands.
 	rederive   rederiveRunner
+	quoteTrim  emailQuoteTrimmer
 	gmailReset gmailBackfillCursorResetter
 	// emailOwnDomains serves --set-email-own-domains (resolve target email
 	// sync-state row + read-modify-write its discovery_own_domains metadata).
@@ -475,6 +489,7 @@ type runOptions struct {
 	rematchStranded        bool
 	reconcileAddressBook   bool
 	rederiveCorrespondence bool
+	trimEmailQuotes        bool
 	resetGmailBackfill     bool
 	// setEmailOwnDomains <- --set-email-own-domains (comma-separated domain
 	// list; explicit "" CLEARS the key). setEmailOwnDomainsSet tracks flag
@@ -676,6 +691,9 @@ func validateSubcommand(opts runOptions) error {
 	if opts.rederiveCorrespondence {
 		active++
 	}
+	if opts.trimEmailQuotes {
+		active++
+	}
 	if opts.resetGmailBackfill {
 		active++
 	}
@@ -756,7 +774,7 @@ func validateSubcommand(opts runOptions) error {
 // subcommandList is the canonical subcommand enumeration shared by the
 // no-subcommand and mutual-exclusion usage errors.
 const subcommandList = "--messages-rematch-stranded, --reconcile-address-book-methods, " +
-	"--rederive-correspondence-names, --reset-gmail-backfill-cursors, " +
+	"--rederive-correspondence-names, --trim-email-quotes, --reset-gmail-backfill-cursors, " +
 	"--set-email-own-domains <comma-list> [--account <email>], --mint-pairing-token, " +
 	"--list-hosts, --revoke-host <uuid>, --rotate-host-key <uuid>, --seed, --reset-and-seed, " +
 	"--migrate, --migrate-check, --list-jobs, --retry-job <id>, --migrate-tags, " +
@@ -781,6 +799,9 @@ func parseArgs(args []string) (runOptions, error) {
 			"(candidate discovery now runs in-sync on the Gmail fetch loop, not here). "+
 			"Continue-on-error; exits non-zero iff any row failed. Idempotent — safe to "+
 			"re-run. Requires Google OAuth creds.")
+	fs.BoolVar(&opts.trimEmailQuotes, "trim-email-quotes", false,
+		"One-time catchup: drop quoted earlier mail from stored email reply bodies "+
+			"(the ingest's quote rule). No Gmail calls. Idempotent — safe to re-run.")
 	fs.BoolVar(&opts.resetGmailBackfill, "reset-gmail-backfill-cursors", false,
 		"Rewind enabled Gmail sync cursors to each row's backfill floor, mark them due, "+
 			"and clear error state. Prints counts only.")
@@ -998,6 +1019,8 @@ func run(ctx context.Context, opts runOptions, deps adminDeps) error {
 		return runReconcileAddressBookMethods(ctx, deps)
 	case opts.rederiveCorrespondence:
 		return runRederiveCorrespondenceNames(ctx, deps)
+	case opts.trimEmailQuotes:
+		return runTrimEmailQuotes(ctx, deps)
 	case opts.resetGmailBackfill:
 		return runResetGmailBackfillCursors(ctx, deps)
 	case opts.setEmailOwnDomainsSet:
@@ -1485,6 +1508,20 @@ func runReconcileAddressBookMethods(ctx context.Context, deps adminDeps) error {
 	return nil
 }
 
+func runTrimEmailQuotes(ctx context.Context, deps adminDeps) error {
+	res, err := deps.quoteTrim.TrimStoredBodies(ctx)
+	if err != nil {
+		return fmt.Errorf("trim email quotes: %w", err)
+	}
+	if _, err := fmt.Fprintf(deps.stdout, "trim-email-quotes summary:\n"+
+		"  scanned: %d\n"+
+		"  trimmed: %d\n",
+		res.Scanned, res.Trimmed); err != nil {
+		return fmt.Errorf("write summary: %w", err)
+	}
+	return nil
+}
+
 func runResetGmailBackfillCursors(ctx context.Context, deps adminDeps) error {
 	res, err := deps.gmailReset.ResetGmailBackfillCursors(ctx)
 	if err != nil {
@@ -1886,6 +1923,7 @@ func buildProductionDeps(ctx context.Context, cfg *config.Config, database *db.D
 		revoker:    hostService,
 		rematch:    rematch,
 		reconcile:  addressBookReconcile,
+		quoteTrim:  google.NewEmailQuoteTrimService(repository.NewCommsMessageRepository(database.Queries)),
 		gmailReset: service.NewEmailBackfillCursorResetService(syncRepo),
 		// --set-email-own-domains: resolve target email sync-state row(s) +
 		// read-modify-write metadata. syncRepo already satisfies the interface

@@ -1223,13 +1223,14 @@ func (p *GmailSyncProvider) processMessage(
 	knownMap map[string][]uuid.UUID,
 	meSet map[string]struct{},
 ) ([]qualifiedRow, error) {
-	body, htmlBody, attachments, err := extractContent(msg.Payload)
+	plain, htmlBody, attachments, err := extractContent(msg.Payload)
 	if err != nil {
 		return nil, fmt.Errorf("extract content: %w", err)
 	}
 
 	headers := newHeaderLookup(msg.Payload)
 	subject := headers.first("Subject")
+	body := messageText(plain, htmlBody, keepsQuotedMail(msg.Id, msg.ThreadId, subject))
 	fromRaw, fromNorm, fromName := parseSingleAddress(headers.first("From"))
 	toRaw, toNorm, toNames := parseAddressList(headers.first("To"))
 	ccRaw, ccNorm, ccNames := parseAddressList(headers.first("Cc"))
@@ -1531,15 +1532,14 @@ func isAttachmentPart(part *gmail.MessagePart) bool {
 	return part.Body != nil && part.Body.AttachmentId != ""
 }
 
-// extractContent MIME-walks payload, returning the canonical plaintext body,
-// the raw HTML body (when present), and attachment metadata. It prefers the
-// first text/plain part; if none exists anywhere, it strips the first text/html
-// part to plaintext for the body and retains the raw HTML. A part is an
+// extractContent MIME-walks payload, returning the first text/plain part, the
+// first text/html part, and attachment metadata; messageText derives the
+// stored body from the two text parts. A part is an
 // attachment when it has a non-empty filename and/or a Body.AttachmentId
 // (inline attachments often carry an attachment id without a filename); only
 // metadata is collected (no content is fetched). Returns an error only on a
 // base64 decode failure of a chosen body part.
-func extractContent(payload *gmail.MessagePart) (body, htmlBody string, attachments []attachmentMeta, err error) {
+func extractContent(payload *gmail.MessagePart) (plain, htmlBody string, attachments []attachmentMeta, err error) {
 	if payload == nil {
 		return "", "", nil, nil
 	}
@@ -1576,7 +1576,7 @@ func extractContent(payload *gmail.MessagePart) (body, htmlBody string, attachme
 		if derr != nil {
 			return "", "", nil, fmt.Errorf("decode text/plain: %w", derr)
 		}
-		body = decoded
+		plain = decoded
 	}
 	if firstHTML != nil {
 		decoded, derr := decodePartBody(firstHTML.Body)
@@ -1584,11 +1584,8 @@ func extractContent(payload *gmail.MessagePart) (body, htmlBody string, attachme
 			return "", "", nil, fmt.Errorf("decode text/html: %w", derr)
 		}
 		htmlBody = decoded
-		if body == "" {
-			body = stripHTML(decoded)
-		}
 	}
-	return body, htmlBody, attachments, nil
+	return plain, htmlBody, attachments, nil
 }
 
 // decodePartBody decodes a MIME part body. Gmail uses base64url (RFC 4648 §5);
@@ -1611,7 +1608,7 @@ func decodePartBody(b *gmail.MessagePartBody) (string, error) {
 // stripHTML reduces an HTML body to conservative plaintext: tags removed, basic
 // entities unescaped, whitespace collapsed. The high-fidelity HTML is retained
 // verbatim in source_metadata.html, so this only feeds the canonical body when
-// no text/plain part exists.
+// no text/plain part exists (messageText).
 func stripHTML(s string) string {
 	s = htmlTagRegex.ReplaceAllString(s, " ")
 	s = html.UnescapeString(s)
