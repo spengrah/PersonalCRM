@@ -195,10 +195,23 @@ public final class PiClient: @unchecked Sendable {
         return try decodeEnrichment(data: data, http: http, type: GroupChatsPage.self)
     }
 
-    /// POST /api/v1/host/:id/messages/enrichment with `add_group_message` and
-    /// `clear_outbound_peer` items (at most 500, under 8 MiB). Each item adds
-    /// evidence or removes an attribution and nothing else, so a retried
-    /// request is safe.
+    /// GET /api/v1/host/:id/messages/enrichment/without-reaction-facts. One
+    /// page of the guids of stored iMessage rows that carry no reaction facts,
+    /// in guid order, strictly after `after`. `limit` is 1...500.
+    public func withoutReactionFacts(
+        auth: PiAuth,
+        after: String?,
+        limit: Int
+    ) async throws -> MissingBodiesPage {
+        let request = try builder.withoutReactionFacts(auth: auth, after: after, limit: limit)
+        let (data, http) = try await transport.send(request)
+        return try decodeEnrichment(data: data, http: http, type: MissingBodiesPage.self)
+    }
+
+    /// POST /api/v1/host/:id/messages/enrichment with `add_group_message`,
+    /// `clear_outbound_peer` and `set_reaction` items (at most 500, under
+    /// 8 MiB). Each item adds evidence, removes an attribution or sets absent
+    /// reaction facts, and nothing else, so a retried request is safe.
     public func submitEnrichment(
         auth: PiAuth,
         items: [EnrichmentItem]

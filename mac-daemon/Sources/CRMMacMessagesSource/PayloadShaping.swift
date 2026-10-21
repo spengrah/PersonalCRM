@@ -11,6 +11,7 @@
 // entry by join ROWID) before invoking shape. An outbound group message
 // names no member: the caller passes the empty peer.
 import Foundation
+import CRMMacPiClient
 
 /// One attachment's metadata, per the Pi-side AttachmentMeta. Currently
 /// unused (Attachments stays empty in v1 per spec §3 / brief
@@ -64,6 +65,8 @@ public struct RawMessagePayload: Encodable, Equatable, Sendable {
     public let sentAt: Date
     public let replyToGuid: String?
     public let attachments: [AttachmentMeta]
+    /// Present exactly when the message is a reaction; omitted otherwise.
+    public let reaction: MessageReaction?
 
     enum CodingKeys: String, CodingKey {
         case version
@@ -79,6 +82,7 @@ public struct RawMessagePayload: Encodable, Equatable, Sendable {
         case sentAt      = "sent_at"
         case replyToGuid = "reply_to_guid"
         case attachments
+        case reaction
     }
 
     public init(
@@ -94,7 +98,8 @@ public struct RawMessagePayload: Encodable, Equatable, Sendable {
         isGroup: Bool,
         sentAt: Date,
         replyToGuid: String? = nil,
-        attachments: [AttachmentMeta] = []
+        attachments: [AttachmentMeta] = [],
+        reaction: MessageReaction? = nil
     ) {
         self.version = version
         self.hostID = hostID
@@ -109,6 +114,7 @@ public struct RawMessagePayload: Encodable, Equatable, Sendable {
         self.sentAt = sentAt
         self.replyToGuid = replyToGuid
         self.attachments = attachments
+        self.reaction = reaction
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -134,6 +140,7 @@ public struct RawMessagePayload: Encodable, Equatable, Sendable {
         if !attachments.isEmpty {
             try c.encode(attachments, forKey: .attachments)
         }
+        try c.encodeIfPresent(reaction, forKey: .reaction)
     }
 }
 
@@ -179,7 +186,8 @@ public enum PayloadShaping {
             isGroup: row.isGroup,
             sentAt: row.sentAt,
             replyToGuid: row.replyToGUID,
-            attachments: []) // v1: spec keeps Attachments empty
+            attachments: [], // v1: spec keeps Attachments empty
+            reaction: row.reaction)
         return (kind, payload)
     }
 }

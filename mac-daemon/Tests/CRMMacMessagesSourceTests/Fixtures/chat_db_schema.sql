@@ -41,7 +41,9 @@ CREATE TABLE message (
     item_type INTEGER NOT NULL DEFAULT 0,
     is_read INTEGER NOT NULL DEFAULT 0,
     cache_has_attachments INTEGER NOT NULL DEFAULT 0,
-    associated_message_guid TEXT
+    associated_message_guid TEXT,
+    associated_message_type INTEGER DEFAULT 0,
+    associated_message_emoji TEXT
 );
 
 CREATE TABLE chat_message_join (

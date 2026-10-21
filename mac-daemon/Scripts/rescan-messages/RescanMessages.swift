@@ -8,10 +8,14 @@
 // own. The body pass then walks the Pi's missing-bodies listing, reads each
 // listed guid's source record, decodes the body through `MessageBodyExtractor`
 // and submits it as a `fill_body` item. Every listed row it does not submit
-// gets one content-free classification. It reads the daemon's config.json and
-// api-key file and opens the messages database read-only; it writes no file,
-// and a body or sender exists only in memory and in the request that carries
-// it to the Pi.
+// gets one content-free classification. The reaction pass runs last. It walks
+// the Pi's listing of rows without reaction facts, reads each listed guid's
+// source record, and submits a `set_reaction` item for each one
+// `ReactionRecognition` marks as a reaction; every other listed row gets one
+// content-free classification. It reads the daemon's config.json and api-key
+// file and opens the messages database read-only; it writes no file, and a
+// body or sender exists only in memory and in the request that carries it to
+// the Pi.
 import Foundation
 import GRDB
 import CRMMacCore
@@ -51,6 +55,10 @@ struct RescanReport {
     var byNature: [ByNature: Int] = [:]
     var unavailable = 0
     var captureFailureGuids: [String] = []
+    var reactionListed = 0
+    var reactionOutcomes: [EnrichmentOutcome: Int] = [:]
+    var notReaction = 0
+    var reactionUnavailable = 0
 
     var lines: [String] {
         var out = ["listed: \(listed)"]
@@ -66,6 +74,12 @@ struct RescanReport {
         for outcome in [EnrichmentOutcome.added, .unchanged, .outsideWindow, .cleared, .unknown] {
             out.append("group.\(outcome.rawValue): \(groupOutcomes[outcome, default: 0])")
         }
+        out.append("reaction_listed: \(reactionListed)")
+        for outcome in [EnrichmentOutcome.marked, .unchanged, .unknown] {
+            out.append("reaction.\(outcome.rawValue): \(reactionOutcomes[outcome, default: 0])")
+        }
+        out.append("reaction.not_reaction: \(notReaction)")
+        out.append("reaction.unavailable: \(reactionUnavailable)")
         out += captureFailureGuids.map { "capture_failure_guid: \($0)" }
         return out
     }
@@ -111,6 +125,7 @@ func rescanMessages(_ env: RescanEnvironment) async -> Int32 {
         var report = RescanReport()
         try await groupPass(pi: pi, auth: auth, pool: pool, report: &report)
         try await bodyPass(pi: pi, auth: auth, pool: pool, report: &report)
+        try await reactionPass(pi: pi, auth: auth, pool: pool, report: &report)
         report.lines.forEach(env.stdout)
         return 0
     } catch let error as PiClientError {
@@ -205,6 +220,35 @@ private func bodyPass(
     } while after != nil
 }
 
+private func reactionPass(
+    pi: PiClient, auth: PiAuth, pool: DatabasePool, report: inout RescanReport
+) async throws {
+    var after: String?
+    repeat {
+        let page = try await pi.withoutReactionFacts(auth: auth, after: after, limit: pageLimit)
+        let guids = page.items.map(\.guid)
+        let records = try await pool.read { db in try guids.map { try sourceRecord(db: db, guid: $0) } }
+        report.reactionListed += guids.count
+
+        var items: [EnrichmentItem] = []
+        for (guid, record) in zip(guids, records) {
+            if let reaction = record?.reaction {
+                items.append(.setReaction(guid: guid, reaction: reaction))
+            } else if record == nil {
+                report.reactionUnavailable += 1
+            } else {
+                report.notReaction += 1
+            }
+        }
+        for batch in try batches(of: items) {
+            for result in try await pi.submitEnrichment(auth: auth, items: batch).results {
+                report.reactionOutcomes[result.outcome, default: 0] += 1
+            }
+        }
+        after = page.nextAfter
+    } while after != nil
+}
+
 private func batches<Item: Encodable>(of items: [Item]) throws -> [[Item]] {
     let encoder = EnrichmentWire.makeEncoder()
     var batches: [[Item]] = []
@@ -226,27 +270,45 @@ private func batches<Item: Encodable>(of items: [Item]) throws -> [[Item]] {
     return batches
 }
 
-/// Reads the source record for `guid` and decides what to do with its row.
-private func decide(db: Database, guid: String) throws -> SourceDecision {
+/// What one source row of the messages database holds, as both passes that
+/// read a listed guid see it.
+private struct SourceRecord {
+    var body: MessageBodyResult
+    var hasAttachment: Bool
+    var reaction: MessageReaction?
+}
+
+/// The source record for `guid`, or nil when no source row has the guid.
+private func sourceRecord(db: Database, guid: String) throws -> SourceRecord? {
     guard let row = try Row.fetchOne(db, sql: """
-        SELECT text, attributedBody, associated_message_type,
+        SELECT text, attributedBody, associated_message_type, associated_message_guid,
+               associated_message_emoji,
                cache_has_attachments != 0
                    OR EXISTS (SELECT 1 FROM message_attachment_join
                               WHERE message_attachment_join.message_id = message.ROWID)
                    AS has_attachment
         FROM message WHERE guid = ?
         """, arguments: [guid]) else {
-        return .unavailable
+        return nil
     }
-    switch MessageBodyExtractor.extract(text: row["text"], attributedBody: row["attributedBody"]) {
+    return SourceRecord(
+        body: MessageBodyExtractor.extract(text: row["text"], attributedBody: row["attributedBody"]),
+        hasAttachment: row["has_attachment"],
+        reaction: ReactionRecognition.facts(
+            associatedMessageType: row["associated_message_type"] ?? 0,
+            associatedMessageGUID: row["associated_message_guid"],
+            associatedMessageEmoji: row["associated_message_emoji"]))
+}
+
+/// Reads the source record for `guid` and decides what to do with its row.
+private func decide(db: Database, guid: String) throws -> SourceDecision {
+    guard let record = try sourceRecord(db: db, guid: guid) else { return .unavailable }
+    switch record.body {
     case .body(let body): return .body(body)
     case .undecodable: return .captureFailure
     case .absent:
-        let type: Int = row["associated_message_type"] ?? 0
-        // Tapbacks add (2000...2005) and remove (3000...3005) a reaction.
-        if (2000...2005).contains(type) || (3000...3005).contains(type) { return .byNature(.reaction) }
-        let hasAttachment: Bool = row["has_attachment"]
-        return .byNature(hasAttachment ? .attachmentOnly : .noneStored)
+        if record.reaction != nil { return .byNature(.reaction) }
+        return .byNature(record.hasAttachment ? .attachmentOnly : .noneStored)
     }
 }
 
