@@ -5,7 +5,7 @@ These rules apply to all AI agents working on this project.
 ## Absolute Rules (Never Violate)
 
 1. **Never use `time.Now()`** → Use `accelerated.GetCurrentTime()`
-2. **Never write raw SQL in Go** → Use sqlc-generated queries (`make sqlc`). Applies to ALL Go code: production code, integration tests, test fixtures, and helper scripts — add a test-only sqlc query + repository wrapper rather than inlining `pool.Exec(ctx, "INSERT ...", ...)` in a test file.
+2. **Never write raw SQL in Go code committed to the repository** → Use sqlc-generated queries (`make sqlc`). Applies to every committed Go file: production code, integration tests, test fixtures, and helper commands — add a test-only sqlc query + repository wrapper rather than inlining `pool.Exec(ctx, "INSERT ...", ...)` in a test file.
 3. **A layer exists where it earns its keep** → handlers never call sqlc (see rule 5); anything with business logic, multi-repository orchestration, or a transaction goes in a service; a handler may call a repository directly when the call adds nothing but a rename. See `.agents/guides/feature-development.md` "When NOT to create a service".
 4. **Never use npm/npx** → Use bun/bunx
 5. **Never call queries from handlers** → Go through repository

@@ -49,7 +49,8 @@ final class RescanMessagesTests: XCTestCase {
 
     func testReactionRowWithNoStoredBodyIsClassifiedByNature() async throws {
         let fixture = try RescanFixture(source: [
-            SourceRow(guid: "g1", text: nil, attributedBody: nil, associatedMessageType: 2001),
+            SourceRow(guid: "g1", text: nil, attributedBody: nil, associatedMessageType: 2001,
+                      associatedGUID: "p:0/target"),
         ])
         let pi = FakePi(rows: ["g1": nil])
 
@@ -208,7 +209,8 @@ final class RescanMessagesTests: XCTestCase {
             SourceRow(guid: "unchanged", text: "secret source words", attributedBody: nil),
             SourceRow(guid: "unknown", text: "secret unknown words", attributedBody: nil),
             SourceRow(guid: "att", text: nil, attributedBody: nil, hasAttachment: true),
-            SourceRow(guid: "react", text: nil, attributedBody: nil, associatedMessageType: 3002),
+            SourceRow(guid: "react", text: nil, attributedBody: nil, associatedMessageType: 3002,
+                      associatedGUID: "p:0/target"),
             SourceRow(guid: "none", text: nil, attributedBody: nil),
             SourceRow(guid: "undecodable", text: nil, attributedBody: undecodableBlob),
         ])

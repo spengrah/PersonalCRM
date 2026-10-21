@@ -4,11 +4,14 @@ package events
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"reflect"
 	"time"
 
 	"github.com/google/uuid"
+
+	"personal-crm/backend/internal/db"
 )
 
 // Kind is a dot-namespaced event kind (spec §3.1 notes on kind namespacing).
@@ -387,6 +390,60 @@ func IsCanonicalMessageType(t string) bool {
 	return ok
 }
 
+// MessageReaction is the wire shape of a reaction's facts: its kind, the emoji
+// of an emoji reaction, the stored key of the message it targets, and whether
+// it takes a reaction back. Its names and values are source-neutral. The one
+// definition of a valid object is Validate: ingest stores a message whose
+// object is invalid as if it carried none, and the enrichment exchange rejects
+// a request that holds one.
+type MessageReaction struct {
+	Kind      string  `json:"kind"`
+	Emoji     *string `json:"emoji,omitempty"`
+	TargetKey string  `json:"target_key"`
+	Removal   *bool   `json:"removal"`
+}
+
+// UnmarshalJSON decodes an object whose members have the wrong JSON types as
+// the zero value, which Validate rejects, so a malformed reaction never makes
+// the payload carrying it undecodable.
+func (r *MessageReaction) UnmarshalJSON(b []byte) error {
+	type plain MessageReaction
+	var p plain
+	// best-effort: a mistyped object decodes as the invalid zero value, so
+	// the message carrying it is still stored, without facts.
+	if err := json.Unmarshal(b, &p); err != nil {
+		*r = MessageReaction{}
+		return nil
+	}
+	*r = MessageReaction(p)
+	return nil
+}
+
+// Validate reports the first reason the object is not a valid reaction, or nil
+// when it is one.
+func (r MessageReaction) Validate() error {
+	// The reaction_kind enum (migration 103) is the one list of kinds; sqlc
+	// generates db.ReactionKind's values from it.
+	kind := db.ReactionKind(r.Kind)
+	if !kind.Valid() {
+		return fmt.Errorf("reaction kind %q is not a known kind", r.Kind)
+	}
+	if r.TargetKey == "" {
+		return errors.New("reaction needs a non-empty target_key")
+	}
+	if r.Removal == nil {
+		return errors.New("reaction needs a removal flag")
+	}
+	hasEmoji := r.Emoji != nil && *r.Emoji != ""
+	if kind == db.ReactionKindEmoji && !hasEmoji {
+		return errors.New("an emoji reaction needs a non-empty emoji")
+	}
+	if kind != db.ReactionKindEmoji && r.Emoji != nil {
+		return fmt.Errorf("a %s reaction carries no emoji", r.Kind)
+	}
+	return nil
+}
+
 // RawMessageReceivedPayload is the payload for KindRawMessageReceived,
 // emitted by the Mac daemon. Carries the full raw data needed by the
 // inline ingest handler to identity-match, upsert staging, and enqueue
@@ -409,6 +466,10 @@ type RawMessageReceivedPayload struct {
 	SentAt      time.Time        `json:"sent_at"`             // from source, NOT daemon clock
 	ReplyToGuid *string          `json:"reply_to_guid,omitempty"`
 	Attachments []AttachmentMeta `json:"attachments,omitempty"` // metadata only; daemon populates when chat.db reader lands
+	// Reaction carries the facts of a message that is a reaction. Absent or
+	// null on any other message, and on every message an older daemon sends.
+	// An invalid object is stored as if it were absent (MessageReaction.Validate).
+	Reaction *MessageReaction `json:"reaction,omitempty"`
 }
 
 // RawMessageSentPayload is the payload for KindRawMessageSent. Same

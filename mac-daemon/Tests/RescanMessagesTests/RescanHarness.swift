@@ -18,6 +18,9 @@ struct SourceRow {
     var attributedBody: Data?
     var hasAttachment = false
     var associatedMessageType = 0
+    /// `message.associated_message_guid`, the target of a reaction.
+    var associatedGUID: String?
+    var emoji: String?
     /// Set for a message of a chat: `chat` is the chat.guid, `handle` the
     /// sender's handle.id (inbound only), `sentAt` the sent time.
     var chat: String?
@@ -69,6 +72,10 @@ final class FakePi: @unchecked Sendable {
         case groupListingRejected, groupListingUnreachable
         /// The nth group-item POST answers 400, or cannot be reached.
         case groupSubmission(Int), groupSubmissionUnreachable
+        /// The without-reaction-facts listing answers 400, or cannot be reached.
+        case reactionListingRejected, reactionListingUnreachable
+        /// The nth set_reaction POST answers 400, or cannot be reached.
+        case reactionSubmission(Int), reactionSubmissionUnreachable
     }
 
     private let lock = NSLock()
@@ -84,6 +91,11 @@ final class FakePi: @unchecked Sendable {
     private(set) var groupListRequests = 0
     /// Raw JSON items of each POST that carried group ops, in request order.
     private(set) var groupRequests: [[[String: Any]]] = []
+    /// guid -> the S1 reaction object stored on the row, for rows that carry facts.
+    private var reactionFacts: [String: [String: Any]]
+    private(set) var reactionListRequests = 0
+    /// Raw JSON items of each POST that carried set_reaction ops, in request order.
+    private(set) var reactionRequests: [[[String: Any]]] = []
     /// Runs under the Pi's lock right after a listing is answered, so a test
     /// can change Pi rows between the listing and the submission.
     var afterListing: (@Sendable (inout [String: String]) -> Void)?
@@ -94,8 +106,10 @@ final class FakePi: @unchecked Sendable {
     init(rows: [String: String?] = [:], pageCap: Int = 500,
          failure: Failure = .none,
          groupChats: [String: [(start: Date, end: Date)]] = [:], groupPageCap: Int = 500,
-         groupRows: [String: PiGroupRow] = [:]) {
+         groupRows: [String: PiGroupRow] = [:],
+         reactionFacts: [String: [String: Any]] = [:]) {
         self.bodies = rows.compactMapValues { $0 }
+        self.reactionFacts = reactionFacts
         self.pageCap = pageCap
         self.failure = failure
         self.groupChats = groupChats
@@ -111,6 +125,11 @@ final class FakePi: @unchecked Sendable {
     }
 
     var submittedGuids: [String] { fillRequests.flatMap { $0.map(\.guid) } }
+    var reactionItems: [[String: Any]] { reactionRequests.flatMap { $0 } }
+    func facts(of guid: String) -> [String: Any]? {
+        lock.lock(); defer { lock.unlock() }
+        return reactionFacts[guid]
+    }
     var groupItems: [[String: Any]] { groupRequests.flatMap { $0 } }
     func groupRow(_ guid: String) -> PiGroupRow? {
         lock.lock(); defer { lock.unlock() }
@@ -189,6 +208,46 @@ final class FakePi: @unchecked Sendable {
                        #"{"success":true,"data":{"results":[\#(results.joined(separator: ","))],"totals":{}}}"#)
     }
 
+    /// Whether `reaction` is a valid S1 object, by the rule the Pi applies.
+    private static func isValidReaction(_ reaction: Any?) -> Bool {
+        guard let r = reaction as? [String: Any],
+              let kind = r["kind"] as? String,
+              ["love", "like", "dislike", "laugh", "emphasize", "question", "emoji", "sticker"].contains(kind),
+              let target = r["target_key"] as? String, !target.isEmpty,
+              r["removal"] is Bool else { return false }
+        let emoji = r["emoji"] as? String
+        return kind == "emoji" ? emoji?.isEmpty == false : r["emoji"] == nil
+    }
+
+    /// Answers a POST of `set_reaction` items, as the Pi's S2 does.
+    private func handleReactionItems(_ request: URLRequest, _ raw: [[String: Any]]) throws -> (Data, URLResponse) {
+        reactionRequests.append(raw)
+        if case .reactionSubmissionUnreachable = failure { throw URLError(.cannotConnectToHost) }
+        if case .reactionSubmission(let n) = failure, reactionRequests.count == n {
+            return respond(request, 400, #"{"success":false,"error":{"code":"VALIDATION","message":"bad"}}"#)
+        }
+        guard raw.allSatisfy({ $0["op"] as? String == "set_reaction" && Self.isValidReaction($0["reaction"]) }) else {
+            XCTFail("invalid set_reaction request")
+            return respond(request, 400, #"{"success":false,"error":{"code":"VALIDATION","message":"bad"}}"#)
+        }
+        var results: [String] = []
+        for item in raw {
+            let guid = item["guid"] as! String
+            let outcome: String
+            if bodies[guid] == nil {
+                outcome = "unknown"
+            } else if reactionFacts[guid] != nil {
+                outcome = "unchanged"
+            } else {
+                reactionFacts[guid] = item["reaction"] as? [String: Any]
+                outcome = "marked"
+            }
+            results.append(#"{"guid":"\#(guid)","outcome":"\#(outcome)"}"#)
+        }
+        return respond(request, 200,
+                       #"{"success":true,"data":{"results":[\#(results.joined(separator: ","))],"totals":{}}}"#)
+    }
+
     private func handle(_ request: URLRequest) throws -> (Data, URLResponse) {
         lock.lock(); defer { lock.unlock() }
         let hostPath = "/api/v1/host/\(testHostID.uuidString.lowercased())/messages/enrichment"
@@ -220,6 +279,23 @@ final class FakePi: @unchecked Sendable {
             return respond(request, 200,
                            #"{"success":true,"data":{"items":[\#(items)],"next_after":\#(next)}}"#)
         }
+        if request.httpMethod == "GET", comps.path == hostPath + "/without-reaction-facts" {
+            reactionListRequests += 1
+            if case .reactionListingUnreachable = failure { throw URLError(.cannotConnectToHost) }
+            if case .reactionListingRejected = failure {
+                return respond(request, 400, #"{"success":false,"error":{"code":"VALIDATION","message":"bad"}}"#)
+            }
+            let after = comps.queryItems?.first { $0.name == "after" }?.value
+            let limit = Int(comps.queryItems?.first { $0.name == "limit" }?.value ?? "") ?? 500
+            XCTAssertTrue((1...500).contains(limit), "limit \(limit) outside 1...500")
+            let unmarked = bodies.keys.filter { reactionFacts[$0] == nil }.sorted()
+                .filter { after == nil || $0 > after! }
+            let page = Array(unmarked.prefix(min(limit, pageCap)))
+            let next = unmarked.count > page.count ? "\"\(page.last!)\"" : "null"
+            let items = page.map { #"{"guid":"\#($0)"}"# }.joined(separator: ",")
+            return respond(request, 200,
+                           #"{"success":true,"data":{"items":[\#(items)],"next_after":\#(next)}}"#)
+        }
         if request.httpMethod == "GET", comps.path == hostPath + "/missing-bodies" {
             listRequests += 1
             if case .unreachable = failure { throw URLError(.cannotConnectToHost) }
@@ -242,6 +318,9 @@ final class FakePi: @unchecked Sendable {
             let raw = json["items"] as! [[String: Any]]
             XCTAssertLessThanOrEqual(raw.count, 500)
             XCTAssertLessThan(request.httpBody?.count ?? 0, 8 << 20)
+            if raw.contains(where: { $0["op"] as? String == "set_reaction" }) {
+                return try handleReactionItems(request, raw)
+            }
             if raw.contains(where: { $0["op"] as? String != "fill_body" }) {
                 return try handleGroupItems(request, raw)
             }
@@ -339,7 +418,8 @@ final class RescanFixture {
                     is_from_me INTEGER NOT NULL DEFAULT 0,
                     item_type INTEGER NOT NULL DEFAULT 0,
                     handle_id INTEGER,
-                    associated_message_guid TEXT
+                    associated_message_guid TEXT,
+                    associated_message_emoji TEXT
                 );
                 CREATE TABLE handle (ROWID INTEGER PRIMARY KEY, id TEXT NOT NULL);
                 CREATE TABLE chat (ROWID INTEGER PRIMARY KEY, guid TEXT NOT NULL UNIQUE, style INTEGER);
@@ -369,11 +449,12 @@ final class RescanFixture {
                 let appleNanos = Int64(((row.sentAt?.timeIntervalSince1970 ?? 978_307_200) - 978_307_200) * 1e9)
                 try db.execute(sql: """
                     INSERT INTO message (ROWID, guid, text, attributedBody, date, cache_has_attachments,
-                                         associated_message_type, is_from_me, handle_id)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                         associated_message_type, is_from_me, handle_id,
+                                         associated_message_guid, associated_message_emoji)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """, arguments: [rowID, row.guid, row.text, row.attributedBody, appleNanos,
                                      row.hasAttachment ? 1 : 0, row.associatedMessageType,
-                                     row.isFromMe ? 1 : 0, handleID])
+                                     row.isFromMe ? 1 : 0, handleID, row.associatedGUID, row.emoji])
                 if let chat = row.chat {
                     if chatIDs[chat] == nil {
                         chatIDs[chat] = Int64(chatIDs.count + 1)

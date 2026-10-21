@@ -78,7 +78,7 @@ func (q *Queries) ListContactNamesForMasking(ctx context.Context) ([]*ListContac
 
 const ListThreadContent = `-- name: ListThreadContent :many
 
-SELECT venue_id, venue_kind, message_key, sent_at, from_user, peer_key, peer_contact_id, peer_aliases, user_aliases, body, headers, observation_id FROM thread_content
+SELECT venue_id, venue_kind, message_key, sent_at, from_user, peer_key, peer_contact_id, peer_aliases, user_aliases, body, headers, observation_id, reaction_kind, reaction_emoji, reaction_target_key, reaction_removal FROM thread_content
 WHERE venue_id = $1
   AND sent_at <= $2
 ORDER BY sent_at, message_key, peer_contact_id
@@ -116,6 +116,10 @@ func (q *Queries) ListThreadContent(ctx context.Context, arg ListThreadContentPa
 			&i.Body,
 			&i.Headers,
 			&i.ObservationID,
+			&i.ReactionKind,
+			&i.ReactionEmoji,
+			&i.ReactionTargetKey,
+			&i.ReactionRemoval,
 		); err != nil {
 			return nil, err
 		}

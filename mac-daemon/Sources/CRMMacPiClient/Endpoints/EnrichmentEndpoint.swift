@@ -1,14 +1,16 @@
 // EnrichmentEndpoint — wire shapes for the message-enrichment exchange:
 //   GET  /api/v1/host/:id/messages/enrichment/missing-bodies?after=<guid>&limit=<1..500>
 //   GET  /api/v1/host/:id/messages/enrichment/group-chats?after=<chat_guid>&limit=<1..500>
+//   GET  /api/v1/host/:id/messages/enrichment/without-reaction-facts?after=<guid>&limit=<1..500>
 //   POST /api/v1/host/:id/messages/enrichment
 //
 // All answer the standard {success, data, ...} envelope; this file declares
-// the `data` payloads and the request body. The exchange carries three ops:
+// the `data` payloads and the request body. The exchange carries four ops:
 // `fill_body` sets the body of a stored row that has none; `add_group_message`
 // adds a group message the Pi lacks inside a window of a stored group chat;
 // `clear_outbound_peer` removes the member attribution of a stored outbound
-// group row. None of them replays any ingest effect.
+// group row; `set_reaction` gives a stored row that carries no reaction facts
+// its facts. None of them replays any ingest effect.
 import Foundation
 
 /// One listed body-less stored row. The guid is all the daemon needs to
@@ -21,8 +23,9 @@ public struct MissingBodyItem: Decodable, Equatable, Sendable {
     }
 }
 
-/// Decoded `data` payload of the missing-bodies listing. `nextAfter` is the
-/// last listed guid when more rows remain, else nil.
+/// Decoded `data` payload of the missing-bodies listing, and of the
+/// without-reaction-facts listing, which answers in the same page shape.
+/// `nextAfter` is the last listed guid when more rows remain, else nil.
 public struct MissingBodiesPage: Decodable, Equatable, Sendable {
     public let items: [MissingBodyItem]
     public let nextAfter: String?
@@ -168,6 +171,7 @@ public struct GroupChatsPage: Decodable, Equatable, Sendable {
 public enum EnrichmentItem: Encodable, Equatable, Sendable {
     case addGroupMessage(AddGroupMessageItem)
     case clearOutboundPeer(guid: String)
+    case setReaction(guid: String, reaction: MessageReaction)
 
     public func encode(to encoder: Encoder) throws {
         switch self {
@@ -177,7 +181,16 @@ public enum EnrichmentItem: Encodable, Equatable, Sendable {
             var c = encoder.container(keyedBy: AddGroupMessageItem.CodingKeys.self)
             try c.encode("clear_outbound_peer", forKey: .op)
             try c.encode(guid, forKey: .guid)
+        case .setReaction(let guid, let reaction):
+            var c = encoder.container(keyedBy: SetReactionKeys.self)
+            try c.encode("set_reaction", forKey: .op)
+            try c.encode(guid, forKey: .guid)
+            try c.encode(reaction, forKey: .reaction)
         }
+    }
+
+    private enum SetReactionKeys: String, CodingKey {
+        case op, guid, reaction
     }
 }
 
@@ -231,6 +244,8 @@ public enum EnrichmentOutcome: String, Decodable, Equatable, Sendable, CaseItera
     case filled, unchanged, unknown, added
     case outsideWindow = "outside_window"
     case cleared
+    /// A `set_reaction` stored its facts on a row that carried none.
+    case marked
 }
 
 public struct EnrichmentResult: Decodable, Equatable, Sendable {
@@ -286,6 +301,18 @@ extension RequestBuilder {
         if let after { query.insert(URLQueryItem(name: "after", value: after), at: 0) }
         let url = try enrichmentURL(
             auth: auth, suffix: "/messages/enrichment/group-chats", query: query)
+        var req = URLRequest(url: url)
+        req.httpMethod = "GET"
+        req.setValue("application/json", forHTTPHeaderField: "Accept")
+        Self.applyAuth(&req, auth: auth)
+        return req
+    }
+
+    func withoutReactionFacts(auth: PiAuth, after: String?, limit: Int) throws -> URLRequest {
+        var query = [URLQueryItem(name: "limit", value: String(limit))]
+        if let after { query.insert(URLQueryItem(name: "after", value: after), at: 0) }
+        let url = try enrichmentURL(
+            auth: auth, suffix: "/messages/enrichment/without-reaction-facts", query: query)
         var req = URLRequest(url: url)
         req.httpMethod = "GET"
         req.setValue("application/json", forHTTPHeaderField: "Accept")

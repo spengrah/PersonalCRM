@@ -9,7 +9,7 @@ final class ChatDBSchemaTests: XCTestCase {
             try ChatDBSchemaValidator.validate(db: db)
         }
         XCTAssertEqual(health, .ok)
-        XCTAssertEqual(health.label, "chat_db_v2")
+        XCTAssertEqual(health.label, "chat_db_v3")
     }
 
     func testDriftOnMissingItemType() throws {

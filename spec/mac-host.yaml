@@ -696,6 +696,35 @@ behaviors:
     provenance: [MessagesEnrichmentHandler.ListMissingBodies/FillBodies, MessagesEnrichmentService, messages_enrichment_test.go, .agents/spec/2026-10-13-interaction-review-readiness.md]
     notes: Group-chat messages are outside this behavior.
 
+  - id: MAC-064
+    title: A paired host lists stored messages without reaction facts and gives them their facts
+    type: api
+    status: current
+    surface: api
+    given: a paired host presenting its bearer key
+    when: it lists messages without reaction facts and submits set_reaction items for them
+    then:
+      - key: lists-rows-without-facts
+        text: the listing returns the guids of stored, non-deleted messages that carry no reaction kind, whichever host pushed them, in guid order, one page at a time, with a cursor to the next page when more remain
+      - key: marks-reaction
+        text: a set_reaction item stores its kind, emoji, target key and removal flag on a named stored message that carries none, and the answer reports that item as marked
+      - key: keeps-existing-facts
+        text: a set_reaction item for a message that already carries facts leaves them as they are, whatever facts the item names, and the answer reports the item as unchanged
+      - key: unknown-guid-not-created
+        text: a set_reaction item naming a guid with no stored non-deleted message creates nothing, and the answer reports the item as unknown
+      - key: row-identity-preserved
+        text: storing a reaction's facts changes no other column of the row, so its body, identity, interaction links, and processing state stay as they were
+      - key: no-cadence-or-event-effect
+        text: storing a reaction's facts replays no ingest, so it changes no contact cadence field, creates no follow-up, and emits no event
+      - key: second-run-unchanged
+        text: submitting the same items again changes nothing, and the answer reports each item as unchanged
+      - key: invalid-request-writes-nothing
+        text: a request with a set_reaction item that misses its guid or its reaction, or whose reaction is invalid as ingest judges one (ING-048), or with more than the per-request item cap, is rejected whole, and none of its items is written
+      - key: requires-host-credentials
+        text: a request without the host's bearer key is refused, and writes nothing
+    provenance: [MessagesEnrichmentHandler.ListWithoutReactionFacts/ApplyItems, MessagesEnrichmentService.ListWithoutReactionFacts/markOne, messages_enrichment_reaction_test.go, .agents/spec/2026-10-21-message-reactions.md]
+    notes: The answer's per-outcome counts carry marked beside the other enrichment outcomes. Ingest stores a live message with an invalid reaction object as one without facts, while this exchange rejects the request, because an operator run can be corrected and rerun. The re-scan that drives this exchange is MAC-063.
+
   - id: MAC-058
     title: A one-time operator re-scan fills stored body-less messages and classifies the rest
     type: business-logic
@@ -760,3 +789,57 @@ behaviors:
         text: a Pi that rejects the listing or a submission, or cannot be reached, ends the run non-zero with no further submission and no body pass
     provenance: [rescan-messages, ChatDBReader.fetchChatWindow, GroupPassTests, ChatWindowReadTests, .agents/spec/2026-10-13-interaction-review-readiness.md]
     notes: Like the body pass (MAC-058), the group pass is an operator tool run from the source tree. It is not part of the shipped daemon, its subcommands, or its assembled bundle.
+
+  # --- Reaction facts (spec: .agents/spec/2026-10-21-message-reactions.md) ---
+
+  - id: MAC-062
+    title: The daemon publishes a reaction's facts with the reaction message
+    type: business-logic
+    status: current
+    surface: none
+    given: a message row in the Mac's messages database that the daemon reads to publish
+    when: the daemon publishes it
+    then:
+      - key: reaction-published-with-kind
+        text: a row of type 2000 to 2007 is published with a reaction object whose kind is love, like, dislike, laugh, emphasize, question, emoji or sticker in that order, and removal false
+      - key: removal-published-with-same-facts
+        text: a row of type 3000 to 3007 is published with removal true and the same kind as the reaction it removes
+      - key: emoji-published-with-emoji-kind
+        text: an emoji reaction and its removal carry the emoji the row stores, and no other kind carries an emoji
+      - key: sticker-on-a-message-published-as-sticker
+        text: a row of type 1000 that names a target message is published with kind sticker and removal false
+      - key: target-key-without-prefix
+        text: the target key is the row's associated message guid with any part prefix (p:<n>/) or bp prefix removed, so it equals the target message's guid
+      - key: non-reaction-published-without-facts
+        text: a row of any other type, a type 1000 row with no target, and an emoji reaction with no stored emoji are published with no reaction object
+      - key: rest-of-payload-unchanged
+        text: the body, message type, reply link and every other payload field are published as they are for a message that carries no facts
+      - key: every-read-path-same-step
+        text: the live tick, the backfill, the scan and the re-scan script decide a row's facts through the same single step
+    provenance: [ReactionRecognition.facts, ChatDBReader.mapMessageRow, PayloadShaping.shape, MessageReaction, ReactionCaptureTests, .agents/spec/2026-10-21-message-reactions.md]
+    notes: How the Pi stores the facts is ING-048. An older daemon sends no reaction object, and the Pi stores its messages as before.
+
+  - id: MAC-063
+    title: The one-time re-scan's reaction pass gives stored reactions their facts
+    type: business-logic
+    status: current
+    surface: none
+    given: the operator runs the re-scan script on the Mac against a paired Pi
+    when: it walks every stored message the Pi lists as carrying no reaction facts
+    then:
+      - key: submits-each-listed-reaction
+        text: each listed message whose source record the recognition step marks as a reaction, or as the removal of one, is submitted as a set_reaction item with the facts MAC-062 publishes
+      - key: submits-nothing-else
+        text: a listed message that is not a reaction, one of an unrecognized type, and one the messages database does not hold are not submitted, and each is counted under one classification
+      - key: reaction-pass-last
+        text: the reaction pass runs after the group pass and the body pass, so a reaction the group pass adds is marked by the same run
+      - key: report-content-free
+        text: the output adds only counts, per outcome the Pi answers and per classification, and no body, name, handle, or other message content
+      - key: reads-read-only-writes-no-file
+        text: the script reads the messages database read-only and writes no file
+      - key: second-run-no-change
+        text: a second run against the state the first left submits nothing
+      - key: failure-ends-run-non-zero
+        text: a Pi that rejects the listing or a submission, or cannot be reached, ends the run non-zero with no report
+    provenance: [rescan-messages, ReactionRecognition.facts, ReactionPassTests, .agents/spec/2026-10-21-message-reactions.md]
+    notes: Like the body pass (MAC-058) and the group pass (MAC-061), the reaction pass is an operator tool run from the source tree. The Pi's half of the exchange is MAC-064.

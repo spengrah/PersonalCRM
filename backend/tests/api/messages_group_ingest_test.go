@@ -73,6 +73,10 @@ type rawMsg struct {
 	group  bool
 	sentAt time.Time
 	text   string
+	// replyTo and reaction are the payload's reply link and reaction facts,
+	// absent when nil.
+	replyTo  *string
+	reaction *events.MessageReaction
 }
 
 func (g *groupIngestEnv) newGuid() string { return "group-ingest-" + uuid.NewString() }
@@ -92,6 +96,7 @@ func (g *groupIngestEnv) eventFor(t *testing.T, m rawMsg) map[string]any {
 	p := events.RawMessageReceivedPayload{
 		Version: 1, HostID: g.pair.HostID, Source: "messages", Guid: m.guid, ChatID: m.chat,
 		PeerHandle: m.handle, Text: &m.text, MessageType: "text", IsGroup: m.group, SentAt: m.sentAt,
+		ReplyToGuid: m.replyTo, Reaction: m.reaction,
 	}
 	var raw json.RawMessage
 	var err error

@@ -43,6 +43,35 @@ type MessagesMessage struct {
 	ClaimedSessionRef *string
 	DeletedAt         *time.Time
 	CreatedAt         time.Time
+	// Reaction is the facts of a message that is a reaction, nil on any other.
+	Reaction *MessageReaction
+}
+
+// MessageReaction is a reaction's stored facts. TargetKey is the stored key of
+// the message it targets: its guid on a messages_message row, its message_key
+// on a thread_content row.
+type MessageReaction struct {
+	Kind      string
+	Emoji     *string
+	TargetKey string
+	Removal   bool
+}
+
+// reactionFromColumns reads the reaction_* columns, which the schema stores
+// all present or all absent.
+func reactionFromColumns(kind, emoji, targetKey *string, removal *bool) *MessageReaction {
+	if kind == nil || targetKey == nil || removal == nil {
+		return nil
+	}
+	return &MessageReaction{Kind: *kind, Emoji: emoji, TargetKey: *targetKey, Removal: *removal}
+}
+
+// reactionColumns is the inverse of reactionFromColumns: all NULL for nil.
+func reactionColumns(r *MessageReaction) (kind *db.ReactionKind, emoji, targetKey *string, removal *bool) {
+	if r == nil {
+		return nil, nil, nil, nil
+	}
+	return (*db.ReactionKind)(&r.Kind), r.Emoji, &r.TargetKey, &r.Removal
 }
 
 // UpsertMessagesMessageParams is the input for UpsertMessage. Fields map
@@ -64,6 +93,9 @@ type UpsertMessagesMessageParams struct {
 	// only kind of row that reads as a reply to a member's inbound burst. A
 	// guid already stored keeps its own value.
 	CreditsReply bool
+	// Reaction is the facts of a message that is a reaction, nil on any other.
+	// A guid already stored keeps its own facts.
+	Reaction *MessageReaction
 }
 
 // MessagesMessageRepository wraps the sqlc-generated messages_message queries.
@@ -165,6 +197,23 @@ func (r *MessagesMessageRepository) ListBodylessGuids(ctx context.Context, after
 // reports whether it did. It changes no other column.
 func (r *MessagesMessageRepository) FillBody(ctx context.Context, guid, body string) (bool, error) {
 	n, err := r.queries.FillMessagesMessageBody(ctx, db.FillMessagesMessageBodyParams{Guid: guid, Body: &body})
+	return n > 0, err
+}
+
+// ListGuidsWithoutReactionFacts returns up to limit guids of stored,
+// non-deleted rows that carry no reaction kind, ordered by guid ascending,
+// strictly after the given guid (nil lists from the start).
+func (r *MessagesMessageRepository) ListGuidsWithoutReactionFacts(ctx context.Context, after *string, limit int32) ([]string, error) {
+	return r.queries.ListMessagesMessageGuidsWithoutReactionFacts(ctx, db.ListMessagesMessageGuidsWithoutReactionFactsParams{After: after, RowLimit: limit})
+}
+
+// SetReaction stores the reaction facts of a stored, non-deleted row that
+// carries none and reports whether it did. It changes no other column.
+func (r *MessagesMessageRepository) SetReaction(ctx context.Context, guid string, reaction MessageReaction) (bool, error) {
+	kind, emoji, targetKey, removal := reactionColumns(&reaction)
+	n, err := r.queries.SetMessagesMessageReaction(ctx, db.SetMessagesMessageReactionParams{
+		Guid: guid, ReactionKind: kind, ReactionEmoji: emoji, ReactionTargetKey: targetKey, ReactionRemoval: removal,
+	})
 	return n > 0, err
 }
 
@@ -306,6 +355,7 @@ func convertDbMessagesMessage(m *db.MessagesMessage) MessagesMessage {
 	if m.CreatedAt != nil {
 		msg.CreatedAt = *m.CreatedAt
 	}
+	msg.Reaction = reactionFromColumns((*string)(m.ReactionKind), m.ReactionEmoji, m.ReactionTargetKey, m.ReactionRemoval)
 	return msg
 }
 
@@ -337,20 +387,25 @@ func (r *MessagesMessageRepository) UpsertMessageTx(ctx context.Context, tx pgx.
 // place ensures both variants stay in lockstep — drift would silently
 // produce different on-disk shapes depending on caller.
 func buildUpsertMessagesMessageParams(params UpsertMessagesMessageParams) db.UpsertMessagesMessageParams {
+	kind, emoji, targetKey, removal := reactionColumns(params.Reaction)
 	return db.UpsertMessagesMessageParams{
-		Guid:             params.Guid,
-		ChatGuid:         params.ChatGuid,
-		PeerHandle:       params.PeerHandle,
-		PeerNormalized:   params.PeerNormalized,
-		Text:             params.Text,
-		MessageType:      params.MessageType,
-		SentAt:           params.SentAt,
-		IsOutgoing:       params.IsOutgoing,
-		IsGroupChat:      params.IsGroupChat,
-		ReplyToGuid:      params.ReplyToGuid,
-		MatchedContactID: params.MatchedContactID,
-		MacHostID:        params.MacHostID,
-		CreditsReply:     params.CreditsReply,
+		Guid:              params.Guid,
+		ChatGuid:          params.ChatGuid,
+		PeerHandle:        params.PeerHandle,
+		PeerNormalized:    params.PeerNormalized,
+		Text:              params.Text,
+		MessageType:       params.MessageType,
+		SentAt:            params.SentAt,
+		IsOutgoing:        params.IsOutgoing,
+		IsGroupChat:       params.IsGroupChat,
+		ReplyToGuid:       params.ReplyToGuid,
+		MatchedContactID:  params.MatchedContactID,
+		MacHostID:         params.MacHostID,
+		CreditsReply:      params.CreditsReply,
+		ReactionKind:      kind,
+		ReactionEmoji:     emoji,
+		ReactionTargetKey: targetKey,
+		ReactionRemoval:   removal,
 	}
 }
 

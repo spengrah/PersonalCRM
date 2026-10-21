@@ -166,7 +166,7 @@ func (q *Queries) FillMessagesMessageBody(ctx context.Context, arg FillMessagesM
 }
 
 const GetMessagesMessage = `-- name: GetMessagesMessage :one
-SELECT id, guid, chat_guid, peer_handle, peer_normalized, text, message_type, sent_at, is_outgoing, is_group_chat, reply_to_guid, matched_contact_id, interaction_id, mac_host_id, processed_at, claimed_at, claimed_session_ref, deleted_at, created_at, credits_reply FROM messages_message
+SELECT id, guid, chat_guid, peer_handle, peer_normalized, text, message_type, sent_at, is_outgoing, is_group_chat, reply_to_guid, matched_contact_id, interaction_id, mac_host_id, processed_at, claimed_at, claimed_session_ref, deleted_at, created_at, credits_reply, reaction_kind, reaction_emoji, reaction_target_key, reaction_removal FROM messages_message
 WHERE guid = $1
   AND deleted_at IS NULL
 `
@@ -197,12 +197,16 @@ func (q *Queries) GetMessagesMessage(ctx context.Context, guid string) (*Message
 		&i.DeletedAt,
 		&i.CreatedAt,
 		&i.CreditsReply,
+		&i.ReactionKind,
+		&i.ReactionEmoji,
+		&i.ReactionTargetKey,
+		&i.ReactionRemoval,
 	)
 	return &i, err
 }
 
 const GetMessagesMessageByReplyTarget = `-- name: GetMessagesMessageByReplyTarget :one
-SELECT id, guid, chat_guid, peer_handle, peer_normalized, text, message_type, sent_at, is_outgoing, is_group_chat, reply_to_guid, matched_contact_id, interaction_id, mac_host_id, processed_at, claimed_at, claimed_session_ref, deleted_at, created_at, credits_reply FROM messages_message
+SELECT id, guid, chat_guid, peer_handle, peer_normalized, text, message_type, sent_at, is_outgoing, is_group_chat, reply_to_guid, matched_contact_id, interaction_id, mac_host_id, processed_at, claimed_at, claimed_session_ref, deleted_at, created_at, credits_reply, reaction_kind, reaction_emoji, reaction_target_key, reaction_removal FROM messages_message
 WHERE chat_guid = $1
   AND guid = $2
   AND deleted_at IS NULL
@@ -240,6 +244,10 @@ func (q *Queries) GetMessagesMessageByReplyTarget(ctx context.Context, arg GetMe
 		&i.DeletedAt,
 		&i.CreatedAt,
 		&i.CreditsReply,
+		&i.ReactionKind,
+		&i.ReactionEmoji,
+		&i.ReactionTargetKey,
+		&i.ReactionRemoval,
 	)
 	return &i, err
 }
@@ -485,8 +493,46 @@ func (q *Queries) ListMessagesGroupBurstWindows(ctx context.Context, arg ListMes
 	return items, nil
 }
 
+const ListMessagesMessageGuidsWithoutReactionFacts = `-- name: ListMessagesMessageGuidsWithoutReactionFacts :many
+SELECT guid FROM messages_message
+WHERE deleted_at IS NULL
+  AND reaction_kind IS NULL
+  AND ($1::text IS NULL OR guid > $1::text)
+ORDER BY guid ASC
+LIMIT $2
+`
+
+type ListMessagesMessageGuidsWithoutReactionFactsParams struct {
+	After    *string `json:"after"`
+	RowLimit int32   `json:"row_limit"`
+}
+
+// Guids of stored, non-deleted rows that carry no reaction kind, in guid order,
+// keyset-paged by an exclusive @after guid. Whichever host pushed the row. The
+// caller asks for one row more than a page to learn whether another page
+// remains.
+func (q *Queries) ListMessagesMessageGuidsWithoutReactionFacts(ctx context.Context, arg ListMessagesMessageGuidsWithoutReactionFactsParams) ([]string, error) {
+	rows, err := q.db.Query(ctx, ListMessagesMessageGuidsWithoutReactionFacts, arg.After, arg.RowLimit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []string{}
+	for rows.Next() {
+		var guid string
+		if err := rows.Scan(&guid); err != nil {
+			return nil, err
+		}
+		items = append(items, guid)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const ListMessagesMessagesByChatWindow = `-- name: ListMessagesMessagesByChatWindow :many
-SELECT id, guid, chat_guid, peer_handle, peer_normalized, text, message_type, sent_at, is_outgoing, is_group_chat, reply_to_guid, matched_contact_id, interaction_id, mac_host_id, processed_at, claimed_at, claimed_session_ref, deleted_at, created_at, credits_reply FROM messages_message
+SELECT id, guid, chat_guid, peer_handle, peer_normalized, text, message_type, sent_at, is_outgoing, is_group_chat, reply_to_guid, matched_contact_id, interaction_id, mac_host_id, processed_at, claimed_at, claimed_session_ref, deleted_at, created_at, credits_reply, reaction_kind, reaction_emoji, reaction_target_key, reaction_removal FROM messages_message
 WHERE chat_guid = $1
   AND sent_at >= $2 AND sent_at <= $3
   AND deleted_at IS NULL
@@ -529,6 +575,10 @@ func (q *Queries) ListMessagesMessagesByChatWindow(ctx context.Context, arg List
 			&i.DeletedAt,
 			&i.CreatedAt,
 			&i.CreditsReply,
+			&i.ReactionKind,
+			&i.ReactionEmoji,
+			&i.ReactionTargetKey,
+			&i.ReactionRemoval,
 		); err != nil {
 			return nil, err
 		}
@@ -541,7 +591,7 @@ func (q *Queries) ListMessagesMessagesByChatWindow(ctx context.Context, arg List
 }
 
 const ListMessagesMessagesByInteractionIDs = `-- name: ListMessagesMessagesByInteractionIDs :many
-SELECT id, guid, chat_guid, peer_handle, peer_normalized, text, message_type, sent_at, is_outgoing, is_group_chat, reply_to_guid, matched_contact_id, interaction_id, mac_host_id, processed_at, claimed_at, claimed_session_ref, deleted_at, created_at, credits_reply FROM messages_message
+SELECT id, guid, chat_guid, peer_handle, peer_normalized, text, message_type, sent_at, is_outgoing, is_group_chat, reply_to_guid, matched_contact_id, interaction_id, mac_host_id, processed_at, claimed_at, claimed_session_ref, deleted_at, created_at, credits_reply, reaction_kind, reaction_emoji, reaction_target_key, reaction_removal FROM messages_message
 WHERE interaction_id = ANY($1::uuid[]) AND deleted_at IS NULL
 `
 
@@ -575,6 +625,10 @@ func (q *Queries) ListMessagesMessagesByInteractionIDs(ctx context.Context, inte
 			&i.DeletedAt,
 			&i.CreatedAt,
 			&i.CreditsReply,
+			&i.ReactionKind,
+			&i.ReactionEmoji,
+			&i.ReactionTargetKey,
+			&i.ReactionRemoval,
 		); err != nil {
 			return nil, err
 		}
@@ -587,7 +641,7 @@ func (q *Queries) ListMessagesMessagesByInteractionIDs(ctx context.Context, inte
 }
 
 const ListStrandedMessagesMessages = `-- name: ListStrandedMessagesMessages :many
-SELECT id, guid, chat_guid, peer_handle, peer_normalized, text, message_type, sent_at, is_outgoing, is_group_chat, reply_to_guid, matched_contact_id, interaction_id, mac_host_id, processed_at, claimed_at, claimed_session_ref, deleted_at, created_at, credits_reply FROM messages_message
+SELECT id, guid, chat_guid, peer_handle, peer_normalized, text, message_type, sent_at, is_outgoing, is_group_chat, reply_to_guid, matched_contact_id, interaction_id, mac_host_id, processed_at, claimed_at, claimed_session_ref, deleted_at, created_at, credits_reply, reaction_kind, reaction_emoji, reaction_target_key, reaction_removal FROM messages_message
 WHERE matched_contact_id IS NULL
   AND processed_at IS NULL
   AND deleted_at IS NULL
@@ -632,6 +686,10 @@ func (q *Queries) ListStrandedMessagesMessages(ctx context.Context) ([]*Messages
 			&i.DeletedAt,
 			&i.CreatedAt,
 			&i.CreditsReply,
+			&i.ReactionKind,
+			&i.ReactionEmoji,
+			&i.ReactionTargetKey,
+			&i.ReactionRemoval,
 		); err != nil {
 			return nil, err
 		}
@@ -644,7 +702,7 @@ func (q *Queries) ListStrandedMessagesMessages(ctx context.Context) ([]*Messages
 }
 
 const ListUnprocessedMessagesByContact = `-- name: ListUnprocessedMessagesByContact :many
-SELECT id, guid, chat_guid, peer_handle, peer_normalized, text, message_type, sent_at, is_outgoing, is_group_chat, reply_to_guid, matched_contact_id, interaction_id, mac_host_id, processed_at, claimed_at, claimed_session_ref, deleted_at, created_at, credits_reply FROM messages_message
+SELECT id, guid, chat_guid, peer_handle, peer_normalized, text, message_type, sent_at, is_outgoing, is_group_chat, reply_to_guid, matched_contact_id, interaction_id, mac_host_id, processed_at, claimed_at, claimed_session_ref, deleted_at, created_at, credits_reply, reaction_kind, reaction_emoji, reaction_target_key, reaction_removal FROM messages_message
 WHERE matched_contact_id = $1
   AND processed_at IS NULL
   AND (claimed_at IS NULL OR claimed_at < NOW() - INTERVAL '5 minutes')
@@ -682,6 +740,10 @@ func (q *Queries) ListUnprocessedMessagesByContact(ctx context.Context, matchedC
 			&i.DeletedAt,
 			&i.CreatedAt,
 			&i.CreditsReply,
+			&i.ReactionKind,
+			&i.ReactionEmoji,
+			&i.ReactionTargetKey,
+			&i.ReactionRemoval,
 		); err != nil {
 			return nil, err
 		}
@@ -694,7 +756,7 @@ func (q *Queries) ListUnprocessedMessagesByContact(ctx context.Context, matchedC
 }
 
 const ListUnprocessedMessagesByContactAndChat = `-- name: ListUnprocessedMessagesByContactAndChat :many
-SELECT id, guid, chat_guid, peer_handle, peer_normalized, text, message_type, sent_at, is_outgoing, is_group_chat, reply_to_guid, matched_contact_id, interaction_id, mac_host_id, processed_at, claimed_at, claimed_session_ref, deleted_at, created_at, credits_reply FROM messages_message
+SELECT id, guid, chat_guid, peer_handle, peer_normalized, text, message_type, sent_at, is_outgoing, is_group_chat, reply_to_guid, matched_contact_id, interaction_id, mac_host_id, processed_at, claimed_at, claimed_session_ref, deleted_at, created_at, credits_reply, reaction_kind, reaction_emoji, reaction_target_key, reaction_removal FROM messages_message
 WHERE matched_contact_id = $1
   AND chat_guid = $2
   AND processed_at IS NULL
@@ -738,6 +800,10 @@ func (q *Queries) ListUnprocessedMessagesByContactAndChat(ctx context.Context, a
 			&i.DeletedAt,
 			&i.CreatedAt,
 			&i.CreditsReply,
+			&i.ReactionKind,
+			&i.ReactionEmoji,
+			&i.ReactionTargetKey,
+			&i.ReactionRemoval,
 		); err != nil {
 			return nil, err
 		}
@@ -890,6 +956,43 @@ func (q *Queries) MessagesMessageGuidExists(ctx context.Context, guid string) (b
 	return found, err
 }
 
+const SetMessagesMessageReaction = `-- name: SetMessagesMessageReaction :execrows
+UPDATE messages_message
+SET reaction_kind = $1,
+    reaction_emoji = $2,
+    reaction_target_key = $3,
+    reaction_removal = $4
+WHERE guid = $5
+  AND deleted_at IS NULL
+  AND reaction_kind IS NULL
+`
+
+type SetMessagesMessageReactionParams struct {
+	ReactionKind      *ReactionKind `json:"reaction_kind"`
+	ReactionEmoji     *string       `json:"reaction_emoji"`
+	ReactionTargetKey *string       `json:"reaction_target_key"`
+	ReactionRemoval   *bool         `json:"reaction_removal"`
+	Guid              string        `json:"guid"`
+}
+
+// Stores the reaction facts of a stored, non-deleted row that carries none.
+// Touches nothing else: no body, processing, claim, interaction or contact
+// column. Returns 0 rows when the row is absent, deleted, or already carries
+// facts, which stay as they are.
+func (q *Queries) SetMessagesMessageReaction(ctx context.Context, arg SetMessagesMessageReactionParams) (int64, error) {
+	result, err := q.db.Exec(ctx, SetMessagesMessageReaction,
+		arg.ReactionKind,
+		arg.ReactionEmoji,
+		arg.ReactionTargetKey,
+		arg.ReactionRemoval,
+		arg.Guid,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const SummarizeMessagesByInteractionIDs = `-- name: SummarizeMessagesByInteractionIDs :many
 SELECT interaction_id, chat_guid, is_group_chat, COUNT(*)::bigint AS message_count
 FROM messages_message
@@ -931,7 +1034,7 @@ func (q *Queries) SummarizeMessagesByInteractionIDs(ctx context.Context, interac
 }
 
 const TestGetMessagesMessageIncludingDeleted = `-- name: TestGetMessagesMessageIncludingDeleted :one
-SELECT id, guid, chat_guid, peer_handle, peer_normalized, text, message_type, sent_at, is_outgoing, is_group_chat, reply_to_guid, matched_contact_id, interaction_id, mac_host_id, processed_at, claimed_at, claimed_session_ref, deleted_at, created_at, credits_reply FROM messages_message WHERE guid = $1
+SELECT id, guid, chat_guid, peer_handle, peer_normalized, text, message_type, sent_at, is_outgoing, is_group_chat, reply_to_guid, matched_contact_id, interaction_id, mac_host_id, processed_at, claimed_at, claimed_session_ref, deleted_at, created_at, credits_reply, reaction_kind, reaction_emoji, reaction_target_key, reaction_removal FROM messages_message WHERE guid = $1
 `
 
 // Test-only: reads a messages_message row by guid whether or not it is
@@ -960,6 +1063,10 @@ func (q *Queries) TestGetMessagesMessageIncludingDeleted(ctx context.Context, gu
 		&i.DeletedAt,
 		&i.CreatedAt,
 		&i.CreditsReply,
+		&i.ReactionKind,
+		&i.ReactionEmoji,
+		&i.ReactionTargetKey,
+		&i.ReactionRemoval,
 	)
 	return &i, err
 }
@@ -970,7 +1077,7 @@ INSERT INTO messages_message (
 ) VALUES (
     $1, $2, $3, $4, $5, $6, $7
 )
-RETURNING id, guid, chat_guid, peer_handle, peer_normalized, text, message_type, sent_at, is_outgoing, is_group_chat, reply_to_guid, matched_contact_id, interaction_id, mac_host_id, processed_at, claimed_at, claimed_session_ref, deleted_at, created_at, credits_reply
+RETURNING id, guid, chat_guid, peer_handle, peer_normalized, text, message_type, sent_at, is_outgoing, is_group_chat, reply_to_guid, matched_contact_id, interaction_id, mac_host_id, processed_at, claimed_at, claimed_session_ref, deleted_at, created_at, credits_reply, reaction_kind, reaction_emoji, reaction_target_key, reaction_removal
 `
 
 type TestInsertMessagesMessageLinkedParams struct {
@@ -1018,6 +1125,10 @@ func (q *Queries) TestInsertMessagesMessageLinked(ctx context.Context, arg TestI
 		&i.DeletedAt,
 		&i.CreatedAt,
 		&i.CreditsReply,
+		&i.ReactionKind,
+		&i.ReactionEmoji,
+		&i.ReactionTargetKey,
+		&i.ReactionRemoval,
 	)
 	return &i, err
 }
@@ -1063,11 +1174,13 @@ const UpsertMessagesMessage = `-- name: UpsertMessagesMessage :one
 INSERT INTO messages_message (
     guid, chat_guid, peer_handle, peer_normalized,
     text, message_type, sent_at, is_outgoing, is_group_chat,
-    reply_to_guid, matched_contact_id, mac_host_id, credits_reply
+    reply_to_guid, matched_contact_id, mac_host_id, credits_reply,
+    reaction_kind, reaction_emoji, reaction_target_key, reaction_removal
 ) VALUES (
     $1, $2, $3, $4,
     $5, $6, $7, $8, $9,
-    $10, $11, $12, $13
+    $10, $11, $12, $13,
+    $14, $15, $16, $17
 )
 ON CONFLICT (guid) DO UPDATE SET
     -- No-op update so RETURNING reliably returns the existing row. We
@@ -1076,23 +1189,27 @@ ON CONFLICT (guid) DO UPDATE SET
     -- content (chat.db rows are immutable post-iOS 16 except for edits,
     -- which are out of v1 scope per spec §2 messages → edits/deletes).
     guid = EXCLUDED.guid
-RETURNING id, guid, chat_guid, peer_handle, peer_normalized, text, message_type, sent_at, is_outgoing, is_group_chat, reply_to_guid, matched_contact_id, interaction_id, mac_host_id, processed_at, claimed_at, claimed_session_ref, deleted_at, created_at, credits_reply
+RETURNING id, guid, chat_guid, peer_handle, peer_normalized, text, message_type, sent_at, is_outgoing, is_group_chat, reply_to_guid, matched_contact_id, interaction_id, mac_host_id, processed_at, claimed_at, claimed_session_ref, deleted_at, created_at, credits_reply, reaction_kind, reaction_emoji, reaction_target_key, reaction_removal
 `
 
 type UpsertMessagesMessageParams struct {
-	Guid             string     `json:"guid"`
-	ChatGuid         string     `json:"chat_guid"`
-	PeerHandle       string     `json:"peer_handle"`
-	PeerNormalized   *string    `json:"peer_normalized"`
-	Text             *string    `json:"text"`
-	MessageType      string     `json:"message_type"`
-	SentAt           time.Time  `json:"sent_at"`
-	IsOutgoing       bool       `json:"is_outgoing"`
-	IsGroupChat      bool       `json:"is_group_chat"`
-	ReplyToGuid      *string    `json:"reply_to_guid"`
-	MatchedContactID *uuid.UUID `json:"matched_contact_id"`
-	MacHostID        *uuid.UUID `json:"mac_host_id"`
-	CreditsReply     bool       `json:"credits_reply"`
+	Guid              string        `json:"guid"`
+	ChatGuid          string        `json:"chat_guid"`
+	PeerHandle        string        `json:"peer_handle"`
+	PeerNormalized    *string       `json:"peer_normalized"`
+	Text              *string       `json:"text"`
+	MessageType       string        `json:"message_type"`
+	SentAt            time.Time     `json:"sent_at"`
+	IsOutgoing        bool          `json:"is_outgoing"`
+	IsGroupChat       bool          `json:"is_group_chat"`
+	ReplyToGuid       *string       `json:"reply_to_guid"`
+	MatchedContactID  *uuid.UUID    `json:"matched_contact_id"`
+	MacHostID         *uuid.UUID    `json:"mac_host_id"`
+	CreditsReply      bool          `json:"credits_reply"`
+	ReactionKind      *ReactionKind `json:"reaction_kind"`
+	ReactionEmoji     *string       `json:"reaction_emoji"`
+	ReactionTargetKey *string       `json:"reaction_target_key"`
+	ReactionRemoval   *bool         `json:"reaction_removal"`
 }
 
 // Insert with no-op on guid conflict. peer_normalized and matched_contact_id
@@ -1100,6 +1217,7 @@ type UpsertMessagesMessageParams struct {
 // provenance — multi-host dedup is by guid, not by host. credits_reply is set
 // only when ingest stores the user's own group message; a conflict keeps the
 // stored row's value, so the RETURNING row is what reply eligibility reads.
+// The reaction_* facts are all NULL on a message that is not a reaction.
 func (q *Queries) UpsertMessagesMessage(ctx context.Context, arg UpsertMessagesMessageParams) (*MessagesMessage, error) {
 	row := q.db.QueryRow(ctx, UpsertMessagesMessage,
 		arg.Guid,
@@ -1115,6 +1233,10 @@ func (q *Queries) UpsertMessagesMessage(ctx context.Context, arg UpsertMessagesM
 		arg.MatchedContactID,
 		arg.MacHostID,
 		arg.CreditsReply,
+		arg.ReactionKind,
+		arg.ReactionEmoji,
+		arg.ReactionTargetKey,
+		arg.ReactionRemoval,
 	)
 	var i MessagesMessage
 	err := row.Scan(
@@ -1138,6 +1260,10 @@ func (q *Queries) UpsertMessagesMessage(ctx context.Context, arg UpsertMessagesM
 		&i.DeletedAt,
 		&i.CreatedAt,
 		&i.CreditsReply,
+		&i.ReactionKind,
+		&i.ReactionEmoji,
+		&i.ReactionTargetKey,
+		&i.ReactionRemoval,
 	)
 	return &i, err
 }

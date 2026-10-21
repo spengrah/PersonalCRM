@@ -17,6 +17,7 @@ import (
 	"personal-crm/backend/internal/api"
 	"personal-crm/backend/internal/api/handlers"
 	"personal-crm/backend/internal/auth"
+	"personal-crm/backend/internal/config"
 	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/mac"
 	"personal-crm/backend/internal/repository"
@@ -33,9 +34,10 @@ import (
 const macHostTestKey = "test-mac-host-admin-key"
 
 // macHostTestEnv bundles the wired stack for mac_host integration tests.
-// Each TestXxx builds its own env. Mac host tests run serially because the
-// mac_host table intentionally has singleton semantics and cleanup hard-deletes
-// those shared rows from the package clone.
+// Each TestXxx builds its own env. A test on setupMacHostEnv runs serially
+// because the mac_host table intentionally has singleton semantics and cleanup
+// hard-deletes those shared rows from the package clone; a test that needs to
+// run in parallel builds its env with newMacHostEnv on a clone of its own.
 type macHostTestEnv struct {
 	router     *gin.Engine
 	apiKey     string
@@ -51,9 +53,39 @@ type macHostTestEnv struct {
 func setupMacHostEnv(t *testing.T) *macHostTestEnv {
 	t.Helper()
 
-	ctx := t.Context()
+	database, cfg := newAPISharedTestDB(t, t.Context())
+	env := newMacHostEnv(t, database, cfg)
 
-	database, cfg := newAPISharedTestDB(t, ctx)
+	t.Cleanup(func() {
+		// Hard-delete rows so the singleton index is empty for the next
+		// test. mac_host has no deleted_at column. We also sweep any
+		// strategy='push' external_sync_state rows the cursor-commit
+		// flow has created — without this, the migration test's
+		// 048-down guard fires on leftover push rows from earlier
+		// tests in the same `go test` invocation.
+		cleanCtx, cancel := context.WithTimeout(context.WithoutCancel(t.Context()), 10*time.Second)
+		defer cancel()
+		// Look up sync states, drop any with strategy='push'. (No
+		// dedicated test-only delete-by-strategy query; the list
+		// iteration is bounded by table size and only runs at
+		// teardown.)
+		states, _ := database.Queries.ListSyncStates(cleanCtx)
+		for _, s := range states {
+			if s.Strategy == "push" {
+				_ = database.Queries.DeleteSyncState(cleanCtx, s.ID)
+			}
+		}
+		_, _ = database.Queries.DeleteAllMacHosts(cleanCtx)
+		_, _ = database.Queries.DeleteAllPairingTokens(cleanCtx)
+	})
+
+	return env
+}
+
+// newMacHostEnv wires the mac_host stack on the given database.
+func newMacHostEnv(t *testing.T, database *db.Database, cfg *config.Config) *macHostTestEnv {
+	t.Helper()
+
 	cfg.External.APIKey = macHostTestKey
 
 	hostRepo := repository.NewMacHostRepository(database.Queries)
@@ -89,7 +121,7 @@ func setupMacHostEnv(t *testing.T) *macHostTestEnv {
 	v1.Use(auth.APIKeyMiddleware(cfg))
 	handlers.RegisterMacHostAdminRoutes(v1, macHandler)
 
-	env := &macHostTestEnv{
+	return &macHostTestEnv{
 		router:     router,
 		apiKey:     cfg.External.APIKey,
 		database:   database,
@@ -100,31 +132,6 @@ func setupMacHostEnv(t *testing.T) *macHostTestEnv {
 		macHandler: macHandler,
 		messages:   messagesRepo,
 	}
-
-	t.Cleanup(func() {
-		// Hard-delete rows so the singleton index is empty for the next
-		// test. mac_host has no deleted_at column. We also sweep any
-		// strategy='push' external_sync_state rows the cursor-commit
-		// flow has created — without this, the migration test's
-		// 048-down guard fires on leftover push rows from earlier
-		// tests in the same `go test` invocation.
-		cleanCtx, cancel := context.WithTimeout(context.WithoutCancel(t.Context()), 10*time.Second)
-		defer cancel()
-		// Look up sync states, drop any with strategy='push'. (No
-		// dedicated test-only delete-by-strategy query; the list
-		// iteration is bounded by table size and only runs at
-		// teardown.)
-		states, _ := database.Queries.ListSyncStates(cleanCtx)
-		for _, s := range states {
-			if s.Strategy == "push" {
-				_ = database.Queries.DeleteSyncState(cleanCtx, s.ID)
-			}
-		}
-		_, _ = database.Queries.DeleteAllMacHosts(cleanCtx)
-		_, _ = database.Queries.DeleteAllPairingTokens(cleanCtx)
-	})
-
-	return env
 }
 
 // macHTTP does a JSON request against env.router and returns the recorder.

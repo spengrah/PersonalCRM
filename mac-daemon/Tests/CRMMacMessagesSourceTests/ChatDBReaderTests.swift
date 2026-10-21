@@ -529,7 +529,8 @@ final class ChatDBReaderTests: XCTestCase {
                     ROWID INTEGER PRIMARY KEY, guid TEXT, text TEXT, attributedBody BLOB,
                     handle_id INTEGER, date INTEGER, is_from_me INTEGER,
                     item_type INTEGER NOT NULL DEFAULT 0,
-                    cache_has_attachments INTEGER, associated_message_guid TEXT
+                    cache_has_attachments INTEGER, associated_message_guid TEXT,
+                    associated_message_type INTEGER, associated_message_emoji TEXT
                 );
                 CREATE TABLE chat_message_join (chat_id INTEGER, message_id INTEGER);
                 CREATE TABLE attachment (
