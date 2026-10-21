@@ -674,7 +674,7 @@ behaviors:
       - key: thread-start-kept-whole
         text: the message that starts its thread in the mailbox, such as an introduction received fresh, keeps everything it carries, as does a message whose Gmail id or thread id is unknown
       - key: forward-kept-whole
-        text: a forward, whose subject starts with Fwd or Fw, keeps everything it carries, and a forwarded-message block in a reply is never treated as quoted mail
+        text: a forward keeps everything it carries, whether its subject starts with Fwd or Fw or its body carries an unquoted forwarded-message line, the forwarded message's own quotes and headers included
       - key: unquoted-body-unchanged
         text: a body with no quoted mail is stored unchanged
     provenance: [messageText, keepsQuotedMail, trimQuotedText, trimQuotedHTML]

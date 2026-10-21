@@ -46,12 +46,16 @@ type bodyLine struct {
 	quoted bool
 }
 
-// ownTextEnd returns how many leading lines are the message's own text. An
-// Outlook original-message header ends it. Below that, the trailing block of
-// quoted lines, with the "... wrote:" attribution that introduces it, is not
-// the message's own; quoted lines followed by new text (an inline reply) are.
-// It returns len(lines) when there is nothing to drop.
+// ownTextEnd returns how many leading lines are the message's own text. A body
+// that carries a forwarded message is all its own. Otherwise an Outlook
+// original-message header ends it, and below that the trailing block of quoted
+// lines, with the "... wrote:" attribution that introduces it, is not the
+// message's own; quoted lines followed by new text (an inline reply) are. It
+// returns len(lines) when there is nothing to drop.
 func ownTextEnd(lines []bodyLine) int {
+	if carriesForward(lines) {
+		return len(lines)
+	}
 	end := len(lines)
 	if i := outlookHeaderLine(lines); i >= 0 {
 		end = i
@@ -86,8 +90,7 @@ scan:
 // quoted original begins, or -1. Outlook quotes without ">" markers or a
 // blockquote, behind an "-----Original Message-----" line or a header block
 // whose "From:" line is followed by "Sent:". An underscore rule directly above
-// the header is part of it. A line already quoted is never the boundary, and
-// neither is a header block that a forwarded-message line introduces.
+// the header is part of it. A line already quoted is never the boundary.
 func outlookHeaderLine(lines []bodyLine) int {
 	for i, l := range lines {
 		if l.quoted {
@@ -98,27 +101,25 @@ func outlookHeaderLine(lines []bodyLine) int {
 			return i
 		}
 		if strings.HasPrefix(line, "From:") && i+1 < len(lines) && strings.HasPrefix(strings.TrimSpace(lines[i+1].text), "Sent:") {
-			start := i
 			if i > 0 {
 				if above := strings.TrimSpace(lines[i-1].text); above != "" && strings.Trim(above, "_") == "" {
-					start = i - 1
+					return i - 1
 				}
 			}
-			if !forwardIntroAbove(lines, start) {
-				return start
-			}
+			return i
 		}
 	}
 	return -1
 }
 
-// forwardIntroAbove reports whether the nearest non-blank line above lines[i]
-// introduces a forwarded message, as "Begin forwarded message:" or
-// "---------- Forwarded message ---------" do.
-func forwardIntroAbove(lines []bodyLine, i int) bool {
-	for j := i - 1; j >= 0; j-- {
-		if line := strings.TrimSpace(lines[j].text); line != "" {
-			return strings.Contains(strings.ToLower(line), "forwarded message")
+// carriesForward reports whether a body carries a forwarded message: an
+// unquoted line introduces one, as "Begin forwarded message:" or
+// "---------- Forwarded message ---------" do. The forwarded message is the
+// body's content, its own quotes and headers included.
+func carriesForward(lines []bodyLine) bool {
+	for _, l := range lines {
+		if !l.quoted && strings.Contains(strings.ToLower(l.text), "forwarded message") {
+			return true
 		}
 	}
 	return false
