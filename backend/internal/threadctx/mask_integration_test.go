@@ -72,6 +72,15 @@ func TestLoadMasker_MasksDisplayNames(t *testing.T) {
 		})
 	}
 
+	t.Run("an email sender's name that is a common word and no listed given name, at a sentence's start and mid-sentence", func(t *testing.T) {
+		// spec: KNW-089.capitalized-known-name-masked
+		t.Parallel()
+		e := newBuilderEnv(t)
+		e.inboundEmail(t, map[string]any{"from": "sender@example.test", "from_name": "Sky"})
+		assert.Equal(t, "NAME_1 sent the minutes", e.maskElsewhere(t, "Sky sent the minutes"))
+		assert.Equal(t, "we spoke with NAME_1 about the minutes", e.maskElsewhere(t, "we spoke with Sky about the minutes"))
+	})
+
 	for _, field := range []string{"to", "cc", "bcc"} {
 		t.Run("an email recipient's name in "+field+", attributed to no contact, from a recipient field", func(t *testing.T) {
 			t.Parallel()

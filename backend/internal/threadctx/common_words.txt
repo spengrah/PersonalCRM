@@ -4,9 +4,14 @@
 # 10000 most frequent words of the Wiktionary frequency lists of English as used
 # in television and movie scripts, each kept when Webster's Second
 # International Dictionary lists it, or the word an -s, -es, -ed, -d or -ing
-# ending inflects, in lower case, or when it is a contraction whose last part
-# is at most two letters or such a word. A word ending in 's is left out: the
-# masker keeps that suffix apart from the word before it.
+# ending inflects, in lower case, or when it is a contraction: a word ending in
+# n't, 'll, 're, 've, 'd or 'm; a word ending in 's whose first part also takes
+# 'll, 're, 've, 'd or 'm among the frequent words ("it's" beside "it'll"); or
+# a part of at most two letters before an apostrophe and a word of the
+# dictionary or another part of at most two letters ("y'all", "ma'am"). Any
+# other word written with an apostrophe is left out: a name's ("teal'c") or a
+# possessive's ("emily's"), whose suffix the masker keeps apart from the word
+# before it.
 #
 # Sources and licenses:
 #   - Wiktionary, "Frequency lists: TV and movie scripts" (2006), CC BY-SA 3.0,
@@ -3523,6 +3528,7 @@ haw
 he
 he'd
 he'll
+he's
 head
 headache
 headaches
@@ -3716,6 +3722,7 @@ hovering
 how
 how'd
 how're
+how's
 how've
 however
 hubby
@@ -4097,6 +4104,7 @@ issues
 it
 it'd
 it'll
+it's
 itch
 itching
 itchy
@@ -6810,6 +6818,7 @@ shaving
 she
 she'd
 she'll
+she's
 shed
 sheer
 sheet
@@ -7646,7 +7655,6 @@ teach
 teachers
 teaches
 teaching
-teal'c
 team
 teams
 tear
@@ -7728,6 +7736,7 @@ thanksgiving
 that
 that'd
 that'll
+that's
 thaw
 the
 theater
@@ -7747,6 +7756,7 @@ there
 there'd
 there'll
 there're
+there's
 therefore
 thermal
 these
@@ -7860,7 +7870,6 @@ toes
 together
 toilet
 toilets
-tok'ra
 token
 told
 tolerance
@@ -8466,6 +8475,7 @@ what
 what'd
 what'll
 what're
+what's
 what've
 whatsoever
 wheel
@@ -8474,6 +8484,7 @@ whenever
 where
 where'd
 where're
+where's
 where've
 whereabouts
 whereas
@@ -8499,6 +8510,7 @@ who
 who'd
 who'll
 who're
+who's
 who've
 whoa
 whoever
@@ -8513,6 +8525,7 @@ whores
 whose
 why
 why'd
+why's
 wide
 widow
 wife

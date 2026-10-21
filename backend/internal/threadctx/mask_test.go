@@ -234,6 +234,13 @@ func TestMask_KeepsOrdinaryWords(t *testing.T) {
 		})
 	}
 
+	for _, text := range []string{"It's good to see you", "It’s good to see you"} {
+		t.Run("a contraction ending in 's with a contact whose name holds its first part: "+text, func(t *testing.T) {
+			masked := maskWith(t, contactsNamed("It Sorensen"), dm(text)).Entries()[0].Text
+			assert.Equal(t, text, masked)
+		})
+	}
+
 	t.Run("lower-case will, it, is and me while contacts carry those words as names", func(t *testing.T) {
 		text := "it is what it is, and will you tell me"
 		masked := maskWith(t, contactsNamed("Will Hartigan", "It Sorensen", "Is Abernathy", "Me Lindqvist"), dm(text)).Entries()[0].Text
@@ -278,11 +285,26 @@ func TestMask_KnownNamesThatAreWords(t *testing.T) {
 	})
 }
 
+// A known name written with an apostrophe is masked like any other name, even
+// where the word list holds it as a contraction.
+// spec: KNW-089.known-apostrophized-name-masked
+func TestMask_KnownNamesWithAnApostrophe(t *testing.T) {
+	t.Run("a contact nicknamed Teal'c", func(t *testing.T) {
+		d := contactsNamed("Teal'c")
+		assert.Equal(t, "NAME_1 called", maskWith(t, d, dm("Teal'c called")).Entries()[0].Text)
+		assert.Equal(t, "we spoke with NAME_1 today", maskWith(t, d, dm("we spoke with Teal’c today")).Entries()[0].Text)
+	})
+
+	t.Run("a contact nicknamed Y'all, which the word list holds as a contraction", func(t *testing.T) {
+		assert.Equal(t, "tell NAME_1 I said hi", maskWith(t, contactsNamed("Y'all"), dm("tell Y'all I said hi")).Entries()[0].Text)
+	})
+}
+
 // A capitalized word that is a person's name is masked mid-sentence though it
 // is also a common word and no contact carries it, so the common-word
 // exemption lets no such name through; a capitalized common word that is no
 // name is kept.
-// spec: KNW-089.unknown-capitalized-masked, KNW-089.capitalized-common-words-kept
+// spec: KNW-089.unknown-given-name-masked, KNW-089.capitalized-common-words-kept
 func TestMask_NamesThatAreWordsWithoutAContact(t *testing.T) {
 	t.Run("Rose, Mark and Will mid-sentence with no contact of those names", func(t *testing.T) {
 		masked := mask(t, dm("we had lunch with Rose, Mark and Will today")).Entries()[0].Text
@@ -313,5 +335,11 @@ func TestMask_OwnNames(t *testing.T) {
 		d := threadctx.Dictionary{Own: []string{"Hope Ashworth"}}
 		masked := maskWith(t, d, dm("Hope says hi, and I hope so")).Entries()[0].Text
 		assert.Equal(t, "ME says hi, and I hope so", masked)
+	})
+
+	t.Run("an own name's word that a participant's alias shares", func(t *testing.T) {
+		c := dm("Marlowe sent it to Marlowe Raven")
+		c.Participants[threadctx.RoleThem] = threadctx.Participant{ContactID: &juniper, Aliases: []string{"Marlowe Raven"}}
+		assert.Equal(t, "ME sent it to THEM", mask(t, c).Entries()[0].Text)
 	})
 }

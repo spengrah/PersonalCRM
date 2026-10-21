@@ -1247,18 +1247,22 @@ behaviors:
     when: the masker masks them before they leave the Pi
     then:
       - key: identifiers-masked
-        text: email addresses, URLs, @handles and phone numbers of seven or more digits become numbered placeholders, and no phone match takes a calendar date or any part of one
+        text: email addresses and phone numbers of seven or more digits are masked, a phone number shaped like a date and an email address holding one included
+      - URLs and @handles are masked too, and every formatted identifier no participant owns becomes a numbered placeholder (EMAIL_n, PHONE_n, URL_n, HANDLE_n), one per distinct value within the request
       - key: role-labels-and-placeholders
-        text: the user's names and each participant's names and handles become its role label (ME, THEM, PERSON_n), and every other name a numbered placeholder, one per distinct identity within the request
+        text: a participant's names become its role label, and every other name a numbered placeholder, one per distinct identity within the request
+      - a participant's own handles, email addresses and phone numbers become its role label (ME, THEM, PERSON_n) too
       - key: calendar-words-survive
-        text: weekday, month and relative-time words and calendar dates survive
+        text: weekday, month and relative-time words and calendar dates survive, and no phone match takes a calendar date or any part of one
       - question IDs and option keys pass through unchanged
       - key: own-names-me
-        text: each of the user's own names from OWN_NAMES, each full name and each of its words, is masked as ME wherever it appears, at the start of a sentence included
+        text: each of the user's own names from OWN_NAMES, each full name and each of its words, is masked as ME wherever it appears, at the start of a sentence included, even where another identity's name shares the word
       - key: display-names-masked
-        text: a display name a stored message gives a sender or recipient, of any source that stores one, is masked in every message, as a numbered placeholder in a thread its owner takes no part in; a common word of a display name that is no person's name names no one alone
+        text: a display name a stored message gives a sender or recipient, of any source that stores one, is masked in every message, as a numbered placeholder in a thread its owner takes no part in
       - key: contractions-stay-whole
-        text: a contraction that is a common word ("I'll", "don't") stays whole, and no part of it is masked as a name
+        text: a contraction that is a common word and no known name ("I'll", "it's") stays whole, and no part of it is masked as a name
+      - key: known-apostrophized-name-masked
+        text: a known name written with an apostrophe ("Teal'c") is masked like any other name, even where the word list holds it as a contraction
       - key: lowercase-common-words-kept
         text: a common English word written in lower case is never masked as a name, even when a contact's name holds it
       - key: capitalized-known-name-masked
@@ -1266,11 +1270,14 @@ behaviors:
       - key: possessive-suffix-kept
         text: a possessive of a known name is masked with its suffix kept beside the placeholder, and a possessive of a word that is no name stays intact
       - key: unknown-capitalized-masked
-        text: a capitalized word that begins no sentence or line and that the dictionary does not hold is masked as a name when it is no common word or is also a person's name ("Will", "Rose", "Mark")
+        text: a capitalized word that begins no sentence or line, that the dictionary does not hold and that is no common word is masked as a name
+      - key: unknown-given-name-masked
+        text: a capitalized common word that is also a person's name ("Will", "Rose", "Mark") is masked as a name where it begins no sentence or line, though the dictionary does not hold it
       - key: capitalized-common-words-kept
         text: a capitalized common word that is no person's name ("Happy New Year") is kept where no sentence begins
       - key: address-header-words-masked
-        text: every word of an address header (from, to, cc, bcc, reply-to, sender) outside a formatted identifier is masked
+        text: every word of a from header outside a formatted identifier is masked
+      - every word of the other address headers (to, cc, bcc, reply-to, sender) outside a formatted identifier is masked too
       - key: refused-without-own-names
         text: the masker refuses to build when OWN_NAMES holds no name, so a run that would mask fails before any call
       - every masked method's version derives from the masking version, which the masking rules and the word lists' content make and no dictionary name feeds, so a masking change makes a rerun judge again

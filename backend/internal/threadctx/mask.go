@@ -29,10 +29,10 @@ import (
 //     seven or more digits);
 //   - every name of its dictionary and the names and handles the sources give
 //     each participant, matched as whole words and never across a formatted
-//     identifier: each full name and each of its words. The dictionary holds
-//     the user's own names, the CRM's contact names and the display names
-//     stored messages give their senders and recipients; a display name's
-//     common words that are no person's name name no one alone;
+//     identifier: each full name and each of its words, whatever source gave
+//     the name. The dictionary holds the user's own names, the CRM's contact
+//     names and the display names stored messages give their senders and
+//     recipients;
 //   - names the dictionary does not cover: a capitalized word that does not
 //     begin a sentence or line and is no common word, or is a common word that
 //     is also a person's name ("Will"), and every remaining word of an address
@@ -40,11 +40,13 @@ import (
 //
 // A common English word written in lower case is no name: a name matches only
 // when one of its words is capitalized or is no common word. A contraction
-// that is a common word ("I'll", "don't") stays whole and is no name, and a
+// that is a common word ("I'll", "it's") stays whole and is no name, unless a
+// name the dictionary holds is written with that very word ("Teal'c"); a
 // possessive suffix stays apart from the name before it ("Emily's").
 //
-// The user's own names and a participant's names and handles become its role
-// label (ME, THEM, PERSON_n); anything else becomes a numbered placeholder
+// The user's own names become ME, even where another identity's name shares
+// one of their words; a participant's names and handles become its role label
+// (ME, THEM, PERSON_n); anything else becomes a numbered placeholder
 // (NAME_n, EMAIL_n, PHONE_n, URL_n, HANDLE_n), one per distinct value within
 // the request. Weekday, month and relative-time words never match a name, and
 // no identifier takes a calendar date or any part of one, so they survive. A
@@ -305,11 +307,16 @@ func tokenize(text string) []token {
 
 // masking holds one request's dictionary and placeholder map.
 type masking struct {
-	// participantTerms, contactTerms and displayTerms map a lowercased word
-	// sequence to the identity it names; the user's and each participant's
-	// own names win over a contact's, and a contact's over a display name's.
-	participantTerms, contactTerms, displayTerms map[string]string
-	longestTerm                                  int
+	// ownTerms, participantTerms, contactTerms and displayTerms map a
+	// lowercased word sequence to the identity it names; the user's own names
+	// win over a participant's, a participant's over a contact's, and a
+	// contact's over a display name's. Every own term names ME, so no other
+	// identity's name can take one from it.
+	ownTerms, participantTerms, contactTerms, displayTerms map[string]string
+	longestTerm                                            int
+	// namedWords are the words written with an apostrophe ("teal'c") that the
+	// dictionary's names hold: none of them is a contraction.
+	namedWords map[string]bool
 	// identifiers maps a normalized identifier a participant owns to its identity.
 	identifiers  map[string]string
 	placeholders map[string]string
@@ -317,7 +324,7 @@ type masking struct {
 }
 
 func newMasking(d Dictionary, participants map[Role]Participant) *masking {
-	s := &masking{participantTerms: map[string]string{}, contactTerms: map[string]string{}, displayTerms: map[string]string{}, identifiers: map[string]string{}, placeholders: map[string]string{}, counts: map[string]int{}}
+	s := &masking{ownTerms: map[string]string{}, participantTerms: map[string]string{}, contactTerms: map[string]string{}, displayTerms: map[string]string{}, namedWords: map[string]bool{}, identifiers: map[string]string{}, placeholders: map[string]string{}, counts: map[string]int{}}
 	me := "role:" + string(RoleMe)
 	s.placeholders[me] = string(RoleMe)
 	roleOfContact := map[string]Role{}
@@ -334,11 +341,11 @@ func newMasking(d Dictionary, participants map[Role]Participant) *masking {
 				s.identifiers[category+":"+value] = identity
 				continue
 			}
-			s.addName(s.participantTerms, alias, identity, true)
+			s.addName(s.participantTerms, alias, identity)
 		}
 	}
 	for _, name := range d.Own {
-		s.addName(s.participantTerms, name, me, true)
+		s.addName(s.ownTerms, name, me)
 	}
 	contact := func(id uuid.UUID) string {
 		if role, ok := roleOfContact[id.String()]; ok {
@@ -347,7 +354,7 @@ func newMasking(d Dictionary, participants map[Role]Participant) *masking {
 		return "contact:" + id.String()
 	}
 	for _, n := range d.Contacts {
-		s.addName(s.contactTerms, n.Name, contact(n.ContactID), true)
+		s.addName(s.contactTerms, n.Name, contact(n.ContactID))
 	}
 	for _, n := range d.Display {
 		if _, _, ok := identifier(strings.TrimSpace(n.Name)); ok {
@@ -357,26 +364,21 @@ func newMasking(d Dictionary, participants map[Role]Participant) *masking {
 		if n.ContactID != nil {
 			identity = contact(*n.ContactID)
 		}
-		s.addName(s.displayTerms, n.Name, identity, false)
+		s.addName(s.displayTerms, n.Name, identity)
 	}
 	return s
 }
 
-// addName adds a name's full word sequence and each of its words as terms. A
-// term two identities share names neither, so that term alone gets an identity
-// of its own; the name's other terms keep naming its identity. Unless every
-// word names, a term whose every word is a common word that is no person's
-// name is left out, so an organization's display name ("The New York Times")
-// makes no ordinary word a name.
-func (s *masking) addName(terms map[string]string, name, identity string, everyWord bool) {
+// addName adds a name's full word sequence and each of its words as terms, and
+// records each of its words written with an apostrophe. A term two identities
+// share names neither, so that term alone gets an identity of its own; the
+// name's other terms keep naming its identity.
+func (s *masking) addName(terms map[string]string, name, identity string) {
 	tokens := tokenize(name)
 	if len(tokens) == 0 {
 		return
 	}
-	add := func(term string, words ...string) {
-		if !everyWord && !slices.ContainsFunc(words, func(w string) bool { return !ordinary(w) }) {
-			return
-		}
+	add := func(term string) {
 		if existing, ok := terms[term]; ok && existing != identity {
 			terms[term] = "term:" + term
 			return
@@ -387,11 +389,16 @@ func (s *masking) addName(terms map[string]string, name, identity string, everyW
 	for i, t := range tokens {
 		words[i] = t.lower
 		if utf8.RuneCountInString(t.lower) >= 2 && !protectedWords[t.lower] && !isDigits(t.lower) {
-			add(t.lower, t.lower)
+			add(t.lower)
 		}
 	}
-	add(strings.Join(words, " "), words...)
+	add(strings.Join(words, " "))
 	s.longestTerm = max(s.longestTerm, len(tokens))
+	for _, word := range apostrophized(name, tokens) {
+		if word != "" {
+			s.namedWords[word] = true
+		}
+	}
 }
 
 func isDigits(s string) bool {
@@ -447,7 +454,7 @@ func (s *masking) mask(text string, addressHeader bool) string {
 		add(match)
 	}
 	slices.SortFunc(spans, func(a, b span) int { return a.start - b.start })
-	for _, words := range runsBetween(text, spans) {
+	for _, words := range s.runsBetween(text, spans) {
 		for i := 0; i < len(words); {
 			if n, identity := s.lookup(text, words[i:]); n > 0 {
 				spans = append(spans, span{words[i].start, words[i+n-1].end, s.placeholder(identity, "NAME")})
@@ -474,20 +481,24 @@ func (s *masking) mask(text string, addressHeader bool) string {
 }
 
 // runsBetween returns the words of text outside the identifier spans, which
-// are in text order, split into runs at each span and at each contraction that
-// is a common word, which stays whole and is no name: no name match crosses
-// either, so every span rendered is disjoint from the others.
-func runsBetween(text string, identifiers []span) [][]token {
+// are in text order, split into runs at each span and at each contraction,
+// which stays whole and is no name: no name match crosses either, so every
+// span rendered is disjoint from the others. A contraction is a word written
+// with an apostrophe that is a common word ("I'll", "it's") and that no name
+// of the dictionary holds ("Teal'c"). Every other such word's parts are words
+// of their own, so a possessive suffix stays apart from the name before it.
+func (s *masking) runsBetween(text string, identifiers []span) [][]token {
 	runs := [][]token{nil}
 	next := 0
 	tokens := tokenize(text)
-	contracted := inContraction(text, tokens)
+	joined := apostrophized(text, tokens)
 	for i, t := range tokens {
 		for next < len(identifiers) && identifiers[next].end <= t.start {
 			next++
 			runs = append(runs, nil)
 		}
-		if contracted[i] || (next < len(identifiers) && identifiers[next].start < t.end) {
+		contraction := commonWords[joined[i]] && !s.namedWords[joined[i]]
+		if contraction || (next < len(identifiers) && identifiers[next].start < t.end) {
 			runs = append(runs, nil)
 			continue
 		}
@@ -499,11 +510,11 @@ func runsBetween(text string, identifiers []span) [][]token {
 // apostrophes join the parts of a contraction or of a possessive.
 const apostrophes = "'’"
 
-// inContraction marks each token that is a part of a contraction that is a
-// common word ("I'll", "don't"). Every other word's parts are tokens of their
-// own, so a possessive suffix stays apart from the name before it.
-func inContraction(text string, tokens []token) []bool {
-	out := make([]bool, len(tokens))
+// apostrophized returns, for each token, the word written with an apostrophe
+// it is a part of ("I'll", "Emily's"), its parts lowercased and joined by ',
+// and "" for a token that is a word alone.
+func apostrophized(text string, tokens []token) []string {
+	out := make([]string, len(tokens))
 	for i := 0; i < len(tokens); {
 		parts := []string{tokens[i].lower}
 		j := i + 1
@@ -514,9 +525,10 @@ func inContraction(text string, tokens []token) []bool {
 			}
 			parts = append(parts, tokens[j].lower)
 		}
-		if len(parts) > 1 && commonWords[strings.Join(parts, "'")] {
+		if len(parts) > 1 {
+			word := strings.Join(parts, "'")
 			for k := i; k < j; k++ {
-				out[k] = true
+				out[k] = word
 			}
 		}
 		i = j
@@ -543,7 +555,7 @@ func (s *masking) lookup(text string, words []token) (int, string) {
 			parts[i] = w.lower
 		}
 		term := strings.Join(parts, " ")
-		for _, terms := range []map[string]string{s.participantTerms, s.contactTerms, s.displayTerms} {
+		for _, terms := range []map[string]string{s.ownTerms, s.participantTerms, s.contactTerms, s.displayTerms} {
 			if identity, ok := terms[term]; ok {
 				return n, identity
 			}
