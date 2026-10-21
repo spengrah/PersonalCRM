@@ -73,7 +73,7 @@ The January review read the masked text of the 122 messages jev-masked flagged a
 
 ## Relation to existing & planned work
 
-- A separate change (another session, 2026-10-21) removes quoted email history and marks reaction messages. Measured masking results improve once it lands, since quoted sender lines and signatures carry many unseen names; neither change depends on the other.
+- A separate change (2026-10-21, landed with #964 and #968) removes quoted email history at ingestion and marks reaction messages, both backfilled. It left the review set's 113 message texts unchanged (checked 2026-10-21), so the bakeoff labels still apply.
 - The commitment definition (decision 20261021T163917Z-77e06cd925bb) ships separately as new wording with its own method version. With these fixes and the quoted-history change, it makes the first-week January re-judge.
 - The masker's guarantees are in `backend/internal/threadctx/mask.go`; HC3 of `.agents/spec/2026-10-18-message-flags-and-threads.md` (no content at rest off the Pi; content-free Langfuse) still holds.
 
