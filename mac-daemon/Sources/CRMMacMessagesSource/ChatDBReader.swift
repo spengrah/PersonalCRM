@@ -18,6 +18,7 @@
 // plugin layer via outboundPeer (the row's chat_handle_join entry).
 import Foundation
 import GRDB
+import CRMMacPiClient
 
 /// One chat.db row, shaped for downstream payload construction.
 public struct ChatDBMessage: Equatable, Sendable {
@@ -33,6 +34,9 @@ public struct ChatDBMessage: Equatable, Sendable {
     public let isGroup: Bool
     public let sentAt: Date
     public let replyToGUID: String?
+    /// The row's reaction facts, decided by `ReactionRecognition`. Nil when
+    /// the row is not a reaction.
+    public let reaction: MessageReaction?
     /// First attachment row joined via message_attachment_join (lowest
     /// join.ROWID). Nil if the message has no attachments.
     public let primaryAttachmentUTI: String?
@@ -47,7 +51,8 @@ public struct ChatDBMessage: Equatable, Sendable {
         primaryAttachmentUTI: String?,
         primaryAttachmentMimeType: String?,
         primaryAttachmentTransferName: String?,
-        primaryAttachmentTotalBytes: Int64?
+        primaryAttachmentTotalBytes: Int64?,
+        reaction: MessageReaction? = nil
     ) {
         self.rowID = rowID
         self.guid = guid
@@ -62,6 +67,7 @@ public struct ChatDBMessage: Equatable, Sendable {
         self.primaryAttachmentMimeType = primaryAttachmentMimeType
         self.primaryAttachmentTransferName = primaryAttachmentTransferName
         self.primaryAttachmentTotalBytes = primaryAttachmentTotalBytes
+        self.reaction = reaction
     }
 }
 
@@ -144,6 +150,8 @@ public final class ChatDBReader {
             message.item_type                     AS msg_item_type,
             message.date                          AS msg_date,
             message.associated_message_guid       AS msg_reply_to_guid,
+            message.associated_message_type       AS msg_assoc_type,
+            message.associated_message_emoji      AS msg_assoc_emoji,
             message.handle_id                     AS msg_handle_id,
             handle.id                             AS hnd_id,
             chat.guid                             AS chat_guid,
@@ -243,7 +251,11 @@ public final class ChatDBReader {
             primaryAttachmentUTI: row["att_uti"],
             primaryAttachmentMimeType: row["att_mime"],
             primaryAttachmentTransferName: row["att_name"],
-            primaryAttachmentTotalBytes: row["att_size"])
+            primaryAttachmentTotalBytes: row["att_size"],
+            reaction: ReactionRecognition.facts(
+                associatedMessageType: (row["msg_assoc_type"] as Int64?) ?? 0,
+                associatedMessageGUID: row["msg_reply_to_guid"],
+                associatedMessageEmoji: row["msg_assoc_emoji"]))
     }
 
     /// max message.ROWID currently in the database.

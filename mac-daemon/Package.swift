@@ -99,8 +99,9 @@ let package = Package(
                     ],
                     .when(platforms: [.macOS])),
             ]),
-        // One-time operator script (`swift run rescan-messages`): fills the
-        // bodies the Pi lacks from the messages database. Deliberately NOT
+        // One-time operator script (`swift run rescan-messages`): completes the
+        // group messages, bodies and reaction facts the Pi lacks from the
+        // messages database. Deliberately NOT
         // in `products`, the `crm-mac` subcommands or the assembled bundle.
         .executableTarget(
             name: "rescan-messages",
