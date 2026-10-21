@@ -833,6 +833,9 @@ func (s *IngestService) handleRawMessage(
 		contactID = matchResult.ContactID
 	}
 
+	// An absent or invalid reaction object stores no facts: the message itself
+	// is stored as an older daemon's would be.
+	reaction, _ := ReactionFacts(p.Reaction)
 	upsertParams := repository.UpsertMessagesMessageParams{
 		Guid:             p.Guid,
 		ChatGuid:         p.ChatID,
@@ -847,6 +850,7 @@ func (s *IngestService) handleRawMessage(
 		MatchedContactID: contactID,
 		MacHostID:        &hostID,
 		CreditsReply:     outboundGroup,
+		Reaction:         reaction,
 	}
 	stored, err := s.messages.UpsertMessageTx(ctx, tx, upsertParams)
 	if err != nil {

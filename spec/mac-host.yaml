@@ -696,6 +696,35 @@ behaviors:
     provenance: [MessagesEnrichmentHandler.ListMissingBodies/FillBodies, MessagesEnrichmentService, messages_enrichment_test.go, .agents/spec/2026-10-13-interaction-review-readiness.md]
     notes: Group-chat messages are outside this behavior.
 
+  - id: MAC-064
+    title: A paired host lists stored messages without reaction facts and gives them their facts
+    type: api
+    status: current
+    surface: api
+    given: a paired host presenting its bearer key
+    when: it lists messages without reaction facts and submits set_reaction items for them
+    then:
+      - key: lists-rows-without-facts
+        text: the listing returns the guids of stored, non-deleted messages that carry no reaction kind, whichever host pushed them, in guid order, one page at a time, with a cursor to the next page when more remain
+      - key: marks-reaction
+        text: a set_reaction item stores its kind, emoji, target key and removal flag on a named stored message that carries none, and the answer reports that item as marked
+      - key: keeps-existing-facts
+        text: a set_reaction item for a message that already carries facts leaves them as they are, whatever facts the item names, and the answer reports the item as unchanged
+      - key: unknown-guid-not-created
+        text: a set_reaction item naming a guid with no stored non-deleted message creates nothing, and the answer reports the item as unknown
+      - key: row-identity-preserved
+        text: storing a reaction's facts changes no other column of the row, so its body, identity, interaction links, and processing state stay as they were
+      - key: no-cadence-or-event-effect
+        text: storing a reaction's facts replays no ingest, so it changes no contact cadence field, creates no follow-up, and emits no event
+      - key: second-run-unchanged
+        text: submitting the same items again changes nothing, and the answer reports each item as unchanged
+      - key: invalid-request-writes-nothing
+        text: a request with a set_reaction item that misses its guid or its reaction, or whose reaction is invalid as ingest judges one (ING-048), or with more than the per-request item cap, is rejected whole, and none of its items is written
+      - key: requires-host-credentials
+        text: a request without the host's bearer key is refused, and writes nothing
+    provenance: [MessagesEnrichmentHandler.ListWithoutReactionFacts/ApplyItems, MessagesEnrichmentService.ListWithoutReactionFacts/markOne, messages_enrichment_reaction_test.go, .agents/spec/2026-10-21-message-reactions.md]
+    notes: The answer's per-outcome counts carry marked beside the other enrichment outcomes. Ingest stores a live message with an invalid reaction object as one without facts, while this exchange rejects the request, because an operator run can be corrected and rerun. The re-scan that drives this exchange is MAC-063.
+
   - id: MAC-058
     title: A one-time operator re-scan fills stored body-less messages and classifies the rest
     type: business-logic

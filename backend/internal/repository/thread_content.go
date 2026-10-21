@@ -34,6 +34,9 @@ type ThreadContentRow struct {
 	UserAliases []string
 	Body        string
 	Headers     []byte
+	// Reaction is the facts of a copy that is a reaction, nil on any other.
+	// Its TargetKey is in MessageKey form, so it equals the target's MessageKey.
+	Reaction *MessageReaction
 }
 
 // ContactName is one name the CRM holds for a live contact.
@@ -67,7 +70,8 @@ func (r *ThreadContentRepository) ListThreadContent(ctx context.Context, venueID
 	}
 	out := make([]ThreadContentRow, len(rows))
 	for i, row := range rows {
-		out[i] = ThreadContentRow{VenueKind: row.VenueKind, MessageKey: row.MessageKey, SentAt: row.SentAt, FromUser: row.FromUser, PeerKey: row.PeerKey, PeerContactID: row.PeerContactID, PeerAliases: row.PeerAliases, UserAliases: row.UserAliases, Body: row.Body, Headers: row.Headers}
+		out[i] = ThreadContentRow{VenueKind: row.VenueKind, MessageKey: row.MessageKey, SentAt: row.SentAt, FromUser: row.FromUser, PeerKey: row.PeerKey, PeerContactID: row.PeerContactID, PeerAliases: row.PeerAliases, UserAliases: row.UserAliases, Body: row.Body, Headers: row.Headers,
+			Reaction: reactionFromColumns(row.ReactionKind, row.ReactionEmoji, row.ReactionTargetKey, row.ReactionRemoval)}
 	}
 	return out, nil
 }

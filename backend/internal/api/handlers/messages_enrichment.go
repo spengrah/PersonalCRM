@@ -11,6 +11,7 @@ import (
 
 	"personal-crm/backend/internal/api"
 	"personal-crm/backend/internal/auth"
+	"personal-crm/backend/internal/events"
 	"personal-crm/backend/internal/service"
 
 	"github.com/gin-gonic/gin"
@@ -28,7 +29,8 @@ const (
 
 // MessagesEnrichmentService is the surface the enrichment handler needs.
 type MessagesEnrichmentService interface {
-	ListMissingBodies(ctx context.Context, after *string, limit int) (*service.MissingBodiesPage, error)
+	ListMissingBodies(ctx context.Context, after *string, limit int) (*service.GuidPage, error)
+	ListWithoutReactionFacts(ctx context.Context, after *string, limit int) (*service.GuidPage, error)
 	ListGroupChats(ctx context.Context, after *string, limit int) (*service.GroupChatsPage, error)
 	ApplyItems(ctx context.Context, hostID uuid.UUID, items []service.EnrichmentItem) (*service.EnrichmentResponse, error)
 }
@@ -74,6 +76,11 @@ func (h *MessagesEnrichmentHandler) ListMissingBodies(c *gin.Context) {
 	listPage(c, h.svc.ListMissingBodies)
 }
 
+// ListWithoutReactionFacts answers GET /api/v1/host/:id/messages/enrichment/without-reaction-facts.
+func (h *MessagesEnrichmentHandler) ListWithoutReactionFacts(c *gin.Context) {
+	listPage(c, h.svc.ListWithoutReactionFacts)
+}
+
 // ListGroupChats answers GET /api/v1/host/:id/messages/enrichment/group-chats.
 func (h *MessagesEnrichmentHandler) ListGroupChats(c *gin.Context) {
 	listPage(c, h.svc.ListGroupChats)
@@ -87,6 +94,8 @@ type enrichmentItem struct {
 	Sender    *string `json:"sender"`
 	Direction string  `json:"direction"`
 	SentAt    string  `json:"sent_at"`
+	// Reaction is the set_reaction item's facts.
+	Reaction *events.MessageReaction `json:"reaction"`
 }
 
 type enrichmentRequest struct {
@@ -109,8 +118,14 @@ func (item enrichmentItem) toService() (service.EnrichmentItem, error) {
 		return service.EnrichmentItem{Op: service.EnrichmentOpClearOutboundPeer, Guid: item.Guid}, nil
 	case service.EnrichmentOpAddGroupMessage:
 		return item.addGroupMessage()
+	case service.EnrichmentOpSetReaction:
+		reaction, err := service.ReactionFacts(item.Reaction)
+		if err != nil {
+			return service.EnrichmentItem{}, fmt.Errorf("set_reaction: %w", err)
+		}
+		return service.EnrichmentItem{Op: service.EnrichmentOpSetReaction, Guid: item.Guid, Reaction: reaction}, nil
 	default:
-		return service.EnrichmentItem{}, fmt.Errorf("op %q is not one of fill_body, add_group_message, clear_outbound_peer", item.Op)
+		return service.EnrichmentItem{}, fmt.Errorf("op %q is not one of fill_body, add_group_message, clear_outbound_peer, set_reaction", item.Op)
 	}
 }
 

@@ -1658,6 +1658,11 @@ type Querier interface {
 	// Every filter is optional. Chats page by an exclusive @after chat_guid, and
 	// @chat_limit bounds the number of distinct chats returned.
 	ListMessagesGroupBurstWindows(ctx context.Context, arg ListMessagesGroupBurstWindowsParams) ([]*ListMessagesGroupBurstWindowsRow, error)
+	// Guids of stored, non-deleted rows that carry no reaction kind, in guid order,
+	// keyset-paged by an exclusive @after guid. Whichever host pushed the row. The
+	// caller asks for one row more than a page to learn whether another page
+	// remains.
+	ListMessagesMessageGuidsWithoutReactionFacts(ctx context.Context, arg ListMessagesMessageGuidsWithoutReactionFactsParams) ([]string, error)
 	ListMessagesMessagesByChatWindow(ctx context.Context, arg ListMessagesMessagesByChatWindowParams) ([]*MessagesMessage, error)
 	ListMessagesMessagesByInteractionIDs(ctx context.Context, interactionIds []uuid.UUID) ([]*MessagesMessage, error)
 	// Missed calls: unanswered inbound calls that left no voicemail, which ingest
@@ -2277,6 +2282,11 @@ type Querier interface {
 	// Production code never calls this — the daemon's heartbeat POST is the only
 	// real writer of last_heartbeat_at.
 	SetMacHostHeartbeatAtForTest(ctx context.Context, arg SetMacHostHeartbeatAtForTestParams) error
+	// Stores the reaction facts of a stored, non-deleted row that carries none.
+	// Touches nothing else: no body, processing, claim, interaction or contact
+	// column. Returns 0 rows when the row is absent, deleted, or already carries
+	// facts, which stay as they are.
+	SetMessagesMessageReaction(ctx context.Context, arg SetMessagesMessageReactionParams) (int64, error)
 	// Records the merge alias (loser → winner) and tombstones the loser node.
 	SetNodeMergedInto(ctx context.Context, arg SetNodeMergedIntoParams) error
 	// Sets an obligation task's basis; a commitment supersedes a reply.
@@ -3549,6 +3559,7 @@ type Querier interface {
 	// provenance — multi-host dedup is by guid, not by host. credits_reply is set
 	// only when ingest stores the user's own group message; a conflict keeps the
 	// stored row's value, so the RETURNING row is what reply eligibility reads.
+	// The reaction_* facts are all NULL on a message that is not a reaction.
 	UpsertMessagesMessage(ctx context.Context, arg UpsertMessagesMessageParams) (*MessagesMessage, error)
 	// Insert or update an OAuth credential.
 	// refresh_token_nonce is kept in sync with refresh_token_encrypted: when a new

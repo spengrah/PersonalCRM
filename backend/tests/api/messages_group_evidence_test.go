@@ -135,7 +135,7 @@ func (e *enrichmentEnv) apply(t *testing.T, items ...map[string]any) enrichmentR
 	requireDataKeys(t, w, map[string][]string{
 		"":        {"results", "totals"},
 		"results": {"guid", "outcome"},
-		"totals":  {"filled", "unchanged", "unknown", "added", "outside_window", "cleared"},
+		"totals":  {"filled", "unchanged", "unknown", "added", "outside_window", "cleared", "marked"},
 	})
 	var res enrichmentResponse
 	readData(t, w, &res)

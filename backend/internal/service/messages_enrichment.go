@@ -14,11 +14,13 @@ import (
 )
 
 // MessagesEnrichmentRepository is the messages_message surface the enrichment
-// exchange uses. Its writes fill a missing body, add a message as evidence, or
-// remove a member attribution, and nothing else.
+// exchange uses. Its writes fill a missing body, add a message as evidence,
+// remove a member attribution, or store a reaction's facts, and nothing else.
 type MessagesEnrichmentRepository interface {
 	ListBodylessGuids(ctx context.Context, after *string, limit int32) ([]string, error)
 	FillBody(ctx context.Context, guid, body string) (bool, error)
+	ListGuidsWithoutReactionFacts(ctx context.Context, after *string, limit int32) ([]string, error)
+	SetReaction(ctx context.Context, guid string, reaction repository.MessageReaction) (bool, error)
 	GetMessage(ctx context.Context, guid string) (*repository.MessagesMessage, error)
 	ListGroupBurstWindows(ctx context.Context, f repository.GroupBurstWindowFilter) ([]repository.GroupBurstWindow, error)
 	GuidExists(ctx context.Context, guid string) (bool, error)
@@ -28,8 +30,8 @@ type MessagesEnrichmentRepository interface {
 
 // MessagesEnrichmentService serves the Mac daemon's re-scans of stored
 // messages. It calls no ingest, aggregation, cadence, follow-up or event code:
-// filling a body, adding a message as evidence and clearing a member
-// attribution are its only writes.
+// filling a body, adding a message as evidence, clearing a member attribution
+// and storing a reaction's facts are its only writes.
 type MessagesEnrichmentService struct {
 	messages MessagesEnrichmentRepository
 }
@@ -38,35 +40,53 @@ func NewMessagesEnrichmentService(messages MessagesEnrichmentRepository) *Messag
 	return &MessagesEnrichmentService{messages: messages}
 }
 
-// MissingBodyItem is one listed body-less row; the guid is all the daemon
-// needs to look the body up locally.
-type MissingBodyItem struct {
+// GuidItem is one listed row; the guid is all the daemon needs to look the
+// message up locally.
+type GuidItem struct {
 	Guid string `json:"guid"`
 }
 
-// MissingBodiesPage is one page of body-less guids. NextAfter is the last
-// listed guid when more remain, else nil.
-type MissingBodiesPage struct {
-	Items     []MissingBodyItem `json:"items"`
-	NextAfter *string           `json:"next_after"`
+// GuidPage is one page of listed guids. NextAfter is the last listed guid when
+// more remain, else nil.
+type GuidPage struct {
+	Items     []GuidItem `json:"items"`
+	NextAfter *string    `json:"next_after"`
 }
 
 // ListMissingBodies lists up to limit guids of stored, non-deleted rows whose
 // text is NULL or empty, in guid order, strictly after the given guid.
-func (s *MessagesEnrichmentService) ListMissingBodies(ctx context.Context, after *string, limit int) (*MissingBodiesPage, error) {
-	// One row beyond the page tells whether another page remains.
-	guids, err := s.messages.ListBodylessGuids(ctx, after, int32(limit+1))
+func (s *MessagesEnrichmentService) ListMissingBodies(ctx context.Context, after *string, limit int) (*GuidPage, error) {
+	page, err := listGuidPage(ctx, s.messages.ListBodylessGuids, after, limit)
 	if err != nil {
 		return nil, fmt.Errorf("list body-less messages: %w", err)
 	}
-	page := &MissingBodiesPage{Items: []MissingBodyItem{}}
+	return page, nil
+}
+
+// ListWithoutReactionFacts lists up to limit guids of stored, non-deleted rows
+// that carry no reaction kind, in guid order, strictly after the given guid.
+func (s *MessagesEnrichmentService) ListWithoutReactionFacts(ctx context.Context, after *string, limit int) (*GuidPage, error) {
+	page, err := listGuidPage(ctx, s.messages.ListGuidsWithoutReactionFacts, after, limit)
+	if err != nil {
+		return nil, fmt.Errorf("list messages without reaction facts: %w", err)
+	}
+	return page, nil
+}
+
+func listGuidPage(ctx context.Context, list func(ctx context.Context, after *string, limit int32) ([]string, error), after *string, limit int) (*GuidPage, error) {
+	// One row beyond the page tells whether another page remains.
+	guids, err := list(ctx, after, int32(limit+1))
+	if err != nil {
+		return nil, err
+	}
+	page := &GuidPage{Items: []GuidItem{}}
 	if len(guids) > limit {
 		guids = guids[:limit]
 		last := guids[limit-1]
 		page.NextAfter = &last
 	}
 	for _, g := range guids {
-		page.Items = append(page.Items, MissingBodyItem{Guid: g})
+		page.Items = append(page.Items, GuidItem{Guid: g})
 	}
 	return page, nil
 }
@@ -128,6 +148,7 @@ const (
 	EnrichmentOpFillBody          EnrichmentOp = "fill_body"
 	EnrichmentOpAddGroupMessage   EnrichmentOp = "add_group_message"
 	EnrichmentOpClearOutboundPeer EnrichmentOp = "clear_outbound_peer"
+	EnrichmentOpSetReaction       EnrichmentOp = "set_reaction"
 )
 
 // EnrichmentOutcome is what one enrichment item did.
@@ -140,12 +161,13 @@ const (
 	EnrichmentAdded         EnrichmentOutcome = "added"
 	EnrichmentOutsideWindow EnrichmentOutcome = "outside_window"
 	EnrichmentCleared       EnrichmentOutcome = "cleared"
+	EnrichmentMarked        EnrichmentOutcome = "marked"
 )
 
 // EnrichmentItem is one validated enrichment request item. Body is the body to
-// fill (fill_body) or the body of the added message (add_group_message); the
-// remaining fields belong to add_group_message, whose Sender is nil for the
-// user's own message.
+// fill (fill_body) or the body of the added message (add_group_message);
+// ChatGuid, Sender, Outgoing and SentAt belong to add_group_message, whose
+// Sender is nil for the user's own message; Reaction belongs to set_reaction.
 type EnrichmentItem struct {
 	Op       EnrichmentOp
 	Guid     string
@@ -154,6 +176,7 @@ type EnrichmentItem struct {
 	Sender   *string
 	Outgoing bool
 	SentAt   time.Time
+	Reaction *repository.MessageReaction
 }
 
 type EnrichmentResult struct {
@@ -169,6 +192,7 @@ type EnrichmentTotals struct {
 	Added         int `json:"added"`
 	OutsideWindow int `json:"outside_window"`
 	Cleared       int `json:"cleared"`
+	Marked        int `json:"marked"`
 }
 
 type EnrichmentResponse struct {
@@ -199,6 +223,8 @@ func (s *MessagesEnrichmentService) ApplyItems(ctx context.Context, hostID uuid.
 			res.Totals.OutsideWindow++
 		case EnrichmentCleared:
 			res.Totals.Cleared++
+		case EnrichmentMarked:
+			res.Totals.Marked++
 		}
 	}
 	return res, nil
@@ -212,6 +238,8 @@ func (s *MessagesEnrichmentService) applyOne(ctx context.Context, hostID uuid.UU
 		return s.addOne(ctx, hostID, item)
 	case EnrichmentOpClearOutboundPeer:
 		return s.clearOne(ctx, item)
+	case EnrichmentOpSetReaction:
+		return s.markOne(ctx, item)
 	default:
 		return "", fmt.Errorf("unknown op %q", item.Op)
 	}
@@ -282,6 +310,20 @@ func (s *MessagesEnrichmentService) clearOne(ctx context.Context, item Enrichmen
 	}
 	if cleared {
 		return EnrichmentCleared, nil
+	}
+	return s.unchangedOrUnknown(ctx, item.Guid)
+}
+
+// markOne stores a reaction's facts on a stored row that carries none. A row
+// that already carries facts keeps them (unchanged); a guid with no non-deleted
+// row creates nothing (unknown).
+func (s *MessagesEnrichmentService) markOne(ctx context.Context, item EnrichmentItem) (EnrichmentOutcome, error) {
+	marked, err := s.messages.SetReaction(ctx, item.Guid, *item.Reaction)
+	if err != nil {
+		return "", err
+	}
+	if marked {
+		return EnrichmentMarked, nil
 	}
 	return s.unchangedOrUnknown(ctx, item.Guid)
 }

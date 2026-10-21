@@ -618,6 +618,10 @@ type MessagesMessage struct {
 	DeletedAt         *time.Time `json:"deleted_at"`
 	CreatedAt         *time.Time `json:"created_at"`
 	CreditsReply      bool       `json:"credits_reply"`
+	ReactionKind      *string    `json:"reaction_kind"`
+	ReactionEmoji     *string    `json:"reaction_emoji"`
+	ReactionTargetKey *string    `json:"reaction_target_key"`
+	ReactionRemoval   *bool      `json:"reaction_removal"`
 }
 
 type Node struct {
@@ -862,18 +866,22 @@ type TelegramUpdateState struct {
 }
 
 type ThreadContent struct {
-	VenueID       uuid.UUID  `json:"venue_id"`
-	VenueKind     string     `json:"venue_kind"`
-	MessageKey    string     `json:"message_key"`
-	SentAt        time.Time  `json:"sent_at"`
-	FromUser      bool       `json:"from_user"`
-	PeerKey       string     `json:"peer_key"`
-	PeerContactID *uuid.UUID `json:"peer_contact_id"`
-	PeerAliases   []string   `json:"peer_aliases"`
-	UserAliases   []string   `json:"user_aliases"`
-	Body          string     `json:"body"`
-	Headers       []byte     `json:"headers"`
-	ObservationID *uuid.UUID `json:"observation_id"`
+	VenueID           uuid.UUID  `json:"venue_id"`
+	VenueKind         string     `json:"venue_kind"`
+	MessageKey        string     `json:"message_key"`
+	SentAt            time.Time  `json:"sent_at"`
+	FromUser          bool       `json:"from_user"`
+	PeerKey           string     `json:"peer_key"`
+	PeerContactID     *uuid.UUID `json:"peer_contact_id"`
+	PeerAliases       []string   `json:"peer_aliases"`
+	UserAliases       []string   `json:"user_aliases"`
+	Body              string     `json:"body"`
+	Headers           []byte     `json:"headers"`
+	ObservationID     *uuid.UUID `json:"observation_id"`
+	ReactionKind      *string    `json:"reaction_kind"`
+	ReactionEmoji     *string    `json:"reaction_emoji"`
+	ReactionTargetKey *string    `json:"reaction_target_key"`
+	ReactionRemoval   *bool      `json:"reaction_removal"`
 }
 
 type Venue struct {

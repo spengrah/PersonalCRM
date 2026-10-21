@@ -4,14 +4,17 @@
 -- provenance — multi-host dedup is by guid, not by host. credits_reply is set
 -- only when ingest stores the user's own group message; a conflict keeps the
 -- stored row's value, so the RETURNING row is what reply eligibility reads.
+-- The reaction_* facts are all NULL on a message that is not a reaction.
 INSERT INTO messages_message (
     guid, chat_guid, peer_handle, peer_normalized,
     text, message_type, sent_at, is_outgoing, is_group_chat,
-    reply_to_guid, matched_contact_id, mac_host_id, credits_reply
+    reply_to_guid, matched_contact_id, mac_host_id, credits_reply,
+    reaction_kind, reaction_emoji, reaction_target_key, reaction_removal
 ) VALUES (
     @guid, @chat_guid, @peer_handle, @peer_normalized,
     @text, @message_type, @sent_at, @is_outgoing, @is_group_chat,
-    @reply_to_guid, @matched_contact_id, @mac_host_id, @credits_reply
+    @reply_to_guid, @matched_contact_id, @mac_host_id, @credits_reply,
+    sqlc.narg(reaction_kind), sqlc.narg(reaction_emoji), sqlc.narg(reaction_target_key), sqlc.narg(reaction_removal)
 )
 ON CONFLICT (guid) DO UPDATE SET
     -- No-op update so RETURNING reliably returns the existing row. We
@@ -262,6 +265,32 @@ SET text = @body
 WHERE guid = @guid
   AND deleted_at IS NULL
   AND (text IS NULL OR text = '');
+
+-- name: ListMessagesMessageGuidsWithoutReactionFacts :many
+-- Guids of stored, non-deleted rows that carry no reaction kind, in guid order,
+-- keyset-paged by an exclusive @after guid. Whichever host pushed the row. The
+-- caller asks for one row more than a page to learn whether another page
+-- remains.
+SELECT guid FROM messages_message
+WHERE deleted_at IS NULL
+  AND reaction_kind IS NULL
+  AND (sqlc.narg(after)::text IS NULL OR guid > sqlc.narg(after)::text)
+ORDER BY guid ASC
+LIMIT @row_limit;
+
+-- name: SetMessagesMessageReaction :execrows
+-- Stores the reaction facts of a stored, non-deleted row that carries none.
+-- Touches nothing else: no body, processing, claim, interaction or contact
+-- column. Returns 0 rows when the row is absent, deleted, or already carries
+-- facts, which stay as they are.
+UPDATE messages_message
+SET reaction_kind = @reaction_kind,
+    reaction_emoji = sqlc.narg(reaction_emoji),
+    reaction_target_key = @reaction_target_key,
+    reaction_removal = @reaction_removal
+WHERE guid = @guid
+  AND deleted_at IS NULL
+  AND reaction_kind IS NULL;
 
 -- name: ListMessagesGroupBurstWindows :many
 -- The one derivation of a group-chat burst's window: the closed span from the
