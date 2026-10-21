@@ -30,10 +30,19 @@ type Config struct {
 	EventBus  EventBusConfig
 	Health    HealthConfig
 	Sync      SyncConfig
+	User      UserConfig
 	Decision  DecisionConfig
 	// LangfuseExtraction is the Langfuse extraction project the decision-model
 	// export sends to.
 	LangfuseExtraction LangfuseExtractionConfig
+}
+
+// UserConfig is what the CRM knows of its one user, who has no contact
+// record. Any feature may read it.
+type UserConfig struct {
+	// OwnNames are the user's own names (OWN_NAMES, comma-separated): each a
+	// full name or another name the user goes by. Empty entries are dropped.
+	OwnNames []string
 }
 
 // DecisionConfig holds the decision-model settings.
@@ -602,6 +611,9 @@ func Load() (*Config, error) {
 		Sync: SyncConfig{
 			LogRetentionDays: getEnvAsInt("SYNC_LOG_RETENTION_DAYS", DefaultSyncLogRetentionDays),
 		},
+		User: UserConfig{
+			OwnNames: getEnvAsList("OWN_NAMES"),
+		},
 		Decision: DecisionConfig{
 			ProductionMethod: getEnv("DECISION_PRODUCTION_METHOD", ""),
 			OpenRouterAPIKey: getEnv("OPENROUTER_API_KEY", ""),
@@ -1011,6 +1023,18 @@ func getEnv(key, defaultValue string) string {
 		return value
 	}
 	return defaultValue
+}
+
+// getEnvAsList reads a comma-separated setting, each entry trimmed and every
+// empty entry dropped, so a setting of only separators and spaces is empty.
+func getEnvAsList(key string) []string {
+	var out []string
+	for entry := range strings.SplitSeq(os.Getenv(key), ",") {
+		if entry = strings.TrimSpace(entry); entry != "" {
+			out = append(out, entry)
+		}
+	}
+	return out
 }
 
 func getEnvAsInt(key string, defaultValue int) int {

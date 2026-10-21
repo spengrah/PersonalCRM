@@ -423,7 +423,7 @@ func TestContentFacts_AgreeWithContexts(t *testing.T) {
 func TestMask_RecipientNamesFromTheSource(t *testing.T) {
 	t.Parallel()
 	e := newBuilderEnv(t)
-	masker, err := threadctx.LoadMasker(e.ctx, repository.NewThreadContentRepository(e.database.Queries))
+	masker, err := threadctx.LoadMasker(e.ctx, repository.NewThreadContentRepository(e.database.Queries), own)
 	require.NoError(t, err)
 	maskOnly := func(t *testing.T, thread threadctx.VenueID) threadctx.MaskedRequest {
 		t.Helper()
@@ -471,7 +471,7 @@ func TestLoadMasker_MasksStoredContactNames(t *testing.T) {
 	e := newBuilderEnv(t)
 	contact, err := e.harness.SeedContact(e.ctx, e.harness.Generator().Contact())
 	require.NoError(t, err)
-	masker, err := threadctx.LoadMasker(e.ctx, repository.NewThreadContentRepository(e.database.Queries))
+	masker, err := threadctx.LoadMasker(e.ctx, repository.NewThreadContentRepository(e.database.Queries), own)
 	require.NoError(t, err)
 
 	// Lower case at the start of the text, where only the dictionary masks it.

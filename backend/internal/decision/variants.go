@@ -16,9 +16,11 @@ type Adapter interface {
 }
 
 // NewMaskedMethod builds a method that masks every request before its adapter
-// sends it.
+// sends it. Its version derives from the masking version, which no masker's
+// dictionary changes, so a registry built with no masker names the same
+// version.
 func NewMaskedMethod(def Definition, masker *threadctx.Masker, adapter Adapter) Method {
-	return newMethod(def, adapter.Route(), func(ctx context.Context, c threadctx.Context, questions []threadctx.Question) (prepared, error) {
+	return newMethod(def, adapter.Route(), threadctx.MaskingVersion(), func(ctx context.Context, c threadctx.Context, questions []threadctx.Question) (prepared, error) {
 		req, err := masker.Mask(ctx, c, questions)
 		if err != nil {
 			return prepared{}, fmt.Errorf("mask request: %w", err)

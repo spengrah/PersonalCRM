@@ -174,13 +174,14 @@ type prepared struct {
 
 // newMethod builds a method on its own copy of the wording, so the wording
 // its version derives from is the wording it sends, whatever the caller later
-// does with the definition.
-func newMethod(def Definition, r Route, prepare func(context.Context, threadctx.Context, []threadctx.Question) (prepared, error)) *method {
+// does with the definition. masking is the version of the masking its prepare
+// applies.
+func newMethod(def Definition, r Route, masking string, prepare func(context.Context, threadctx.Context, []threadctx.Question) (prepared, error)) *method {
 	if def.Sizing.Ratio <= 0 || def.Sizing.Margin < 0 {
 		panic(fmt.Sprintf("decision: method %q needs a positive sizing ratio and a margin of at least zero", def.Key))
 	}
 	def.Wording = def.Wording.clone()
-	return &method{def: def, ref: def.ref(r), prepare: prepare}
+	return &method{def: def, ref: def.ref(r, masking), prepare: prepare}
 }
 
 func (m *method) Ref() judgment.MethodRef { return m.ref }

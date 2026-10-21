@@ -8,48 +8,71 @@ import (
 	"personal-crm/backend/internal/threadctx"
 )
 
-// Month is one calendar month in the server's timezone (time.Local), the
-// timezone the CRM reads calendar days in.
-type Month struct {
-	start time.Time
+// dayLayout is how a day is written.
+const dayLayout = "2006-01-02"
+
+// Days is a range of whole calendar days in the server's timezone
+// (time.Local), the timezone the CRM reads calendar days in: from its first
+// day's opening midnight to the midnight that closes its last.
+type Days struct {
+	start, end time.Time
 }
 
-// ParseMonth reads a month written YYYY-MM.
-func ParseMonth(s string) (Month, error) {
-	start, err := time.ParseInLocation("2006-01", s, time.Local)
+// ParseDays reads the range from its first and last day, each written
+// YYYY-MM-DD and both included. It refuses a last day before the first.
+func ParseDays(first, last string) (Days, error) {
+	start, err := parseDay(first)
 	if err != nil {
-		return Month{}, fmt.Errorf("month %q: want YYYY-MM", s)
+		return Days{}, err
 	}
-	return Month{start: start}, nil
+	lastDay, err := parseDay(last)
+	if err != nil {
+		return Days{}, err
+	}
+	if lastDay.Before(start) {
+		return Days{}, fmt.Errorf("day range %s to %s: the last day is before the first", first, last)
+	}
+	return Days{start: start, end: lastDay.AddDate(0, 0, 1)}, nil
 }
 
-// MonthOf is the month containing t.
-func MonthOf(t time.Time) Month {
+func parseDay(s string) (time.Time, error) {
+	day, err := time.ParseInLocation(dayLayout, s, time.Local)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("day %q: want YYYY-MM-DD", s)
+	}
+	return day, nil
+}
+
+// MonthOf is the days of the calendar month containing t.
+func MonthOf(t time.Time) Days {
 	t = t.In(time.Local)
-	return Month{start: time.Date(t.Year(), t.Month(), 1, 0, 0, 0, 0, time.Local)}
+	start := time.Date(t.Year(), t.Month(), 1, 0, 0, 0, 0, time.Local)
+	return Days{start: start, end: start.AddDate(0, 1, 0)}
 }
 
-// Start is the month's first midnight.
-func (m Month) Start() time.Time { return m.start }
+// Start is the first day's opening midnight.
+func (d Days) Start() time.Time { return d.start }
 
-// End is the next month's first midnight.
-func (m Month) End() time.Time { return m.start.AddDate(0, 1, 0) }
+// End is the midnight that closes the last day.
+func (d Days) End() time.Time { return d.end }
 
-func (m Month) String() string { return m.start.Format("2006-01") }
+func (d Days) String() string {
+	return d.start.Format(dayLayout) + ".." + d.end.AddDate(0, 0, -1).Format(dayLayout)
+}
 
-// CutOffs are the month's simulated nightly cut-offs: the midnight that closes
+// CutOffs are the range's simulated nightly cut-offs: the midnight that closes
 // each of its days, the last being End.
-func (m Month) CutOffs() []time.Time {
+func (d Days) CutOffs() []time.Time {
 	var cutOffs []time.Time
-	for day := m.start; day.Before(m.End()); day = day.AddDate(0, 0, 1) {
+	for day := d.start; day.Before(d.End()); day = day.AddDate(0, 0, 1) {
 		cutOffs = append(cutOffs, day.AddDate(0, 0, 1))
 	}
 	return cutOffs
 }
 
 // previousCutOff is the nightly cut-off immediately before cutOff: the
-// midnight a day earlier for a nightly cut-off, which for a month's first is
-// the month's start.
+// midnight a day earlier for a nightly cut-off, which for a range's first is
+// the range's start.
 func previousCutOff(cutOff time.Time) time.Time {
 	local := cutOff.In(time.Local)
 	midnight := time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, time.Local)
@@ -66,15 +89,15 @@ type eligibility struct {
 	threads []threadctx.VenueID
 }
 
-// eligible lists, at each cut-off of the month, the threads that gained
+// eligible lists, at each cut-off of the range, the threads that gained
 // content after the previous cut-off and up to and including this one. The
-// first window opens at the month's start, so a thread whose only content
-// precedes the month is never eligible. It is the one eligibility rule every
-// run over a month uses.
-func eligible(ctx context.Context, contexts *threadctx.Builder, month Month) ([]eligibility, error) {
-	after := month.Start()
+// first window opens at the range's start, so a thread whose only content
+// precedes the range is never eligible. It is the one eligibility rule every
+// run over a range uses.
+func eligible(ctx context.Context, contexts *threadctx.Builder, days Days) ([]eligibility, error) {
+	after := days.Start()
 	var out []eligibility
-	for _, cutOff := range month.CutOffs() {
+	for _, cutOff := range days.CutOffs() {
 		threads, err := contexts.ThreadsWithContentIn(ctx, after, cutOff)
 		if err != nil {
 			return nil, fmt.Errorf("threads with content up to %s: %w", cutOff.Format(time.RFC3339), err)

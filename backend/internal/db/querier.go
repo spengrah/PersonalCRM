@@ -1464,6 +1464,18 @@ type Querier interface {
 	// source of the set.
 	ListCorrectionPredicates(ctx context.Context) ([]*ListCorrectionPredicatesRow, error)
 	ListCuratedPredicates(ctx context.Context) ([]*ListCuratedPredicatesRow, error)
+	// Every display name a stored message gives a sender or recipient, of every
+	// source that stores one: an email's sender and recipient names, a chat
+	// sender's push name and a Telegram peer's name. owner is the source identity
+	// the name was given to, prefixed by source; contact_id is the live contact
+	// the message attributes that owner to, NULL when it attributes none.
+	//
+	// A message's sender: an inbound message's peer, else the user.
+	// An email's recipients, each name paired with its address. The user's own
+	// message is attributed to the recipient its copy is stored for.
+	// A Telegram chat's peer: its other side in a private chat, the sender of a
+	// received group message.
+	ListDisplayNamesForMasking(ctx context.Context) ([]*ListDisplayNamesForMaskingRow, error)
 	// Prefer rows with username/phone for identity matching, then rows with
 	// populated names so a single aggregation pass picks the most-populated row
 	// per peer (avoids depending on multi-pass COALESCE accumulation in Go).

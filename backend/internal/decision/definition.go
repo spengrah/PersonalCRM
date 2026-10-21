@@ -54,17 +54,19 @@ func (s Sizing) scale(w wireRequest) int {
 	return int(math.Ceil(float64(countTokens(w)) * s.Ratio * (1 + s.Margin)))
 }
 
-// ref names the method built from the definition on a route. Its version is
-// derived from everything that produces a judgment, the route and the
-// question wording, so changing any part changes it. Limits
-// and terms decide whether and where a method may run, not what it answers.
-func (d Definition) ref(r Route) judgment.MethodRef {
+// ref names the method built from the definition on a route, masking by the
+// given masking version. Its version is derived from everything that produces
+// a judgment, the route, the masking and the question wording, so changing any
+// part changes it. Limits and terms decide whether and where a method may run,
+// not what it answers.
+func (d Definition) ref(r Route, masking string) judgment.MethodRef {
 	return judgment.MethodRef{
 		Key: d.Key,
 		Version: digest(struct {
 			Route   Route
+			Masking string
 			Wording Wording
-		}{r, d.Wording}),
+		}{r, masking, d.Wording}),
 		WordingVersion: d.Wording.Version(),
 	}
 }

@@ -701,18 +701,18 @@ behaviors:
     type: business-logic
     status: current
     surface: none
-    given: a historical run of one method over a chosen month
+    given: a historical run of one method over a chosen range of days, its first and last day included
     when: the run executes
     then:
       - key: nightly-cut-offs
-        text: the run's cut-offs are the midnights, in the server's timezone, that close each day of the month
+        text: the run's cut-offs are the midnights, in the server's timezone, that close each day of the range, and no others
       - key: gained-content-eligible
-        text: a thread is judged at a cut-off exactly when it has content after the previous cut-off and up to and including this one, the first window opening at the month's start, so a thread with content on two nights is judged at both and a thread whose only content precedes the month is not judged
+        text: a thread is judged at a cut-off exactly when it has content after the previous cut-off and up to and including this one, the first window opening at the range's first midnight, so a thread with content on two nights is judged at both and a thread whose only content precedes or follows the range is not judged
       - key: whole-content-context
-        text: each judgment reads its window of the thread's content up to its cut-off (KNW-055), content from before the month included
+        text: each judgment reads its window of the thread's content up to its cut-off (KNW-055), content from before the range included
       - key: writes-as-production
         text: each judgment and incomplete report is recorded through the judgment store as a production run's would be, so the production method's current judgments change live state
-    provenance: [judgerun.Runner.Historical, judgerun.eachEligible, judgerun.Month.CutOffs, crm-admin --judge-month, .agents/spec/2026-10-14-decision-model-extraction.md G10 SC1 "historical runs simulate the production schedule"]
+    provenance: [judgerun.Runner.Historical, judgerun.eachEligible, judgerun.Days.CutOffs, crm-admin --judge-start-day --judge-end-day, .agents/spec/2026-10-14-decision-model-extraction.md G10 SC1 "historical runs simulate the production schedule"]
 
   - id: KNW-052
     title: Every eligible thread of a run ends with a recorded judgment or an incomplete report
@@ -743,7 +743,7 @@ behaviors:
     when: the run's method version already holds a judgment of that thread and input hash that read the same (KNW-062)
     then:
       - key: reused-not-sent
-        text: the run reuses that judgment through the store and sends nothing, so repeating a month sends nothing
+        text: the run reuses that judgment through the store and sends nothing, so repeating a run over the same days sends nothing
       - key: group-once-per-cut-off
         text: a group thread is sent once per cut-off per method, never once per member
       - key: rerun-reviewed-examples
@@ -755,20 +755,22 @@ behaviors:
     type: business-logic
     status: current
     surface: none
-    given: a historical or measuring run started from crm-admin --judge-month
+    given: a historical or measuring run started from crm-admin --judge-start-day and --judge-end-day
     when: the run starts and finishes
     then:
       - key: unknown-designation-fails
         text: a production designation naming a key the method registry lacks fails before any call, and a run with no designation proceeds and changes no live state
+      - key: malformed-range-refused
+        text: the month flag the day flags replaced is refused as an unknown flag, and a range naming only one of the two day flags, a malformed day or a last day before its first, or a range without --method, is refused before any call
       - key: measuring-run-sends-nothing
-        text: a measuring run builds every context a historical run of the month would judge, with the method's question tree, sends nothing, writes no judgment, run or live state, and reports how many contexts it built, the distribution of their token and question counts against the method's limits and how many exceed a limit
+        text: a measuring run builds every context a historical run of the range would judge, with the method's question tree, sends nothing, writes no judgment, run or live state, and reports how many contexts it built, the distribution of their token and question counts against the method's limits and how many exceed a limit
       - key: summary-reports-live-effects
         text: a historical run's summary reports the obligations it opened, the flags it raised and the claims it raised
       - key: summary-counts-unjudged
         text: a historical run's summary counts the new messages left unjudged, by reason (KNW-058)
       - key: content-free-never-blocking
         text: run output holds only IDs, counts, probabilities and reasons, and no run refuses or stops on a size or a count
-    provenance: [judgerun.New, judgerun.Runner.Measure, judgerun.Summary, crm-admin --judge-month --measure, .agents/spec/2026-10-14-decision-model-extraction.md HC1 HC7 G15 "Assumptions & deferred questions"]
+    provenance: [judgerun.New, judgerun.Runner.Measure, judgerun.Summary, crm-admin --judge-start-day --judge-end-day --measure, .agents/spec/2026-10-14-decision-model-extraction.md HC1 HC7 G15 "Assumptions & deferred questions"]
 
   # --- Message flags and windows ---
 
@@ -1095,7 +1097,7 @@ behaviors:
       - key: compared-methods
         text: the method registry lists the compared methods only, and the run, the production designation and the scorecard read that one list
       - key: removed-refused-before-any-call
-        text: crm-admin --judge-month and --scorecard naming a removed method, as the method or the compared method, are refused before any call
+        text: crm-admin's historical run (--judge-start-day and --judge-end-day) and --scorecard naming a removed method, as the method or the compared method, are refused before any call
       - key: designation-refused-as-unknown
         text: a production designation naming a removed method is refused as one naming an unknown method is
       - key: stored-judgments-still-read
@@ -1233,3 +1235,44 @@ behaviors:
       - key: scores-content-free
         text: the scores carry no message text, sender or contact identity
     provenance: [langfuseexport.scorecardScores, langfuseexport.Exporter.Export, langfuseexport.client.deleteScores, crm-admin --langfuse-export, .agents/spec/2026-10-18-message-flags-and-threads.md G14 HC3 SC7]
+
+  # --- Masking ---
+
+  - id: KNW-089
+    title: The masker hides every known name and the user's own names, and keeps ordinary words
+    type: business-logic
+    status: current
+    surface: none
+    given: a thread context and its questions for a masked decision-model method, and the masker's dictionary of the user's own names (OWN_NAMES), the CRM's contact names and the display names stored messages give their senders and recipients
+    when: the masker masks them before they leave the Pi
+    then:
+      - key: identifiers-masked
+        text: email addresses, URLs, @handles and phone numbers of seven or more digits become numbered placeholders, and no phone match takes a calendar date or any part of one
+      - key: role-labels-and-placeholders
+        text: the user's names and each participant's names and handles become its role label (ME, THEM, PERSON_n), and every other name a numbered placeholder, one per distinct identity within the request
+      - key: calendar-words-survive
+        text: weekday, month and relative-time words and calendar dates survive
+      - question IDs and option keys pass through unchanged
+      - key: own-names-me
+        text: each of the user's own names from OWN_NAMES, each full name and each of its words, is masked as ME wherever it appears, at the start of a sentence included
+      - key: display-names-masked
+        text: a display name a stored message gives a sender or recipient, of any source that stores one, is masked in every message, as a numbered placeholder in a thread its owner takes no part in; a common word of a display name that is no person's name names no one alone
+      - key: contractions-stay-whole
+        text: a contraction that is a common word ("I'll", "don't") stays whole, and no part of it is masked as a name
+      - key: lowercase-common-words-kept
+        text: a common English word written in lower case is never masked as a name, even when a contact's name holds it
+      - key: capitalized-known-name-masked
+        text: a known name that is also a common word is masked when capitalized, at the start of a sentence too
+      - key: possessive-suffix-kept
+        text: a possessive of a known name is masked with its suffix kept beside the placeholder, and a possessive of a word that is no name stays intact
+      - key: unknown-capitalized-masked
+        text: a capitalized word that begins no sentence or line and that the dictionary does not hold is masked as a name when it is no common word or is also a person's name ("Will", "Rose", "Mark")
+      - key: capitalized-common-words-kept
+        text: a capitalized common word that is no person's name ("Happy New Year") is kept where no sentence begins
+      - key: address-header-words-masked
+        text: every word of an address header (from, to, cc, bcc, reply-to, sender) outside a formatted identifier is masked
+      - key: refused-without-own-names
+        text: the masker refuses to build when OWN_NAMES holds no name, so a run that would mask fails before any call
+      - every masked method's version derives from the masking version, which the masking rules and the word lists' content make and no dictionary name feeds, so a masking change makes a rerun judge again
+    provenance: [threadctx.Masker, threadctx.LoadMasker, threadctx.MaskingVersion, decision.NewMaskedMethod, cmd/gen-mask-words, .agents/spec/2026-10-21-masking-fixes.md G1 G2 G3 G5 HC1 SC1 SC2 SC3 SC4]
+    notes: The common-word and person-name lists are generated by backend/cmd/gen-mask-words from vendored sources that each file's header names with its license. A common name written in lower case ("talked to will") passes, by the user's ruling (decision 20261021T190726Z-a4122783cf5c).
