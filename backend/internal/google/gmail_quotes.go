@@ -113,12 +113,17 @@ func outlookHeaderLine(lines []bodyLine) int {
 }
 
 // carriesForward reports whether a body carries a forwarded message: an
-// unquoted line introduces one, as "Begin forwarded message:" or
-// "---------- Forwarded message ---------" do. The forwarded message is the
-// body's content, its own quotes and headers included.
+// unquoted line is a client's forward introduction, Gmail's and Thunderbird's
+// "---------- Forwarded message ---------" or Apple Mail's "Begin forwarded
+// message:". The forwarded message is the body's content, its own quotes and
+// headers included.
 func carriesForward(lines []bodyLine) bool {
 	for _, l := range lines {
-		if !l.quoted && strings.Contains(strings.ToLower(l.text), "forwarded message") {
+		if l.quoted {
+			continue
+		}
+		intro := strings.ToLower(strings.Trim(strings.TrimSpace(l.text), "-: "))
+		if intro == "forwarded message" || intro == "begin forwarded message" {
 			return true
 		}
 	}
