@@ -19,9 +19,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// enrichmentEnv is a paired host plus a guid namespace unique to one test, so
-// rows seeded here are told apart from rows other tests leave in the shared
-// database.
+// enrichmentEnv is a paired host on a database clone of the test's own, so the
+// singleton host and database-wide counts are the test's alone, plus a guid
+// namespace for the rows it seeds.
 type enrichmentEnv struct {
 	*macHostTestEnv
 	hostID  uuid.UUID
@@ -31,14 +31,15 @@ type enrichmentEnv struct {
 
 func setupEnrichmentEnv(t *testing.T) *enrichmentEnv {
 	t.Helper()
-	env := setupMacHostEnv(t)
+	database, cfg := newIsolatedRiverTestDB(t, t.Context())
+	env := newMacHostEnv(t, database, cfg)
 
 	plain, _, err := env.macService.CreatePairingToken(t.Context())
 	require.NoError(t, err)
 	res, err := env.macService.PairWithToken(t.Context(), plain, "enrichment-host", "0.1.0", 1)
 	require.NoError(t, err)
 
-	e := &enrichmentEnv{
+	return &enrichmentEnv{
 		macHostTestEnv: env,
 		hostID:         res.HostID,
 		headers: map[string]string{
@@ -47,14 +48,6 @@ func setupEnrichmentEnv(t *testing.T) *enrichmentEnv {
 		},
 		prefix: "enr-" + strings.ReplaceAll(uuid.NewString(), "-", "")[:12],
 	}
-	// Registered after the env's own cleanup, so it runs first and the host
-	// row is still present when the staged rows are removed.
-	t.Cleanup(func() {
-		ctx, cancel := context.WithTimeout(context.WithoutCancel(t.Context()), 10*time.Second)
-		defer cancel()
-		_ = env.messages.HardDeleteByMacHost(ctx, res.HostID)
-	})
-	return e
 }
 
 func (e *enrichmentEnv) guid(n int) string { return fmt.Sprintf("%s-%04d", e.prefix, n) }
@@ -190,6 +183,7 @@ func ownedGuids(e *enrichmentEnv, guids []string) []string {
 
 // spec: MAC-057.lists-body-less-rows
 func TestMessagesEnrichment_MissingBodies_ListsNullTextRow(t *testing.T) {
+	t.Parallel()
 	e := setupEnrichmentEnv(t)
 	e.seed(t, 1, nil)
 
@@ -199,6 +193,7 @@ func TestMessagesEnrichment_MissingBodies_ListsNullTextRow(t *testing.T) {
 
 // spec: MAC-057.lists-body-less-rows
 func TestMessagesEnrichment_MissingBodies_ListsEmptyTextRow(t *testing.T) {
+	t.Parallel()
 	e := setupEnrichmentEnv(t)
 	e.seed(t, 1, strPtr(""))
 
@@ -208,6 +203,7 @@ func TestMessagesEnrichment_MissingBodies_ListsEmptyTextRow(t *testing.T) {
 
 // spec: MAC-057.lists-body-less-rows
 func TestMessagesEnrichment_MissingBodies_OmitsRowWithBody(t *testing.T) {
+	t.Parallel()
 	e := setupEnrichmentEnv(t)
 	e.seed(t, 1, strPtr("hello"))
 	e.seed(t, 2, nil)
@@ -218,6 +214,7 @@ func TestMessagesEnrichment_MissingBodies_OmitsRowWithBody(t *testing.T) {
 
 // spec: MAC-057.lists-body-less-rows
 func TestMessagesEnrichment_MissingBodies_OmitsSoftDeletedRow(t *testing.T) {
+	t.Parallel()
 	e := setupEnrichmentEnv(t)
 	gone := e.seed(t, 1, nil)
 	e.seed(t, 2, nil)
@@ -229,6 +226,7 @@ func TestMessagesEnrichment_MissingBodies_OmitsSoftDeletedRow(t *testing.T) {
 
 // spec: MAC-057.lists-body-less-rows
 func TestMessagesEnrichment_MissingBodies_ListsRowsPushedByAnyHost(t *testing.T) {
+	t.Parallel()
 	e := setupEnrichmentEnv(t)
 	other, err := e.database.Queries.SeedRevokedMacHost(t.Context(), db.SeedRevokedMacHostParams{
 		Hostname:        "enrichment-other-host",
@@ -256,6 +254,7 @@ func TestMessagesEnrichment_MissingBodies_ListsRowsPushedByAnyHost(t *testing.T)
 
 // spec: MAC-057.lists-body-less-rows
 func TestMessagesEnrichment_MissingBodies_WalkListsEveryRowOnce(t *testing.T) {
+	t.Parallel()
 	e := setupEnrichmentEnv(t)
 	for n := 1; n <= 5; n++ {
 		e.seed(t, n, nil)
@@ -273,6 +272,7 @@ func TestMessagesEnrichment_MissingBodies_WalkListsEveryRowOnce(t *testing.T) {
 
 // spec: MAC-057.lists-body-less-rows
 func TestMessagesEnrichment_MissingBodies_AfterIsExclusiveAndOmittedStartsLowest(t *testing.T) {
+	t.Parallel()
 	e := setupEnrichmentEnv(t)
 	for n := 1; n <= 3; n++ {
 		e.seed(t, n, nil)
@@ -290,6 +290,7 @@ func TestMessagesEnrichment_MissingBodies_AfterIsExclusiveAndOmittedStartsLowest
 
 // spec: MAC-057.lists-body-less-rows
 func TestMessagesEnrichment_MissingBodies_DefaultLimitIs500(t *testing.T) {
+	t.Parallel()
 	e := setupEnrichmentEnv(t)
 	for n := 1; n <= 501; n++ {
 		e.seed(t, n, nil)
@@ -303,6 +304,7 @@ func TestMessagesEnrichment_MissingBodies_DefaultLimitIs500(t *testing.T) {
 
 // spec: MAC-057.lists-body-less-rows
 func TestMessagesEnrichment_MissingBodies_LimitBounds(t *testing.T) {
+	t.Parallel()
 	e := setupEnrichmentEnv(t)
 	for n := 1; n <= 3; n++ {
 		e.seed(t, n, nil)
@@ -318,6 +320,7 @@ func TestMessagesEnrichment_MissingBodies_LimitBounds(t *testing.T) {
 }
 
 func TestMessagesEnrichment_MissingBodies_RequiresHostCredentials(t *testing.T) {
+	t.Parallel()
 	e := setupEnrichmentEnv(t)
 
 	w := macHTTP(t, e.macHostTestEnv, http.MethodGet, e.missingPath(""), nil, nil)
@@ -401,6 +404,7 @@ func (e *enrichmentEnv) requireBodyless(t *testing.T, n int) {
 
 // spec: MAC-057.fills-missing-body
 func TestMessagesEnrichment_Fill_NullTextRowGainsBody(t *testing.T) {
+	t.Parallel()
 	e := setupEnrichmentEnv(t)
 	e.seed(t, 1, nil)
 
@@ -412,6 +416,7 @@ func TestMessagesEnrichment_Fill_NullTextRowGainsBody(t *testing.T) {
 
 // spec: MAC-057.fills-missing-body
 func TestMessagesEnrichment_Fill_EmptyTextRowGainsBody(t *testing.T) {
+	t.Parallel()
 	e := setupEnrichmentEnv(t)
 	e.seed(t, 1, strPtr(""))
 
@@ -423,6 +428,7 @@ func TestMessagesEnrichment_Fill_EmptyTextRowGainsBody(t *testing.T) {
 
 // spec: MAC-057.keeps-existing-body
 func TestMessagesEnrichment_Fill_RowWithBodyKeepsIt(t *testing.T) {
+	t.Parallel()
 	e := setupEnrichmentEnv(t)
 	e.seed(t, 1, strPtr("original"))
 
@@ -434,6 +440,7 @@ func TestMessagesEnrichment_Fill_RowWithBodyKeepsIt(t *testing.T) {
 
 // spec: MAC-057.unknown-guid-not-created
 func TestMessagesEnrichment_Fill_UnknownGuidCreatesNothing(t *testing.T) {
+	t.Parallel()
 	e := setupEnrichmentEnv(t)
 
 	res := e.fill(t, fillItem(e.guid(1), "orphan body"))
@@ -445,6 +452,7 @@ func TestMessagesEnrichment_Fill_UnknownGuidCreatesNothing(t *testing.T) {
 
 // spec: MAC-057.unknown-guid-not-created
 func TestMessagesEnrichment_Fill_SoftDeletedRowIsUnknownAndUnchanged(t *testing.T) {
+	t.Parallel()
 	e := setupEnrichmentEnv(t)
 	gone := e.seed(t, 1, nil)
 	require.NoError(t, e.messages.TestSoftDeleteMessage(t.Context(), gone.ID))
@@ -498,6 +506,7 @@ func (e *enrichmentEnv) seedLinked(t *testing.T) *repository.Contact {
 
 // spec: MAC-057.row-identity-preserved
 func TestMessagesEnrichment_Fill_FilledRowKeepsItsIdentityAndState(t *testing.T) {
+	t.Parallel()
 	e := setupEnrichmentEnv(t)
 	e.seedLinked(t)
 	before := []*repository.MessagesMessage{e.stored(t, 1), e.stored(t, 2), e.stored(t, 3)}
@@ -519,6 +528,7 @@ func TestMessagesEnrichment_Fill_FilledRowKeepsItsIdentityAndState(t *testing.T)
 
 // spec: MAC-057.no-cadence-or-event-effect
 func TestMessagesEnrichment_Fill_HasNoCadenceFollowUpOrEventEffect(t *testing.T) {
+	t.Parallel()
 	e := setupEnrichmentEnv(t)
 	contact := e.seedLinked(t)
 	contactRepo := repository.NewContactRepository(e.database.Queries)
@@ -548,6 +558,7 @@ func TestMessagesEnrichment_Fill_HasNoCadenceFollowUpOrEventEffect(t *testing.T)
 
 // spec: MAC-057.fills-missing-body, MAC-057.keeps-existing-body, MAC-057.unknown-guid-not-created
 func TestMessagesEnrichment_Fill_MixedRequestAnswersEachItemInOrder(t *testing.T) {
+	t.Parallel()
 	e := setupEnrichmentEnv(t)
 	e.seed(t, 1, nil)
 	e.seed(t, 2, strPtr("kept"))
@@ -567,6 +578,7 @@ func TestMessagesEnrichment_Fill_MixedRequestAnswersEachItemInOrder(t *testing.T
 
 // spec: MAC-057.second-run-unchanged
 func TestMessagesEnrichment_Fill_IdenticalSecondRequestIsAllUnchanged(t *testing.T) {
+	t.Parallel()
 	e := setupEnrichmentEnv(t)
 	e.seed(t, 1, nil)
 	e.seed(t, 2, strPtr(""))
@@ -586,6 +598,7 @@ func TestMessagesEnrichment_Fill_IdenticalSecondRequestIsAllUnchanged(t *testing
 
 // spec: MAC-057.invalid-request-writes-nothing
 func TestMessagesEnrichment_Fill_UnknownOpWritesNothing(t *testing.T) {
+	t.Parallel()
 	e := setupEnrichmentEnv(t)
 	e.seed(t, 1, nil)
 
@@ -597,6 +610,7 @@ func TestMessagesEnrichment_Fill_UnknownOpWritesNothing(t *testing.T) {
 
 // spec: MAC-057.invalid-request-writes-nothing
 func TestMessagesEnrichment_Fill_ItemWithoutGuidWritesNothing(t *testing.T) {
+	t.Parallel()
 	e := setupEnrichmentEnv(t)
 	e.seed(t, 1, nil)
 
@@ -608,6 +622,7 @@ func TestMessagesEnrichment_Fill_ItemWithoutGuidWritesNothing(t *testing.T) {
 
 // spec: MAC-057.invalid-request-writes-nothing
 func TestMessagesEnrichment_Fill_ItemWithoutBodyWritesNothing(t *testing.T) {
+	t.Parallel()
 	e := setupEnrichmentEnv(t)
 	e.seed(t, 1, nil)
 
@@ -619,6 +634,7 @@ func TestMessagesEnrichment_Fill_ItemWithoutBodyWritesNothing(t *testing.T) {
 
 // spec: MAC-057.invalid-request-writes-nothing
 func TestMessagesEnrichment_Fill_ItemWithEmptyBodyWritesNothing(t *testing.T) {
+	t.Parallel()
 	e := setupEnrichmentEnv(t)
 	e.seed(t, 1, nil)
 
@@ -630,6 +646,7 @@ func TestMessagesEnrichment_Fill_ItemWithEmptyBodyWritesNothing(t *testing.T) {
 
 // spec: MAC-057.fills-missing-body
 func TestMessagesEnrichment_Fill_AcceptsFiveHundredItems(t *testing.T) {
+	t.Parallel()
 	e := setupEnrichmentEnv(t)
 	items := make([]map[string]any, 500)
 	for i := range items {
@@ -643,6 +660,7 @@ func TestMessagesEnrichment_Fill_AcceptsFiveHundredItems(t *testing.T) {
 
 // spec: MAC-057.invalid-request-writes-nothing
 func TestMessagesEnrichment_Fill_FiveHundredAndOneItemsWriteNothing(t *testing.T) {
+	t.Parallel()
 	e := setupEnrichmentEnv(t)
 	e.seed(t, 1, nil)
 	items := make([]map[string]any, 501)
@@ -673,6 +691,7 @@ func sizedFillBody(t *testing.T, guid string, size int) []byte {
 
 // spec: MAC-057.fills-missing-body
 func TestMessagesEnrichment_Fill_AcceptsBodyOfExactlyEightMiB(t *testing.T) {
+	t.Parallel()
 	e := setupEnrichmentEnv(t)
 	e.seed(t, 1, nil)
 
@@ -686,6 +705,7 @@ func TestMessagesEnrichment_Fill_AcceptsBodyOfExactlyEightMiB(t *testing.T) {
 
 // spec: MAC-057.invalid-request-writes-nothing
 func TestMessagesEnrichment_Fill_RejectsBodyOverEightMiBWithoutWriting(t *testing.T) {
+	t.Parallel()
 	e := setupEnrichmentEnv(t)
 	e.seed(t, 1, nil)
 
@@ -696,6 +716,7 @@ func TestMessagesEnrichment_Fill_RejectsBodyOverEightMiBWithoutWriting(t *testin
 }
 
 func TestMessagesEnrichment_Fill_RequiresHostCredentials(t *testing.T) {
+	t.Parallel()
 	e := setupEnrichmentEnv(t)
 	e.seed(t, 1, nil)
 

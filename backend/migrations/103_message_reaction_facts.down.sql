@@ -171,10 +171,11 @@ WHERE mn.deleted_at IS NULL;
 
 ALTER TABLE messages_message
     DROP CONSTRAINT messages_message_reaction_facts_check,
-    DROP CONSTRAINT messages_message_reaction_kind_check,
     DROP COLUMN reaction_removal,
     DROP COLUMN reaction_target_key,
     DROP COLUMN reaction_emoji,
     DROP COLUMN reaction_kind;
+
+DROP TYPE reaction_kind;
 
 COMMIT;

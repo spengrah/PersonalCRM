@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"personal-crm/backend/internal/db"
 )
 
 // Kind is a dot-namespaced event kind (spec §3.1 notes on kind namespacing).
@@ -388,23 +390,6 @@ func IsCanonicalMessageType(t string) bool {
 	return ok
 }
 
-// reactionKinds is the set of reaction kinds a message can carry, matched
-// verbatim against the messages_message.reaction_kind CHECK constraint
-// (migration 103).
-var reactionKinds = map[string]struct{}{
-	"love":      {},
-	"like":      {},
-	"dislike":   {},
-	"laugh":     {},
-	"emphasize": {},
-	"question":  {},
-	"emoji":     {},
-	"sticker":   {},
-}
-
-// reactionKindEmoji is the one kind that records an emoji.
-const reactionKindEmoji = "emoji"
-
 // MessageReaction is the wire shape of a reaction's facts: its kind, the emoji
 // of an emoji reaction, the stored key of the message it targets, and whether
 // it takes a reaction back. Its names and values are source-neutral. The one
@@ -437,7 +422,10 @@ func (r *MessageReaction) UnmarshalJSON(b []byte) error {
 // Validate reports the first reason the object is not a valid reaction, or nil
 // when it is one.
 func (r MessageReaction) Validate() error {
-	if _, ok := reactionKinds[r.Kind]; !ok {
+	// The reaction_kind enum (migration 103) is the one list of kinds; sqlc
+	// generates db.ReactionKind's values from it.
+	kind := db.ReactionKind(r.Kind)
+	if !kind.Valid() {
 		return fmt.Errorf("reaction kind %q is not a known kind", r.Kind)
 	}
 	if r.TargetKey == "" {
@@ -447,10 +435,10 @@ func (r MessageReaction) Validate() error {
 		return errors.New("reaction needs a removal flag")
 	}
 	hasEmoji := r.Emoji != nil && *r.Emoji != ""
-	if r.Kind == reactionKindEmoji && !hasEmoji {
+	if kind == db.ReactionKindEmoji && !hasEmoji {
 		return errors.New("an emoji reaction needs a non-empty emoji")
 	}
-	if r.Kind != reactionKindEmoji && r.Emoji != nil {
+	if kind != db.ReactionKindEmoji && r.Emoji != nil {
 		return fmt.Errorf("a %s reaction carries no emoji", r.Kind)
 	}
 	return nil

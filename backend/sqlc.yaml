@@ -15,6 +15,7 @@ sql:
         emit_empty_slices: true
         emit_exported_queries: true
         emit_result_struct_pointers: true
+        emit_enum_valid_method: true
         overrides:
           - db_type: "uuid"
             go_type: "github.com/google/uuid.UUID"
@@ -46,3 +47,6 @@ sql:
           - db_type: "pg_catalog.float8"
             nullable: true
             go_type: { type: "float64", pointer: true }
+          - db_type: "reaction_kind"
+            nullable: true
+            go_type: { type: "ReactionKind", pointer: true }

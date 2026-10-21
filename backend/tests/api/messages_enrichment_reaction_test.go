@@ -113,6 +113,7 @@ func (e *enrichmentEnv) setReactions(t *testing.T, items ...map[string]any) reac
 
 // spec: MAC-064.lists-rows-without-facts
 func TestMessagesEnrichment_WithoutReactionFacts_ListsPagesInGuidOrderAndOmitsMarkedAndDeletedRows(t *testing.T) {
+	t.Parallel()
 	e := setupEnrichmentEnv(t)
 	for n := 1; n <= 5; n++ {
 		e.seed(t, n, strPtr("hello"))
@@ -133,6 +134,7 @@ func TestMessagesEnrichment_WithoutReactionFacts_ListsPagesInGuidOrderAndOmitsMa
 
 // spec: MAC-064.marks-reaction
 func TestMessagesEnrichment_SetReaction_StoresFactsOnAMessageWithoutThem(t *testing.T) {
+	t.Parallel()
 	e := setupEnrichmentEnv(t)
 	e.seed(t, 1, strPtr(`Reacted 👍 to "lunch?"`))
 	thumbs := "👍"
@@ -146,6 +148,7 @@ func TestMessagesEnrichment_SetReaction_StoresFactsOnAMessageWithoutThem(t *test
 
 // spec: MAC-064.second-run-unchanged
 func TestMessagesEnrichment_SetReaction_SameItemAgainIsUnchanged(t *testing.T) {
+	t.Parallel()
 	e := setupEnrichmentEnv(t)
 	e.seed(t, 1, strPtr(`Liked "lunch?"`))
 	item := setReactionItem(e.guid(1), likeOf("target"))
@@ -161,6 +164,7 @@ func TestMessagesEnrichment_SetReaction_SameItemAgainIsUnchanged(t *testing.T) {
 
 // spec: MAC-064.keeps-existing-facts
 func TestMessagesEnrichment_SetReaction_DifferentFactsOnAMarkedMessageKeepTheStoredOnes(t *testing.T) {
+	t.Parallel()
 	e := setupEnrichmentEnv(t)
 	stored := &repository.MessageReaction{Kind: "love", TargetKey: "target"}
 	e.seedReaction(t, 1, stored)
@@ -173,6 +177,7 @@ func TestMessagesEnrichment_SetReaction_DifferentFactsOnAMarkedMessageKeepTheSto
 
 // spec: MAC-064.unknown-guid-not-created
 func TestMessagesEnrichment_SetReaction_UnknownGuidCreatesNothing(t *testing.T) {
+	t.Parallel()
 	e := setupEnrichmentEnv(t)
 	gone := e.seed(t, 2, strPtr(`Liked "lunch?"`))
 	require.NoError(t, e.messages.TestSoftDeleteMessage(t.Context(), gone.ID))
@@ -189,6 +194,7 @@ func TestMessagesEnrichment_SetReaction_UnknownGuidCreatesNothing(t *testing.T) 
 
 // spec: MAC-064.row-identity-preserved
 func TestMessagesEnrichment_SetReaction_MarkedRowKeepsItsIdentityAndState(t *testing.T) {
+	t.Parallel()
 	e := setupEnrichmentEnv(t)
 	e.seedLinked(t)
 	before := []*repository.MessagesMessage{e.stored(t, 1), e.stored(t, 2), e.stored(t, 3)}
@@ -209,6 +215,7 @@ func TestMessagesEnrichment_SetReaction_MarkedRowKeepsItsIdentityAndState(t *tes
 
 // spec: MAC-064.no-cadence-or-event-effect
 func TestMessagesEnrichment_SetReaction_HasNoCadenceFollowUpOrEventEffect(t *testing.T) {
+	t.Parallel()
 	e := setupEnrichmentEnv(t)
 	contact := e.seedLinked(t)
 	contactRepo := repository.NewContactRepository(e.database.Queries)
@@ -238,6 +245,7 @@ func TestMessagesEnrichment_SetReaction_HasNoCadenceFollowUpOrEventEffect(t *tes
 
 // spec: MAC-064.invalid-request-writes-nothing
 func TestMessagesEnrichment_SetReaction_InvalidRequestWritesNothing(t *testing.T) {
+	t.Parallel()
 	e := setupEnrichmentEnv(t)
 	e.seed(t, 1, strPtr(`Liked "lunch?"`))
 	valid := setReactionItem(e.guid(1), likeOf("target"))
@@ -273,6 +281,7 @@ func TestMessagesEnrichment_SetReaction_InvalidRequestWritesNothing(t *testing.T
 
 // spec: MAC-064.requires-host-credentials
 func TestMessagesEnrichment_ReactionExchange_RequiresHostCredentials(t *testing.T) {
+	t.Parallel()
 	e := setupEnrichmentEnv(t)
 	e.seed(t, 1, strPtr(`Liked "lunch?"`))
 

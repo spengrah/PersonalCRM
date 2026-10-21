@@ -67,11 +67,11 @@ func reactionFromColumns(kind, emoji, targetKey *string, removal *bool) *Message
 }
 
 // reactionColumns is the inverse of reactionFromColumns: all NULL for nil.
-func reactionColumns(r *MessageReaction) (kind, emoji, targetKey *string, removal *bool) {
+func reactionColumns(r *MessageReaction) (kind *db.ReactionKind, emoji, targetKey *string, removal *bool) {
 	if r == nil {
 		return nil, nil, nil, nil
 	}
-	return &r.Kind, r.Emoji, &r.TargetKey, &r.Removal
+	return (*db.ReactionKind)(&r.Kind), r.Emoji, &r.TargetKey, &r.Removal
 }
 
 // UpsertMessagesMessageParams is the input for UpsertMessage. Fields map
@@ -355,7 +355,7 @@ func convertDbMessagesMessage(m *db.MessagesMessage) MessagesMessage {
 	if m.CreatedAt != nil {
 		msg.CreatedAt = *m.CreatedAt
 	}
-	msg.Reaction = reactionFromColumns(m.ReactionKind, m.ReactionEmoji, m.ReactionTargetKey, m.ReactionRemoval)
+	msg.Reaction = reactionFromColumns((*string)(m.ReactionKind), m.ReactionEmoji, m.ReactionTargetKey, m.ReactionRemoval)
 	return msg
 }
 

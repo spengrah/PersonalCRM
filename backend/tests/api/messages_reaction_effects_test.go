@@ -113,6 +113,7 @@ func (sc reactionScenario) run(t *testing.T, g *groupIngestEnv, facts *events.Me
 
 // spec: ING-048.reaction-effects-unchanged
 func TestReactionFacts_LeaveTheReactionsInteractionReplyAndCadenceEffectsAsTheyWere(t *testing.T) {
+	t.Parallel()
 	g := setupGroupIngest(t)
 	removal := false
 	love := &events.MessageReaction{Kind: "love", Removal: &removal}

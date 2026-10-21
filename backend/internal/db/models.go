@@ -14,6 +14,69 @@ import (
 	"github.com/pgvector/pgvector-go"
 )
 
+type ReactionKind string
+
+const (
+	ReactionKindLove      ReactionKind = "love"
+	ReactionKindLike      ReactionKind = "like"
+	ReactionKindDislike   ReactionKind = "dislike"
+	ReactionKindLaugh     ReactionKind = "laugh"
+	ReactionKindEmphasize ReactionKind = "emphasize"
+	ReactionKindQuestion  ReactionKind = "question"
+	ReactionKindEmoji     ReactionKind = "emoji"
+	ReactionKindSticker   ReactionKind = "sticker"
+)
+
+func (e *ReactionKind) Scan(src interface{}) error {
+	switch s := src.(type) {
+	case []byte:
+		*e = ReactionKind(s)
+	case string:
+		*e = ReactionKind(s)
+	default:
+		return fmt.Errorf("unsupported scan type for ReactionKind: %T", src)
+	}
+	return nil
+}
+
+type NullReactionKind struct {
+	ReactionKind ReactionKind `json:"reaction_kind"`
+	Valid        bool         `json:"valid"` // Valid is true if ReactionKind is not NULL
+}
+
+// Scan implements the Scanner interface.
+func (ns *NullReactionKind) Scan(value interface{}) error {
+	if value == nil {
+		ns.ReactionKind, ns.Valid = "", false
+		return nil
+	}
+	ns.Valid = true
+	return ns.ReactionKind.Scan(value)
+}
+
+// Value implements the driver Valuer interface.
+func (ns NullReactionKind) Value() (driver.Value, error) {
+	if !ns.Valid {
+		return nil, nil
+	}
+	return string(ns.ReactionKind), nil
+}
+
+func (e ReactionKind) Valid() bool {
+	switch e {
+	case ReactionKindLove,
+		ReactionKindLike,
+		ReactionKindDislike,
+		ReactionKindLaugh,
+		ReactionKindEmphasize,
+		ReactionKindQuestion,
+		ReactionKindEmoji,
+		ReactionKindSticker:
+		return true
+	}
+	return false
+}
+
 type RiverJobState string
 
 const (
@@ -60,6 +123,21 @@ func (ns NullRiverJobState) Value() (driver.Value, error) {
 		return nil, nil
 	}
 	return string(ns.RiverJobState), nil
+}
+
+func (e RiverJobState) Valid() bool {
+	switch e {
+	case RiverJobStateAvailable,
+		RiverJobStateCancelled,
+		RiverJobStateCompleted,
+		RiverJobStateDiscarded,
+		RiverJobStatePending,
+		RiverJobStateRetryable,
+		RiverJobStateRunning,
+		RiverJobStateScheduled:
+		return true
+	}
+	return false
 }
 
 type Assertion struct {
@@ -598,30 +676,30 @@ type MeetingNote struct {
 }
 
 type MessagesMessage struct {
-	ID                uuid.UUID  `json:"id"`
-	Guid              string     `json:"guid"`
-	ChatGuid          string     `json:"chat_guid"`
-	PeerHandle        string     `json:"peer_handle"`
-	PeerNormalized    *string    `json:"peer_normalized"`
-	Text              *string    `json:"text"`
-	MessageType       string     `json:"message_type"`
-	SentAt            time.Time  `json:"sent_at"`
-	IsOutgoing        bool       `json:"is_outgoing"`
-	IsGroupChat       bool       `json:"is_group_chat"`
-	ReplyToGuid       *string    `json:"reply_to_guid"`
-	MatchedContactID  *uuid.UUID `json:"matched_contact_id"`
-	InteractionID     *uuid.UUID `json:"interaction_id"`
-	MacHostID         *uuid.UUID `json:"mac_host_id"`
-	ProcessedAt       *time.Time `json:"processed_at"`
-	ClaimedAt         *time.Time `json:"claimed_at"`
-	ClaimedSessionRef *string    `json:"claimed_session_ref"`
-	DeletedAt         *time.Time `json:"deleted_at"`
-	CreatedAt         *time.Time `json:"created_at"`
-	CreditsReply      bool       `json:"credits_reply"`
-	ReactionKind      *string    `json:"reaction_kind"`
-	ReactionEmoji     *string    `json:"reaction_emoji"`
-	ReactionTargetKey *string    `json:"reaction_target_key"`
-	ReactionRemoval   *bool      `json:"reaction_removal"`
+	ID                uuid.UUID     `json:"id"`
+	Guid              string        `json:"guid"`
+	ChatGuid          string        `json:"chat_guid"`
+	PeerHandle        string        `json:"peer_handle"`
+	PeerNormalized    *string       `json:"peer_normalized"`
+	Text              *string       `json:"text"`
+	MessageType       string        `json:"message_type"`
+	SentAt            time.Time     `json:"sent_at"`
+	IsOutgoing        bool          `json:"is_outgoing"`
+	IsGroupChat       bool          `json:"is_group_chat"`
+	ReplyToGuid       *string       `json:"reply_to_guid"`
+	MatchedContactID  *uuid.UUID    `json:"matched_contact_id"`
+	InteractionID     *uuid.UUID    `json:"interaction_id"`
+	MacHostID         *uuid.UUID    `json:"mac_host_id"`
+	ProcessedAt       *time.Time    `json:"processed_at"`
+	ClaimedAt         *time.Time    `json:"claimed_at"`
+	ClaimedSessionRef *string       `json:"claimed_session_ref"`
+	DeletedAt         *time.Time    `json:"deleted_at"`
+	CreatedAt         *time.Time    `json:"created_at"`
+	CreditsReply      bool          `json:"credits_reply"`
+	ReactionKind      *ReactionKind `json:"reaction_kind"`
+	ReactionEmoji     *string       `json:"reaction_emoji"`
+	ReactionTargetKey *string       `json:"reaction_target_key"`
+	ReactionRemoval   *bool         `json:"reaction_removal"`
 }
 
 type Node struct {

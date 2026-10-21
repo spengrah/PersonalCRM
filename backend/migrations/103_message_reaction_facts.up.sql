@@ -5,8 +5,9 @@
 -- targets, and whether it takes a reaction back. A message is a reaction
 -- exactly when it has a kind. The constraints make a partial or contradictory
 -- fact set unstorable: the kind, target and removal flag are all present or
--- all absent, an emoji is present exactly on the emoji kind, and the kind is
--- one of the eight the daemon recognizes. Every existing row stores no facts.
+-- all absent, and an emoji is present exactly on the emoji kind. The
+-- reaction_kind type is the one list of kinds: sqlc generates the Go values
+-- that validate a reaction from it. Every existing row stores no facts.
 --
 -- thread_content (migration 096) gains the facts as four trailing columns, so
 -- the thread-context read carries them beside each message. Every other column
@@ -18,13 +19,14 @@
 
 BEGIN;
 
+CREATE TYPE reaction_kind AS ENUM (
+    'love', 'like', 'dislike', 'laugh', 'emphasize', 'question', 'emoji', 'sticker');
+
 ALTER TABLE messages_message
-    ADD COLUMN reaction_kind TEXT,
+    ADD COLUMN reaction_kind reaction_kind,
     ADD COLUMN reaction_emoji TEXT,
     ADD COLUMN reaction_target_key TEXT,
     ADD COLUMN reaction_removal BOOLEAN,
-    ADD CONSTRAINT messages_message_reaction_kind_check CHECK (reaction_kind IN (
-        'love', 'like', 'dislike', 'laugh', 'emphasize', 'question', 'emoji', 'sticker')),
     ADD CONSTRAINT messages_message_reaction_facts_check CHECK (
         (reaction_kind IS NULL) = (reaction_target_key IS NULL)
         AND (reaction_kind IS NULL) = (reaction_removal IS NULL)
@@ -166,7 +168,7 @@ SELECT
     COALESCE(mm.text, ''),
     '{}'::jsonb,
     mm.interaction_id,
-    mm.reaction_kind,
+    mm.reaction_kind::text,
     mm.reaction_emoji,
     'messages:' || mm.reaction_target_key,
     mm.reaction_removal

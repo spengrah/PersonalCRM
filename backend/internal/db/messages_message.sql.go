@@ -968,11 +968,11 @@ WHERE guid = $5
 `
 
 type SetMessagesMessageReactionParams struct {
-	ReactionKind      *string `json:"reaction_kind"`
-	ReactionEmoji     *string `json:"reaction_emoji"`
-	ReactionTargetKey *string `json:"reaction_target_key"`
-	ReactionRemoval   *bool   `json:"reaction_removal"`
-	Guid              string  `json:"guid"`
+	ReactionKind      *ReactionKind `json:"reaction_kind"`
+	ReactionEmoji     *string       `json:"reaction_emoji"`
+	ReactionTargetKey *string       `json:"reaction_target_key"`
+	ReactionRemoval   *bool         `json:"reaction_removal"`
+	Guid              string        `json:"guid"`
 }
 
 // Stores the reaction facts of a stored, non-deleted row that carries none.
@@ -1193,23 +1193,23 @@ RETURNING id, guid, chat_guid, peer_handle, peer_normalized, text, message_type,
 `
 
 type UpsertMessagesMessageParams struct {
-	Guid              string     `json:"guid"`
-	ChatGuid          string     `json:"chat_guid"`
-	PeerHandle        string     `json:"peer_handle"`
-	PeerNormalized    *string    `json:"peer_normalized"`
-	Text              *string    `json:"text"`
-	MessageType       string     `json:"message_type"`
-	SentAt            time.Time  `json:"sent_at"`
-	IsOutgoing        bool       `json:"is_outgoing"`
-	IsGroupChat       bool       `json:"is_group_chat"`
-	ReplyToGuid       *string    `json:"reply_to_guid"`
-	MatchedContactID  *uuid.UUID `json:"matched_contact_id"`
-	MacHostID         *uuid.UUID `json:"mac_host_id"`
-	CreditsReply      bool       `json:"credits_reply"`
-	ReactionKind      *string    `json:"reaction_kind"`
-	ReactionEmoji     *string    `json:"reaction_emoji"`
-	ReactionTargetKey *string    `json:"reaction_target_key"`
-	ReactionRemoval   *bool      `json:"reaction_removal"`
+	Guid              string        `json:"guid"`
+	ChatGuid          string        `json:"chat_guid"`
+	PeerHandle        string        `json:"peer_handle"`
+	PeerNormalized    *string       `json:"peer_normalized"`
+	Text              *string       `json:"text"`
+	MessageType       string        `json:"message_type"`
+	SentAt            time.Time     `json:"sent_at"`
+	IsOutgoing        bool          `json:"is_outgoing"`
+	IsGroupChat       bool          `json:"is_group_chat"`
+	ReplyToGuid       *string       `json:"reply_to_guid"`
+	MatchedContactID  *uuid.UUID    `json:"matched_contact_id"`
+	MacHostID         *uuid.UUID    `json:"mac_host_id"`
+	CreditsReply      bool          `json:"credits_reply"`
+	ReactionKind      *ReactionKind `json:"reaction_kind"`
+	ReactionEmoji     *string       `json:"reaction_emoji"`
+	ReactionTargetKey *string       `json:"reaction_target_key"`
+	ReactionRemoval   *bool         `json:"reaction_removal"`
 }
 
 // Insert with no-op on guid conflict. peer_normalized and matched_contact_id
