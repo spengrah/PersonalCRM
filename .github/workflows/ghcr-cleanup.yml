@@ -6,7 +6,9 @@ name: GHCR retention
 # is removed only when its SHA is an ancestor of the current `main` tip AND more
 # than BUFFER commits behind it. The current prod image (main tip) and every
 # un-promoted develop SHA are kept regardless of age — so a long promote gap is
-# safe. See scripts/ci/ghcr-retention.sh for the full policy.
+# safe. See scripts/ci/ghcr-retention.sh for the full policy. The name model
+# image (personalcrm-name-model) is left out: its tags follow name-model/'s
+# sources, not commits, so the hosts can run a tag older than any rollback window.
 #
 # GHCR packages here are USER-owned (spengrah/*). GITHUB_TOKEN can delete versions
 # of ORG-owned, repo-scoped packages, but not USER-owned ones, so this uses a PAT

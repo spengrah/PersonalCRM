@@ -1,0 +1,33 @@
+# PersonalCRM name model (rootless Podman Quadlet). Generates
+# personalcrm-name-model.service, which only personalcrm-name-model.socket
+# starts: it has no [Install] section and starts at no boot.
+#
+# Installed by scripts/deploy-artifact.sh into the tenant's
+# ~/.config/containers/systemd/ from the model image it deploys, which pins the
+# Image= line below to that image's tag.
+#
+# A pure function of text to person spans: no network (the socket arrives as a
+# file descriptor), no environment file and so no credentials, a read-only root
+# filesystem, and weights baked into the image.
+[Unit]
+Description=PersonalCRM name model (GLiNER person spans, on demand)
+Requires=personalcrm-name-model.socket
+After=personalcrm-name-model.socket
+
+[Container]
+ContainerName=crm-name-model
+Image=ghcr.io/spengrah/personalcrm-name-model:unpinned
+Network=none
+ReadOnly=true
+NoNewPrivileges=true
+DropCapability=ALL
+# The memory cap (arc plan, section 4): the bakeoff's 2.8 GB peak plus
+# headroom, within the Pi's 5.4 GB available with the CRM running. Swap is
+# capped to the same figure, so the container cannot page past it.
+PodmanArgs=--memory=3584m --memory-swap=3584m
+
+[Service]
+# The model exits by itself once idle; the socket starts it again on the next
+# connection, so systemd never restarts it.
+Restart=no
+TimeoutStopSec=30
