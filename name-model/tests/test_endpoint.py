@@ -16,10 +16,14 @@ import json
 import os
 import re
 import socket
+import sys
 import tempfile
 import threading
+import types
 import unittest
+from unittest import mock
 
+from name_model.gliner_model import GlinerModel
 from name_model.server import Server, serve_until_idle
 
 MODEL = "urchade/gliner_multi_pii-v1"
@@ -59,8 +63,11 @@ class _UnixConnection(http.client.HTTPConnection):
         self.sock.connect(self._path)
 
 
-class EndpointTest(unittest.TestCase):
-    scores = {"Emily Rose": 0.9, "Bartholomew": 0.8, "Kit": 0.3}
+class _ServedEndpoint(unittest.TestCase):
+    """Serves the real endpoint over a Unix socket with the model make_model gives."""
+
+    def make_model(self):
+        raise NotImplementedError
 
     def setUp(self):
         self._dir = tempfile.TemporaryDirectory()
@@ -68,7 +75,7 @@ class EndpointTest(unittest.TestCase):
         listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         listener.bind(self.path)
         listener.listen()
-        self.server = Server(listener, FakeModel(self.scores), idle_seconds=60)
+        self.server = Server(listener, self.make_model(), idle_seconds=60)
         self.thread = threading.Thread(target=serve_until_idle, args=(self.server,), daemon=True)
         self.thread.start()
 
@@ -109,6 +116,13 @@ class EndpointTest(unittest.TestCase):
         """The substrings of text, as UTF-8 bytes, that the spans address."""
         raw = text.encode("utf-8")
         return [raw[s["start"] : s["end"]].decode("utf-8") for s in spans]
+
+
+class EndpointTest(_ServedEndpoint):
+    scores = {"Emily Rose": 0.9, "Bartholomew": 0.8, "Kit": 0.3}
+
+    def make_model(self):
+        return FakeModel(self.scores)
 
     # --- Spans cover the whole text, as UTF-8 byte offsets (PR2.c1) ---
 
@@ -176,6 +190,44 @@ class EndpointTest(unittest.TestCase):
                 status, data = self.request(method, path, body if method == "POST" else None)
                 self.assertGreaterEqual(status, 400)
                 self.assertNotIn(b'"spans"', data)
+
+
+
+class _StrictGliner:
+    """Stands in for the gliner library's model, which cannot run in CI. Like
+    GLiNER's span decoder, it keeps a span only when its score is strictly
+    greater than the threshold it is given."""
+
+    scores = {"Bartholomew": 0.5, "Kit": 0.4}
+
+    @classmethod
+    def from_pretrained(cls, name):
+        assert name == MODEL
+        return cls()
+
+    def eval(self):
+        pass
+
+    def predict_entities(self, text, labels, threshold):
+        return [
+            {"start": m.start(), "end": m.end(), "score": score}
+            for name, score in self.scores.items()
+            for m in re.finditer(re.escape(name), text)
+            if score > threshold
+        ]
+
+
+class AdapterThresholdTest(_ServedEndpoint):
+    """The endpoint through the image's GLiNER adapter, with the gliner library
+    faked: the threshold promise holds across the adapter (PR2.c1, KNW-091)."""
+
+    def make_model(self):
+        with mock.patch.dict(sys.modules, {"gliner": types.SimpleNamespace(GLiNER=_StrictGliner)}):
+            return GlinerModel()
+
+    def test_span_scored_exactly_at_the_threshold_is_returned(self):
+        text = "Kit and Bartholomew"
+        self.assertEqual(self.named(text, self.spans([text], threshold=0.5)[0]), ["Bartholomew"])
 
 
 if __name__ == "__main__":

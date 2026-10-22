@@ -4,6 +4,8 @@ MODEL_NAME is the one statement of which model the image holds: the image
 build fetches it by this name, and the server refuses a request for any other.
 """
 
+import math
+
 MODEL_NAME = "urchade/gliner_multi_pii-v1"
 
 
@@ -23,6 +25,12 @@ class GlinerModel:
         self._model.eval()
 
     def predict(self, text, label, threshold):
-        """(start, end, score) per span, as character offsets into text."""
-        entities = self._model.predict_entities(text, [label], threshold=threshold)
+        """(start, end, score) per span, as character offsets into text, for
+        every span scored at threshold or more."""
+        # GLiNER keeps a span only when its score is strictly greater than the
+        # threshold it is given, so it is given the next float below: a span
+        # scored exactly at threshold survives, and the server's own comparison
+        # stays the one cutoff.
+        below = math.nextafter(threshold, 0)
+        entities = self._model.predict_entities(text, [label], threshold=below)
         return [(e["start"], e["end"], e["score"]) for e in entities]
