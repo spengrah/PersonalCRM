@@ -33,24 +33,25 @@ import (
 //     the name. The dictionary holds the user's own names, the CRM's contact
 //     names and the display names stored messages give their senders and
 //     recipients;
-//   - names the dictionary does not cover: a capitalized word that does not
-//     begin a sentence or line and is no common word, or is a common word that
-//     is also a person's name ("Will"), and every remaining word of an address
-//     header (from, to, cc, bcc, reply-to, sender).
+//   - every remaining word of an address header (from, to, cc, bcc,
+//     reply-to, sender).
+//
+// No rule masks a word for being capitalized and unknown: a name the
+// dictionary does not hold survives, and finding it is the name model's.
 //
 // A common English word written in lower case is no name: a name matches only
 // when one of its words is capitalized or is no common word. A contraction
-// that is a common word ("I'll", "it's") stays whole and is no name, unless a
-// name the dictionary holds is written with that very word ("Teal'c"); a
-// possessive suffix stays apart from the name before it ("Emily's").
+// that is a common word ("I'll", "don't") stays whole and is no name, unless a
+// name the dictionary holds is written with that very word ("Teal'c"). A word
+// ending in 's is its head word and a suffix ("Emily's", "it's"): the head
+// matches a name by the rule every word does, and the suffix stays beside it.
 //
 // The user's own names become ME, even where another identity's name shares
 // one of their words; a participant's names and handles become its role label
 // (ME, THEM, PERSON_n); anything else becomes a numbered placeholder
 // (NAME_n, EMAIL_n, PHONE_n, URL_n, HANDLE_n), one per distinct value within
 // the request. Weekday, month and relative-time words never match a name, and
-// no identifier takes a calendar date or any part of one, so they survive. A
-// name outside the dictionary that begins a sentence survives.
+// no identifier takes a calendar date or any part of one, so they survive.
 //
 // Question IDs and option keys are identifiers and pass through unchanged.
 type Masker struct {
@@ -100,14 +101,14 @@ func LoadMasker(ctx context.Context, content *repository.ThreadContentRepository
 // to what Mask hides or keeps: every masked method's version derives from
 // MaskingVersion, so a rerun then judges again instead of reusing judgments
 // made on the old masking.
-const maskingRules = "2026-10-21"
+const maskingRules = "2026-10-21.2"
 
 // MaskingVersion identifies how Mask masks: its rules and the content of the
-// word lists they read. A dictionary's names change with contacts and messages
-// and are no part of it, so every Masker gives one version, and a caller
-// without one derives the same.
+// common-word list they read. A dictionary's names change with contacts and
+// messages and are no part of it, so every Masker gives one version, and a
+// caller without one derives the same.
 func MaskingVersion() string {
-	sum := sha256.Sum256([]byte(maskingRules + "\x00" + commonWordsFile + "\x00" + personNamesFile))
+	sum := sha256.Sum256([]byte(maskingRules + "\x00" + commonWordsFile))
 	return hex.EncodeToString(sum[:6])
 }
 
@@ -394,7 +395,8 @@ func (s *masking) addName(terms map[string]string, name, identity string) {
 	}
 	add(strings.Join(words, " "))
 	s.longestTerm = max(s.longestTerm, len(tokens))
-	for _, word := range apostrophized(name, tokens) {
+	named, _ := apostrophized(name, tokens)
+	for _, word := range named {
 		if word != "" {
 			s.namedWords[word] = true
 		}
@@ -462,7 +464,7 @@ func (s *masking) mask(text string, addressHeader bool) string {
 				continue
 			}
 			t := words[i]
-			if !protectedWords[t.lower] && !isDigits(t.lower) && (addressHeader || (capitalized(t.word) && !beginsSentence(text, t.start) && !ordinary(t.lower))) {
+			if addressHeader && !protectedWords[t.lower] && !isDigits(t.lower) {
 				spans = append(spans, span{t.start, t.end, s.placeholder("word:"+t.lower, "NAME")})
 			}
 			i++
@@ -481,24 +483,24 @@ func (s *masking) mask(text string, addressHeader bool) string {
 }
 
 // runsBetween returns the words of text outside the identifier spans, which
-// are in text order, split into runs at each span and at each contraction,
-// which stays whole and is no name: no name match crosses either, so every
-// span rendered is disjoint from the others. A contraction is a word written
-// with an apostrophe that is a common word ("I'll", "it's") and that no name
-// of the dictionary holds ("Teal'c"). Every other such word's parts are words
-// of their own, so a possessive suffix stays apart from the name before it.
+// are in text order, split into runs at each span, at each contraction and at
+// each 's suffix, none of which is a name: no name match crosses any of them,
+// so every span rendered is disjoint from the others. A contraction is a word
+// written with an apostrophe that is a common word ("I'll", "don't") and that
+// no name of the dictionary holds ("Teal'c"). Every other such word's parts
+// are words of their own.
 func (s *masking) runsBetween(text string, identifiers []span) [][]token {
 	runs := [][]token{nil}
 	next := 0
 	tokens := tokenize(text)
-	joined := apostrophized(text, tokens)
+	joined, suffix := apostrophized(text, tokens)
 	for i, t := range tokens {
 		for next < len(identifiers) && identifiers[next].end <= t.start {
 			next++
 			runs = append(runs, nil)
 		}
 		contraction := commonWords[joined[i]] && !s.namedWords[joined[i]]
-		if contraction || (next < len(identifiers) && identifiers[next].start < t.end) {
+		if suffix[i] || contraction || (next < len(identifiers) && identifiers[next].start < t.end) {
 			runs = append(runs, nil)
 			continue
 		}
@@ -511,10 +513,12 @@ func (s *masking) runsBetween(text string, identifiers []span) [][]token {
 const apostrophes = "'’"
 
 // apostrophized returns, for each token, the word written with an apostrophe
-// it is a part of ("I'll", "Emily's"), its parts lowercased and joined by ',
-// and "" for a token that is a word alone.
-func apostrophized(text string, tokens []token) []string {
-	out := make([]string, len(tokens))
+// it is a part of ("I'll", "Teal'c"), its parts lowercased and joined by ',
+// and "" for a token that is a word alone. A final 's is a suffix and no part
+// of that word: suffix reports its s, and the head before it is a word alone
+// ("Emily's", "it's") or the word its own apostrophes join ("O'Neill's").
+func apostrophized(text string, tokens []token) (words []string, suffix []bool) {
+	words, suffix = make([]string, len(tokens)), make([]bool, len(tokens))
 	for i := 0; i < len(tokens); {
 		parts := []string{tokens[i].lower}
 		j := i + 1
@@ -525,15 +529,20 @@ func apostrophized(text string, tokens []token) []string {
 			}
 			parts = append(parts, tokens[j].lower)
 		}
+		end := j
+		if len(parts) > 1 && parts[len(parts)-1] == "s" {
+			suffix[j-1] = true
+			parts, end = parts[:len(parts)-1], j-1
+		}
 		if len(parts) > 1 {
 			word := strings.Join(parts, "'")
-			for k := i; k < j; k++ {
-				out[k] = word
+			for k := i; k < end; k++ {
+				words[k] = word
 			}
 		}
 		i = j
 	}
-	return out
+	return words, suffix
 }
 
 // lookup returns how many words, from the first, form the longest dictionary
@@ -569,29 +578,4 @@ func (s *masking) lookup(text string, words []token) (int, string) {
 func namesSomeone(t token) bool {
 	first, _ := utf8.DecodeRuneInString(t.word)
 	return unicode.IsUpper(first) || !commonWords[t.lower]
-}
-
-// capitalized reports a word of two or more letters whose first letter alone is
-// upper case.
-func capitalized(word string) bool {
-	first, size := utf8.DecodeRuneInString(word)
-	rest := word[size:]
-	return unicode.IsUpper(first) && rest != "" && strings.IndexFunc(rest, func(r rune) bool { return !unicode.IsLower(r) }) < 0
-}
-
-// beginsSentence reports whether the word at start opens the text, a line or a
-// sentence.
-func beginsSentence(text string, start int) bool {
-	for i := start; i > 0; {
-		r, size := utf8.DecodeLastRuneInString(text[:i])
-		switch {
-		case r == '\n' || r == '.' || r == '!' || r == '?':
-			return true
-		case unicode.IsSpace(r) || strings.ContainsRune(`"'“‘([-`, r):
-			i -= size
-		default:
-			return false
-		}
-	}
-	return true
 }

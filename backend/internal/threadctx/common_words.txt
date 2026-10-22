@@ -5,15 +5,11 @@
 # in television and movie scripts, each kept when Webster's Second
 # International Dictionary lists it, or the word an -s, -es, -ed, -d or -ing
 # ending inflects, in lower case, or when it is a contraction: a word ending in
-# n't, 'll, 're, 've, 'd or 'm; a word ending in 's whose first part also takes
-# 'll, 're, 've, 'd or 'm among the frequent words ("it's" beside "it'll"), or
-# is let, here, now, when, all, whatever, whoever or an indefinite pronoun
-# ("let's", "here's", "something's"); or
-# a part of at most two letters before an apostrophe and a word of the
-# dictionary or another part of at most two letters ("y'all", "ma'am"). Any
-# other word written with an apostrophe is left out: a name's ("teal'c") or a
-# possessive's ("emily's"), whose suffix the masker keeps apart from the word
-# before it.
+# n't, 'll, 're, 've, 'd or 'm, or a part of at most two letters before an
+# apostrophe and a word of the dictionary or another part of at most two
+# letters ("y'all", "ma'am"). A word ending in 's is left out: the masker reads
+# every such word as its head word and a suffix ("it's", "emily's"). Any other
+# word written with an apostrophe is left out too: a name's ("teal'c").
 #
 # Sources and licenses:
 #   - Wiktionary, "Frequency lists: TV and movie scripts" (2006), CC BY-SA 3.0,
@@ -25,8 +21,7 @@
 #
 # Regenerate (cwd backend):
 #   go mod download -json github.com/ccojocar/zxcvbn-go@v1.0.4   # prints Dir
-#   curl -sSfLo /tmp/Person.php https://raw.githubusercontent.com/FakerPHP/Faker/v1.24.1/src/Faker/Provider/en_US/Person.php
-#   go run ./cmd/gen-mask-words -english <Dir>/data/data/English.json -web2 /usr/share/dict/web2 -faker /tmp/Person.php
+#   go run ./cmd/gen-mask-words -english <Dir>/data/data/English.json -web2 /usr/share/dict/web2
 
 a
 abandon
@@ -250,7 +245,6 @@ alike
 alimony
 alive
 all
-all's
 allegations
 alleged
 allegiance
@@ -360,13 +354,10 @@ anxiety
 anxious
 any
 anybody
-anybody's
 anyhow
 anyone
-anyone's
 anyplace
 anything
-anything's
 anyway
 anyways
 anywhere
@@ -2667,12 +2658,9 @@ ever
 everlasting
 every
 everybody
-everybody's
 everyday
 everyone
-everyone's
 everything
-everything's
 everywhere
 evicted
 evidence
@@ -3537,7 +3525,6 @@ haw
 he
 he'd
 he'll
-he's
 head
 headache
 headaches
@@ -3603,7 +3590,6 @@ her
 herbal
 herbs
 here
-here's
 hereby
 hero
 heroes
@@ -3732,7 +3718,6 @@ hovering
 how
 how'd
 how're
-how's
 how've
 however
 hubby
@@ -4114,7 +4099,6 @@ issues
 it
 it'd
 it'll
-it's
 itch
 itching
 itchy
@@ -4360,7 +4344,6 @@ lesser
 lesson
 lessons
 let
-let's
 lethal
 lets
 letter
@@ -5028,7 +5011,6 @@ ninth
 nip
 no
 nobody
-nobody's
 nod
 nods
 noise
@@ -5057,7 +5039,6 @@ note
 noted
 notes
 nothing
-nothing's
 notice
 noticed
 notices
@@ -5069,7 +5050,6 @@ notorious
 novel
 novels
 now
-now's
 nowadays
 nowhere
 nuclear
@@ -6832,7 +6812,6 @@ shaving
 she
 she'd
 she'll
-she's
 shed
 sheer
 sheet
@@ -7113,14 +7092,11 @@ solved
 solving
 some
 somebody
-somebody's
 someday
 somehow
 someone
-someone's
 someplace
 something
-something's
 sometime
 sometimes
 somewhat
@@ -7753,7 +7729,6 @@ thanksgiving
 that
 that'd
 that'll
-that's
 thaw
 the
 theater
@@ -7773,7 +7748,6 @@ there
 there'd
 there'll
 there're
-there's
 therefore
 thermal
 these
@@ -8492,18 +8466,14 @@ what
 what'd
 what'll
 what're
-what's
 what've
-whatever's
 whatsoever
 wheel
 when
-when's
 whenever
 where
 where'd
 where're
-where's
 where've
 whereabouts
 whereas
@@ -8529,11 +8499,9 @@ who
 who'd
 who'll
 who're
-who's
 who've
 whoa
 whoever
-whoever's
 whole
 wholesome
 whom
@@ -8545,7 +8513,6 @@ whores
 whose
 why
 why'd
-why's
 wide
 widow
 wife

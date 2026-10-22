@@ -197,14 +197,10 @@ func TestMask_ConsistentPlaceholdersAndTimeWords(t *testing.T) {
 	}
 }
 
-// A name the dictionary does not cover is masked when it does not begin
-// a sentence or line, and every word of an address header is masked.
-// spec: KNW-089.unknown-capitalized-masked, KNW-089.address-header-words-masked
-func TestMask_NamesOutsideTheDictionary(t *testing.T) {
-	t.Run("a capitalized first name of a non-contact", func(t *testing.T) {
-		assertGone(t, mask(t, dm("I ran into Priya at the market")), "priya")
-	})
-
+// Every word of an address header is masked, though the dictionary does not
+// hold it.
+// spec: KNW-089.address-header-words-masked
+func TestMask_AddressHeaderWords(t *testing.T) {
 	t.Run("a non-contact's full name in a sender header", func(t *testing.T) {
 		c := dm("hello")
 		c.Entries[0].Headers = map[string]string{"from": "Priya Raman <p.r@example.test>"}
@@ -222,30 +218,36 @@ func contactsNamed(fullNames ...string) threadctx.Dictionary {
 }
 
 // Masking keeps ordinary words: a contraction stays whole, and a common word
-// written in lower case survives though a contact's name holds it. A
-// capitalized word that no sentence begins with is still masked as a name
-// unless it is a common word.
-// spec: KNW-089.contractions-stay-whole, KNW-089.lowercase-common-words-kept, KNW-089.capitalized-common-words-kept, KNW-089.unknown-capitalized-masked
+// written in lower case survives though a contact's name holds it.
+// spec: KNW-089.contractions-stay-whole, KNW-089.lowercase-common-words-kept
 func TestMask_KeepsOrdinaryWords(t *testing.T) {
-	for _, text := range []string{"I'll call you tonight", "I’ll call you tonight"} {
-		t.Run("a contraction with a contact whose name holds its last part: "+text, func(t *testing.T) {
-			masked := maskWith(t, contactsNamed("Ll Brannock"), dm(text)).Entries()[0].Text
-			assert.Equal(t, text, masked)
-		})
+	for _, tc := range []struct{ first, last, text string }{
+		{"I", "Ll", "I'll call you tonight"},
+		{"Don", "T", "please don't wait up"},
+		{"We", "Re", "we're on our way"},
+		{"They", "Ve", "they've left already"},
+	} {
+		for _, text := range []string{tc.text, strings.ReplaceAll(tc.text, "'", "’")} {
+			t.Run("a contraction with contacts whose names hold the words on either side of its apostrophe: "+text, func(t *testing.T) {
+				masked := maskWith(t, contactsNamed(tc.first+" Hartigan", tc.last+" Brannock"), dm(text)).Entries()[0].Text
+				assert.Equal(t, text, masked)
+			})
+		}
 	}
 
 	for _, tc := range []struct{ contact, text string }{
-		{"It Sorensen", "It's good to see you"},
-		{"It Sorensen", "It’s good to see you"},
-		{"Let Hartigan", "Let's meet tomorrow"},
-		{"Let Hartigan", "Let’s meet tomorrow"},
-		{"Here Hartigan", "Here's the plan"},
-		{"Here Hartigan", "Here’s the plan"},
+		{"It Sorensen", "I think it's good to see you"},
+		{"Let Hartigan", "ok let's meet tomorrow"},
+		{"Mine Hartigan", "yours is red and mine's blue"},
+		{"So Hartigan", "he's tired and so's she"},
+		{"Here Hartigan", "ok, here's the plan"},
 	} {
-		t.Run("a contraction ending in 's with a contact whose name holds its first part: "+tc.text, func(t *testing.T) {
-			masked := maskWith(t, contactsNamed(tc.contact), dm(tc.text)).Entries()[0].Text
-			assert.Equal(t, tc.text, masked)
-		})
+		for _, text := range []string{tc.text, strings.ReplaceAll(tc.text, "'", "’")} {
+			t.Run("a lower-case word ending in 's with a contact whose name holds its head: "+text, func(t *testing.T) {
+				masked := maskWith(t, contactsNamed(tc.contact), dm(text)).Entries()[0].Text
+				assert.Equal(t, text, masked)
+			})
+		}
 	}
 
 	t.Run("lower-case will, it, is and me while contacts carry those words as names", func(t *testing.T) {
@@ -258,15 +260,11 @@ func TestMask_KeepsOrdinaryWords(t *testing.T) {
 		text := "we wish you a Happy New Year"
 		assert.Equal(t, text, mask(t, dm(text)).Entries()[0].Text)
 	})
-
-	t.Run("an unknown capitalized word mid-sentence that is no common word", func(t *testing.T) {
-		assert.Equal(t, "I ran into NAME_1 at the market", mask(t, dm("I ran into Priya at the market")).Entries()[0].Text)
-	})
 }
 
 // A known name that is also a common word is masked when capitalized, at the
-// start of a sentence too, and a possessive of a known name is masked with
-// its suffix kept beside the placeholder.
+// start of a sentence too, and a word ending in 's is its head word and a
+// suffix kept beside it: the head is masked by the same rule as any word.
 // spec: KNW-089.capitalized-known-name-masked, KNW-089.possessive-suffix-kept
 func TestMask_KnownNamesThatAreWords(t *testing.T) {
 	will := contactsNamed("Will Hartigan")
@@ -279,11 +277,25 @@ func TestMask_KnownNamesThatAreWords(t *testing.T) {
 		})
 	}
 
-	for _, text := range []string{"Emily's car is outside", "Emily’s car is outside"} {
-		t.Run("a possessive of a contact's name: "+text, func(t *testing.T) {
-			masked := maskWith(t, contactsNamed("Emily Castellanos"), dm(text)).Entries()[0].Text
-			assert.Equal(t, strings.Replace(text, "Emily", "NAME_1", 1), masked)
-		})
+	for _, contact := range []string{"Emily Castellanos", "Emily S."} {
+		for _, text := range []string{"Emily's car is outside", "Emily’s car is outside"} {
+			t.Run("a possessive of the name of a contact named "+contact+": "+text, func(t *testing.T) {
+				masked := maskWith(t, contactsNamed(contact), dm(text)).Entries()[0].Text
+				assert.Equal(t, strings.Replace(text, "Emily", "NAME_1", 1), masked)
+			})
+		}
+	}
+
+	for _, tc := range []struct{ contact, text, want string }{
+		{"It Sorensen", "It's good to see you", "NAME_1's good to see you"},
+		{"Mine Hartigan", "Mine's ready. Yours?", "NAME_1's ready. Yours?"},
+	} {
+		for _, apostrophe := range []string{"'", "’"} {
+			text, want := strings.ReplaceAll(tc.text, "'", apostrophe), strings.ReplaceAll(tc.want, "'", apostrophe)
+			t.Run("a capitalized word ending in 's whose head a contact's name holds, at the start of a sentence: "+text, func(t *testing.T) {
+				assert.Equal(t, want, maskWith(t, contactsNamed(tc.contact), dm(text)).Entries()[0].Text)
+			})
+		}
 	}
 
 	t.Run("a possessive of a word that is no name", func(t *testing.T) {
@@ -307,21 +319,20 @@ func TestMask_KnownNamesWithAnApostrophe(t *testing.T) {
 	})
 }
 
-// A capitalized word that is a person's name is masked mid-sentence though it
-// is also a common word and no contact carries it, so the common-word
-// exemption lets no such name through; a capitalized common word that is no
-// name is kept.
-// spec: KNW-089.unknown-given-name-masked, KNW-089.capitalized-common-words-kept
-func TestMask_NamesThatAreWordsWithoutAContact(t *testing.T) {
-	t.Run("Rose, Mark and Will mid-sentence with no contact of those names", func(t *testing.T) {
-		masked := mask(t, dm("we had lunch with Rose, Mark and Will today")).Entries()[0].Text
-		assert.Equal(t, "we had lunch with NAME_1, NAME_2 and NAME_3 today", masked)
-	})
-
-	t.Run("a capitalized common word that is no name mid-sentence", func(t *testing.T) {
-		text := "plans for the New Year"
-		assert.Equal(t, text, mask(t, dm(text)).Entries()[0].Text)
-	})
+// The masker masks no word for being capitalized and unknown: a capitalized
+// word that no known name holds comes through unmasked, common word, given
+// name or invented word alike, and is the name model's to find.
+// spec: KNW-089.unknown-capitalized-kept
+func TestMask_UnknownCapitalizedWordsKept(t *testing.T) {
+	for _, text := range []string{
+		"we wish you a Happy New Year",
+		"we had lunch with Rose and Mark today",
+		"I ran into Quenbry at the market",
+	} {
+		t.Run(text, func(t *testing.T) {
+			assert.Equal(t, text, mask(t, dm(text)).Entries()[0].Text)
+		})
+	}
 }
 
 // The user's own names are masked as ME, each full name and each of its

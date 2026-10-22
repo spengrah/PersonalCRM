@@ -72,7 +72,7 @@ func TestLoadMasker_MasksDisplayNames(t *testing.T) {
 		})
 	}
 
-	t.Run("an email sender's name that is a common word and no listed given name, at a sentence's start and mid-sentence", func(t *testing.T) {
+	t.Run("an email sender's name that is a common word, at a sentence's start and mid-sentence", func(t *testing.T) {
 		// spec: KNW-089.capitalized-known-name-masked
 		t.Parallel()
 		e := newBuilderEnv(t)
