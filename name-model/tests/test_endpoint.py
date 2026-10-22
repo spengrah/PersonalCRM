@@ -16,6 +16,7 @@ import json
 import os
 import re
 import socket
+import struct
 import sys
 import tempfile
 import threading
@@ -193,10 +194,15 @@ class EndpointTest(_ServedEndpoint):
 
 
 
+def _float32(x):
+    return struct.unpack("<f", struct.pack("<f", x))[0]
+
+
 class _StrictGliner:
     """Stands in for the gliner library's model, which cannot run in CI. Like
-    GLiNER's span decoder, it keeps a span only when its score is strictly
-    greater than the threshold it is given."""
+    GLiNER's span decoder under PyTorch, it holds each score as a float32,
+    converts the threshold it is given to float32, and keeps a span only when
+    its score is strictly greater."""
 
     scores = {"Bartholomew": 0.5, "Kit": 0.4}
 
@@ -213,7 +219,7 @@ class _StrictGliner:
             {"start": m.start(), "end": m.end(), "score": score}
             for name, score in self.scores.items()
             for m in re.finditer(re.escape(name), text)
-            if score > threshold
+            if _float32(score) > _float32(threshold)
         ]
 
 

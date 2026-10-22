@@ -4,7 +4,7 @@ MODEL_NAME is the one statement of which model the image holds: the image
 build fetches it by this name, and the server refuses a request for any other.
 """
 
-import math
+import struct
 
 MODEL_NAME = "urchade/gliner_multi_pii-v1"
 
@@ -27,10 +27,18 @@ class GlinerModel:
     def predict(self, text, label, threshold):
         """(start, end, score) per span, as character offsets into text, for
         every span scored at threshold or more."""
-        # GLiNER keeps a span only when its score is strictly greater than the
-        # threshold it is given, so it is given the next float below: a span
+        # GLiNER keeps a span only when its float32 score is strictly greater
+        # than the threshold it is given, which PyTorch first converts to
+        # float32. It is given the largest float32 below threshold, so a span
         # scored exactly at threshold survives, and the server's own comparison
         # stays the one cutoff.
-        below = math.nextafter(threshold, 0)
-        entities = self._model.predict_entities(text, [label], threshold=below)
+        entities = self._model.predict_entities(text, [label], threshold=float32_below(threshold))
         return [(e["start"], e["end"], e["score"]) for e in entities]
+
+
+def float32_below(x):
+    """The largest float32 value strictly below the positive number x."""
+    bits = struct.unpack("<I", struct.pack("<f", x))[0]
+    if struct.unpack("<f", struct.pack("<I", bits))[0] >= x:
+        bits -= 1
+    return struct.unpack("<f", struct.pack("<I", bits))[0]
