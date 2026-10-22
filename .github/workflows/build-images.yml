@@ -14,6 +14,14 @@ name: Build & Push Images
 # promotable to main and deployable (no paths filter — a scripts/docs-only push
 # must still build, or its SHA would 404 on pull at promotion time). The green-CI
 # deploy gate + SHA-pinned promotion is the deploy job (umbrella security model).
+#
+# The name model image is the exception to "one image per SHA": its tag is
+# name-model/image-tag.sh's, a function of name-model/ alone, so it is built and
+# pushed only when the registry lacks that tag, i.e. when the model's sources
+# changed. Every backend :<sha> image carries the tag its revision names as the
+# label org.personalcrm.name-model.tag, which deploy-artifact.sh reads; the
+# backend image is pushed only after the model image it names exists.
+# The first push creates personalcrm-name-model PRIVATE too; flip it to PUBLIC.
 
 on:
   push:
@@ -29,9 +37,67 @@ env:
   IMAGE_NS: ghcr.io/${{ github.repository_owner }}
 
 jobs:
+  name-model-image:
+    name: Build & Push name model image (when its sources changed)
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compute the name model image tag
+        id: tag
+        run: |
+          tag="$(name-model/image-tag.sh)"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "name model image tag: $tag"
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Check whether the registry has this tag
+        id: exists
+        env:
+          IMAGE: ${{ env.IMAGE_NS }}/personalcrm-name-model:${{ steps.tag.outputs.tag }}
+        run: |
+          if docker manifest inspect "$IMAGE" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "$IMAGE exists; the model's sources are unchanged, nothing to build."
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "$IMAGE is not in the registry; building it."
+          fi
+
+      # torch and GLiNER install from arm64 wheels and the image fetches and
+      # test-loads the weights, so this build runs under QEMU emulation, unlike
+      # the COPY-only backend and frontend images. It runs only when the
+      # model's sources change.
+      - name: Set up QEMU
+        if: steps.exists.outputs.exists != 'true'
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        if: steps.exists.outputs.exists != 'true'
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build & push name model image
+        if: steps.exists.outputs.exists != 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: name-model
+          file: name-model/Dockerfile
+          platforms: linux/arm64
+          push: true
+          tags: ${{ env.IMAGE_NS }}/personalcrm-name-model:${{ steps.tag.outputs.tag }}
+
   build-images:
     name: Build & Push arm64 images
     runs-on: ubuntu-latest
+    needs: name-model-image
     steps:
       - uses: actions/checkout@v4
 
@@ -93,6 +159,8 @@ jobs:
           file: infra/images/backend.Dockerfile
           platforms: linux/arm64
           push: true
+          # The name model image this revision names (deploy-artifact.sh).
+          labels: org.personalcrm.name-model.tag=${{ needs.name-model-image.outputs.tag }}
           tags: |
             ${{ env.IMAGE_NS }}/personalcrm-backend:${{ github.sha }}
             ${{ env.IMAGE_NS }}/personalcrm-backend:latest

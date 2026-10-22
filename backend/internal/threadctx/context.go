@@ -51,6 +51,10 @@ type Entry struct {
 	SentAt  time.Time
 	Headers map[string]string
 	Text    string
+	// names are the name spans of the entry's texts, by text. Only the
+	// masker covers an entry with them (Masker.Cover), and Mask refuses an
+	// entry with a text they lack.
+	names map[string][]NameSpan
 }
 
 // Participant is one party of a thread context.

@@ -1259,6 +1259,9 @@ type Querier interface {
 	// returns ErrNoRows in that case, which the repository translates to
 	// db.ErrNotFound.
 	InsertMeetingNote(ctx context.Context, arg InsertMeetingNoteParams) (*MeetingNote, error)
+	// Stores the spans of one text. The model's spans of a text are a function of
+	// the text and the model version, so a row already stored is kept.
+	InsertMessageNameSpan(ctx context.Context, arg InsertMessageNameSpanParams) error
 	// Adds a group-chat message as evidence only: stored processed with no
 	// interaction link and no contact match, so no aggregation, sweep, promotion
 	// or rematch picks it up, and credits_reply stays false so it is never read as
@@ -1464,6 +1467,18 @@ type Querier interface {
 	// source of the set.
 	ListCorrectionPredicates(ctx context.Context) ([]*ListCorrectionPredicatesRow, error)
 	ListCuratedPredicates(ctx context.Context) ([]*ListCuratedPredicatesRow, error)
+	// Every display name a stored message gives a sender or recipient, of every
+	// source that stores one: an email's sender and recipient names, a chat
+	// sender's push name and a Telegram peer's name. owner is the source identity
+	// the name was given to, prefixed by source; contact_id is the live contact
+	// the message attributes that owner to, NULL when it attributes none.
+	//
+	// A message's sender: an inbound message's peer, else the user.
+	// An email's recipients, each name paired with its address. The user's own
+	// message is attributed to the recipient its copy is stored for.
+	// A Telegram chat's peer: its other side in a private chat, the sender of a
+	// received group message.
+	ListDisplayNamesForMasking(ctx context.Context) ([]*ListDisplayNamesForMaskingRow, error)
 	// Prefer rows with username/phone for identity matching, then rows with
 	// populated names so a single aggregation pass picks the most-populated row
 	// per peer (avoids depending on multi-pass COALESCE accumulation in Go).
@@ -1649,6 +1664,9 @@ type Querier interface {
 	// idx_meeting_note_linkage_state from migration 053; the in-memory sort
 	// on the small filtered set is cheap.
 	ListMeetingNotesNeedingAttention(ctx context.Context, hostID *uuid.UUID) ([]*MeetingNote, error)
+	// The stored spans of the model version for each (message key, text digest)
+	// pair asked; a pair with none stored has no row.
+	ListMessageNameSpans(ctx context.Context, arg ListMessageNameSpansParams) ([]*ListMessageNameSpansRow, error)
 	ListMessagesContainersForContact(ctx context.Context, contactID *uuid.UUID) ([]*ListMessagesContainersForContactRow, error)
 	// The one derivation of a group-chat burst's window: the closed span from the
 	// earliest to the latest sent time of the live messages_message rows linked to

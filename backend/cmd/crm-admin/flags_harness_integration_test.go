@@ -2,8 +2,9 @@
 
 // Harness for the message-flag tests: synthetic threads in January 2026, each
 // compared method's vendor faked at its API boundary (an HTTP server speaking
-// the vendor's wire protocol), and crm-admin --judge-month and --scorecard
-// driven through the real run() dispatch.
+// the vendor's wire protocol), and crm-admin's historical run
+// (--judge-start-day and --judge-end-day) and --scorecard driven through the
+// real run() dispatch.
 package main
 
 import (
@@ -22,6 +23,7 @@ import (
 	"testing"
 	"time"
 
+	"personal-crm/backend/internal/config"
 	"personal-crm/backend/internal/decision"
 	"personal-crm/backend/internal/judgerun"
 	"personal-crm/backend/internal/judgment"
@@ -41,15 +43,21 @@ func jan(day, hour int) time.Time {
 }
 
 // flagsEnv is the judgment store over an isolated clone with the vendors a
-// test fakes.
+// test fakes, and the name model faked at its socket.
 type flagsEnv struct {
 	*labelsEnv
+	names  *nameModel
 	masker *threadctx.Masker
 }
 
+// ownNames are the synthetic user's own names.
+var ownNames = []string{"Marlowe Quill"}
+
 func newFlagsEnv(t *testing.T, production string) *flagsEnv {
 	t.Helper()
-	return &flagsEnv{labelsEnv: newLabelsEnvFor(t, production), masker: threadctx.NewMasker(nil)}
+	e := &flagsEnv{labelsEnv: newLabelsEnvFor(t, production), names: newNameModel(t)}
+	e.masker = e.maskerOf(t, e.names.socket, testDeadline)
+	return e
 }
 
 // ask is one question a vendor receives, with the message it concerns.
@@ -291,11 +299,20 @@ func (e *flagsEnv) method(key string, v *vendor, limits decision.Limits) decisio
 }
 
 func (e *flagsEnv) methodOf(def decision.Definition, v *vendor) decision.Method {
-	return decision.NewMaskedMethod(def, e.masker, decision.NewSystemOneAdapter(v.url, "key", "fake-1"))
+	return decision.NewMaskedMethod(def, defaultNames, e.masker, decision.NewSystemOneAdapter(v.url, "key", "fake-1"))
 }
 
-// judgeMonth runs crm-admin --judge-month over January with the method, and
-// returns its output.
+// methodAt is a method of the key with roomy limits that masks with the name
+// spans of the model version.
+func (e *flagsEnv) methodAt(key string, names threadctx.ModelVersion, v *vendor) decision.Method {
+	return decision.NewMaskedMethod(fakeDefinition(key, roomy), names, e.masker, decision.NewSystemOneAdapter(v.url, "key", "fake-1"))
+}
+
+// defaultNames is the name model at its default cutoff.
+var defaultNames = threadctx.NewModelVersion(config.DefaultNameModelThreshold)
+
+// judgeMonth runs crm-admin's historical run over the days of January with
+// the method, and returns its output.
 func (e *flagsEnv) judgeMonth(t *testing.T, set judgerun.Methods, key string) string {
 	t.Helper()
 	return e.judgeMonthOf(t, januaryMonth, set, key)
@@ -309,14 +326,26 @@ func (e *flagsEnv) judgeMonthOf(t *testing.T, month string, set judgerun.Methods
 	return out
 }
 
+// tryJudgeMonth runs the historical run over the days of a month, written
+// YYYY-MM: its first day to its last.
 func (e *flagsEnv) tryJudgeMonth(month string, set judgerun.Methods, key string, measure bool) (string, error) {
+	first, err := time.ParseInLocation("2006-01", month, time.Local)
+	if err != nil {
+		return "", err
+	}
+	return e.tryJudgeDays(first.Format(time.DateOnly), first.AddDate(0, 1, -1).Format(time.DateOnly), set, key, measure)
+}
+
+// tryJudgeDays runs crm-admin's historical run from the first day to the
+// last, both written YYYY-MM-DD and included.
+func (e *flagsEnv) tryJudgeDays(first, last string, set judgerun.Methods, key string, measure bool) (string, error) {
 	runner, err := judgerun.New(e.contexts, e.store, set)
 	if err != nil {
 		return "", err
 	}
 	var stdout bytes.Buffer
-	err = run(e.ctx, runOptions{judgeMonth: month, judgeMethod: key, judgeMeasure: measure}, adminDeps{
-		judgeMonth: runner, stdout: &stdout, stderr: &bytes.Buffer{},
+	err = run(e.ctx, runOptions{judgeStartDay: first, judgeEndDay: last, judgeMethod: key, judgeMeasure: measure}, adminDeps{
+		historical: runner, stdout: &stdout, stderr: &bytes.Buffer{},
 	})
 	return stdout.String(), err
 }
@@ -469,7 +498,7 @@ func (e *flagsEnv) tokensFor(t *testing.T, def decision.Definition, req decision
 	t.Helper()
 	startsAt := func(limit int) (string, bool) {
 		def.Limits.Tokens = limit
-		p, err := decision.NewMaskedMethod(def, e.masker, noSend{}).Plan(e.ctx, req)
+		p, err := decision.NewMaskedMethod(def, defaultNames, e.masker, noSend{}).Plan(e.ctx, req)
 		require.NoError(t, err)
 		return p.Read.WindowStart, p.Incomplete == "" && len(p.Read.Chunks) == 0
 	}

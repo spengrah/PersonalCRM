@@ -1,0 +1,23 @@
+# PersonalCRM name model socket. Installed by scripts/deploy-artifact.sh into
+# the tenant's ~/.config/systemd/user/ from the model image it deploys.
+#
+# Holds the model's Unix socket open while the model is down: the first
+# connection starts personalcrm-name-model.service, which receives this socket
+# (socket activation), answers, and exits once idle. With this unit stopped
+# nothing listens, so a request fails at once instead of waiting.
+#
+# The backend container mounts %t/personalcrm-name-model at /run/name-model and
+# reaches the model at NAME_MODEL_SOCKET=/run/name-model/name-model.sock.
+[Unit]
+Description=PersonalCRM name model socket (starts the model on demand)
+
+[Socket]
+ListenStream=%t/personalcrm-name-model/name-model.sock
+# The backend runs as a mapped non-root uid inside its own user namespace, so
+# the socket is open to every uid; %t (the tenant's /run/user/<uid>, mode 0700)
+# keeps every other host user out.
+SocketMode=0666
+DirectoryMode=0755
+
+[Install]
+WantedBy=sockets.target

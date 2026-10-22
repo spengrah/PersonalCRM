@@ -93,9 +93,10 @@ type registered struct {
 // judgments and runs read without the registry. A method whose route is not
 // configured stays in the registry and fails on Get.
 func NewRegistry(cfg config.DecisionConfig, masker *threadctx.Masker) *Registry {
+	names := threadctx.NewModelVersion(cfg.NameModelThreshold)
 	openRouter := func(model string, routing *openRouterRouting) func(Definition) (Method, error) {
 		return func(def Definition) (Method, error) {
-			return NewMaskedMethod(def, masker, newSystemOne(openRouterDecisionsURL, cfg.OpenRouterAPIKey, model, routing)), nil
+			return NewMaskedMethod(def, names, masker, newSystemOne(openRouterDecisionsURL, cfg.OpenRouterAPIKey, model, routing)), nil
 		}
 	}
 	routes := []registered{
@@ -109,7 +110,7 @@ func NewRegistry(cfg config.DecisionConfig, masker *threadctx.Masker) *Registry 
 		// release does not change this method's version.
 		{Definition{Key: "jev-masked", Wording: DefaultWording, Limits: jevLimits, Sizing: jevSizing, Terms: veniceJevTerms},
 			"VENICE_API_KEY", cfg.VeniceAPIKey, func(def Definition) (Method, error) {
-				return NewMaskedMethod(def, masker, newSystemOne(veniceDecisionsURL, cfg.VeniceAPIKey, "jev-latest", nil)), nil
+				return NewMaskedMethod(def, names, masker, newSystemOne(veniceDecisionsURL, cfg.VeniceAPIKey, "jev-latest", nil)), nil
 			}},
 	}
 	r := &Registry{methods: make(map[string]func() (Method, error), len(routes))}

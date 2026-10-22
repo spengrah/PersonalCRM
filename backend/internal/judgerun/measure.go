@@ -14,7 +14,7 @@ import (
 // sit against the method's limits.
 type Measurement struct {
 	Method    judgment.MethodRef
-	Month     Month
+	Days      Days
 	CutOffs   int
 	Contexts  int
 	Tokens    Distribution
@@ -36,18 +36,19 @@ type Distribution struct {
 	Min, P50, P90, P99, Max int
 }
 
-// Measure builds every context a historical run of the month would judge,
+// Measure builds every context a historical run of the days would judge,
 // and sizes its whole request against the method's limits. It sends nothing
-// and writes nothing: no judgment, no run and no live state. It reports every
-// size and refuses none.
-func (r *Runner) Measure(ctx context.Context, methodKey string, month Month) (Measurement, error) {
+// to a vendor and writes no judgment, no run and no live state; masking the
+// requests stores the name spans it asks the name model for, as any run's
+// masking does. It reports every size and refuses none.
+func (r *Runner) Measure(ctx context.Context, methodKey string, days Days) (Measurement, error) {
 	m, err := r.methods.Get(methodKey)
 	if err != nil {
 		return Measurement{}, err
 	}
-	out := Measurement{Method: m.Ref(), Month: month, CutOffs: len(month.CutOffs())}
+	out := Measurement{Method: m.Ref(), Days: days, CutOffs: len(days.CutOffs())}
 	var tokens, questions []int
-	schedule, err := eligible(ctx, r.contexts, month)
+	schedule, err := eligible(ctx, r.contexts, days)
 	if err != nil {
 		return Measurement{}, err
 	}

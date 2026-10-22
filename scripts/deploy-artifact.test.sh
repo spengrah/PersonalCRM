@@ -19,6 +19,10 @@
 #   - post-migrate swap-failure -> ROLLBACK-WITH-RESTORE (not the bare trap).
 #   - re-pin failure -> "ROLLBACK FAILED" + app left STOPPED + snapshot retained.
 #   - ntfy outcomes + degrade-open when the ntfy env file is absent.
+#   - the name model: pulled only when the revision names a model image other
+#     than the installed one, its units installed alike under production's and
+#     staging's configuration, a missing image aborting before the DB, restored
+#     on rollback, and never started by the deploy (PR2.c5).
 
 set -uo pipefail
 
@@ -27,6 +31,12 @@ SCRIPT="$REPO_ROOT/scripts/deploy-artifact.sh"
 TESTDATA="$REPO_ROOT/scripts/testdata"
 VALID_SHA="abcdef0123456789abcdef0123456789abcdef01"
 NEW_SHA="$VALID_SHA"
+MODEL_REPO="ghcr.io/spengrah/personalcrm-name-model"
+# The model image tags two revisions name: the host runs MODEL_TAG_OLD, and a
+# revision that changes the model's sources names MODEL_TAG_NEW.
+MODEL_TAG_OLD="src-1111111111111111111111111111111111111111"
+MODEL_TAG_NEW="src-2222222222222222222222222222222222222222"
+MODEL_UNITS="$REPO_ROOT/name-model/units"
 
 PASS=0
 FAIL=0
@@ -47,6 +57,16 @@ make_sandbox() {
     cp "$TESTDATA/frontend-${2:-latest}.container" "$SANDBOX/units/frontend.container"
     BACKEND_UNIT="$SANDBOX/units/backend.container"
     FRONTEND_UNIT="$SANDBOX/units/frontend.container"
+    # The model's units as a host holds them: installed from the image the host
+    # runs (MODEL_TAG_OLD), its Image= pinned. "none" = no model installed yet.
+    MODEL_UNIT="$SANDBOX/home/.config/containers/systemd/personalcrm-name-model.container"
+    MODEL_SOCKET_UNIT="$SANDBOX/home/.config/systemd/user/personalcrm-name-model.socket"
+    if [ "${3:-installed}" = installed ]; then
+        mkdir -p "$(dirname "$MODEL_UNIT")" "$(dirname "$MODEL_SOCKET_UNIT")"
+        sed "s|^Image=.*|Image=$MODEL_REPO:$MODEL_TAG_OLD|" \
+            "$MODEL_UNITS/personalcrm-name-model.container" > "$MODEL_UNIT"
+        cp "$MODEL_UNITS/personalcrm-name-model.socket" "$MODEL_SOCKET_UNIT"
+    fi
 
     # --- stub: id (resolve a tenant uid without a real account) ---
     cat > "$SANDBOX/bin/id" <<'EOF'
@@ -93,10 +113,18 @@ case "\$1" in
     echo "\${STUB_IMAGE_ID:-c91da029deadbeefc91da029deadbeefc91da029deadbeefc91da029deadbeef}"
     exit 0 ;;
   image)
+    # image inspect of the backend image's model label -> the model image tag
+    # the revision names (STUB_MODEL_TAG; set it empty for a missing label).
+    if [[ "\$*" == *org.personalcrm.name-model.tag* ]]; then
+      echo "\${STUB_MODEL_TAG-$MODEL_TAG_OLD}"
+      exit 0
+    fi
     # image inspect: \`podman image inspect <id> --format '{{index .RepoDigests 0}}'\` -> repo digest
     echo "\${STUB_INSPECT_DIGEST:-ghcr.io/spengrah/personalcrm-backend@sha256:c91da029deadbeefc91da029deadbeefc91da029deadbeefc91da029deadbeef}"
     exit 0 ;;
   pull)
+    # STUB_MODEL_PULL_RC fails only the model image's pull.
+    if [[ "\$*" == *personalcrm-name-model* ]]; then exit "\${STUB_MODEL_PULL_RC:-0}"; fi
     exit "\${STUB_PULL_RC:-0}" ;;
   volume)
     echo "$SANDBOX/volume/_data"
@@ -105,6 +133,12 @@ case "\$1" in
     # pg_isready -- STUB_PG_NOT_READY=1 simulates postgres never becoming ready.
     exit "\${STUB_PG_NOT_READY:-0}" ;;
   run)
+    # A unit file read out of the model image: serve the repository's own
+    # name-model/units, which is what the image holds.
+    if [[ "\$*" == *"--entrypoint cat"* ]]; then
+      cat "$MODEL_UNITS/\$(basename "\${@: -1}")"
+      exit
+    fi
     # crm-admin via --entrypoint. Last arg is the subcommand.
     sub="\${@: -1}"
     if [ "\$sub" = "--migrate-check" ]; then exit "\${STUB_MIGRATE_CHECK_RC:-0}"; fi
@@ -238,6 +272,8 @@ run_deploy() {
         CRM_HOME="${CRM_HOME_OVERRIDE:-$SANDBOX/home}" \
         BACKEND_UNIT="$BACKEND_UNIT" \
         FRONTEND_UNIT="$FRONTEND_UNIT" \
+        MODEL_UNIT="$MODEL_UNIT" \
+        MODEL_SOCKET_UNIT="$MODEL_SOCKET_UNIT" \
         DEPLOY_ENV_FILE="$SANDBOX/env" \
         BACKUP_SCRIPT="$SANDBOX/bin/backup-db.sh" \
         RESTORE_SCRIPT="$SANDBOX/bin/restore-db.sh" \
@@ -757,6 +793,133 @@ test_export_propagates_crm_user_home_to_children() {
     cleanup_sandbox
 }
 
+# ===========================================================================
+# The name model (PR2.c5): installed beside the backend and frontend by this
+# one script, on production and staging alike.
+# ===========================================================================
+
+# model_unit_for <tag>: the container unit a host should hold for <tag> — the
+# image's own unit with its Image= pinned to <tag>.
+model_unit_for() {
+    sed "s|^Image=.*|Image=$MODEL_REPO:$1|" "$MODEL_UNITS/personalcrm-name-model.container"
+}
+
+assert_model_installed() {  # <tag> <container-unit> <socket-unit> <context>
+    if cmp -s <(model_unit_for "$1") "$2"; then ok
+    else fail "$4: model container unit is not the image's unit pinned to $1"; fi
+    if cmp -s "$MODEL_UNITS/personalcrm-name-model.socket" "$3"; then ok
+    else fail "$4: model socket unit is not the image's socket unit"; fi
+}
+
+test_model_change_pulls_and_installs_named_image() {
+    echo "test: a revision that changes the model's sources pulls and installs the model image it names"
+    local check
+    for check in 0 2; do
+        make_sandbox
+        STUB_MODEL_TAG="$MODEL_TAG_NEW" STUB_MIGRATE_CHECK_RC=$check run_deploy "$VALID_SHA"
+        if [ "$RC" -eq 0 ]; then ok; else fail "migrate-check $check: deploy should exit 0, got $RC ($OUT)"; fi
+        if log_has "podman pull $MODEL_REPO:$MODEL_TAG_NEW"; then ok
+        else fail "migrate-check $check: the model image the revision names was not pulled"; fi
+        assert_model_installed "$MODEL_TAG_NEW" "$MODEL_UNIT" "$MODEL_SOCKET_UNIT" "migrate-check $check"
+        # The running model (on the old image) stops; the socket restarts on the
+        # new units, so the next request starts the new image.
+        if log_has "stop personalcrm-name-model.service" && log_has "restart personalcrm-name-model.socket"; then ok
+        else fail "migrate-check $check: the model was not restarted onto its new units"; fi
+        cleanup_sandbox
+    done
+}
+
+test_model_unchanged_pulls_nothing() {
+    echo "test: a revision that changes no model source pulls no model image and leaves the installed one"
+    local check before
+    for check in 0 2; do
+        make_sandbox
+        before="$(cat "$MODEL_UNIT")"
+        STUB_MIGRATE_CHECK_RC=$check run_deploy "$VALID_SHA"
+        if [ "$RC" -eq 0 ]; then ok; else fail "migrate-check $check: deploy should exit 0, got $RC ($OUT)"; fi
+        if log_lacks "pull $MODEL_REPO"; then ok; else fail "migrate-check $check: pulled a model image though the model is unchanged"; fi
+        if [ "$(cat "$MODEL_UNIT")" = "$before" ]; then ok; else fail "migrate-check $check: the installed model unit changed"; fi
+        if log_lacks "personalcrm-name-model.socket" && log_lacks "personalcrm-name-model.service"; then ok
+        else fail "migrate-check $check: the unchanged model was stopped or restarted"; fi
+        cleanup_sandbox
+    done
+}
+
+test_model_staging_installs_what_prod_installs() {
+    echo "test: under staging's configuration the deploy installs the same model image and units as under production's"
+    local tenant home
+    make_sandbox latest latest none
+    for tenant in crm staging; do
+        home="$SANDBOX/$tenant-home"
+        : > "$CALL_LOG"
+        # The tenant's own paths, derived from CRM_HOME by the script's defaults.
+        MODEL_UNIT="" MODEL_SOCKET_UNIT="" CRM_USER_OVERRIDE=$tenant CRM_HOME_OVERRIDE="$home" \
+            STUB_MODEL_TAG="$MODEL_TAG_NEW" STUB_MIGRATE_CHECK_RC=0 run_deploy "$VALID_SHA"
+        if [ "$RC" -eq 0 ]; then ok; else fail "$tenant: deploy should exit 0, got $RC ($OUT)"; fi
+        if log_has "podman pull $MODEL_REPO:$MODEL_TAG_NEW"; then ok; else fail "$tenant: model image not pulled"; fi
+        assert_model_installed "$MODEL_TAG_NEW" \
+            "$home/.config/containers/systemd/personalcrm-name-model.container" \
+            "$home/.config/systemd/user/personalcrm-name-model.socket" "$tenant"
+        if log_has "systemctl --user enable personalcrm-name-model.socket"; then ok
+        else fail "$tenant: the model socket was not enabled"; fi
+    done
+    cleanup_sandbox
+}
+
+test_model_missing_image_fails_before_db() {
+    echo "test: a missing model image fails the deploy before the database is touched"
+    local label
+    # A model image that will not pull, a backend image with no model label, and
+    # a label that is no model image tag.
+    for label in "pull-fails" "" "latest"; do
+        make_sandbox
+        if [ "$label" = pull-fails ]; then
+            STUB_MODEL_TAG="$MODEL_TAG_NEW" STUB_MODEL_PULL_RC=1 STUB_MIGRATE_CHECK_RC=2 run_deploy "$VALID_SHA"
+        else
+            STUB_MODEL_TAG="$label" STUB_MIGRATE_CHECK_RC=2 run_deploy "$VALID_SHA"
+        fi
+        if [ "$RC" -eq 1 ]; then ok; else fail "[$label]: should exit 1, got $RC"; fi
+        if log_lacks "--migrate-check" && log_lacks "backup-db.sh" && log_lacks "personalcrm-backup-predeploy.service"; then ok
+        else fail "[$label]: the database was touched before the model image was secured"; fi
+        if grep -q "Image=$MODEL_REPO:$MODEL_TAG_OLD" "$MODEL_UNIT" \
+           && grep -q 'Image=ghcr.io/spengrah/personalcrm-backend:latest' "$BACKEND_UNIT"; then ok
+        else fail "[$label]: an Image= line was rewritten on an aborted deploy"; fi
+        cleanup_sandbox
+    done
+}
+
+test_model_rollback_restores_previous_image() {
+    echo "test: a rollback restores the model image the previous revision named"
+    local check
+    # Up-to-date path (image rollback) and pending path (rollback with restore).
+    for check in 0 2; do
+        make_sandbox
+        STUB_MODEL_TAG="$MODEL_TAG_NEW" STUB_MIGRATE_CHECK_RC=$check STUB_HEALTH_OK=0 run_deploy "$VALID_SHA"
+        if [ "$RC" -eq 1 ]; then ok; else fail "migrate-check $check: failed health should roll back (exit 1), got $RC"; fi
+        if log_has "podman pull $MODEL_REPO:$MODEL_TAG_NEW"; then ok; else fail "migrate-check $check: new model never pulled"; fi
+        assert_model_installed "$MODEL_TAG_OLD" "$MODEL_UNIT" "$MODEL_SOCKET_UNIT" "migrate-check $check rollback"
+        if [ "$(grep -c '^systemctl --user restart personalcrm-name-model.socket' "$CALL_LOG")" -eq 2 ]; then ok
+        else fail "migrate-check $check: the model socket was not restarted onto the restored units"; fi
+        cleanup_sandbox
+    done
+}
+
+test_health_gate_passes_without_starting_model() {
+    echo "test: the health gate passes without starting the model, on either host"
+    local tenant
+    for tenant in crm staging; do
+        make_sandbox
+        CRM_USER_OVERRIDE=$tenant CRM_HOME_OVERRIDE="$SANDBOX/home" \
+            STUB_MODEL_TAG="$MODEL_TAG_NEW" STUB_MIGRATE_CHECK_RC=0 run_deploy "$VALID_SHA"
+        if [ "$RC" -eq 0 ]; then ok; else fail "$tenant: deploy should pass its health gate (exit 0), got $RC ($OUT)"; fi
+        if grep -E 'systemctl --user (re)?start .*personalcrm-name-model\.service' "$CALL_LOG" >/dev/null; then
+            fail "$tenant: the deploy started the model"
+        else ok; fi
+        if grep -F 'curl' "$CALL_LOG" | grep -qF 'name-model'; then fail "$tenant: the health gate reached the model"; else ok; fi
+        cleanup_sandbox
+    done
+}
+
 # ---------------------------------------------------------------------------
 main() {
     test_sha_validation
@@ -789,6 +952,12 @@ main() {
     test_ntfy_post_failure_does_not_change_outcome
     test_snapshot_retained_on_failure
     test_export_propagates_crm_user_home_to_children
+    test_model_change_pulls_and_installs_named_image
+    test_model_unchanged_pulls_nothing
+    test_model_staging_installs_what_prod_installs
+    test_model_missing_image_fails_before_db
+    test_model_rollback_restores_previous_image
+    test_health_gate_passes_without_starting_model
 
     echo ""
     echo "===================="

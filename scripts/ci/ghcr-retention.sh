@@ -18,7 +18,13 @@
 #   - the tip PLUS the BUFFER most recent promoted ancestors (the rollback window);
 #   - every UN-promoted develop SHA (ahead of main) — un-promoted work is kept;
 #   - :latest, and any untagged version (untagged versions may back a manifest, so
-#     they are never touched here).
+#     they are never touched here);
+#   - every name model image tag. The model image is not tagged by commit: its
+#     tag is "src-" plus the tree hash of name-model/ (name-model/image-tag.sh),
+#     so a tag first built for a long-superseded commit stays the one the hosts
+#     run until the model's sources change. A tag is deleted only when it equals
+#     a commit SHA in the delete set, which a "src-" tag never does, so the model
+#     package is left out of PACKAGES and would keep every tag if it were added.
 #
 # SCOPE: this bounds TAG count, not total storage. Deleting a tagged buildx
 # manifest-index can leave its child/attestation manifests as UNTAGGED orphans,

@@ -32,7 +32,7 @@ func (e *flagsEnv) newRegistryEnv(t *testing.T) registryEnv {
 	openRouter, venice := newVendor(t), newVendor(t)
 	routeVendors(t, map[string]*vendor{"openrouter.ai": openRouter, "api.venice.ai": venice})
 	return registryEnv{
-		registry: decision.NewRegistry(config.DecisionConfig{OpenRouterAPIKey: "key", VeniceAPIKey: "key"}, e.masker),
+		registry: decision.NewRegistry(config.DecisionConfig{OpenRouterAPIKey: "key", VeniceAPIKey: "key", NameModelThreshold: config.DefaultNameModelThreshold}, e.masker),
 		vendors:  []*vendor{openRouter, venice},
 	}
 }
@@ -64,7 +64,7 @@ func (e *flagsEnv) tryScorecard(set judgerun.Methods, key, compare string) error
 // is refused before any call, and their stored judgments and runs still read.
 // spec: KNW-074.compared-methods, KNW-074.removed-refused-before-any-call, KNW-074.designation-refused-as-unknown, KNW-074.stored-judgments-still-read
 func TestRunsAndTheScorecardAcceptOnlyTheComparedMethods(t *testing.T) {
-	t.Run("--judge-month naming sage-masked", func(t *testing.T) {
+	t.Run("a historical run naming sage-masked", func(t *testing.T) {
 		e := newFlagsEnv(t, "")
 		e.chat(t, 3)
 		r := e.newRegistryEnv(t)

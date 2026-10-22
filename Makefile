@@ -1,6 +1,6 @@
 # Personal CRM Makefile
 
-.PHONY: help setup dev dev-seed staging-reset tours qa-sanity build crm-admin mac-daemon test test-daemon-local clean docker-up docker-down docker-reset test-cadence-ultra test-cadence-fast model-prices-sync model-prices-apply qa-cost-assert prod staging accelerated testing start start-local stop restart reload status dev-stop dev-restart dev-api-stop dev-api-start dev-api-restart ci-build-backend ci-build-frontend ci-build ci-test test-e2e test-e2e-local e2e-db e2e-env e2e-pg-ensure e2e-ports-free deploy-mac promote setup-pi setup-mac-deploy dev-native postgres-native sqlc smoke-test test-deploy-scripts worktree-env worktree-deps test-integration-fast test-integration-slow test-clean-clones worktree-test-pg-ensure test-pg-teardown test-pg-reap test-pg-smoke lint-ingest-registry spec-lint spec-coverage spec-drift api-types api-types-check api-docs api-docs-check contact-queries contact-queries-check sqlc-params-check
+.PHONY: help setup dev dev-seed staging-reset tours qa-sanity build crm-admin mac-daemon test test-daemon-local clean docker-up docker-down docker-reset test-cadence-ultra test-cadence-fast model-prices-sync model-prices-apply qa-cost-assert prod staging accelerated testing start start-local stop restart reload status dev-stop dev-restart dev-api-stop dev-api-start dev-api-restart ci-build-backend ci-build-frontend ci-build ci-test test-e2e test-e2e-local e2e-db e2e-env e2e-pg-ensure e2e-ports-free deploy-mac promote setup-pi setup-mac-deploy dev-native postgres-native sqlc smoke-test test-deploy-scripts test-name-model worktree-env worktree-deps test-integration-fast test-integration-slow test-clean-clones worktree-test-pg-ensure test-pg-teardown test-pg-reap test-pg-smoke lint-ingest-registry spec-lint spec-coverage spec-drift api-types api-types-check api-docs api-docs-check contact-queries contact-queries-check sqlc-params-check
 
 # Repo root (supports running make from subdirectories).
 REPO_ROOT := $(shell git rev-parse --show-toplevel)
@@ -523,6 +523,11 @@ test-deploy-scripts: ## Run the mocked deploy-script shell suites
 	@echo "Validating the committed timer template (plistlib parse)..."
 	@python3 -c "import plistlib,sys; plistlib.loads(open(sys.argv[1],'rb').read()); print('  timer template OK')" \
 		infra/mac-deploy/xyz.spengrah.crm-mac-deploy.plist.template
+
+# The name model container's endpoint tests (name-model/). Standard library
+# only: a fake stands in for GLiNER, whose weights the image alone holds.
+test-name-model: ## Run the name model container's endpoint tests
+	@cd name-model && python3 -m unittest discover -s tests -v
 
 smoke-test: ## Full system verification (restart + test)
 	@echo "Running full system smoke test..."

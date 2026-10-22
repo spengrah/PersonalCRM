@@ -45,6 +45,17 @@ type ContactName struct {
 	Name      string
 }
 
+// DisplayName is one display name a stored message gives a sender or
+// recipient.
+type DisplayName struct {
+	// Owner is the source identity the name was given to, prefixed by source.
+	Owner string
+	// ContactID is the live contact the message attributes Owner to; nil when
+	// it attributes none.
+	ContactID *uuid.UUID
+	Name      string
+}
+
 // ThreadContentRepository reads thread content through the thread_content view.
 type ThreadContentRepository struct {
 	queries db.Querier
@@ -111,6 +122,20 @@ func (r *ThreadContentRepository) ListContactNamesForMasking(ctx context.Context
 	out := make([]ContactName, len(rows))
 	for i, row := range rows {
 		out[i] = ContactName{ContactID: row.ContactID, Name: row.Name}
+	}
+	return out, nil
+}
+
+// ListDisplayNamesForMasking returns every display name a stored message gives
+// a sender or recipient, of every source that stores one.
+func (r *ThreadContentRepository) ListDisplayNamesForMasking(ctx context.Context) ([]DisplayName, error) {
+	rows, err := r.queries.ListDisplayNamesForMasking(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]DisplayName, len(rows))
+	for i, row := range rows {
+		out[i] = DisplayName{Owner: row.Owner, ContactID: row.ContactID, Name: row.Name}
 	}
 	return out, nil
 }

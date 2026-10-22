@@ -181,10 +181,11 @@
 //	                              numerically to the Tier-1 queue_wait_ms metric.
 //	                              Read-only; SAFE with crm-api running.
 //
-//	--judge-month YYYY-MM         Historical decision-model run over one month:
-//	      --method KEY            at each simulated nightly cut-off (the
-//	      [--measure]             midnights in the server's timezone that close
-//	                              the month's days), judge with method KEY every
+//	--judge-start-day YYYY-MM-DD  Historical decision-model run over a range of
+//	      --judge-end-day YYYY-MM-DD days, both included: at each simulated
+//	      --method KEY            nightly cut-off (the midnights in the
+//	      [--measure]             server's timezone that close the range's
+//	                              days), judge with method KEY every
 //	                              thread that gained content since the previous
 //	                              cut-off, a thread's cut-offs in order, over
 //	                              the window of its content up to the cut-off
@@ -200,10 +201,17 @@
 //	                              judgment the method version already holds for
 //	                              what a cut-off reads (window, new messages,
 //	                              earlier judgments re-checked) is reused, so
-//	                              repeating a month sends nothing. --measure
-//	                              builds the same contexts, sizes each whole
-//	                              request against the method's limits, and
-//	                              sends and writes nothing. Prints a
+//	                              repeating a range sends nothing. The masker
+//	                              needs the user's own names and the name
+//	                              model: a run fails before any call when
+//	                              OWN_NAMES holds none or NAME_MODEL_SOCKET is
+//	                              unset, and a context the model cannot cover
+//	                              is not sent (reported call_failed).
+//	                              --measure builds the same contexts, sizes
+//	                              each whole request against the method's
+//	                              limits, and sends nothing to a vendor and
+//	                              writes no judgment; like any masking, it
+//	                              stores the name spans it asks for. Prints a
 //	                              content-free report (IDs, counts, reasons).
 //	                              SAFE with crm-api running (it runs the Todoist
 //	                              jobs a run's live effects enqueue).
@@ -467,11 +475,12 @@ type adminDeps struct {
 	// whatsappHistory serves --whatsapp-list-history / --whatsapp-requeue-history
 	// (the operator recovery path for a history chunk that failed to drain).
 	whatsappHistory whatsappHistoryAdmin
-	// judgeMonth serves --judge-month and scorecard serves --scorecard. Both
-	// are built LAZILY (only when --judge-month or --scorecard is set)
-	// because loading the masker reads every contact name. Nil for all other
+	// historical serves a historical run (--judge-start-day and
+	// --judge-end-day) and scorecard serves --scorecard. Both are built LAZILY
+	// (only when a historical run or --scorecard is selected) because loading
+	// the masker reads every contact and display name. Nil for all other
 	// subcommands.
-	judgeMonth judgeMonthRunner
+	historical historicalRunner
 	scorecard  scorecardReporter
 	// langfuseExport serves --langfuse-export. Built LAZILY (only when
 	// --langfuse-export is set). Nil for all other subcommands.
@@ -549,12 +558,14 @@ type runOptions struct {
 	listWhatsAppHistory      bool
 	historyState             string
 	requeueWhatsAppHistoryID string
-	// Historical decision-model runs. judgeMonth <- --judge-month (YYYY-MM;
-	// empty = unset; non-empty selects the subcommand); judgeMethod <-
-	// --method (also read by --scorecard); judgeMeasure <- --measure.
-	judgeMonth   string
-	judgeMethod  string
-	judgeMeasure bool
+	// Historical decision-model runs. judgeStartDay <- --judge-start-day and
+	// judgeEndDay <- --judge-end-day (YYYY-MM-DD; empty = unset; either
+	// non-empty selects the subcommand); judgeMethod <- --method (also read by
+	// --scorecard); judgeMeasure <- --measure.
+	judgeStartDay string
+	judgeEndDay   string
+	judgeMethod   string
+	judgeMeasure  bool
 	// Decision-model scorecard. scorecard <- --scorecard (the bool subcommand
 	// selector); compareMethod <- --compare-method.
 	scorecard     bool
@@ -745,7 +756,7 @@ func validateSubcommand(opts runOptions) error {
 	if opts.requeueWhatsAppHistoryID != "" {
 		active++
 	}
-	if opts.judgeMonth != "" {
+	if historicalRun(opts) {
 		active++
 	}
 	if opts.scorecard {
@@ -765,7 +776,7 @@ func validateSubcommand(opts runOptions) error {
 		return errors.New("subcommand flags are mutually exclusive; pass exactly one of " +
 			subcommandList)
 	}
-	if err := validateJudgeMonth(opts); err != nil {
+	if err := validateJudgeDays(opts); err != nil {
 		return err
 	}
 	return validateScorecard(opts)
@@ -779,7 +790,8 @@ const subcommandList = "--messages-rematch-stranded, --reconcile-address-book-me
 	"--list-hosts, --revoke-host <uuid>, --rotate-host-key <uuid>, --seed, --reset-and-seed, " +
 	"--migrate, --migrate-check, --list-jobs, --retry-job <id>, --migrate-tags, " +
 	"--migrate-contact-knowledge-columns, --river-tier0, --whatsapp-list-history, " +
-	"--whatsapp-requeue-history <uuid>, --judge-month YYYY-MM --method <key> [--measure], " +
+	"--whatsapp-requeue-history <uuid>, " +
+	"--judge-start-day YYYY-MM-DD --judge-end-day YYYY-MM-DD --method <key> [--measure], " +
 	"--scorecard [--method <key> [--compare-method <key>]], --langfuse-export, --infer-negative-labels"
 
 // parseArgs uses a private FlagSet so tests can drive the parser
@@ -891,15 +903,18 @@ func parseArgs(args []string) (runOptions, error) {
 		"Return a FAILED WhatsApp history chunk (by UUID from --whatsapp-list-history) to pending so "+
 			"the drainer retries it. Attempts are NOT reset -- they are lifetime triage evidence -- so "+
 			"a chunk past the attempt cap gets exactly one fresh attempt per requeue.")
-	fs.StringVar(&opts.judgeMonth, "judge-month", "",
-		"Historical decision-model run over one month (YYYY-MM): judge with --method each thread "+
-			"that gained content since the previous simulated nightly cut-off over its window, recording "+
-			"every judgment, incomplete report and unjudged message. Only the designated production method "+
-			"changes live state. Prints a content-free summary.")
+	fs.StringVar(&opts.judgeStartDay, "judge-start-day", "",
+		"First day (YYYY-MM-DD) of a historical decision-model run, with --judge-end-day: judge with "+
+			"--method, at the simulated nightly cut-off closing each day of the range, each thread that "+
+			"gained content since the previous cut-off over its window, recording every judgment, incomplete "+
+			"report and unjudged message. Only the designated production method changes live state. Prints "+
+			"a content-free summary.")
+	fs.StringVar(&opts.judgeEndDay, "judge-end-day", "",
+		"Last day (YYYY-MM-DD) of a historical decision-model run, included, with --judge-start-day.")
 	fs.StringVar(&opts.judgeMethod, "method", "",
-		"Decision-model method key for --judge-month, or the one method --scorecard scores.")
+		"Decision-model method key for a historical run, or the one method --scorecard scores.")
 	fs.BoolVar(&opts.judgeMeasure, "measure", false,
-		"With --judge-month: build every eligible context and size its whole request against the "+
+		"With a historical run: build every eligible context and size its whole request against the "+
 			"method's limits, sending and writing nothing.")
 	fs.BoolVar(&opts.scorecard, "scorecard", false,
 		"Score decision-model methods against the user's reviews: rerun --method (or, without it, every "+
@@ -1043,8 +1058,8 @@ func run(ctx context.Context, opts runOptions, deps adminDeps) error {
 		return runListWhatsAppHistory(ctx, opts, deps)
 	case opts.requeueWhatsAppHistoryID != "":
 		return runRequeueWhatsAppHistory(ctx, opts, deps)
-	case opts.judgeMonth != "":
-		return runJudgeMonth(ctx, opts, deps)
+	case historicalRun(opts):
+		return runJudgeDays(ctx, opts, deps)
 	case opts.scorecard:
 		return runScorecard(ctx, opts, deps)
 	case opts.langfuseExport:
@@ -1964,14 +1979,14 @@ func buildProductionDeps(ctx context.Context, cfg *config.Config, database *db.D
 		deps.rederive = google.NewCorrespondenceNameRederiveService(commsRepo, gmailProvider)
 	}
 
-	// LAZY: build the decision-model stack ONLY for --judge-month and
+	// LAZY: build the decision-model stack ONLY for a historical run and
 	// --scorecard.
-	if opts.judgeMonth != "" || opts.scorecard {
+	if historicalRun(opts) || opts.scorecard {
 		stack, err := buildJudgmentStack(ctx, cfg, database, assertService, contactRepo, riverClient)
 		if err != nil {
 			return adminDeps{}, nil, err
 		}
-		deps.judgeMonth = stack.runner
+		deps.historical = stack.runner
 		deps.scorecard = scorecard.New(stack.store, stack.runner, stack.methods, contactRepo, cfg.Watchdog)
 	}
 

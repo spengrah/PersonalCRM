@@ -1,0 +1,116 @@
+//go:build integration_testdb
+
+package threadctx_test
+
+import (
+	"context"
+	"math/rand/v2"
+	"testing"
+
+	"personal-crm/backend/internal/repository"
+	"personal-crm/backend/internal/threadctx"
+
+	"github.com/google/uuid"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+// noNames is a name model that finds no name in any text.
+type noNames struct{}
+
+func (noNames) Spans(_ context.Context, _ threadctx.ModelVersion, texts []string) ([][]threadctx.NameSpan, error) {
+	return make([][]threadctx.NameSpan, len(texts)), nil
+}
+
+// loadMasker loads the masker from the CRM, covering requests with the span
+// store and a name model that finds no name.
+func (e *builderEnv) loadMasker(t *testing.T) *threadctx.Masker {
+	t.Helper()
+	names := threadctx.NewNameSpans(repository.NewNameSpanRepository(e.database.Queries), noNames{})
+	masker, err := threadctx.LoadMasker(e.ctx, repository.NewThreadContentRepository(e.database.Queries), own, names)
+	require.NoError(t, err)
+	return masker
+}
+
+// maskCovered masks the context once the masker has covered it with spans.
+func (e *builderEnv) maskCovered(t *testing.T, masker *threadctx.Masker, c threadctx.Context) threadctx.MaskedRequest {
+	t.Helper()
+	c, err := masker.Cover(e.ctx, threadctx.NewModelVersion(0.5), c)
+	require.NoError(t, err)
+	masked, err := masker.Mask(e.ctx, c, nil)
+	require.NoError(t, err)
+	return masked
+}
+
+// maskElsewhere stores text as a contact's message in an email thread of its
+// own, and returns it masked by a masker loaded from the CRM after every
+// store: the masked text of a thread the display names' owners take no part
+// in.
+func (e *builderEnv) maskElsewhere(t *testing.T, text string) string {
+	t.Helper()
+	gmailThread := "thread-" + uuid.NewString()
+	thread := e.venue(t, repository.InteractionSourceEmail, repository.VenueKindEmailThread, gmailThread)
+	e.store(t, commsCopy{source: repository.InteractionSourceEmail, thread: gmailThread, external: uuid.NewString(), direction: repository.InteractionDirectionInbound, peer: "elsewhere@example.test", body: text, contact: e.contact(t), at: e.at(2)})
+	c := e.build(t, thread, e.at(3))
+	require.Contains(t, c.Participants, threadctx.RoleThem)
+	return e.maskCovered(t, e.loadMasker(t), c).Entries()[0].Text
+}
+
+// inboundEmail stores an email from a contact, in a thread of its own, with
+// the given source metadata.
+func (e *builderEnv) inboundEmail(t *testing.T, metadata map[string]any) {
+	t.Helper()
+	e.store(t, commsCopy{source: repository.InteractionSourceEmail, thread: "thread-" + uuid.NewString(), external: uuid.NewString(), direction: repository.InteractionDirectionInbound, peer: "sender@example.test", body: "hello", contact: e.contact(t), at: e.at(1), metadata: metadata})
+}
+
+// A display name a stored message gives a sender or a recipient, of any source
+// that stores one, masks the same name in the messages of another thread,
+// where its owner takes no part, as a numbered placeholder. The name begins
+// the text, where only the dictionary masks a name.
+// spec: KNW-089.display-names-masked
+func TestLoadMasker_MasksDisplayNames(t *testing.T) {
+	t.Parallel()
+	const text, want = "Ottoline sent the minutes", "NAME_1 sent the minutes"
+
+	senders := []struct {
+		name  string
+		store func(t *testing.T, e *builderEnv)
+	}{
+		{"an email sender's name", func(t *testing.T, e *builderEnv) {
+			e.inboundEmail(t, map[string]any{"from": "sender@example.test", "from_name": "Ottoline"})
+		}},
+		{"a WhatsApp sender's push name", func(t *testing.T, e *builderEnv) {
+			e.store(t, commsCopy{source: repository.InteractionSourceWhatsApp, thread: uuid.NewString() + "@s.whatsapp.net", external: uuid.NewString(), direction: repository.InteractionDirectionInbound, peer: "15550100123@s.whatsapp.net", body: "hello", contact: e.contact(t), at: e.at(1), metadata: map[string]any{"push_name": "Ottoline"}})
+		}},
+		{"a Telegram peer's name, the message attributed to no contact", func(t *testing.T, e *builderEnv) {
+			peer := rand.Int64N(1 << 40)
+			e.telegram(t, peer, "private", 1, peer, "Ottoline", nil, e.at(1))
+		}},
+	}
+	for _, tc := range senders {
+		t.Run(tc.name+", from a sender field", func(t *testing.T) {
+			t.Parallel()
+			e := newBuilderEnv(t)
+			tc.store(t, e)
+			assert.Equal(t, want, e.maskElsewhere(t, text))
+		})
+	}
+
+	t.Run("an email sender's name that is a common word, at a sentence's start and mid-sentence", func(t *testing.T) {
+		// spec: KNW-089.capitalized-known-name-masked
+		t.Parallel()
+		e := newBuilderEnv(t)
+		e.inboundEmail(t, map[string]any{"from": "sender@example.test", "from_name": "Sky"})
+		assert.Equal(t, "NAME_1 sent the minutes", e.maskElsewhere(t, "Sky sent the minutes"))
+		assert.Equal(t, "we spoke with NAME_1 about the minutes", e.maskElsewhere(t, "we spoke with Sky about the minutes"))
+	})
+
+	for _, field := range []string{"to", "cc", "bcc"} {
+		t.Run("an email recipient's name in "+field+", attributed to no contact, from a recipient field", func(t *testing.T) {
+			t.Parallel()
+			e := newBuilderEnv(t)
+			e.inboundEmail(t, map[string]any{"from": "sender@example.test", field: []string{"me@example.test", "o@example.test"}, field + "_names": []string{"Marlowe Quill", "Ottoline"}})
+			assert.Equal(t, want, e.maskElsewhere(t, text))
+		})
+	}
+}

@@ -71,23 +71,23 @@ type Summary struct {
 	Effects judgment.Effects
 }
 
-// Historical judges, at each simulated nightly cut-off of the month, the
+// Historical judges, at each simulated nightly cut-off of the days, the
 // threads that gained content since the previous cut-off, each over its
 // window of content up to that cut-off, a thread's cut-offs in order, and
 // writes as a production run does.
-func (r *Runner) Historical(ctx context.Context, methodKey string, month Month) (Summary, error) {
+func (r *Runner) Historical(ctx context.Context, methodKey string, days Days) (Summary, error) {
 	m, err := r.methods.Get(methodKey)
 	if err != nil {
 		return Summary{}, err
 	}
-	from, to := month.Start(), month.End()
+	from, to := days.Start(), days.End()
 	run, err := r.store.StartRun(ctx, judgment.RunSpec{Kind: judgment.RunKindHistorical, Method: m.Ref(), From: &from, To: &to})
 	if err != nil {
 		return Summary{}, err
 	}
 	s := r.newSummary(run, judgment.RunKindHistorical, m)
-	s.CutOffs = len(month.CutOffs())
-	if err := r.replay(ctx, &s, m, month, nil); err != nil {
+	s.CutOffs = len(days.CutOffs())
+	if err := r.replay(ctx, &s, m, days, nil); err != nil {
 		return s, fmt.Errorf("historical run %s: %w", run, err)
 	}
 	if err := r.store.FinishRun(ctx, run); err != nil {
@@ -122,13 +122,13 @@ func (r *Runner) Rerun(ctx context.Context, methodKey string, targets []Target) 
 		return judgment.RunID{}, err
 	}
 	s := r.newSummary(run, judgment.RunKindRerun, m)
-	months, err := r.startMonths(ctx, targets)
+	starts, err := r.startDays(ctx, targets)
 	if err != nil {
 		return run, err
 	}
-	// The targets grouped by the month their replay starts in.
+	// The targets grouped by the days their replay covers.
 	type group struct {
-		month   Month
+		days    Days
 		reruns  map[threadctx.VenueID][]time.Time
 		threads []threadctx.VenueID
 	}
@@ -145,9 +145,9 @@ func (r *Runner) Rerun(ctx context.Context, methodKey string, targets []Target) 
 			}
 			continue
 		}
-		gi := slices.IndexFunc(groups, func(g *group) bool { return g.month == months[i] })
+		gi := slices.IndexFunc(groups, func(g *group) bool { return g.days == starts[i] })
 		if gi < 0 {
-			groups = append(groups, &group{month: months[i], reruns: map[threadctx.VenueID][]time.Time{}})
+			groups = append(groups, &group{days: starts[i], reruns: map[threadctx.VenueID][]time.Time{}})
 			gi = len(groups) - 1
 		}
 		g := groups[gi]
@@ -161,50 +161,51 @@ func (r *Runner) Rerun(ctx context.Context, methodKey string, targets []Target) 
 		for _, thread := range g.threads {
 			only[thread] = g.reruns[thread]
 		}
-		if err := r.replay(ctx, &s, m, g.month, only); err != nil {
+		if err := r.replay(ctx, &s, m, g.days, only); err != nil {
 			return run, fmt.Errorf("rerun %s: %w", run, err)
 		}
 	}
 	return run, r.store.FinishRun(ctx, run)
 }
 
-// startMonths returns, for each target, the month of the run its named
+// startDays returns, for each target, the days of the run its named
 // judgments appeared in: the earliest historical or scheduled run holding one
-// of them. A target no such run holds starts with the month of its cut-off.
-func (r *Runner) startMonths(ctx context.Context, targets []Target) ([]Month, error) {
+// of them, so its replay starts where that run started. A target no such run
+// holds replays the month of its cut-off.
+func (r *Runner) startDays(ctx context.Context, targets []Target) ([]Days, error) {
 	runs, err := r.store.ListRuns(ctx)
 	if err != nil {
 		return nil, err
 	}
-	from := map[judgment.RunID]time.Time{}
+	windows := map[judgment.RunID]Days{}
 	for _, run := range runs {
-		if (run.Kind == judgment.RunKindHistorical || run.Kind == judgment.RunKindScheduled) && run.From != nil {
-			from[run.ID] = *run.From
+		if (run.Kind == judgment.RunKindHistorical || run.Kind == judgment.RunKindScheduled) && run.From != nil && run.To != nil {
+			windows[run.ID] = Days{start: run.From.In(time.Local), end: run.To.In(time.Local)}
 		}
 	}
-	months := make([]Month, len(targets))
+	out := make([]Days, len(targets))
 	for i, ex := range targets {
-		months[i] = MonthOf(ex.CutOff.Add(-time.Nanosecond))
+		out[i] = MonthOf(ex.CutOff.Add(-time.Nanosecond))
 		views, err := r.store.ListJudgments(ctx, judgment.JudgmentQuery{Thread: &ex.Thread})
 		if err != nil {
 			return nil, err
 		}
-		var earliest *time.Time
+		var earliest *Days
 		for _, v := range views {
 			if !slices.Contains(ex.Judgments, v.ID) {
 				continue
 			}
 			for _, a := range v.Runs {
-				if start, ok := from[a.Run]; ok && (earliest == nil || start.Before(*earliest)) {
-					earliest = &start
+				if days, ok := windows[a.Run]; ok && (earliest == nil || days.start.Before(earliest.start)) {
+					earliest = &days
 				}
 			}
 		}
 		if earliest != nil {
-			months[i] = MonthOf(*earliest)
+			out[i] = *earliest
 		}
 	}
-	return months, nil
+	return out, nil
 }
 
 func (r *Runner) newSummary(run judgment.RunID, kind judgment.RunKind, m decision.Method) Summary {
@@ -262,16 +263,16 @@ func (h *history) commitments(floor float64) []decision.Commitment {
 }
 
 // replay is the one path every run judges through. It judges, in order at
-// each cut-off of the month, the threads eligible there, or with only set
+// each cut-off of the days, the threads eligible there, or with only set
 // only those threads, at the cut-offs eligible up to the last of theirs it
 // names and at each cut-off it names. Each thread's history starts from the
-// judgments the method version holds before the month.
-func (r *Runner) replay(ctx context.Context, s *Summary, m decision.Method, month Month, only map[threadctx.VenueID][]time.Time) error {
+// judgments the method version holds before the days.
+func (r *Runner) replay(ctx context.Context, s *Summary, m decision.Method, days Days, only map[threadctx.VenueID][]time.Time) error {
 	floor, err := r.store.ClearingFloor(ctx, m.Ref().Key)
 	if err != nil {
 		return err
 	}
-	schedule, err := eligible(ctx, r.contexts, month)
+	schedule, err := eligible(ctx, r.contexts, days)
 	if err != nil {
 		return err
 	}
@@ -315,7 +316,7 @@ func (r *Runner) replay(ctx context.Context, s *Summary, m decision.Method, mont
 	for _, st := range steps {
 		h, ok := histories[st.thread]
 		if !ok {
-			if h, err = r.priorHistory(ctx, m, st.thread, month.Start()); err != nil {
+			if h, err = r.priorHistory(ctx, m, st.thread, days.Start()); err != nil {
 				return err
 			}
 			histories[st.thread] = h
@@ -332,8 +333,9 @@ func (r *Runner) replay(ctx context.Context, s *Summary, m decision.Method, mont
 }
 
 // priorHistory is the method version's judgments of the thread at cut-offs up
-// to and including start, one per cut-off. A month's start is the previous
-// month's final cut-off, so a judgment there is part of the month's history.
+// to and including start, one per cut-off. A range's start is the cut-off
+// that closes the day before it, so a judgment there is part of the range's
+// history.
 func (r *Runner) priorHistory(ctx context.Context, m decision.Method, thread threadctx.VenueID, start time.Time) (*history, error) {
 	prior, err := r.store.JudgmentsThrough(ctx, m.Ref(), thread, start)
 	if err != nil {

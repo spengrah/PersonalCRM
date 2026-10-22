@@ -30,10 +30,19 @@ type Config struct {
 	EventBus  EventBusConfig
 	Health    HealthConfig
 	Sync      SyncConfig
+	User      UserConfig
 	Decision  DecisionConfig
 	// LangfuseExtraction is the Langfuse extraction project the decision-model
 	// export sends to.
 	LangfuseExtraction LangfuseExtractionConfig
+}
+
+// UserConfig is what the CRM knows of its one user, who has no contact
+// record. Any feature may read it.
+type UserConfig struct {
+	// OwnNames are the user's own names (OWN_NAMES, comma-separated): each a
+	// full name or another name the user goes by. Empty entries are dropped.
+	OwnNames []string
 }
 
 // DecisionConfig holds the decision-model settings.
@@ -46,6 +55,15 @@ type DecisionConfig struct {
 	// it serves unavailable.
 	OpenRouterAPIKey string // OPENROUTER_API_KEY
 	VeniceAPIKey     string // VENICE_API_KEY
+	// NameModelSocket is the path of the name model's Unix socket as the
+	// backend sees it (NAME_MODEL_SOCKET). A run that masks refuses to start
+	// without it.
+	NameModelSocket string
+	// NameModelThreshold is the name model's score cutoff
+	// (NAME_MODEL_THRESHOLD): a decimal in (0, 1], DefaultNameModelThreshold
+	// when unset. Every masked method's version derives from it, so the API
+	// and crm-admin read it from this one place.
+	NameModelThreshold float64
 }
 
 // LangfuseExtractionConfig names the Langfuse extraction project, distinct
@@ -434,6 +452,9 @@ const (
 	DefaultWhatsAppReplyBridgeHours     = 48
 	DefaultWhatsAppDiscoveryMinMessages = 3
 	DefaultWhatsAppGroupMaxMembers      = 10
+	// DefaultNameModelThreshold is the name model's score cutoff when
+	// NAME_MODEL_THRESHOLD is unset (spec 2026-10-21-masking-fixes G6).
+	DefaultNameModelThreshold = 0.5
 )
 
 // builtinStalenessSourceOverrides returns a fresh copy of the per-source
@@ -498,6 +519,10 @@ func Load() (*Config, error) {
 	}
 	for k, v := range envOverrides {
 		stalenessOverrides[k] = v
+	}
+	nameModelThreshold, err := parseNameModelThreshold(os.Getenv("NAME_MODEL_THRESHOLD"))
+	if err != nil {
+		return nil, err
 	}
 
 	cfg := &Config{
@@ -602,10 +627,16 @@ func Load() (*Config, error) {
 		Sync: SyncConfig{
 			LogRetentionDays: getEnvAsInt("SYNC_LOG_RETENTION_DAYS", DefaultSyncLogRetentionDays),
 		},
+		User: UserConfig{
+			OwnNames: getEnvAsList("OWN_NAMES"),
+		},
 		Decision: DecisionConfig{
 			ProductionMethod: getEnv("DECISION_PRODUCTION_METHOD", ""),
 			OpenRouterAPIKey: getEnv("OPENROUTER_API_KEY", ""),
 			VeniceAPIKey:     getEnv("VENICE_API_KEY", ""),
+
+			NameModelSocket:    getEnv("NAME_MODEL_SOCKET", ""),
+			NameModelThreshold: nameModelThreshold,
 		},
 		LangfuseExtraction: LangfuseExtractionConfig{
 			Host:      getEnv("LANGFUSE_EXTRACTION_HOST", ""),
@@ -1004,6 +1035,21 @@ func (c *Config) GetBindAddress() string {
 	return fmt.Sprintf("%s:%d", c.Server.Host, c.Server.Port)
 }
 
+// parseNameModelThreshold parses NAME_MODEL_THRESHOLD: unset is
+// DefaultNameModelThreshold, and a value that is not a number or lies outside
+// (0, 1] is refused rather than replaced by the default, since judging with a
+// cutoff the user did not set would be silent.
+func parseNameModelThreshold(raw string) (float64, error) {
+	if raw == "" {
+		return DefaultNameModelThreshold, nil
+	}
+	v, err := strconv.ParseFloat(raw, 64)
+	if err != nil || !(v > 0 && v <= 1) {
+		return 0, fmt.Errorf("invalid NAME_MODEL_THRESHOLD %q: want a decimal in (0, 1]", raw)
+	}
+	return v, nil
+}
+
 // Helper functions for parsing environment variables
 
 func getEnv(key, defaultValue string) string {
@@ -1011,6 +1057,18 @@ func getEnv(key, defaultValue string) string {
 		return value
 	}
 	return defaultValue
+}
+
+// getEnvAsList reads a comma-separated setting, each entry trimmed and every
+// empty entry dropped, so a setting of only separators and spaces is empty.
+func getEnvAsList(key string) []string {
+	var out []string
+	for entry := range strings.SplitSeq(os.Getenv(key), ",") {
+		if entry = strings.TrimSpace(entry); entry != "" {
+			out = append(out, entry)
+		}
+	}
+	return out
 }
 
 func getEnvAsInt(key string, defaultValue int) int {
@@ -1111,6 +1169,7 @@ func TestConfig() *Config {
 			ClientSecret: "test-todoist-client-secret",
 			RedirectURL:  "http://localhost:8080/api/v1/auth/todoist/callback",
 		},
+		Decision: DecisionConfig{NameModelThreshold: DefaultNameModelThreshold},
 		Watchdog: WatchdogConfig{
 			WeeklyDays:    3,
 			BiweeklyDays:  5,

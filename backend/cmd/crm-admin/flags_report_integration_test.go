@@ -85,7 +85,7 @@ func TestJudgeMonthReportsContentFree(t *testing.T) {
 		require.NoError(t, err)
 		assert.Empty(t, runs, "no run is written")
 		assert.Empty(t, th.judgments(t, m.Ref()), "no judgment is written")
-		assert.Contains(t, out, "nothing sent, nothing written")
+		assert.Contains(t, out, "nothing sent; name spans the model gave are stored")
 		assert.Contains(t, out, "contexts=2")
 		assert.Contains(t, out, "windowed=1 message_over_limit=1")
 		assertContentFree(t, out, th, huge)

@@ -701,18 +701,18 @@ behaviors:
     type: business-logic
     status: current
     surface: none
-    given: a historical run of one method over a chosen month
+    given: a historical run of one method over a chosen range of days, its first and last day included
     when: the run executes
     then:
       - key: nightly-cut-offs
-        text: the run's cut-offs are the midnights, in the server's timezone, that close each day of the month
+        text: the run's cut-offs are the midnights, in the server's timezone, that close each day of the range, and no others
       - key: gained-content-eligible
-        text: a thread is judged at a cut-off exactly when it has content after the previous cut-off and up to and including this one, the first window opening at the month's start, so a thread with content on two nights is judged at both and a thread whose only content precedes the month is not judged
+        text: a thread is judged at a cut-off exactly when it has content after the previous cut-off and up to and including this one, the first window opening at the range's first midnight, so a thread with content on two nights is judged at both and a thread whose only content precedes or follows the range is not judged
       - key: whole-content-context
-        text: each judgment reads its window of the thread's content up to its cut-off (KNW-055), content from before the month included
+        text: each judgment reads its window of the thread's content up to its cut-off (KNW-055), content from before the range included
       - key: writes-as-production
         text: each judgment and incomplete report is recorded through the judgment store as a production run's would be, so the production method's current judgments change live state
-    provenance: [judgerun.Runner.Historical, judgerun.eachEligible, judgerun.Month.CutOffs, crm-admin --judge-month, .agents/spec/2026-10-14-decision-model-extraction.md G10 SC1 "historical runs simulate the production schedule"]
+    provenance: [judgerun.Runner.Historical, judgerun.eachEligible, judgerun.Days.CutOffs, crm-admin --judge-start-day --judge-end-day, .agents/spec/2026-10-14-decision-model-extraction.md G10 SC1 "historical runs simulate the production schedule"]
 
   - id: KNW-052
     title: Every eligible thread of a run ends with a recorded judgment or an incomplete report
@@ -743,7 +743,7 @@ behaviors:
     when: the run's method version already holds a judgment of that thread and input hash that read the same (KNW-062)
     then:
       - key: reused-not-sent
-        text: the run reuses that judgment through the store and sends nothing, so repeating a month sends nothing
+        text: the run reuses that judgment through the store and sends nothing, so repeating a run over the same days sends nothing
       - key: group-once-per-cut-off
         text: a group thread is sent once per cut-off per method, never once per member
       - key: rerun-reviewed-examples
@@ -755,20 +755,22 @@ behaviors:
     type: business-logic
     status: current
     surface: none
-    given: a historical or measuring run started from crm-admin --judge-month
+    given: a historical or measuring run started from crm-admin --judge-start-day and --judge-end-day
     when: the run starts and finishes
     then:
       - key: unknown-designation-fails
         text: a production designation naming a key the method registry lacks fails before any call, and a run with no designation proceeds and changes no live state
+      - key: malformed-range-refused
+        text: the month flag the day flags replaced is refused as an unknown flag, and a range naming only one of the two day flags, a malformed day or a last day before its first, or a range without --method, is refused before any call
       - key: measuring-run-sends-nothing
-        text: a measuring run builds every context a historical run of the month would judge, with the method's question tree, sends nothing, writes no judgment, run or live state, and reports how many contexts it built, the distribution of their token and question counts against the method's limits and how many exceed a limit
+        text: a measuring run builds every context a historical run of the range would judge, with the method's question tree, sends nothing, writes no judgment, run or live state, and reports how many contexts it built, the distribution of their token and question counts against the method's limits and how many exceed a limit
       - key: summary-reports-live-effects
         text: a historical run's summary reports the obligations it opened, the flags it raised and the claims it raised
       - key: summary-counts-unjudged
         text: a historical run's summary counts the new messages left unjudged, by reason (KNW-058)
       - key: content-free-never-blocking
         text: run output holds only IDs, counts, probabilities and reasons, and no run refuses or stops on a size or a count
-    provenance: [judgerun.New, judgerun.Runner.Measure, judgerun.Summary, crm-admin --judge-month --measure, .agents/spec/2026-10-14-decision-model-extraction.md HC1 HC7 G15 "Assumptions & deferred questions"]
+    provenance: [judgerun.New, judgerun.Runner.Measure, judgerun.Summary, crm-admin --judge-start-day --judge-end-day --measure, .agents/spec/2026-10-14-decision-model-extraction.md HC1 HC7 G15 "Assumptions & deferred questions"]
 
   # --- Message flags and windows ---
 
@@ -1095,7 +1097,7 @@ behaviors:
       - key: compared-methods
         text: the method registry lists the compared methods only, and the run, the production designation and the scorecard read that one list
       - key: removed-refused-before-any-call
-        text: crm-admin --judge-month and --scorecard naming a removed method, as the method or the compared method, are refused before any call
+        text: crm-admin's historical run (--judge-start-day and --judge-end-day) and --scorecard naming a removed method, as the method or the compared method, are refused before any call
       - key: designation-refused-as-unknown
         text: a production designation naming a removed method is refused as one naming an unknown method is
       - key: stored-judgments-still-read
@@ -1216,6 +1218,22 @@ behaviors:
         text: a stored stage-1 rerun's before_window record is counted unjudged with that reason
     provenance: [scorecard.Reader.scoreFlags, crm-admin --scorecard, crm-admin --langfuse-export, .agents/spec/2026-10-18-message-flags-and-threads.md G13 SC10, coordinator ruling PR3-R1]
 
+  - id: KNW-091
+    title: The name model container turns texts into person spans, on demand, and holds nothing else
+    type: api
+    status: current
+    surface: none
+    given: a request to the name model's socket, POST /v1/spans with a model, a label, a threshold and texts
+    when: the container answers it
+    then:
+      - for each text, in the order sent, it returns the ranges the model labels with the label at a score of the threshold or more, as half-open UTF-8 byte ranges into the text exactly as sent, covering the whole text whatever its length, a name that a division of a long text splits included
+      - an empty text has no spans, and the response carries no text
+      - a request for any model other than the one its image holds, a threshold outside (0, 1], an empty label, or texts that are missing or not all strings is refused with 422 and no spans, and an unknown path is never answered with spans
+      - a connection while the model is down starts it and is answered once the model has loaded; the model exits after an idle period, and with its units stopped a request fails at once
+      - it runs under its memory cap with no network, no database and no credentials, its weights in its image, and writes no text to its logs or its disk
+    provenance: [name-model/name_model/server.py, name-model/units, scripts/deploy-artifact.sh swap_model, name-model/tests/test_endpoint.py, .agents/spec/2026-10-21-masking-fixes.md G6 G9 HC2 D2]
+    notes: The coverage scanner reads no Python, so the endpoint tests in name-model/tests reference this behavior in prose. The on-demand start, idle exit and memory cap are shown by a live capture on the Pi, not by a test.
+
   - id: KNW-088
     title: The Langfuse export sends each scorecard metric as its own numeric score
     type: data
@@ -1233,3 +1251,68 @@ behaviors:
       - key: scores-content-free
         text: the scores carry no message text, sender or contact identity
     provenance: [langfuseexport.scorecardScores, langfuseexport.Exporter.Export, langfuseexport.client.deleteScores, crm-admin --langfuse-export, .agents/spec/2026-10-18-message-flags-and-threads.md G14 HC3 SC7]
+
+  # --- Masking ---
+
+  - id: KNW-089
+    title: The masker hides every known name and the user's own names, and keeps ordinary words
+    type: business-logic
+    status: current
+    surface: none
+    given: a thread context and its questions for a masked decision-model method, and the masker's dictionary of the user's own names (OWN_NAMES), the CRM's contact names and the display names stored messages give their senders and recipients
+    when: the masker masks them before they leave the Pi
+    then:
+      - key: identifiers-masked
+        text: email addresses and phone numbers of seven or more digits are masked, a phone number shaped like a date and an email address holding one included
+      - URLs and @handles are masked too, and every formatted identifier no participant owns becomes a numbered placeholder (EMAIL_n, PHONE_n, URL_n, HANDLE_n), one per distinct value within the request
+      - key: role-labels-and-placeholders
+        text: a participant's names become its role label, and every other name a numbered placeholder, one per distinct identity within the request
+      - a participant's own handles, email addresses and phone numbers become its role label (ME, THEM, PERSON_n) too
+      - key: calendar-words-survive
+        text: weekday, month and relative-time words and calendar dates survive, and no phone match takes a calendar date or any part of one
+      - question IDs and option keys pass through unchanged
+      - key: own-names-me
+        text: each of the user's own names from OWN_NAMES, each full name and each of its words, is masked as ME wherever it appears, at the start of a sentence included, even where another identity's name shares the word
+      - key: display-names-masked
+        text: a display name a stored message gives a sender or recipient, of any source that stores one, is masked in every message, as a numbered placeholder in a thread its owner takes no part in
+      - key: contractions-stay-whole
+        text: a contraction that does not end in 's, is a common word and is no known name ("I'll", "don't") stays whole, and no part of it is masked as a name; a lower-case word ending in 's whose head is a common word ("it's", "let's") stays whole too
+      - key: known-apostrophized-name-masked
+        text: a known name written with an apostrophe ("Teal'c") is masked like any other name, even where the word list holds it as a contraction
+      - key: lowercase-common-words-kept
+        text: a common English word written in lower case is never masked as a name, even when a contact's name holds it
+      - key: capitalized-known-name-masked
+        text: a known name that is also a common word is masked when capitalized, at the start of a sentence too
+      - key: possessive-suffix-kept
+        text: a word ending in 's is its head word and a suffix, and the head is masked by the rule every word is, so a possessive of a known name ("Emily's") and a capitalized contraction whose head is a known name ("It's" with a contact named It) are masked with the suffix kept beside the placeholder, and a possessive of a word that is no name stays intact
+      - key: unknown-capitalized-kept
+        text: no rule masks a word for being capitalized and unknown, so a capitalized word no known name holds ("Happy New Year", "Rose", an invented word) survives the dictionary; the name model finds unknown names
+      - key: address-header-words-masked
+        text: every word of a from header outside a formatted identifier is masked
+      - every word of the other address headers (to, cc, bcc, reply-to, sender) outside a formatted identifier is masked too
+      - key: refused-without-own-names
+        text: the masker refuses to build when OWN_NAMES holds no name, so a run that would mask fails before any call
+      - every masked method's version derives from the masking version, which the masking rules, the common-word list's content and the name model's version (KNW-090) make and no dictionary name feeds, so a masking change makes a rerun judge again
+    provenance: [threadctx.Masker, threadctx.LoadMasker, threadctx.MaskingVersion, decision.NewMaskedMethod, cmd/gen-mask-words, .agents/spec/2026-10-21-masking-fixes.md G1 G2 G3 G5 HC1 SC1 SC2 SC3 SC4]
+    notes: The common-word list is generated by backend/cmd/gen-mask-words from vendored sources that the file's header names with their licenses. A common name written in lower case ("talked to will") passes, by the user's ruling (decision 20261021T190726Z-a4122783cf5c).
+  - id: KNW-090
+    title: The masker masks the name model's spans with the dictionary's matches, and sends nothing the model has not covered
+    type: business-logic
+    status: current
+    surface: none
+    given: a thread context for a masked decision-model method, the span store, the name model (GLiNER urchade/gliner_multi_pii-v1, label person) at the socket NAME_MODEL_SOCKET names, and the score cutoff NAME_MODEL_THRESHOLD
+    when: the masker covers and masks the context before a run sends it
+    then:
+      - key: spans-ensured-and-stored
+        text: before masking, the masker ensures every text of every entry (its text and each header that is not an address header) has name spans for its message, a digest of the text and the model version, asking the name model only for the texts the span store lacks and storing what it answers, so a run whose texts are all stored, or a second run over the same range, asks the model nothing, and a changed text or model version is asked again
+      - the span store holds message keys, text digests, the model version and offsets, never text, and the backend is its only writer
+      - key: union-masked
+        text: the masker masks the union of the dictionary's matches and the name spans, every masked range taking its placeholder from the one per-request placeholder map, so a span over an unknown name becomes a numbered placeholder shared across entries, a span over a participant's alias its role label and a span over the user's own name ME; overlapping ranges are masked whole, a span is widened to every word it touches, and a known name the model misses is still masked
+      - key: lowercase-common-spans-kept
+        text: a name span every word of which is a common English word written in lower case, judged by the masker's common-word list and its 's split, masks nothing, and any other span masks every word it touches, whole
+      - key: no-spans-no-send
+        text: a request with a text the name model has not covered is not sent, and the run records its cut-off as it records a failed call (call_failed), whether the socket has no listener, the model answers a non-success status or refuses the model identity, the deadline expires, or the answer does not align with the texts asked or holds a span that is not a range of whole characters of its text; a rerun once the model answers sends it, and a run with NAME_MODEL_SOCKET unset fails before any call
+      - key: threshold-setting
+        text: the run asks the model at the cutoff NAME_MODEL_THRESHOLD sets, 0.5 when unset; the cutoff is part of the model version, which every masked method's version and every stored span's key derive from, so a change to it makes a rerun judge again and ask the model again, and equal values written differently ("0.5", "0.50") are one version; a value that is not a number or lies outside (0, 1] is refused when the configuration loads, before any call
+    provenance: [threadctx.Masker.Cover, threadctx.NameSpans, threadctx.ModelVersion, namemodel.Client, repository.NameSpanRepository, decision.NewMaskedMethod, config.DecisionConfig, migrations/104_message_name_span, .agents/spec/2026-10-21-masking-fixes.md G6 G7 G8 HC2 HC3 SC6 SC7]
+    notes: A lower-case word the common-word list lacks is masked when a span covers it ("mom" is not on the list), by the spec's tradeoff rule (hide the name). The cutoff is the user's ruling (decision 20261022T002648Z-a01b4678d1a9); the lower-case rule for spans is decision 20261022T021159Z-25b0429017f3.
