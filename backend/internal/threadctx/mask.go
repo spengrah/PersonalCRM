@@ -1,6 +1,7 @@
 package threadctx
 
 import (
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -36,8 +37,13 @@ import (
 //   - every remaining word of an address header (from, to, cc, bcc,
 //     reply-to, sender).
 //
-// No rule masks a word for being capitalized and unknown: a name the
-// dictionary does not hold survives, and finding it is the name model's.
+// It also masks every name span the name model reports in an entry's text or
+// in its other headers, and Mask refuses an entry the masker has not covered
+// with spans (Cover), so no request is masked without them. No rule masks a
+// word for being capitalized and unknown: the name model finds the names the
+// dictionary does not hold. A span masks every word it touches, whole, unless
+// each of them is a common English word written in lower case, as a
+// dictionary match does.
 //
 // A common English word written in lower case is no name: a name matches only
 // when one of its words is capitalized or is no common word. A contraction
@@ -56,6 +62,7 @@ import (
 // Question IDs and option keys are identifiers and pass through unchanged.
 type Masker struct {
 	dictionary Dictionary
+	names      *NameSpans
 }
 
 // Dictionary is every name a Masker knows before it reads a request.
@@ -73,19 +80,21 @@ type Dictionary struct {
 // errNoOwnNames refuses a masker that could not hide the user's own names.
 var errNoOwnNames = errors.New("the user's own names are unknown: set OWN_NAMES to them, comma-separated")
 
-// NewMasker builds a Masker over the dictionary. It refuses a dictionary that
-// holds none of the user's own names, since every request may hold them.
-func NewMasker(d Dictionary) (*Masker, error) {
+// NewMasker builds a Masker over the dictionary that covers requests with the
+// name spans of names; with none, it covers no request. It refuses a
+// dictionary that holds none of the user's own names, since every request may
+// hold them.
+func NewMasker(d Dictionary, names *NameSpans) (*Masker, error) {
 	if !slices.ContainsFunc(d.Own, func(name string) bool { return len(tokenize(name)) > 0 }) {
 		return nil, errNoOwnNames
 	}
-	return &Masker{dictionary: d}, nil
+	return &Masker{dictionary: d, names: names}, nil
 }
 
 // LoadMasker builds a Masker over the user's own names and every name the
 // CRM holds for its live contacts and its stored messages' senders and
-// recipients.
-func LoadMasker(ctx context.Context, content *repository.ThreadContentRepository, own []string) (*Masker, error) {
+// recipients, covering requests with the name spans of names.
+func LoadMasker(ctx context.Context, content *repository.ThreadContentRepository, own []string, names *NameSpans) (*Masker, error) {
 	contacts, err := content.ListContactNamesForMasking(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("list contact names for masking: %w", err)
@@ -94,22 +103,50 @@ func LoadMasker(ctx context.Context, content *repository.ThreadContentRepository
 	if err != nil {
 		return nil, fmt.Errorf("list display names for masking: %w", err)
 	}
-	return NewMasker(Dictionary{Own: own, Contacts: contacts, Display: display})
+	return NewMasker(Dictionary{Own: own, Contacts: contacts, Display: display}, names)
 }
 
 // maskingRules versions the rules this file masks by. Change it with any change
 // to what Mask hides or keeps: every masked method's version derives from
 // MaskingVersion, so a rerun then judges again instead of reusing judgments
 // made on the old masking.
-const maskingRules = "2026-10-21.2"
+const maskingRules = "2026-10-22.1"
 
-// MaskingVersion identifies how Mask masks: its rules and the content of the
-// common-word list they read. A dictionary's names change with contacts and
-// messages and are no part of it, so every Masker gives one version, and a
-// caller without one derives the same.
-func MaskingVersion() string {
-	sum := sha256.Sum256([]byte(maskingRules + "\x00" + commonWordsFile))
+// MaskingVersion identifies how Mask masks with the name model's spans of the
+// version: its rules, the content of the common-word list they read and the
+// model version. A dictionary's names change with contacts and messages and
+// are no part of it, so every Masker gives one version, and a caller without
+// one derives the same.
+func MaskingVersion(model ModelVersion) string {
+	sum := sha256.Sum256([]byte(maskingRules + "\x00" + commonWordsFile + "\x00" + model.String()))
 	return hex.EncodeToString(sum[:6])
+}
+
+// Cover returns the context with every entry covered by the name spans of the
+// model version: the spans the span store holds for each of its texts, the
+// model asked for those it lacks. It fails with ErrNoNameSpans when any text
+// is left without spans, the model down or refusing, so the request is not
+// masked and not sent.
+func (m *Masker) Cover(ctx context.Context, model ModelVersion, c Context) (Context, error) {
+	if m.names == nil {
+		return Context{}, fmt.Errorf("%w: no name model", ErrNoNameSpans)
+	}
+	found, missed, err := m.names.ensure(ctx, model, c.Entries)
+	if err != nil {
+		return Context{}, err
+	}
+	out := covered(c, func(message, text string) ([]NameSpan, bool) {
+		spans, ok := found[keyOf(message, text)]
+		return spans, ok
+	})
+	for _, e := range out.Entries {
+		for _, text := range e.modelTexts() {
+			if _, err := e.namesOf(text); err != nil {
+				return Context{}, fmt.Errorf("%w: the name model failed: %w", ErrNoNameSpans, missed)
+			}
+		}
+	}
+	return out, nil
 }
 
 // MaskedRequest is a thread context and its questions with every identifier
@@ -147,7 +184,8 @@ func (r MaskedRequest) Questions() []Question {
 }
 
 // Mask returns the whole request masked. The placeholder map lives only for
-// this call.
+// this call. It fails with ErrNoNameSpans when an entry's text or header was
+// not covered (Cover) as it stands.
 func (m *Masker) Mask(ctx context.Context, c Context, questions []Question) (MaskedRequest, error) {
 	if err := ctx.Err(); err != nil {
 		return MaskedRequest{}, err
@@ -155,19 +193,32 @@ func (m *Masker) Mask(ctx context.Context, c Context, questions []Question) (Mas
 	s := newMasking(m.dictionary, c.Participants)
 	out := MaskedRequest{kind: c.Kind, cutOff: c.CutOff, entries: make([]Entry, len(c.Entries)), questions: make([]Question, len(questions))}
 	for i, entry := range c.Entries {
-		masked := Entry{Role: entry.Role, SentAt: entry.SentAt, Text: s.mask(entry.Text, false)}
+		names, err := entry.namesOf(entry.Text)
+		if err != nil {
+			return MaskedRequest{}, err
+		}
+		masked := Entry{Role: entry.Role, SentAt: entry.SentAt, Text: s.mask(entry.Text, false, names)}
 		if entry.Headers != nil {
 			masked.Headers = make(map[string]string, len(entry.Headers))
 			for _, name := range slices.Sorted(maps.Keys(entry.Headers)) {
-				masked.Headers[name] = s.mask(entry.Headers[name], addressHeaders[strings.ToLower(name)])
+				value := entry.Headers[name]
+				if addressHeaders[strings.ToLower(name)] {
+					masked.Headers[name] = s.mask(value, true, nil)
+					continue
+				}
+				names, err := entry.namesOf(value)
+				if err != nil {
+					return MaskedRequest{}, err
+				}
+				masked.Headers[name] = s.mask(value, false, names)
 			}
 		}
 		out.entries[i] = masked
 	}
 	for i, q := range questions {
-		masked := Question{ID: q.ID, Kind: q.Kind, Instructions: s.mask(q.Instructions, false), Options: make([]Option, len(q.Options))}
+		masked := Question{ID: q.ID, Kind: q.Kind, Instructions: s.mask(q.Instructions, false, nil), Options: make([]Option, len(q.Options))}
 		for j, option := range q.Options {
-			masked.Options[j] = Option{Key: option.Key, Label: s.mask(option.Label, false), Description: s.mask(option.Description, false)}
+			masked.Options[j] = Option{Key: option.Key, Label: s.mask(option.Label, false, nil), Description: s.mask(option.Description, false, nil)}
 		}
 		out.questions[i] = masked
 	}
@@ -389,7 +440,9 @@ func (s *masking) addName(terms map[string]string, name, identity string) {
 	words := make([]string, len(tokens))
 	for i, t := range tokens {
 		words[i] = t.lower
-		if utf8.RuneCountInString(t.lower) >= 2 && !protectedWords[t.lower] && !isDigits(t.lower) {
+		// A protected word is a term too, which lookup never matches alone, so
+		// a name span over it finds the identity it names.
+		if utf8.RuneCountInString(t.lower) >= 2 && !isDigits(t.lower) {
 			add(t.lower)
 		}
 	}
@@ -424,9 +477,10 @@ type span struct {
 	label      string
 }
 
-// mask replaces every identifier and name in text. In an address header every
-// word outside an identifier is a name.
-func (s *masking) mask(text string, addressHeader bool) string {
+// mask replaces every identifier and name in text, the names of the
+// dictionary and those of the name spans. In an address header every word
+// outside an identifier is a name.
+func (s *masking) mask(text string, addressHeader bool, names []NameSpan) string {
 	var spans []span
 	add := func(match []int) {
 		category, value, ok := identifier(text[match[0]:match[1]])
@@ -470,16 +524,111 @@ func (s *masking) mask(text string, addressHeader bool) string {
 			i++
 		}
 	}
-	slices.SortFunc(spans, func(a, b span) int { return a.start - b.start })
+	spans = append(spans, s.spanned(text, names)...)
 	var out strings.Builder
 	last := 0
-	for _, sp := range spans {
+	for _, sp := range s.merged(text, spans) {
 		out.WriteString(text[last:sp.start])
 		out.WriteString(sp.label)
 		last = sp.end
 	}
 	out.WriteString(text[last:])
 	return out.String()
+}
+
+// spanned returns the ranges the name spans mask, unlabeled: each span
+// widened to every word it touches, whole, a word written with apostrophes
+// included ("Teal'c"). A span every word of which is a common English word
+// written in lower case is no name, as a dictionary match is none, and masks
+// nothing; an 's suffix is no word of it.
+func (s *masking) spanned(text string, names []NameSpan) []span {
+	if len(names) == 0 {
+		return nil
+	}
+	tokens := tokenize(text)
+	joined, suffix := apostrophized(text, tokens)
+	// The range of the word each token is part of.
+	wordStart, wordEnd := make([]int, len(tokens)), make([]int, len(tokens))
+	for i, t := range tokens {
+		wordStart[i], wordEnd[i] = t.start, t.end
+		if i > 0 && joined[i] != "" && joined[i] == joined[i-1] && apostropheBetween(text, tokens[i-1], t) {
+			wordStart[i] = wordStart[i-1]
+		}
+	}
+	for i := len(tokens) - 2; i >= 0; i-- {
+		if wordStart[i+1] == wordStart[i] {
+			wordEnd[i] = wordEnd[i+1]
+		}
+	}
+	var out []span
+	for _, n := range names {
+		start, end, named := n.Start, n.End, false
+		for i, t := range tokens {
+			if t.end <= n.Start || t.start >= n.End {
+				continue
+			}
+			start, end = min(start, wordStart[i]), max(end, wordEnd[i])
+			if suffix[i] {
+				continue
+			}
+			word := cmp.Or(joined[i], t.lower)
+			first, _ := utf8.DecodeRuneInString(text[wordStart[i]:])
+			if unicode.IsUpper(first) || !commonWords[word] {
+				named = true
+			}
+		}
+		if named {
+			out = append(out, span{start: start, end: end})
+		}
+	}
+	return out
+}
+
+// apostropheBetween reports whether one apostrophe alone joins two tokens.
+func apostropheBetween(text string, a, b token) bool {
+	r, size := utf8.DecodeRuneInString(text[a.end:])
+	return strings.ContainsRune(apostrophes, r) && a.end+size == b.start
+}
+
+// merged returns the spans in text order with every group of overlapping
+// spans joined into one, so no character of any of them is left unmasked.
+// A group takes the label of its earliest labeled span, an identifier or a
+// dictionary match. A group of name spans alone takes the label of the
+// identity its words name in the dictionary, whatever rule kept the
+// dictionary from matching them ("May" for a participant named May), and is
+// otherwise an unknown name, one placeholder per distinct word sequence within
+// the request.
+func (s *masking) merged(text string, spans []span) []span {
+	slices.SortStableFunc(spans, func(a, b span) int { return a.start - b.start })
+	var out []span
+	for i := 0; i < len(spans); {
+		group := spans[i]
+		for i++; i < len(spans) && spans[i].start < group.end; i++ {
+			group.end = max(group.end, spans[i].end)
+			if group.label == "" {
+				group.label = spans[i].label
+			}
+		}
+		if group.label == "" {
+			words := text[group.start:group.end]
+			tokens := tokenize(words)
+			_, suffix := apostrophized(words, tokens)
+			var parts []string
+			for j, t := range tokens {
+				if !suffix[j] {
+					parts = append(parts, t.lower)
+				}
+			}
+			term := strings.Join(parts, " ")
+			identity, known := s.identityOf(term)
+			if !known {
+				identity = "name:" + term
+			}
+			group.label = s.placeholder(identity, "NAME")
+		}
+		out = append(out, group)
+	}
+	return out
 }
 
 // runsBetween returns the words of text outside the identifier spans, which
@@ -563,14 +712,22 @@ func (s *masking) lookup(text string, words []token) (int, string) {
 		for i, w := range words[:n] {
 			parts[i] = w.lower
 		}
-		term := strings.Join(parts, " ")
-		for _, terms := range []map[string]string{s.ownTerms, s.participantTerms, s.contactTerms, s.displayTerms} {
-			if identity, ok := terms[term]; ok {
-				return n, identity
-			}
+		if identity, ok := s.identityOf(strings.Join(parts, " ")); ok {
+			return n, identity
 		}
 	}
 	return 0, ""
+}
+
+// identityOf returns the identity a dictionary term names, the user's own
+// names first, then a participant's, a contact's and a display name's.
+func (s *masking) identityOf(term string) (string, bool) {
+	for _, terms := range []map[string]string{s.ownTerms, s.participantTerms, s.contactTerms, s.displayTerms} {
+		if identity, ok := terms[term]; ok {
+			return identity, true
+		}
+	}
+	return "", false
 }
 
 // namesSomeone reports whether a word can make a name: it is capitalized or

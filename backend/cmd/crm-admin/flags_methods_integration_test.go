@@ -32,7 +32,7 @@ func (e *flagsEnv) newRegistryEnv(t *testing.T) registryEnv {
 	openRouter, venice := newVendor(t), newVendor(t)
 	routeVendors(t, map[string]*vendor{"openrouter.ai": openRouter, "api.venice.ai": venice})
 	return registryEnv{
-		registry: decision.NewRegistry(config.DecisionConfig{OpenRouterAPIKey: "key", VeniceAPIKey: "key"}, e.masker),
+		registry: decision.NewRegistry(config.DecisionConfig{OpenRouterAPIKey: "key", VeniceAPIKey: "key", NameModelThreshold: config.DefaultNameModelThreshold}, e.masker),
 		vendors:  []*vendor{openRouter, venice},
 	}
 }

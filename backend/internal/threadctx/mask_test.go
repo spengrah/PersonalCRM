@@ -60,9 +60,9 @@ func mask(t *testing.T, c threadctx.Context, questions ...threadctx.Question) th
 
 func maskWith(t *testing.T, d threadctx.Dictionary, c threadctx.Context, questions ...threadctx.Question) threadctx.MaskedRequest {
 	t.Helper()
-	masker, err := threadctx.NewMasker(d)
+	masker, err := threadctx.NewMasker(d, nil)
 	require.NoError(t, err)
-	masked, err := masker.Mask(t.Context(), c, questions)
+	masked, err := masker.Mask(t.Context(), threadctx.CoverForTest(c, nil), questions)
 	require.NoError(t, err)
 	return masked
 }

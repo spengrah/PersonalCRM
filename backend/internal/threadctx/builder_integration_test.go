@@ -423,13 +423,10 @@ func TestContentFacts_AgreeWithContexts(t *testing.T) {
 func TestMask_RecipientNamesFromTheSource(t *testing.T) {
 	t.Parallel()
 	e := newBuilderEnv(t)
-	masker, err := threadctx.LoadMasker(e.ctx, repository.NewThreadContentRepository(e.database.Queries), own)
-	require.NoError(t, err)
+	masker := e.loadMasker(t)
 	maskOnly := func(t *testing.T, thread threadctx.VenueID) threadctx.MaskedRequest {
 		t.Helper()
-		masked, err := masker.Mask(e.ctx, e.build(t, thread, e.at(1)), nil)
-		require.NoError(t, err)
-		return masked
+		return e.maskCovered(t, masker, e.build(t, thread, e.at(1)))
 	}
 	// toTelegram stores the user's own message in a private chat with peer.
 	toTelegram := func(t *testing.T, contact *uuid.UUID) threadctx.VenueID {
@@ -471,13 +468,11 @@ func TestLoadMasker_MasksStoredContactNames(t *testing.T) {
 	e := newBuilderEnv(t)
 	contact, err := e.harness.SeedContact(e.ctx, e.harness.Generator().Contact())
 	require.NoError(t, err)
-	masker, err := threadctx.LoadMasker(e.ctx, repository.NewThreadContentRepository(e.database.Queries), own)
-	require.NoError(t, err)
+	masker := e.loadMasker(t)
 
 	// Lower case at the start of the text, where only the dictionary masks it.
 	c := threadctx.Context{Kind: threadctx.KindConversation, Entries: []threadctx.Entry{{Role: threadctx.RoleMe, Text: strings.ToLower(contact.FullName) + " asked about it"}}}
-	masked, err := masker.Mask(e.ctx, c, nil)
-	require.NoError(t, err)
+	masked := e.maskCovered(t, masker, c)
 	text := strings.ToLower(masked.Entries()[0].Text)
 	for _, word := range strings.Fields(strings.ToLower(contact.FullName)) {
 		assert.NotContains(t, text, word)

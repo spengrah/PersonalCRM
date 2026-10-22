@@ -56,6 +56,7 @@ var wipedTables = []string{
 	"mac_host",
 	"mac_host_pairing_token",
 	"meeting_note",
+	"message_name_span",
 	"messages_message",
 	"node",
 	"note",

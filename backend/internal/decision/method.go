@@ -160,8 +160,11 @@ var errIncompleteAnswers = errors.New("response leaves a question or option unan
 // method is the one implementation of Method; a masking variant decides only
 // how the request is prepared and sent.
 type method struct {
-	def     Definition
-	ref     judgment.MethodRef
+	def Definition
+	ref judgment.MethodRef
+	// cover readies a context for prepare: a masking variant covers it with
+	// name spans, failing with threadctx.ErrNoNameSpans when it cannot.
+	cover   func(ctx context.Context, c threadctx.Context) (threadctx.Context, error)
 	prepare func(ctx context.Context, c threadctx.Context, questions []threadctx.Question) (prepared, error)
 }
 
@@ -176,12 +179,12 @@ type prepared struct {
 // its version derives from is the wording it sends, whatever the caller later
 // does with the definition. masking is the version of the masking its prepare
 // applies.
-func newMethod(def Definition, r Route, masking string, prepare func(context.Context, threadctx.Context, []threadctx.Question) (prepared, error)) *method {
+func newMethod(def Definition, r Route, masking string, cover func(context.Context, threadctx.Context) (threadctx.Context, error), prepare func(context.Context, threadctx.Context, []threadctx.Question) (prepared, error)) *method {
 	if def.Sizing.Ratio <= 0 || def.Sizing.Margin < 0 {
 		panic(fmt.Sprintf("decision: method %q needs a positive sizing ratio and a margin of at least zero", def.Key))
 	}
 	def.Wording = def.Wording.clone()
-	return &method{def: def, ref: def.ref(r, masking), prepare: prepare}
+	return &method{def: def, ref: def.ref(r, masking), cover: cover, prepare: prepare}
 }
 
 func (m *method) Ref() judgment.MethodRef { return m.ref }
@@ -293,11 +296,21 @@ func split(questions []threadctx.Question, limit int) [][]threadctx.Question {
 }
 
 func (m *method) Plan(ctx context.Context, r Request) (*Plan, error) {
-	c := r.Context
-	n := len(c.Entries)
+	n := len(r.Context.Entries)
 	if n == 0 {
 		return nil, errors.New("plan: thread context has no messages")
 	}
+	c, err := m.cover(ctx, r.Context)
+	// best-effort: a context the name model cannot cover is a failed call,
+	// reported call_failed; the cause may name the model's failure, so it goes
+	// nowhere.
+	if errors.Is(err, threadctx.ErrNoNameSpans) {
+		return &Plan{Incomplete: judgment.IncompleteReasonCallFailed}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	r.Context = c
 	last := n - 1
 	whole, ok, err := m.widest(ctx, r, last, last, func(start int) []int { return newIn(r, start, last) })
 	if err != nil {
@@ -489,6 +502,10 @@ func balanced(n, k int, fit func(from, to int) (bool, error)) ([][2]int, bool, e
 func (m *method) Measure(ctx context.Context, c threadctx.Context) (Size, error) {
 	if len(c.Entries) == 0 {
 		return Size{}, errors.New("measure: thread context has no messages")
+	}
+	c, err := m.cover(ctx, c)
+	if err != nil {
+		return Size{}, fmt.Errorf("measure: %w", err)
 	}
 	r := Request{Context: c}
 	last := len(c.Entries) - 1

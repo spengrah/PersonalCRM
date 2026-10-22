@@ -38,8 +38,9 @@ type Distribution struct {
 
 // Measure builds every context a historical run of the days would judge,
 // and sizes its whole request against the method's limits. It sends nothing
-// and writes nothing: no judgment, no run and no live state. It reports every
-// size and refuses none.
+// to a vendor and writes no judgment, no run and no live state; masking the
+// requests stores the name spans it asks the name model for, as any run's
+// masking does. It reports every size and refuses none.
 func (r *Runner) Measure(ctx context.Context, methodKey string, days Days) (Measurement, error) {
 	m, err := r.methods.Get(methodKey)
 	if err != nil {

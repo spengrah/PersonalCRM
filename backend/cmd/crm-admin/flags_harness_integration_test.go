@@ -23,6 +23,7 @@ import (
 	"testing"
 	"time"
 
+	"personal-crm/backend/internal/config"
 	"personal-crm/backend/internal/decision"
 	"personal-crm/backend/internal/judgerun"
 	"personal-crm/backend/internal/judgment"
@@ -42,9 +43,10 @@ func jan(day, hour int) time.Time {
 }
 
 // flagsEnv is the judgment store over an isolated clone with the vendors a
-// test fakes.
+// test fakes, and the name model faked at its socket.
 type flagsEnv struct {
 	*labelsEnv
+	names  *nameModel
 	masker *threadctx.Masker
 }
 
@@ -53,9 +55,9 @@ var ownNames = []string{"Marlowe Quill"}
 
 func newFlagsEnv(t *testing.T, production string) *flagsEnv {
 	t.Helper()
-	masker, err := threadctx.NewMasker(threadctx.Dictionary{Own: ownNames})
-	require.NoError(t, err)
-	return &flagsEnv{labelsEnv: newLabelsEnvFor(t, production), masker: masker}
+	e := &flagsEnv{labelsEnv: newLabelsEnvFor(t, production), names: newNameModel(t)}
+	e.masker = e.maskerOf(t, e.names.socket, testDeadline)
+	return e
 }
 
 // ask is one question a vendor receives, with the message it concerns.
@@ -297,8 +299,17 @@ func (e *flagsEnv) method(key string, v *vendor, limits decision.Limits) decisio
 }
 
 func (e *flagsEnv) methodOf(def decision.Definition, v *vendor) decision.Method {
-	return decision.NewMaskedMethod(def, e.masker, decision.NewSystemOneAdapter(v.url, "key", "fake-1"))
+	return decision.NewMaskedMethod(def, defaultNames, e.masker, decision.NewSystemOneAdapter(v.url, "key", "fake-1"))
 }
+
+// methodAt is a method of the key with roomy limits that masks with the name
+// spans of the model version.
+func (e *flagsEnv) methodAt(key string, names threadctx.ModelVersion, v *vendor) decision.Method {
+	return decision.NewMaskedMethod(fakeDefinition(key, roomy), names, e.masker, decision.NewSystemOneAdapter(v.url, "key", "fake-1"))
+}
+
+// defaultNames is the name model at its default cutoff.
+var defaultNames = threadctx.NewModelVersion(config.DefaultNameModelThreshold)
 
 // judgeMonth runs crm-admin's historical run over the days of January with
 // the method, and returns its output.
@@ -487,7 +498,7 @@ func (e *flagsEnv) tokensFor(t *testing.T, def decision.Definition, req decision
 	t.Helper()
 	startsAt := func(limit int) (string, bool) {
 		def.Limits.Tokens = limit
-		p, err := decision.NewMaskedMethod(def, e.masker, noSend{}).Plan(e.ctx, req)
+		p, err := decision.NewMaskedMethod(def, defaultNames, e.masker, noSend{}).Plan(e.ctx, req)
 		require.NoError(t, err)
 		return p.Read.WindowStart, p.Incomplete == "" && len(p.Read.Chunks) == 0
 	}

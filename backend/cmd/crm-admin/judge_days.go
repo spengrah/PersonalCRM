@@ -16,6 +16,7 @@ import (
 	"personal-crm/backend/internal/decision"
 	"personal-crm/backend/internal/judgerun"
 	"personal-crm/backend/internal/judgment"
+	"personal-crm/backend/internal/namemodel"
 	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/service"
 	"personal-crm/backend/internal/threadctx"
@@ -41,10 +42,11 @@ type judgmentStack struct {
 
 // buildJudgmentStack wires the decision-model stack over a thread-context
 // builder: the masker loaded from the user's own names (OWN_NAMES) and the
-// CRM's names, the method registry, the one judgment store with the production
-// method DECISION_PRODUCTION_METHOD names, and the runner over them. It fails
-// before any call when OWN_NAMES holds no name or that setting names a key the
-// registry lacks.
+// CRM's names, covering requests with the span store and the name model at
+// NAME_MODEL_SOCKET, the method registry, the one judgment store with the
+// production method DECISION_PRODUCTION_METHOD names, and the runner over
+// them. It fails before any call when NAME_MODEL_SOCKET is unset, OWN_NAMES
+// holds no name or DECISION_PRODUCTION_METHOD names a key the registry lacks.
 func buildJudgmentStack(
 	ctx context.Context,
 	cfg *config.Config,
@@ -55,7 +57,12 @@ func buildJudgmentStack(
 ) (judgmentStack, error) {
 	content := repository.NewThreadContentRepository(database.Queries)
 	contexts := threadctx.NewBuilder(content, repository.NewVenueRepository(database.Queries))
-	masker, err := threadctx.LoadMasker(ctx, content, cfg.User.OwnNames)
+	model, err := namemodel.New(cfg.Decision.NameModelSocket, namemodel.DefaultDeadline)
+	if err != nil {
+		return judgmentStack{}, err
+	}
+	names := threadctx.NewNameSpans(repository.NewNameSpanRepository(database.Queries), model)
+	masker, err := threadctx.LoadMasker(ctx, content, cfg.User.OwnNames, names)
 	if err != nil {
 		return judgmentStack{}, fmt.Errorf("load masker: %w", err)
 	}
@@ -125,8 +132,8 @@ func validateJudgeDays(opts runOptions) error {
 }
 
 // runJudgeDays runs a historical run over the days, or with --measure a
-// measuring run that sends and writes nothing, and prints its content-free
-// report: IDs, counts and reasons only.
+// measuring run that sends nothing to a vendor and writes no judgment, and
+// prints its content-free report: IDs, counts and reasons only.
 func runJudgeDays(ctx context.Context, opts runOptions, deps adminDeps) error {
 	days, err := judgerun.ParseDays(opts.judgeStartDay, opts.judgeEndDay)
 	if err != nil {

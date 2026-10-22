@@ -202,11 +202,16 @@
 //	                              what a cut-off reads (window, new messages,
 //	                              earlier judgments re-checked) is reused, so
 //	                              repeating a range sends nothing. The masker
-//	                              needs the user's own names: a run fails
-//	                              before any call when OWN_NAMES holds none.
+//	                              needs the user's own names and the name
+//	                              model: a run fails before any call when
+//	                              OWN_NAMES holds none or NAME_MODEL_SOCKET is
+//	                              unset, and a context the model cannot cover
+//	                              is not sent (reported call_failed).
 //	                              --measure builds the same contexts, sizes
 //	                              each whole request against the method's
-//	                              limits, and sends and writes nothing. Prints a
+//	                              limits, and sends nothing to a vendor and
+//	                              writes no judgment; like any masking, it
+//	                              stores the name spans it asks for. Prints a
 //	                              content-free report (IDs, counts, reasons).
 //	                              SAFE with crm-api running (it runs the Todoist
 //	                              jobs a run's live effects enqueue).

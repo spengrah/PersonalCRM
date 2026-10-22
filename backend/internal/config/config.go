@@ -55,6 +55,15 @@ type DecisionConfig struct {
 	// it serves unavailable.
 	OpenRouterAPIKey string // OPENROUTER_API_KEY
 	VeniceAPIKey     string // VENICE_API_KEY
+	// NameModelSocket is the path of the name model's Unix socket as the
+	// backend sees it (NAME_MODEL_SOCKET). A run that masks refuses to start
+	// without it.
+	NameModelSocket string
+	// NameModelThreshold is the name model's score cutoff
+	// (NAME_MODEL_THRESHOLD): a decimal in (0, 1], DefaultNameModelThreshold
+	// when unset. Every masked method's version derives from it, so the API
+	// and crm-admin read it from this one place.
+	NameModelThreshold float64
 }
 
 // LangfuseExtractionConfig names the Langfuse extraction project, distinct
@@ -443,6 +452,9 @@ const (
 	DefaultWhatsAppReplyBridgeHours     = 48
 	DefaultWhatsAppDiscoveryMinMessages = 3
 	DefaultWhatsAppGroupMaxMembers      = 10
+	// DefaultNameModelThreshold is the name model's score cutoff when
+	// NAME_MODEL_THRESHOLD is unset (spec 2026-10-21-masking-fixes G6).
+	DefaultNameModelThreshold = 0.5
 )
 
 // builtinStalenessSourceOverrides returns a fresh copy of the per-source
@@ -507,6 +519,10 @@ func Load() (*Config, error) {
 	}
 	for k, v := range envOverrides {
 		stalenessOverrides[k] = v
+	}
+	nameModelThreshold, err := parseNameModelThreshold(os.Getenv("NAME_MODEL_THRESHOLD"))
+	if err != nil {
+		return nil, err
 	}
 
 	cfg := &Config{
@@ -618,6 +634,9 @@ func Load() (*Config, error) {
 			ProductionMethod: getEnv("DECISION_PRODUCTION_METHOD", ""),
 			OpenRouterAPIKey: getEnv("OPENROUTER_API_KEY", ""),
 			VeniceAPIKey:     getEnv("VENICE_API_KEY", ""),
+
+			NameModelSocket:    getEnv("NAME_MODEL_SOCKET", ""),
+			NameModelThreshold: nameModelThreshold,
 		},
 		LangfuseExtraction: LangfuseExtractionConfig{
 			Host:      getEnv("LANGFUSE_EXTRACTION_HOST", ""),
@@ -1016,6 +1035,21 @@ func (c *Config) GetBindAddress() string {
 	return fmt.Sprintf("%s:%d", c.Server.Host, c.Server.Port)
 }
 
+// parseNameModelThreshold parses NAME_MODEL_THRESHOLD: unset is
+// DefaultNameModelThreshold, and a value that is not a number or lies outside
+// (0, 1] is refused rather than replaced by the default, since judging with a
+// cutoff the user did not set would be silent.
+func parseNameModelThreshold(raw string) (float64, error) {
+	if raw == "" {
+		return DefaultNameModelThreshold, nil
+	}
+	v, err := strconv.ParseFloat(raw, 64)
+	if err != nil || !(v > 0 && v <= 1) {
+		return 0, fmt.Errorf("invalid NAME_MODEL_THRESHOLD %q: want a decimal in (0, 1]", raw)
+	}
+	return v, nil
+}
+
 // Helper functions for parsing environment variables
 
 func getEnv(key, defaultValue string) string {
@@ -1135,6 +1169,7 @@ func TestConfig() *Config {
 			ClientSecret: "test-todoist-client-secret",
 			RedirectURL:  "http://localhost:8080/api/v1/auth/todoist/callback",
 		},
+		Decision: DecisionConfig{NameModelThreshold: DefaultNameModelThreshold},
 		Watchdog: WatchdogConfig{
 			WeeklyDays:    3,
 			BiweeklyDays:  5,

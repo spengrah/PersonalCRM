@@ -675,6 +675,14 @@ type MeetingNote struct {
 	ConflictCandidates []byte `json:"conflict_candidates"`
 }
 
+type MessageNameSpan struct {
+	MessageKey   string  `json:"message_key"`
+	TextDigest   []byte  `json:"text_digest"`
+	ModelVersion string  `json:"model_version"`
+	Starts       []int32 `json:"starts"`
+	Ends         []int32 `json:"ends"`
+}
+
 type MessagesMessage struct {
 	ID                uuid.UUID     `json:"id"`
 	Guid              string        `json:"guid"`

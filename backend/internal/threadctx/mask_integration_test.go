@@ -3,6 +3,7 @@
 package threadctx_test
 
 import (
+	"context"
 	"math/rand/v2"
 	"testing"
 
@@ -14,6 +15,33 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// noNames is a name model that finds no name in any text.
+type noNames struct{}
+
+func (noNames) Spans(_ context.Context, _ threadctx.ModelVersion, texts []string) ([][]threadctx.NameSpan, error) {
+	return make([][]threadctx.NameSpan, len(texts)), nil
+}
+
+// loadMasker loads the masker from the CRM, covering requests with the span
+// store and a name model that finds no name.
+func (e *builderEnv) loadMasker(t *testing.T) *threadctx.Masker {
+	t.Helper()
+	names := threadctx.NewNameSpans(repository.NewNameSpanRepository(e.database.Queries), noNames{})
+	masker, err := threadctx.LoadMasker(e.ctx, repository.NewThreadContentRepository(e.database.Queries), own, names)
+	require.NoError(t, err)
+	return masker
+}
+
+// maskCovered masks the context once the masker has covered it with spans.
+func (e *builderEnv) maskCovered(t *testing.T, masker *threadctx.Masker, c threadctx.Context) threadctx.MaskedRequest {
+	t.Helper()
+	c, err := masker.Cover(e.ctx, threadctx.NewModelVersion(0.5), c)
+	require.NoError(t, err)
+	masked, err := masker.Mask(e.ctx, c, nil)
+	require.NoError(t, err)
+	return masked
+}
+
 // maskElsewhere stores text as a contact's message in an email thread of its
 // own, and returns it masked by a masker loaded from the CRM after every
 // store: the masked text of a thread the display names' owners take no part
@@ -23,13 +51,9 @@ func (e *builderEnv) maskElsewhere(t *testing.T, text string) string {
 	gmailThread := "thread-" + uuid.NewString()
 	thread := e.venue(t, repository.InteractionSourceEmail, repository.VenueKindEmailThread, gmailThread)
 	e.store(t, commsCopy{source: repository.InteractionSourceEmail, thread: gmailThread, external: uuid.NewString(), direction: repository.InteractionDirectionInbound, peer: "elsewhere@example.test", body: text, contact: e.contact(t), at: e.at(2)})
-	masker, err := threadctx.LoadMasker(e.ctx, repository.NewThreadContentRepository(e.database.Queries), own)
-	require.NoError(t, err)
 	c := e.build(t, thread, e.at(3))
 	require.Contains(t, c.Participants, threadctx.RoleThem)
-	masked, err := masker.Mask(e.ctx, c, nil)
-	require.NoError(t, err)
-	return masked.Entries()[0].Text
+	return e.maskCovered(t, e.loadMasker(t), c).Entries()[0].Text
 }
 
 // inboundEmail stores an email from a contact, in a thread of its own, with

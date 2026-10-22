@@ -176,6 +176,7 @@ func TestHistoricalRunRefusesWithoutOwnNames(t *testing.T) {
 			t.Setenv("NODE_ENV", "development")
 			t.Setenv("DECISION_PRODUCTION_METHOD", "")
 			t.Setenv("VENICE_API_KEY", "key")
+			t.Setenv("NAME_MODEL_SOCKET", e.names.socket)
 			t.Setenv("OWN_NAMES", tc.value)
 			if !tc.set {
 				require.NoError(t, os.Unsetenv("OWN_NAMES"))

@@ -1259,6 +1259,9 @@ type Querier interface {
 	// returns ErrNoRows in that case, which the repository translates to
 	// db.ErrNotFound.
 	InsertMeetingNote(ctx context.Context, arg InsertMeetingNoteParams) (*MeetingNote, error)
+	// Stores the spans of one text. The model's spans of a text are a function of
+	// the text and the model version, so a row already stored is kept.
+	InsertMessageNameSpan(ctx context.Context, arg InsertMessageNameSpanParams) error
 	// Adds a group-chat message as evidence only: stored processed with no
 	// interaction link and no contact match, so no aggregation, sweep, promotion
 	// or rematch picks it up, and credits_reply stays false so it is never read as
@@ -1661,6 +1664,9 @@ type Querier interface {
 	// idx_meeting_note_linkage_state from migration 053; the in-memory sort
 	// on the small filtered set is cheap.
 	ListMeetingNotesNeedingAttention(ctx context.Context, hostID *uuid.UUID) ([]*MeetingNote, error)
+	// The stored spans of the model version for each (message key, text digest)
+	// pair asked; a pair with none stored has no row.
+	ListMessageNameSpans(ctx context.Context, arg ListMessageNameSpansParams) ([]*ListMessageNameSpansRow, error)
 	ListMessagesContainersForContact(ctx context.Context, contactID *uuid.UUID) ([]*ListMessagesContainersForContactRow, error)
 	// The one derivation of a group-chat burst's window: the closed span from the
 	// earliest to the latest sent time of the live messages_message rows linked to

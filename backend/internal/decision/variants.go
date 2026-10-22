@@ -15,12 +15,17 @@ type Adapter interface {
 	Send(ctx context.Context, req threadctx.MaskedRequest) (Answers, error)
 }
 
-// NewMaskedMethod builds a method that masks every request before its adapter
-// sends it. Its version derives from the masking version, which no masker's
-// dictionary changes, so a registry built with no masker names the same
-// version.
-func NewMaskedMethod(def Definition, masker *threadctx.Masker, adapter Adapter) Method {
-	return newMethod(def, adapter.Route(), threadctx.MaskingVersion(), func(ctx context.Context, c threadctx.Context, questions []threadctx.Question) (prepared, error) {
+// NewMaskedMethod builds a method that masks every request with the name
+// spans of the model version before its adapter sends it: it covers each
+// context with spans before it plans or measures it, and a context the name
+// model cannot cover is not sent. Its version derives from the masking
+// version of the model version, which no masker's dictionary changes, so a
+// registry built with no masker names the same version.
+func NewMaskedMethod(def Definition, model threadctx.ModelVersion, masker *threadctx.Masker, adapter Adapter) Method {
+	cover := func(ctx context.Context, c threadctx.Context) (threadctx.Context, error) {
+		return masker.Cover(ctx, model, c)
+	}
+	return newMethod(def, adapter.Route(), threadctx.MaskingVersion(model), cover, func(ctx context.Context, c threadctx.Context, questions []threadctx.Question) (prepared, error) {
 		req, err := masker.Mask(ctx, c, questions)
 		if err != nil {
 			return prepared{}, fmt.Errorf("mask request: %w", err)
