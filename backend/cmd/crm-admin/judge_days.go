@@ -196,7 +196,7 @@ func writeRunSummary(w io.Writer, days judgerun.Days, s judgerun.Summary) error 
 
 func writeMeasurement(w io.Writer, m judgerun.Measurement) error {
 	if _, err := fmt.Fprintf(w,
-		"historical run --measure: days=%s method=%s version=%s (nothing sent, nothing written)\n"+
+		"historical run --measure: days=%s method=%s version=%s (nothing sent; name spans the model gave are stored)\n"+
 			"  cut_offs=%d contexts=%d\n"+
 			"  tokens min=%d p50=%d p90=%d p99=%d max=%d limit=%d\n"+
 			"  questions min=%d p50=%d p90=%d p99=%d max=%d limit=%d\n"+

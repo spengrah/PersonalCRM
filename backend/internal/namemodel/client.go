@@ -61,14 +61,19 @@ type request struct {
 	Texts     []string `json:"texts"`
 }
 
+// response decodes the endpoint's answer. A text's result, a span and a
+// span's offsets are pointers, so a null or missing one is told apart from an
+// empty result or a zero offset and fails the whole response.
 type response struct {
-	Model     string  `json:"model"`
-	Label     string  `json:"label"`
-	Threshold float64 `json:"threshold"`
-	Spans     [][]struct {
-		Start int `json:"start"`
-		End   int `json:"end"`
-	} `json:"spans"`
+	Model     string             `json:"model"`
+	Label     string             `json:"label"`
+	Threshold float64            `json:"threshold"`
+	Spans     []*[]*responseSpan `json:"spans"`
+}
+
+type responseSpan struct {
+	Start *int `json:"start"`
+	End   *int `json:"end"`
 }
 
 // Spans returns, for each text, the spans the model labels the version's
@@ -114,13 +119,20 @@ func (c *Client) Spans(ctx context.Context, model threadctx.ModelVersion, texts 
 	}
 	out := make([][]threadctx.NameSpan, len(texts))
 	for i, spans := range got.Spans {
+		if spans == nil {
+			return nil, fmt.Errorf("name model: text %d has no result", i)
+		}
 		text := texts[i]
-		out[i] = make([]threadctx.NameSpan, len(spans))
-		for j, s := range spans {
-			if s.Start < 0 || s.Start >= s.End || s.End > len(text) || !boundary(text, s.Start) || !boundary(text, s.End) {
+		out[i] = make([]threadctx.NameSpan, len(*spans))
+		for j, s := range *spans {
+			if s == nil || s.Start == nil || s.End == nil {
+				return nil, fmt.Errorf("name model: span %d of text %d lacks its offsets", j, i)
+			}
+			start, end := *s.Start, *s.End
+			if start < 0 || start >= end || end > len(text) || !boundary(text, start) || !boundary(text, end) {
 				return nil, fmt.Errorf("name model: span %d of text %d is not a range of whole characters of it", j, i)
 			}
-			out[i][j] = threadctx.NameSpan{Start: s.Start, End: s.End}
+			out[i][j] = threadctx.NameSpan{Start: start, End: end}
 		}
 	}
 	return out, nil

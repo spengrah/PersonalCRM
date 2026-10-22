@@ -203,6 +203,25 @@ func TestHistoricalRunSendsNothingTheNameModelHasNotCovered(t *testing.T) {
 			spans[0] = []threadctx.NameSpan{{Start: 1, End: 4}}
 			writeSpans(w, req, spans)
 		}},
+		{"a null result for each text", func(w http.ResponseWriter, _ *http.Request, req spansRequest) {
+			writeTestJSON(w, map[string]any{"model": req.Model, "label": req.Label, "threshold": req.Threshold, "spans": make([]any, len(req.Texts))})
+		}},
+		{"a null span", func(w http.ResponseWriter, _ *http.Request, req spansRequest) {
+			spans := make([]any, len(req.Texts))
+			for i := range spans {
+				spans[i] = []any{}
+			}
+			spans[0] = []any{nil}
+			writeTestJSON(w, map[string]any{"model": req.Model, "label": req.Label, "threshold": req.Threshold, "spans": spans})
+		}},
+		{"a span without its start", func(w http.ResponseWriter, _ *http.Request, req spansRequest) {
+			spans := make([]any, len(req.Texts))
+			for i := range spans {
+				spans[i] = []any{}
+			}
+			spans[0] = []any{map[string]int{"end": 2}}
+			writeTestJSON(w, map[string]any{"model": req.Model, "label": req.Label, "threshold": req.Threshold, "spans": spans})
+		}},
 	}
 	for _, tc := range failures {
 		t.Run(tc.name, func(t *testing.T) {
