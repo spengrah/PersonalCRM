@@ -271,6 +271,7 @@ func TestMask_KnownNamesThatAreWords(t *testing.T) {
 	for _, tc := range []struct{ name, text, want string }{
 		{"Will mid-sentence", "I asked Will about the lease", "I asked NAME_1 about the lease"},
 		{"Will at the start of a sentence", "Will says the lease is fine", "NAME_1 says the lease is fine"},
+		{"wILL, with an upper-case letter past its first", "I asked wILL about the lease", "I asked NAME_1 about the lease"},
 	} {
 		t.Run(tc.name+" with a contact named Will", func(t *testing.T) {
 			assert.Equal(t, tc.want, maskWith(t, will, dm(tc.text)).Entries()[0].Text)

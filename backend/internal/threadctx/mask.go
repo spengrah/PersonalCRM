@@ -571,9 +571,7 @@ func (s *masking) spanned(text string, names []NameSpan) []span {
 			if suffix[i] {
 				continue
 			}
-			word := cmp.Or(joined[i], t.lower)
-			first, _ := utf8.DecodeRuneInString(text[wordStart[i]:])
-			if unicode.IsUpper(first) || !commonWords[word] {
+			if !ordinaryWord(text[wordStart[i]:wordEnd[i]], cmp.Or(joined[i], t.lower)) {
 				named = true
 			}
 		}
@@ -730,9 +728,16 @@ func (s *masking) identityOf(term string) (string, bool) {
 	return "", false
 }
 
-// namesSomeone reports whether a word can make a name: it is capitalized or
-// is no common word, since a common word written in lower case is no name.
+// namesSomeone reports whether a word can make a name: it is not an ordinary
+// word.
 func namesSomeone(t token) bool {
-	first, _ := utf8.DecodeRuneInString(t.word)
-	return unicode.IsUpper(first) || !commonWords[t.lower]
+	return !ordinaryWord(t.word, t.lower)
+}
+
+// ordinaryWord reports whether a word, written as written and looked up as
+// common, names no one (G1): every letter of it is lower case and the
+// common-word list holds it. One upper-case letter anywhere ("Will", "wILL")
+// makes it a possible name.
+func ordinaryWord(written, common string) bool {
+	return written == strings.ToLower(written) && commonWords[common]
 }

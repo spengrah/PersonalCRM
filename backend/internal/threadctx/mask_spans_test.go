@@ -102,6 +102,7 @@ func TestMask_NameSpansKeepOrdinaryWords(t *testing.T) {
 		{"several words, each lower-case and common", threadctx.Dictionary{Own: own}, "ask my sister about it", "my sister", "ask my sister about it"},
 		{"a lower-case word that is no common word", threadctx.Dictionary{Own: own}, "ask quenbry about it", "quenbry", "ask NAME_1 about it"},
 		{"a common word capitalized mid-sentence", threadctx.Dictionary{Own: own}, "ask Will about it", "Will", "ask NAME_1 about it"},
+		{"a common word with an upper-case letter past its first", threadctx.Dictionary{Own: own}, "ask wILL about it", "wILL", "ask NAME_1 about it"},
 		{"a common word capitalized at the start of a sentence", threadctx.Dictionary{Own: own}, "Will asked about it", "Will", "NAME_1 asked about it"},
 		{"a lower-case common word with a capitalized word", threadctx.Dictionary{Own: own}, "ask aunt Rose about it", "aunt Rose", "ask NAME_1 about it"},
 		{"a lower-case common word a contact holds as a name", contactsNamed("Will Brannock"), "talked to will about it", "will", "talked to will about it"},
