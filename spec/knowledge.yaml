@@ -1216,6 +1216,22 @@ behaviors:
         text: a stored stage-1 rerun's before_window record is counted unjudged with that reason
     provenance: [scorecard.Reader.scoreFlags, crm-admin --scorecard, crm-admin --langfuse-export, .agents/spec/2026-10-18-message-flags-and-threads.md G13 SC10, coordinator ruling PR3-R1]
 
+  - id: KNW-091
+    title: The name model container turns texts into person spans, on demand, and holds nothing else
+    type: api
+    status: current
+    surface: none
+    given: a request to the name model's socket, POST /v1/spans with a model, a label, a threshold and texts
+    when: the container answers it
+    then:
+      - for each text, in the order sent, it returns the ranges the model labels with the label at a score of the threshold or more, as half-open UTF-8 byte ranges into the text exactly as sent, covering the whole text whatever its length, a name that a division of a long text splits included
+      - an empty text has no spans, and the response carries no text
+      - a request for any model other than the one its image holds, a threshold outside (0, 1], an empty label, or texts that are missing or not all strings is refused with 422 and no spans, and an unknown path is never answered with spans
+      - a connection while the model is down starts it and is answered once the model has loaded; the model exits after an idle period, and with its units stopped a request fails at once
+      - it runs under its memory cap with no network, no database and no credentials, its weights in its image, and writes no text to its logs or its disk
+    provenance: [name-model/name_model/server.py, name-model/units, scripts/deploy-artifact.sh swap_model, name-model/tests/test_endpoint.py, .agents/spec/2026-10-21-masking-fixes.md G6 G9 HC2 D2]
+    notes: The coverage scanner reads no Python, so the endpoint tests in name-model/tests reference this behavior in prose. The on-demand start, idle exit and memory cap are shown by a live capture on the Pi, not by a test.
+
   - id: KNW-088
     title: The Langfuse export sends each scorecard metric as its own numeric score
     type: data

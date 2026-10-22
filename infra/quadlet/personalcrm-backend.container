@@ -31,11 +31,18 @@ Environment=LOG_LEVEL=info
 Environment=MIGRATIONS_PATH=/migrations
 # Published to loopback for the native Caddy edge (/api/* -> 127.0.0.1:8080).
 PublishPort=127.0.0.1:8080:8080
+# The name model's Unix socket (personalcrm-name-model.socket, which the deploy
+# installs). The directory is mounted rather than the socket file, so a socket
+# its unit recreates stays reachable; ExecStartPre below creates the directory,
+# so the backend also starts on a host with no model installed yet.
+Volume=%t/personalcrm-name-model:/run/name-model
+Environment=NAME_MODEL_SOCKET=/run/name-model/name-model.sock
 
 [Service]
 Restart=always
 RestartSec=5s
 TimeoutStopSec=30s
+ExecStartPre=/bin/mkdir -p %t/personalcrm-name-model
 # Boot/restart health gate (distroless image has no curl, so gate host-side against
 # the published port). Restores parity with the old native ExecStartPost curl gate:
 # the unit isn't "active" until /health (incl. DB) returns 200; else Restart=always.

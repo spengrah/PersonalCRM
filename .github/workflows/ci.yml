@@ -19,6 +19,7 @@ jobs:
       mac_daemon: ${{ steps.filter.outputs.mac_daemon }}
       scripts: ${{ steps.filter.outputs.scripts }}
       spec: ${{ steps.filter.outputs.spec }}
+      name_model: ${{ steps.filter.outputs.name_model }}
       frontend_inputs: ${{ steps.filter.outputs.frontend_inputs }}
     steps:
       - uses: actions/checkout@v4
@@ -388,6 +389,26 @@ jobs:
         # The suites use no DB and no network, and no macOS-only binary is
         # reached outside a stub, so they run on the standard Ubuntu runner.
         run: make test-deploy-scripts
+
+  # The name model container's endpoint tests (KNW-091). Standard-library
+  # Python with a fake model: no GLiNER, torch or weights on the runner.
+  name-model-tests:
+    name: Name Model Tests
+    runs-on: ubuntu-latest
+    needs: changes
+    if: ${{ needs.changes.outputs.name_model == 'true' }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          # The image's Python (name-model/Dockerfile).
+          python-version: '3.12'
+
+      - name: Run name model endpoint tests
+        run: make test-name-model
 
   frontend-tests:
     name: Frontend Tests

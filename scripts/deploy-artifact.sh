@@ -1,20 +1,28 @@
 #!/bin/bash
 # PersonalCRM artifact deploy (rootless Podman Quadlet edition).
 #
-# Promotes a single, already-built GHCR image (tagged :<sha>) to prod. Runs ON
-# THE PI AS ROOT (via one sudoers entry), but EVERY podman/systemctl op against
-# the crm runtime runs as the crm user (rootless store), never root's. The only
-# genuine-root ops live inside backup-db.sh / restore-db.sh (the cold volume cp).
+# Promotes a single, already-built GHCR image (tagged :<sha>) to prod, with the
+# name model image that revision names. Runs ON THE PI AS ROOT (via one sudoers
+# entry), but EVERY podman/systemctl op against the crm runtime runs as the crm
+# user (rootless store), never root's. The only genuine-root ops live inside
+# backup-db.sh / restore-db.sh (the cold volume cp).
 #
 # Flow:
-#   validate SHA -> read rollback anchor from the live units -> pull :<sha> ->
-#   pre-deploy offsite backup ->
+#   validate SHA -> read rollback anchors from the live units -> pull :<sha> ->
+#   read the model image tag the backend image names -> pull it if the host
+#   runs another -> pre-deploy offsite backup ->
 #   migrate-check via the NEW image:
 #     exit 0 (up-to-date): swap Image=, restart app, health-gate (no DB touched).
 #     exit 2 (pending):    stop app -> snapshot -> start DB -> migrate -> swap ->
 #                          start app -> health-gate. ANY failure after migrate
 #                          succeeds routes to ROLLBACK-WITH-RESTORE.
 #     exit 1/other:        abort before touching anything.
+#
+# The name model rides with the app: each swap installs the model's units from
+# the image the revision names (only when that differs from the one the host
+# runs), and each rollback reinstalls the units of the image it ran before. The
+# model starts on demand through its socket, so no step here starts the model
+# itself and the health gate never reaches it.
 #
 # Usage: deploy-artifact.sh <40-hex-sha>
 #
@@ -38,6 +46,15 @@ BACKEND_UNIT="${BACKEND_UNIT:-$QUADLET_DIR/personalcrm-backend.container}"
 FRONTEND_UNIT="${FRONTEND_UNIT:-$QUADLET_DIR/personalcrm-frontend.container}"
 BACKEND_REPO="${BACKEND_REPO:-ghcr.io/spengrah/personalcrm-backend}"
 FRONTEND_REPO="${FRONTEND_REPO:-ghcr.io/spengrah/personalcrm-frontend}"
+# The name model: a Quadlet container started on demand by a user socket unit.
+# Its image tag follows the model's own sources, not the deployed SHA: the build
+# stamps it on the backend image as MODEL_TAG_LABEL (name-model/image-tag.sh).
+SYSTEMD_USER_DIR="${SYSTEMD_USER_DIR:-$CRM_HOME/.config/systemd/user}"
+MODEL_UNIT="${MODEL_UNIT:-$QUADLET_DIR/personalcrm-name-model.container}"
+MODEL_SOCKET_UNIT="${MODEL_SOCKET_UNIT:-$SYSTEMD_USER_DIR/personalcrm-name-model.socket}"
+MODEL_REPO="${MODEL_REPO:-ghcr.io/spengrah/personalcrm-name-model}"
+MODEL_TAG_LABEL="org.personalcrm.name-model.tag"
+MODEL_IMAGE_UNITS="/opt/name-model/units"
 ENV_FILE="${DEPLOY_ENV_FILE:-/srv/personalcrm/.env}"
 PODMAN_NETWORK="${PODMAN_NETWORK:-crm}"
 MIGRATIONS_PATH="${DEPLOY_MIGRATIONS_PATH:-/migrations}"
@@ -103,6 +120,9 @@ read_image_tag() {
     sed -n 's/^Image=//p' "$1" | head -1
 }
 
+# valid_model_tag: 0 iff arg is a model image tag, "src-" + 40 lowercase hex.
+valid_model_tag() { [[ "$1" =~ ^src-[0-9a-f]{40}$ ]]; }
+
 # rollback_ref_for <repo> <container> <unit>: resolve the immutable rollback ref.
 # If the unit pins :<40-hex-sha> -> repo:<that-sha> (deterministic).
 # If it pins :latest (or anything else mutable) -> resolve the RUNNING image
@@ -139,6 +159,57 @@ pin_image() {
         echo "error: Image= rewrite of $unit did not take (got '$got', want '$ref')" >&2
         return 1
     fi
+}
+
+# model_tag_of <backend-ref>: the model image tag the backend image's label
+# names (podman prints "<no value>" for a missing label; valid_model_tag
+# rejects it).
+model_tag_of() {
+    crm_podman image inspect --format "{{index .Labels \"$MODEL_TAG_LABEL\"}}" "$1"
+}
+
+# copy_model_unit <ref> <name> <dest>: write the unit file <name> held in model
+# image <ref> to <dest>, owned by the crm user. Fails on an empty read.
+copy_model_unit() {
+    local ref="$1" name="$2" dest="$3"
+    crm_podman run --rm --network none --entrypoint cat "$ref" "$MODEL_IMAGE_UNITS/$name" \
+        | sudo -u "$CRM_USER" tee "$dest" >/dev/null \
+        && [ -s "$dest" ]
+}
+
+# swap_model <ref>: put the host on model image <ref>. A no-op when the
+# installed unit already pins <ref>, so a revision that changes no model source
+# leaves the model untouched. Otherwise it installs both units from <ref> (the
+# container unit's Image= pinned to <ref>), stops a model still running the old
+# image, and restarts the socket on the new units: the next request starts the
+# new image. Nothing here starts the model.
+swap_model() {
+    local ref="$1"
+    if [ -f "$MODEL_UNIT" ] && [ "$(read_image_tag "$MODEL_UNIT")" = "$ref" ]; then
+        return 0
+    fi
+    log "installing name model units from $ref"
+    sudo -u "$CRM_USER" mkdir -p "$(dirname "$MODEL_UNIT")" "$(dirname "$MODEL_SOCKET_UNIT")" \
+        && copy_model_unit "$ref" personalcrm-name-model.container "$MODEL_UNIT.new" \
+        && pin_image "$MODEL_UNIT.new" "$ref" \
+        && copy_model_unit "$ref" personalcrm-name-model.socket "$MODEL_SOCKET_UNIT.new" \
+        && sudo -u "$CRM_USER" mv -f "$MODEL_UNIT.new" "$MODEL_UNIT" \
+        && sudo -u "$CRM_USER" mv -f "$MODEL_SOCKET_UNIT.new" "$MODEL_SOCKET_UNIT" \
+        && crm_ctl daemon-reload \
+        && crm_ctl stop personalcrm-name-model.service \
+        && crm_ctl enable personalcrm-name-model.socket \
+        && crm_ctl restart personalcrm-name-model.socket
+}
+
+# rollback_model: reinstall the model image the host ran before this deploy.
+# Best-effort, like the rolled-back app's start: a host that ran no model
+# before keeps the new units idle, since nothing older to restore exists.
+rollback_model() {
+    if [ -z "$MODEL_ROLLBACK_REF" ]; then
+        log "no name model was installed before this deploy; its new units stay installed, idle"
+        return 0
+    fi
+    swap_model "$MODEL_ROLLBACK_REF" || log "warning: name model rollback to $MODEL_ROLLBACK_REF failed"
 }
 
 # run_migrate_admin runs crm-admin from the NEW image. The image ENTRYPOINT is
@@ -227,6 +298,7 @@ post_migrate_swap() {
         && pin_image "$FRONTEND_UNIT" "$FRONTEND_REPO:$SHA" \
         && crm_ctl daemon-reload \
         && crm_ctl start personalcrm-backend.service personalcrm-frontend.service \
+        && swap_model "$MODEL_REF" \
         && health_gate "$SHA"
 }
 
@@ -265,8 +337,10 @@ rollback_with_restore() {
         exit 1
     fi
 
-    # 4. Start the app on the OLD image + restored OLD DB.
+    # 4. Start the app on the OLD image + restored OLD DB, and put the model
+    #    back on the image the OLD revision named.
     crm_ctl start personalcrm-backend.service personalcrm-frontend.service || true
+    rollback_model
     health_gate || log "rolled-back stack health-gate did not pass (best-effort)"
 
     ROLLED_BACK=true
@@ -365,8 +439,15 @@ XDG="/run/user/$CRM_UID"
 log "resolving rollback anchors from live units"
 BACKEND_ROLLBACK_REF="$(rollback_ref_for "$BACKEND_REPO" crm-backend "$BACKEND_UNIT")"
 FRONTEND_ROLLBACK_REF="$(rollback_ref_for "$FRONTEND_REPO" crm-frontend "$FRONTEND_UNIT")"
+# The model's anchor is the image its installed unit pins (always a tag this
+# script wrote); empty on a host where no deploy has installed the model yet.
+MODEL_ROLLBACK_REF=""
+if [ -f "$MODEL_UNIT" ]; then
+    MODEL_ROLLBACK_REF="$(read_image_tag "$MODEL_UNIT")"
+fi
 log "backend rollback ref: $(short_ref "$BACKEND_ROLLBACK_REF")"
 log "frontend rollback ref: $(short_ref "$FRONTEND_ROLLBACK_REF")"
+log "name model rollback ref: ${MODEL_ROLLBACK_REF:-<none installed>}"
 
 # Pull both :<sha> images (fail fast, no DB touched).
 log "pulling $BACKEND_REPO:$SHA and $FRONTEND_REPO:$SHA"
@@ -375,6 +456,27 @@ if ! crm_podman pull "$BACKEND_REPO:$SHA" || ! crm_podman pull "$FRONTEND_REPO:$
     log "image pull failed; aborting before touching the DB"
     DONE=1
     exit 1
+fi
+
+# The model image this revision names, pulled only when the host runs another.
+MODEL_TAG="$(model_tag_of "$BACKEND_REPO:$SHA" || true)"
+if ! valid_model_tag "$MODEL_TAG"; then
+    ntfy "Deploy aborted" "high" "warning" "$SHA names no name model image; no changes applied"
+    log "backend image names no valid name model tag (got '$MODEL_TAG'); aborting before touching the DB"
+    DONE=1
+    exit 1
+fi
+MODEL_REF="$MODEL_REPO:$MODEL_TAG"
+if [ "$MODEL_REF" = "$MODEL_ROLLBACK_REF" ]; then
+    log "name model unchanged ($MODEL_TAG); not pulling it"
+else
+    log "pulling $MODEL_REF"
+    if ! crm_podman pull "$MODEL_REF"; then
+        ntfy "Deploy aborted" "high" "warning" "$SHA name model image missing/pull failed; no changes applied"
+        log "name model image pull failed; aborting before touching the DB"
+        DONE=1
+        exit 1
+    fi
 fi
 
 log "pre-deploy offsite backup"
@@ -399,18 +501,19 @@ case "$CHECK_RC" in
         pin_image "$FRONTEND_UNIT" "$FRONTEND_REPO:$SHA"
         crm_ctl daemon-reload
         crm_ctl restart personalcrm-backend.service personalcrm-frontend.service
-        if health_gate "$SHA"; then
+        if swap_model "$MODEL_REF" && health_gate "$SHA"; then
             ntfy "Deploy OK" "default" "white_check_mark" "Deployed $SHA (migrated=no)"
             log "deploy OK (migrated=no)"
             DONE=1
             exit 0
         fi
         # Health failed: re-pin rollback, restart. No DB was touched -> no restore.
-        log "health-gate failed on up-to-date path; rolling back image (no DB restore needed)"
+        log "health-gate or model swap failed on up-to-date path; rolling back images (no DB restore needed)"
         pin_image "$BACKEND_UNIT" "$BACKEND_ROLLBACK_REF"
         pin_image "$FRONTEND_UNIT" "$FRONTEND_ROLLBACK_REF"
         crm_ctl daemon-reload
         crm_ctl restart personalcrm-backend.service personalcrm-frontend.service
+        rollback_model
         # Health-gate the rolled-back stack (best-effort) so we don't report a
         # clean rollback while prod is still unhealthy on the OLD image too.
         health_gate || log "rolled-back stack health-gate did not pass (best-effort)"

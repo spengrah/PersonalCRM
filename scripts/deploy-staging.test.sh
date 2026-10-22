@@ -153,7 +153,8 @@ test_workflow_no_trusted_knob() {
     for knob in CRM_USER CRM_HOME QUADLET_DIR BACKEND_UNIT FRONTEND_UNIT \
                 BACKEND_REPO FRONTEND_REPO DEPLOY_ENV_FILE PODMAN_NETWORK \
                 DEPLOY_MIGRATIONS_PATH BACKUP_SCRIPT RESTORE_SCRIPT \
-                NTFY_ENV_FILE HEALTH_RETRIES; do
+                NTFY_ENV_FILE HEALTH_RETRIES SYSTEMD_USER_DIR MODEL_UNIT \
+                MODEL_SOCKET_UNIT MODEL_REPO; do
         if wf_lacks "$knob"; then ok; else fail "workflow leaks trusted knob '$knob'"; fi
     done
 }

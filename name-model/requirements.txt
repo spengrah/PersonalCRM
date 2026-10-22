@@ -1,0 +1,4 @@
+gliner==0.2.17
+transformers==4.48.3
+huggingface_hub==0.28.1
+sentencepiece==0.2.0
