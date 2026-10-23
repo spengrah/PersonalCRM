@@ -8,8 +8,9 @@ const ME = 'Me'
 
 /**
  * One message as the thread page draws it: "{sender} · {time}" on one line, the
- * sender semibold and blue for the user's own, then the text. Children, the
- * message's chips, follow the text. The message is the target of every link to
+ * sender semibold and blue for the user's own, then the text. An email's quoted
+ * history follows the text, collapsed until the user opens it. Children, the
+ * message's chips, follow. The message is the target of every link to
  * it, and shows highlighted while a link has just taken the user there.
  */
 export function Message({
@@ -49,6 +50,19 @@ export function Message({
       <div data-message-text className="whitespace-pre-wrap text-[15px] text-gray-900">
         {message.text}
       </div>
+      {message.quoted_history && (
+        <details data-message-quoted-history>
+          <summary className="cursor-pointer text-xs font-medium text-gray-500 hover:text-gray-700">
+            Quoted history
+          </summary>
+          <div
+            data-quoted-history-text
+            className="mt-1 whitespace-pre-wrap border-l-2 border-gray-200 pl-3 text-sm text-gray-600"
+          >
+            {message.quoted_history}
+          </div>
+        </details>
+      )}
       {children}
     </div>
   )

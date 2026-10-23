@@ -795,13 +795,16 @@ export interface ReviewRunsResponse {
 }
 /**
  * ThreadMessageResponse is one message of a thread: its key, its sender ("Me"
- * for the user's own, else the contact's name), its time and its text.
+ * for the user's own, else the contact's name), its time and its text. An
+ * email that starts its thread carrying earlier mail has that mail as its
+ * quoted_history, absent for every other message.
  */
 export interface ThreadMessageResponse {
   message_key: string;
   sender: string;
   sent_at: string;
   text: string;
+  quoted_history?: string;
 }
 /**
  * ThreadPositionResponse is a thread's place in the list as the filters keep

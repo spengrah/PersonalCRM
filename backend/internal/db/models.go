@@ -225,6 +225,7 @@ type CommsMessage struct {
 	ProcessedAt       *time.Time `json:"processed_at"`
 	DeletedAt         *time.Time `json:"deleted_at"`
 	CreatedAt         time.Time  `json:"created_at"`
+	QuotedHistory     *string    `json:"quoted_history"`
 }
 
 type Contact struct {

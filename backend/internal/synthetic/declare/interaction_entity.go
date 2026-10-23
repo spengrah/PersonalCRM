@@ -40,6 +40,7 @@ type interactionPlanProps struct {
 	burst         *int
 	speakerHandle string
 	groupThread   bool
+	quote         string
 }
 
 type InteractionProp func(*interactionPlanProps)
@@ -60,6 +61,13 @@ func GroupThread(speakerHandle string) InteractionProp {
 		p.speakerHandle = speakerHandle
 		p.groupThread = true
 	}
+}
+
+// StartsThreadQuoting turns an email MessageInteraction into the message that
+// starts its thread carrying the quoted earlier mail below its text, as an
+// introduction received fresh does.
+func StartsThreadQuoting(quote string) InteractionProp {
+	return func(p *interactionPlanProps) { p.quote = quote }
 }
 
 type messageInteractionPlan struct {
@@ -94,6 +102,9 @@ func (p *messageInteractionPlan) validate() error {
 	}
 	if p.props.groupThread && strings.TrimSpace(p.props.speakerHandle) == "" {
 		return fmt.Errorf("message interaction %q: GroupThread speaker handle must be non-empty", p.name)
+	}
+	if p.props.quote != "" && p.source != "email" {
+		return fmt.Errorf("message interaction %q: StartsThreadQuoting is only valid for email", p.name)
 	}
 	return nil
 }
@@ -138,6 +149,9 @@ func (p *phoneCallInteractionPlan) validate() error {
 	}
 	if p.props.groupThread {
 		return fmt.Errorf("phone call interaction %q: GroupThread is not valid", p.name)
+	}
+	if p.props.quote != "" {
+		return fmt.Errorf("phone call interaction %q: StartsThreadQuoting is not valid", p.name)
 	}
 	return nil
 }
@@ -188,6 +202,9 @@ func (p *loggedInteractionPlan) validate() error {
 	}
 	if p.props.groupThread {
 		return fmt.Errorf("logged interaction %q: GroupThread is not valid", p.name)
+	}
+	if p.props.quote != "" {
+		return fmt.Errorf("logged interaction %q: StartsThreadQuoting is not valid", p.name)
 	}
 	return nil
 }
@@ -275,7 +292,8 @@ func runMessageInteraction(ctx context.Context, h *replay.Harness, p *messageInt
 
 	switch p.source {
 	case "email":
-		msg := gen.GmailMessage(targetSpec, factory.MatchSeeded, factory.WithMessageAge(age))
+		shape := factory.GmailMessageShape{StartsThread: p.props.quote != "", Quote: p.props.quote}
+		msg := gen.GmailMessageWithShape(targetSpec, factory.MatchSeeded, shape, factory.WithMessageAge(age))
 		if _, err := h.ReplayGmail(ctx, contactID, msg); err != nil {
 			return Seeded{}, fmt.Errorf("replay email interaction %q: %w", p.name, err)
 		}

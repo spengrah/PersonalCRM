@@ -310,7 +310,7 @@ func (q *Queries) CountLiveMatchedChatMessage(ctx context.Context, arg CountLive
 }
 
 const GetCommsMessage = `-- name: GetCommsMessage :one
-SELECT id, source, external_id, thread_id, subject, body, snippet, peer_handle, peer_normalized, direction, sent_at, account_id, source_metadata, matched_contact_id, interaction_id, claimed_at, claimed_session_ref, processed_at, deleted_at, created_at FROM comms_message
+SELECT id, source, external_id, thread_id, subject, body, snippet, peer_handle, peer_normalized, direction, sent_at, account_id, source_metadata, matched_contact_id, interaction_id, claimed_at, claimed_session_ref, processed_at, deleted_at, created_at, quoted_history FROM comms_message
 WHERE source = $1
   AND external_id = $2
   AND matched_contact_id = $3
@@ -349,12 +349,13 @@ func (q *Queries) GetCommsMessage(ctx context.Context, arg GetCommsMessageParams
 		&i.ProcessedAt,
 		&i.DeletedAt,
 		&i.CreatedAt,
+		&i.QuotedHistory,
 	)
 	return &i, err
 }
 
 const GetCommsMessageByID = `-- name: GetCommsMessageByID :one
-SELECT id, source, external_id, thread_id, subject, body, snippet, peer_handle, peer_normalized, direction, sent_at, account_id, source_metadata, matched_contact_id, interaction_id, claimed_at, claimed_session_ref, processed_at, deleted_at, created_at FROM comms_message
+SELECT id, source, external_id, thread_id, subject, body, snippet, peer_handle, peer_normalized, direction, sent_at, account_id, source_metadata, matched_contact_id, interaction_id, claimed_at, claimed_session_ref, processed_at, deleted_at, created_at, quoted_history FROM comms_message
 WHERE id = $1
   AND deleted_at IS NULL
 `
@@ -383,12 +384,13 @@ func (q *Queries) GetCommsMessageByID(ctx context.Context, id uuid.UUID) (*Comms
 		&i.ProcessedAt,
 		&i.DeletedAt,
 		&i.CreatedAt,
+		&i.QuotedHistory,
 	)
 	return &i, err
 }
 
 const GetCommsMessageByReplyTarget = `-- name: GetCommsMessageByReplyTarget :one
-SELECT id, source, external_id, thread_id, subject, body, snippet, peer_handle, peer_normalized, direction, sent_at, account_id, source_metadata, matched_contact_id, interaction_id, claimed_at, claimed_session_ref, processed_at, deleted_at, created_at FROM comms_message
+SELECT id, source, external_id, thread_id, subject, body, snippet, peer_handle, peer_normalized, direction, sent_at, account_id, source_metadata, matched_contact_id, interaction_id, claimed_at, claimed_session_ref, processed_at, deleted_at, created_at, quoted_history FROM comms_message
 WHERE source = $1
   AND matched_contact_id = $2
   AND thread_id = $3
@@ -442,6 +444,7 @@ func (q *Queries) GetCommsMessageByReplyTarget(ctx context.Context, arg GetComms
 		&i.ProcessedAt,
 		&i.DeletedAt,
 		&i.CreatedAt,
+		&i.QuotedHistory,
 	)
 	return &i, err
 }
@@ -470,7 +473,7 @@ func (q *Queries) GetCommsMessageContainer(ctx context.Context, id uuid.UUID) (*
 }
 
 const GetCommsMessageLatestByExternalID = `-- name: GetCommsMessageLatestByExternalID :one
-SELECT id, source, external_id, thread_id, subject, body, snippet, peer_handle, peer_normalized, direction, sent_at, account_id, source_metadata, matched_contact_id, interaction_id, claimed_at, claimed_session_ref, processed_at, deleted_at, created_at FROM comms_message
+SELECT id, source, external_id, thread_id, subject, body, snippet, peer_handle, peer_normalized, direction, sent_at, account_id, source_metadata, matched_contact_id, interaction_id, claimed_at, claimed_session_ref, processed_at, deleted_at, created_at, quoted_history FROM comms_message
 WHERE source = $1
   AND external_id = $2
   AND deleted_at IS NULL
@@ -512,6 +515,7 @@ func (q *Queries) GetCommsMessageLatestByExternalID(ctx context.Context, arg Get
 		&i.ProcessedAt,
 		&i.DeletedAt,
 		&i.CreatedAt,
+		&i.QuotedHistory,
 	)
 	return &i, err
 }
@@ -605,7 +609,7 @@ func (q *Queries) ListCommsContainersForContact(ctx context.Context, contactID *
 }
 
 const ListCommsMessagesByContact = `-- name: ListCommsMessagesByContact :many
-SELECT id, source, external_id, thread_id, subject, body, snippet, peer_handle, peer_normalized, direction, sent_at, account_id, source_metadata, matched_contact_id, interaction_id, claimed_at, claimed_session_ref, processed_at, deleted_at, created_at FROM comms_message
+SELECT id, source, external_id, thread_id, subject, body, snippet, peer_handle, peer_normalized, direction, sent_at, account_id, source_metadata, matched_contact_id, interaction_id, claimed_at, claimed_session_ref, processed_at, deleted_at, created_at, quoted_history FROM comms_message
 WHERE matched_contact_id = $1
   AND deleted_at IS NULL
 ORDER BY sent_at DESC, id
@@ -642,6 +646,7 @@ func (q *Queries) ListCommsMessagesByContact(ctx context.Context, matchedContact
 			&i.ProcessedAt,
 			&i.DeletedAt,
 			&i.CreatedAt,
+			&i.QuotedHistory,
 		); err != nil {
 			return nil, err
 		}
@@ -654,7 +659,7 @@ func (q *Queries) ListCommsMessagesByContact(ctx context.Context, matchedContact
 }
 
 const ListCommsMessagesByInteractionIDs = `-- name: ListCommsMessagesByInteractionIDs :many
-SELECT id, source, external_id, thread_id, subject, body, snippet, peer_handle, peer_normalized, direction, sent_at, account_id, source_metadata, matched_contact_id, interaction_id, claimed_at, claimed_session_ref, processed_at, deleted_at, created_at FROM comms_message
+SELECT id, source, external_id, thread_id, subject, body, snippet, peer_handle, peer_normalized, direction, sent_at, account_id, source_metadata, matched_contact_id, interaction_id, claimed_at, claimed_session_ref, processed_at, deleted_at, created_at, quoted_history FROM comms_message
 WHERE interaction_id = ANY($1::uuid[]) AND deleted_at IS NULL
 `
 
@@ -688,6 +693,7 @@ func (q *Queries) ListCommsMessagesByInteractionIDs(ctx context.Context, interac
 			&i.ProcessedAt,
 			&i.DeletedAt,
 			&i.CreatedAt,
+			&i.QuotedHistory,
 		); err != nil {
 			return nil, err
 		}
@@ -700,7 +706,7 @@ func (q *Queries) ListCommsMessagesByInteractionIDs(ctx context.Context, interac
 }
 
 const ListCommsMessagesByThreadWindow = `-- name: ListCommsMessagesByThreadWindow :many
-SELECT id, source, external_id, thread_id, subject, body, snippet, peer_handle, peer_normalized, direction, sent_at, account_id, source_metadata, matched_contact_id, interaction_id, claimed_at, claimed_session_ref, processed_at, deleted_at, created_at FROM comms_message
+SELECT id, source, external_id, thread_id, subject, body, snippet, peer_handle, peer_normalized, direction, sent_at, account_id, source_metadata, matched_contact_id, interaction_id, claimed_at, claimed_session_ref, processed_at, deleted_at, created_at, quoted_history FROM comms_message
 WHERE source = $1 AND thread_id = $2
   AND sent_at >= $3 AND sent_at <= $4
   AND deleted_at IS NULL
@@ -749,6 +755,7 @@ func (q *Queries) ListCommsMessagesByThreadWindow(ctx context.Context, arg ListC
 			&i.ProcessedAt,
 			&i.DeletedAt,
 			&i.CreatedAt,
+			&i.QuotedHistory,
 		); err != nil {
 			return nil, err
 		}
@@ -850,8 +857,8 @@ type ListEmailBodiesForQuoteTrimRow struct {
 // --trim-email-quotes), paged by id > @after_id. gmail_message_id is the
 // observing account's per-mailbox gmail id (the upsert's account_gmail_ids
 // key, '__unknown__' when account_id is NULL); with thread_id and subject it
-// tells a message stored whole from a reply. html is the stored source HTML,
-// ” when absent.
+// tells a thread start and a forward from a reply. html is the stored source
+// HTML, ” when absent.
 func (q *Queries) ListEmailBodiesForQuoteTrim(ctx context.Context, arg ListEmailBodiesForQuoteTrimParams) ([]*ListEmailBodiesForQuoteTrimRow, error) {
 	rows, err := q.db.Query(ctx, ListEmailBodiesForQuoteTrim, arg.AfterID, arg.BatchSize)
 	if err != nil {
@@ -962,7 +969,7 @@ func (q *Queries) ListUnmatchedCommsPeerCounts(ctx context.Context, arg ListUnma
 }
 
 const ListUnprocessedCommsByContact = `-- name: ListUnprocessedCommsByContact :many
-SELECT id, source, external_id, thread_id, subject, body, snippet, peer_handle, peer_normalized, direction, sent_at, account_id, source_metadata, matched_contact_id, interaction_id, claimed_at, claimed_session_ref, processed_at, deleted_at, created_at FROM comms_message
+SELECT id, source, external_id, thread_id, subject, body, snippet, peer_handle, peer_normalized, direction, sent_at, account_id, source_metadata, matched_contact_id, interaction_id, claimed_at, claimed_session_ref, processed_at, deleted_at, created_at, quoted_history FROM comms_message
 WHERE source = $1
   AND matched_contact_id = $2
   AND processed_at IS NULL
@@ -1009,6 +1016,7 @@ func (q *Queries) ListUnprocessedCommsByContact(ctx context.Context, arg ListUnp
 			&i.ProcessedAt,
 			&i.DeletedAt,
 			&i.CreatedAt,
+			&i.QuotedHistory,
 		); err != nil {
 			return nil, err
 		}
@@ -1021,7 +1029,7 @@ func (q *Queries) ListUnprocessedCommsByContact(ctx context.Context, arg ListUnp
 }
 
 const ListUnprocessedCommsByContactAndChat = `-- name: ListUnprocessedCommsByContactAndChat :many
-SELECT id, source, external_id, thread_id, subject, body, snippet, peer_handle, peer_normalized, direction, sent_at, account_id, source_metadata, matched_contact_id, interaction_id, claimed_at, claimed_session_ref, processed_at, deleted_at, created_at FROM comms_message
+SELECT id, source, external_id, thread_id, subject, body, snippet, peer_handle, peer_normalized, direction, sent_at, account_id, source_metadata, matched_contact_id, interaction_id, claimed_at, claimed_session_ref, processed_at, deleted_at, created_at, quoted_history FROM comms_message
 WHERE source = $1
   AND matched_contact_id = $2
   AND thread_id = $3
@@ -1069,6 +1077,7 @@ func (q *Queries) ListUnprocessedCommsByContactAndChat(ctx context.Context, arg 
 			&i.ProcessedAt,
 			&i.DeletedAt,
 			&i.CreatedAt,
+			&i.QuotedHistory,
 		); err != nil {
 			return nil, err
 		}
@@ -1475,7 +1484,7 @@ INSERT INTO comms_message (
 ) VALUES (
     $1, $2, $3, $4, $5, $6, $7
 )
-RETURNING id, source, external_id, thread_id, subject, body, snippet, peer_handle, peer_normalized, direction, sent_at, account_id, source_metadata, matched_contact_id, interaction_id, claimed_at, claimed_session_ref, processed_at, deleted_at, created_at
+RETURNING id, source, external_id, thread_id, subject, body, snippet, peer_handle, peer_normalized, direction, sent_at, account_id, source_metadata, matched_contact_id, interaction_id, claimed_at, claimed_session_ref, processed_at, deleted_at, created_at, quoted_history
 `
 
 type TestInsertCommsMessageLinkedParams struct {
@@ -1523,26 +1532,30 @@ func (q *Queries) TestInsertCommsMessageLinked(ctx context.Context, arg TestInse
 		&i.ProcessedAt,
 		&i.DeletedAt,
 		&i.CreatedAt,
+		&i.QuotedHistory,
 	)
 	return &i, err
 }
 
-const UpdateCommsMessageBody = `-- name: UpdateCommsMessageBody :execrows
+const UpdateCommsMessageText = `-- name: UpdateCommsMessageText :execrows
 UPDATE comms_message
-SET body = $1
-WHERE id = $2
+SET body = $1,
+    quoted_history = $2
+WHERE id = $3
   AND deleted_at IS NULL
 `
 
-type UpdateCommsMessageBodyParams struct {
-	Body *string   `json:"body"`
-	ID   uuid.UUID `json:"id"`
+type UpdateCommsMessageTextParams struct {
+	Body          *string   `json:"body"`
+	QuotedHistory *string   `json:"quoted_history"`
+	ID            uuid.UUID `json:"id"`
 }
 
-// Rewrite one stored body. Only the one-time quote trim writes here; ingest
-// never rewrites content (UpsertCommsMessage keeps the first writer's).
-func (q *Queries) UpdateCommsMessageBody(ctx context.Context, arg UpdateCommsMessageBodyParams) (int64, error) {
-	result, err := q.db.Exec(ctx, UpdateCommsMessageBody, arg.Body, arg.ID)
+// Rewrite one stored email's body and quoted history together. Only the
+// one-time quote trim writes here; ingest never rewrites content
+// (UpsertCommsMessage keeps the first writer's).
+func (q *Queries) UpdateCommsMessageText(ctx context.Context, arg UpdateCommsMessageTextParams) (int64, error) {
+	result, err := q.db.Exec(ctx, UpdateCommsMessageText, arg.Body, arg.QuotedHistory, arg.ID)
 	if err != nil {
 		return 0, err
 	}
@@ -1563,7 +1576,7 @@ INSERT INTO comms_message (
 ON CONFLICT (source, external_id, matched_contact_id) WHERE deleted_at IS NULL
 DO UPDATE SET source = comms_message.source
 WHERE comms_message.deleted_at IS NULL
-RETURNING id, source, external_id, thread_id, subject, body, snippet, peer_handle, peer_normalized, direction, sent_at, account_id, source_metadata, matched_contact_id, interaction_id, claimed_at, claimed_session_ref, processed_at, deleted_at, created_at
+RETURNING id, source, external_id, thread_id, subject, body, snippet, peer_handle, peer_normalized, direction, sent_at, account_id, source_metadata, matched_contact_id, interaction_id, claimed_at, claimed_session_ref, processed_at, deleted_at, created_at, quoted_history
 `
 
 type UpsertChatCommsMessageMatchedParams struct {
@@ -1635,6 +1648,7 @@ func (q *Queries) UpsertChatCommsMessageMatched(ctx context.Context, arg UpsertC
 		&i.ProcessedAt,
 		&i.DeletedAt,
 		&i.CreatedAt,
+		&i.QuotedHistory,
 	)
 	return &i, err
 }
@@ -1652,7 +1666,7 @@ INSERT INTO comms_message (
 ON CONFLICT (source, external_id) WHERE matched_contact_id IS NULL AND deleted_at IS NULL
 DO UPDATE SET source = comms_message.source
 WHERE comms_message.deleted_at IS NULL
-RETURNING id, source, external_id, thread_id, subject, body, snippet, peer_handle, peer_normalized, direction, sent_at, account_id, source_metadata, matched_contact_id, interaction_id, claimed_at, claimed_session_ref, processed_at, deleted_at, created_at
+RETURNING id, source, external_id, thread_id, subject, body, snippet, peer_handle, peer_normalized, direction, sent_at, account_id, source_metadata, matched_contact_id, interaction_id, claimed_at, claimed_session_ref, processed_at, deleted_at, created_at, quoted_history
 `
 
 type UpsertChatCommsMessageUnmatchedParams struct {
@@ -1710,18 +1724,19 @@ func (q *Queries) UpsertChatCommsMessageUnmatched(ctx context.Context, arg Upser
 		&i.ProcessedAt,
 		&i.DeletedAt,
 		&i.CreatedAt,
+		&i.QuotedHistory,
 	)
 	return &i, err
 }
 
 const UpsertCommsMessage = `-- name: UpsertCommsMessage :one
 INSERT INTO comms_message (
-    source, external_id, thread_id, subject, body, snippet,
+    source, external_id, thread_id, subject, body, quoted_history, snippet,
     peer_handle, peer_normalized, direction, sent_at, account_id,
     source_metadata, matched_contact_id
 ) VALUES (
-    $1, $2, $3, $4, $5, $6,
-    $7, $8, $9, $10, $11,
+    $1, $2, $3, $4, $5, $6, $7,
+    $8, $9, $10, $11, $12,
     -- LEVEL 3 (outermost): set the per-account gmail id under
     -- account_gmail_ids.<account_id>. Lands only because LEVEL 2 seeded the
     -- parent object first (jsonb_set does NOT create intermediate parents).
@@ -1733,29 +1748,29 @@ INSERT INTO comms_message (
             -- LEVEL 1 (innermost): union observed_accounts[] into the caller's
             -- metadata (add @account_id only if absent).
             jsonb_set(
-                $12::jsonb,
+                $13::jsonb,
                 '{observed_accounts}',
                 CASE
-                    WHEN $11::text IS NULL THEN
-                        COALESCE($12::jsonb->'observed_accounts', '[]'::jsonb)
-                    WHEN COALESCE($12::jsonb->'observed_accounts', '[]'::jsonb)
-                         @> to_jsonb(ARRAY[$11::text]) THEN
-                        COALESCE($12::jsonb->'observed_accounts', '[]'::jsonb)
+                    WHEN $12::text IS NULL THEN
+                        COALESCE($13::jsonb->'observed_accounts', '[]'::jsonb)
+                    WHEN COALESCE($13::jsonb->'observed_accounts', '[]'::jsonb)
+                         @> to_jsonb(ARRAY[$12::text]) THEN
+                        COALESCE($13::jsonb->'observed_accounts', '[]'::jsonb)
                     ELSE
-                        COALESCE($12::jsonb->'observed_accounts', '[]'::jsonb)
-                            || to_jsonb(ARRAY[$11::text])
+                        COALESCE($13::jsonb->'observed_accounts', '[]'::jsonb)
+                            || to_jsonb(ARRAY[$12::text])
                 END,
                 TRUE
             ),
             '{account_gmail_ids}',
-            COALESCE($12::jsonb->'account_gmail_ids', '{}'::jsonb),
+            COALESCE($13::jsonb->'account_gmail_ids', '{}'::jsonb),
             TRUE
         ),
-        ARRAY['account_gmail_ids', COALESCE($11::text, '__unknown__')],
-        to_jsonb($13::text),
+        ARRAY['account_gmail_ids', COALESCE($12::text, '__unknown__')],
+        to_jsonb($14::text),
         TRUE
     ),
-    $14
+    $15
 )
 ON CONFLICT (source, external_id, matched_contact_id) WHERE deleted_at IS NULL
 DO UPDATE SET
@@ -1768,14 +1783,14 @@ DO UPDATE SET
                 comms_message.source_metadata,
                 '{observed_accounts}',
                 CASE
-                    WHEN $11::text IS NULL THEN
+                    WHEN $12::text IS NULL THEN
                         COALESCE(comms_message.source_metadata->'observed_accounts', '[]'::jsonb)
                     WHEN COALESCE(comms_message.source_metadata->'observed_accounts', '[]'::jsonb)
-                         @> to_jsonb(ARRAY[$11::text]) THEN
+                         @> to_jsonb(ARRAY[$12::text]) THEN
                         COALESCE(comms_message.source_metadata->'observed_accounts', '[]'::jsonb)
                     ELSE
                         COALESCE(comms_message.source_metadata->'observed_accounts', '[]'::jsonb)
-                            || to_jsonb(ARRAY[$11::text])
+                            || to_jsonb(ARRAY[$12::text])
                 END,
                 TRUE
             ),
@@ -1783,12 +1798,12 @@ DO UPDATE SET
             COALESCE(comms_message.source_metadata->'account_gmail_ids', '{}'::jsonb),
             TRUE
         ),
-        ARRAY['account_gmail_ids', COALESCE($11::text, '__unknown__')],
-        to_jsonb($13::text),
+        ARRAY['account_gmail_ids', COALESCE($12::text, '__unknown__')],
+        to_jsonb($14::text),
         TRUE
     )
 WHERE comms_message.deleted_at IS NULL
-RETURNING id, source, external_id, thread_id, subject, body, snippet, peer_handle, peer_normalized, direction, sent_at, account_id, source_metadata, matched_contact_id, interaction_id, claimed_at, claimed_session_ref, processed_at, deleted_at, created_at
+RETURNING id, source, external_id, thread_id, subject, body, snippet, peer_handle, peer_normalized, direction, sent_at, account_id, source_metadata, matched_contact_id, interaction_id, claimed_at, claimed_session_ref, processed_at, deleted_at, created_at, quoted_history
 `
 
 type UpsertCommsMessageParams struct {
@@ -1797,6 +1812,7 @@ type UpsertCommsMessageParams struct {
 	ThreadID         *string    `json:"thread_id"`
 	Subject          *string    `json:"subject"`
 	Body             *string    `json:"body"`
+	QuotedHistory    *string    `json:"quoted_history"`
 	Snippet          *string    `json:"snippet"`
 	PeerHandle       *string    `json:"peer_handle"`
 	PeerNormalized   *string    `json:"peer_normalized"`
@@ -1832,6 +1848,7 @@ func (q *Queries) UpsertCommsMessage(ctx context.Context, arg UpsertCommsMessage
 		arg.ThreadID,
 		arg.Subject,
 		arg.Body,
+		arg.QuotedHistory,
 		arg.Snippet,
 		arg.PeerHandle,
 		arg.PeerNormalized,
@@ -1864,6 +1881,7 @@ func (q *Queries) UpsertCommsMessage(ctx context.Context, arg UpsertCommsMessage
 		&i.ProcessedAt,
 		&i.DeletedAt,
 		&i.CreatedAt,
+		&i.QuotedHistory,
 	)
 	return &i, err
 }

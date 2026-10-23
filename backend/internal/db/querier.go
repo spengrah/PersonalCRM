@@ -1505,8 +1505,8 @@ type Querier interface {
 	// --trim-email-quotes), paged by id > @after_id. gmail_message_id is the
 	// observing account's per-mailbox gmail id (the upsert's account_gmail_ids
 	// key, '__unknown__' when account_id is NULL); with thread_id and subject it
-	// tells a message stored whole from a reply. html is the stored source HTML,
-	// '' when absent.
+	// tells a thread start and a forward from a reply. html is the stored source
+	// HTML, '' when absent.
 	ListEmailBodiesForQuoteTrim(ctx context.Context, arg ListEmailBodiesForQuoteTrimParams) ([]*ListEmailBodiesForQuoteTrimRow, error)
 	// Returns (value_normalized, contact_id) for every email contact_method of a
 	// non-deleted contact. MANY-TO-ONE allowed: a shared address (joint inbox /
@@ -1777,6 +1777,11 @@ type Querier interface {
 	ListThreadMessageKeys(ctx context.Context, venueIds []uuid.UUID) ([]*ListThreadMessageKeysRow, error)
 	// The live contacts that take part in each given thread, by name.
 	ListThreadParticipants(ctx context.Context, venueIds []uuid.UUID) ([]*ListThreadParticipantsRow, error)
+	// The quoted history of each email of one thread that stores one, by its
+	// thread_content message_key, read once however many per-contact copies hold
+	// the email. Only the thread read reads it: the thread_content view carries no
+	// quoted history, so no decision-model context holds one.
+	ListThreadQuotedHistories(ctx context.Context, venueID uuid.UUID) ([]*ListThreadQuotedHistoriesRow, error)
 	// Reads of the Threads tab. A thread is a venue holding content; its content
 	// comes from the one definition of a thread's content, the thread_content view
 	// (migrations 091 and 096), and its participants from the effective
@@ -3339,9 +3344,10 @@ type Querier interface {
 	// Dedup re-aggregate: on a corroborating write, raise confidence (SP1 rule:
 	// max(existing, incoming)) and recompute trust_tier. trust_tier is nullable.
 	UpdateAssertionConfidenceTrust(ctx context.Context, arg UpdateAssertionConfidenceTrustParams) error
-	// Rewrite one stored body. Only the one-time quote trim writes here; ingest
-	// never rewrites content (UpsertCommsMessage keeps the first writer's).
-	UpdateCommsMessageBody(ctx context.Context, arg UpdateCommsMessageBodyParams) (int64, error)
+	// Rewrite one stored email's body and quoted history together. Only the
+	// one-time quote trim writes here; ingest never rewrites content
+	// (UpsertCommsMessage keeps the first writer's).
+	UpdateCommsMessageText(ctx context.Context, arg UpdateCommsMessageTextParams) (int64, error)
 	// Profile-only update path. Writes name, cadence, profile_photo — NEVER
 	// writes last_contacted, last_outreach_at, last_response_at, contact_by,
 	// or the location/birthday/how_met cache columns (those flow from the

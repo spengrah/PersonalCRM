@@ -76,12 +76,15 @@ type ReviewRunsResponse struct {
 }
 
 // ThreadMessageResponse is one message of a thread: its key, its sender ("Me"
-// for the user's own, else the contact's name), its time and its text.
+// for the user's own, else the contact's name), its time and its text. An
+// email that starts its thread carrying earlier mail has that mail as its
+// quoted_history, absent for every other message.
 type ThreadMessageResponse struct {
-	MessageKey string    `json:"message_key"`
-	Sender     string    `json:"sender"`
-	SentAt     time.Time `json:"sent_at"`
-	Text       string    `json:"text"`
+	MessageKey    string    `json:"message_key"`
+	Sender        string    `json:"sender"`
+	SentAt        time.Time `json:"sent_at"`
+	Text          string    `json:"text"`
+	QuotedHistory *string   `json:"quoted_history,omitempty"`
 }
 
 // ThreadPositionResponse is a thread's place in the list as the filters keep

@@ -23,13 +23,15 @@ type EmailQuoteTrimResult struct {
 // Concrete: *repository.CommsMessageRepository.
 type quoteTrimCommsRepo interface {
 	ListEmailBodies(ctx context.Context, afterID uuid.UUID, batchSize int32) ([]repository.EmailBodyRow, error)
-	UpdateBody(ctx context.Context, id uuid.UUID, body *string) (int64, error)
+	UpdateText(ctx context.Context, id uuid.UUID, body, quotedHistory *string) (int64, error)
 }
 
-// EmailQuoteTrimService applies the ingest's quote rule (messageText) once to
-// email bodies stored before ingest applied it. It reads only what the row
-// stores, so it makes no Gmail calls. Idempotent: a trimmed body trims to
-// itself, so a second run changes nothing.
+// EmailQuoteTrimService applies the ingest's text rule (storedText) once to
+// email bodies stored before ingest applied it: a thread start's quoted mail
+// moves to its quoted history, a forward's content is capped and a reply's
+// quotes are dropped. It reads only what the row stores, so it makes no Gmail
+// calls. It writes only a row whose body the rule changes, so a second run
+// changes nothing.
 type EmailQuoteTrimService struct {
 	comms quoteTrimCommsRepo
 }
@@ -39,8 +41,8 @@ func NewEmailQuoteTrimService(comms quoteTrimCommsRepo) *EmailQuoteTrimService {
 	return &EmailQuoteTrimService{comms: comms}
 }
 
-// TrimStoredBodies pages every live email row by id and rewrites each body the
-// rule changes.
+// TrimStoredBodies pages every live email row by id and rewrites the body and
+// quoted history of each row whose body the rule changes.
 func (s *EmailQuoteTrimService) TrimStoredBodies(ctx context.Context) (EmailQuoteTrimResult, error) {
 	var result EmailQuoteTrimResult
 	afterID := uuid.Nil
@@ -54,12 +56,12 @@ func (s *EmailQuoteTrimService) TrimStoredBodies(ctx context.Context) (EmailQuot
 		}
 		for _, row := range rows {
 			result.Scanned++
-			body := storedMessageText(row)
-			if body == row.Body {
+			text := storedRowText(row)
+			if text.body == row.Body {
 				continue
 			}
-			if _, err := s.comms.UpdateBody(ctx, row.ID, strPtrIfNotEmpty(body)); err != nil {
-				return result, fmt.Errorf("update body: %w", err)
+			if _, err := s.comms.UpdateText(ctx, row.ID, strPtrIfNotEmpty(text.body), strPtrIfNotEmpty(text.quoted)); err != nil {
+				return result, fmt.Errorf("update text: %w", err)
 			}
 			result.Trimmed++
 		}
@@ -67,13 +69,13 @@ func (s *EmailQuoteTrimService) TrimStoredBodies(ctx context.Context) (EmailQuot
 	}
 }
 
-// storedMessageText re-derives a stored row's body with messageText. The row
-// keeps no separate plain part: a body equal to its stripped HTML came from
-// the HTML part, and any other body is the plain part.
-func storedMessageText(row repository.EmailBodyRow) string {
+// storedRowText re-derives a stored row's text with storedText. The row keeps
+// no separate plain part: a body equal to its stripped HTML came from the HTML
+// part, and any other body is the plain part.
+func storedRowText(row repository.EmailBodyRow) emailText {
 	plain := row.Body
 	if row.HTML != "" && stripHTML(row.HTML) == row.Body {
 		plain = ""
 	}
-	return messageText(plain, row.HTML, keepsQuotedMail(row.GmailMessageID, row.ThreadID, row.Subject))
+	return storedText(plain, row.HTML, mailKindOf(row.GmailMessageID, row.ThreadID, row.Subject))
 }

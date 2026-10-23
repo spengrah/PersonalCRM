@@ -46,9 +46,12 @@
 //	                              only backfills display names.
 //
 //	--trim-email-quotes
-//	                              One-time catchup: apply the ingest's quote
-//	                              rule (ING-047) to stored email bodies, so a
-//	                              reply keeps only its new text. Reads only
+//	                              One-time catchup: apply the ingest's text
+//	                              rule (ING-047) to stored emails, so each body
+//	                              is the email's own text: a thread start's
+//	                              quoted mail moves to its quoted history, a
+//	                              forward's content is capped and a reply's
+//	                              quotes are dropped (ING-050). Reads only
 //	                              stored rows; no Gmail calls. Prints counts
 //	                              only. Idempotent — safe to re-run.
 //
@@ -812,8 +815,9 @@ func parseArgs(args []string) (runOptions, error) {
 			"Continue-on-error; exits non-zero iff any row failed. Idempotent — safe to "+
 			"re-run. Requires Google OAuth creds.")
 	fs.BoolVar(&opts.trimEmailQuotes, "trim-email-quotes", false,
-		"One-time catchup: drop quoted earlier mail from stored email reply bodies "+
-			"(the ingest's quote rule). No Gmail calls. Idempotent — safe to re-run.")
+		"One-time catchup: store each stored email's own text as its body, a thread start's "+
+			"quoted mail apart and a forward's content capped (the ingest's text rule). "+
+			"No Gmail calls. Idempotent — safe to re-run.")
 	fs.BoolVar(&opts.resetGmailBackfill, "reset-gmail-backfill-cursors", false,
 		"Rewind enabled Gmail sync cursors to each row's backfill floor, mark them due, "+
 			"and clear error state. Prints counts only.")

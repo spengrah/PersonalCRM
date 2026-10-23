@@ -84,7 +84,7 @@ func TestHistoricalRunAsksTheNameModelOnlyForWhatItLacks(t *testing.T) {
 		require.NoError(t, err)
 		e.names.reset()
 		text := "the changed text"
-		_, err = repository.NewCommsMessageRepository(e.database.Queries).UpdateBody(e.ctx, changed, &text)
+		_, err = repository.NewCommsMessageRepository(e.database.Queries).UpdateText(e.ctx, changed, &text, nil)
 		require.NoError(t, err)
 
 		_, err = e.tryJudgeDays("2026-01-01", "2026-01-02", methods{jevKey: m}, jevKey, false)

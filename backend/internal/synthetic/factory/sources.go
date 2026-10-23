@@ -99,6 +99,13 @@ type GmailMessageShape struct {
 	// ThreadID places the message in an existing thread, such as an earlier
 	// spec's Message.ThreadId. Empty gives the message a thread of its own.
 	ThreadID string
+	// StartsThread gives the message the thread its own Gmail id names, as
+	// Gmail does for the message that starts a thread in the mailbox. It
+	// overrides ThreadID.
+	StartsThread bool
+	// Quote is earlier mail the message carries below its text, as a mail
+	// client quotes it. Empty carries none.
+	Quote string
 	// To and Cc are further recipients, after the account or peer the message is
 	// addressed to by default.
 	To []GmailAddress
@@ -136,9 +143,13 @@ const (
 	GmailCalendarAttachment
 )
 
-// gmailPayload returns the MIME tree for a layout, carrying headers at its root.
-func gmailPayload(layout GmailCalendarLayout, headers []*gmailapi.MessagePartHeader) *gmailapi.MessagePart {
-	const body = "synthetic email body"
+// gmailPayload returns the MIME tree for a layout, carrying headers at its
+// root, with the quote below the text when one is given.
+func gmailPayload(layout GmailCalendarLayout, headers []*gmailapi.MessagePartHeader, quote string) *gmailapi.MessagePart {
+	body := "synthetic email body"
+	if quote != "" {
+		body += "\n\n" + quote
+	}
 	leaf := func(mime, data string) *gmailapi.MessagePart {
 		return &gmailapi.MessagePart{MimeType: mime, Body: &gmailapi.MessagePartBody{Data: encodeBody(data), Size: int64(len(data))}}
 	}
@@ -210,7 +221,10 @@ func (g *Generator) GmailMessageWithShape(target ContactSpec, intent MatchIntent
 	sentAt := g.at(-(2 * time.Hour) - mo.age)
 	gmailID := g.Prefix() + "gid-" + fmt.Sprint(g.sourceIDSeq)
 	threadID := shape.ThreadID
-	if threadID == "" {
+	switch {
+	case shape.StartsThread:
+		threadID = gmailID
+	case threadID == "":
 		threadID = g.Prefix() + "thr-" + fmt.Sprint(g.sourceIDSeq)
 	}
 
@@ -240,7 +254,7 @@ func (g *Generator) GmailMessageWithShape(target ContactSpec, intent MatchIntent
 		InternalDate: sentAt.UnixMilli(),
 		Snippet:      "synthetic snippet",
 		LabelIds:     []string{label},
-		Payload:      gmailPayload(shape.Calendar, headers),
+		Payload:      gmailPayload(shape.Calendar, headers, shape.Quote),
 	}
 	// The persisted external_id strips the angle brackets.
 	return GmailMessageSpec{

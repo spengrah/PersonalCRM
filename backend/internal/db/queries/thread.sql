@@ -61,3 +61,21 @@ JOIN venue v ON v.node_id = t.venue_id;
 SELECT EXISTS (
     SELECT 1 FROM thread_content
     WHERE venue_id = sqlc.arg('venue_id')::uuid AND message_key = sqlc.arg('message_key')::text);
+
+-- name: ListThreadQuotedHistories :many
+-- The quoted history of each email of one thread that stores one, by its
+-- thread_content message_key, read once however many per-contact copies hold
+-- the email. Only the thread read reads it: the thread_content view carries no
+-- quoted history, so no decision-model context holds one.
+SELECT DISTINCT ON (cm.external_id)
+       (cm.source || ':' || cm.external_id)::text AS message_key,
+       cm.quoted_history::text AS quoted_history
+FROM comms_message cm
+JOIN venue v
+  ON v.source = cm.source
+ AND v.source_container_id = cm.thread_id
+WHERE v.node_id = @venue_id
+  AND cm.source = 'email'
+  AND cm.quoted_history IS NOT NULL
+  AND cm.deleted_at IS NULL
+ORDER BY cm.external_id, cm.id;
