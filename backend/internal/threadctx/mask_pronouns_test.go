@@ -30,6 +30,12 @@ func TestMask_PronounsAreNeverNames(t *testing.T) {
 		}
 	}
 
+	// No name match crosses a pronoun: the stored phrase's other words are
+	// capitalized known-name words, each masked alone.
+	t.Run("a message that is a whole stored phrase holding a pronoun", func(t *testing.T) {
+		assert.Equal(t, "It NAME_1 NAME_1 It NAME_1", maskWith(t, phrases, dm("It Is What It Is")).Entries()[0].Text)
+	})
+
 	t.Run("a capitalized It's with a contact named It", func(t *testing.T) {
 		for _, text := range apostrophes("It's good to see you") {
 			assert.Equal(t, text, maskWith(t, contactsNamed("It Sorensen"), dm(text)).Entries()[0].Text)
