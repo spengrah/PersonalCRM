@@ -57,6 +57,25 @@ func TestMask_PronounsAreNeverNames(t *testing.T) {
 		}
 	}
 
+	// One span over a pronoun and a name masks every part but the pronoun,
+	// the ordinary words beside the name included, as the span did whole.
+	for _, tc := range []struct{ text, span, want string }{
+		{"Quenbry and I saw will", "Quenbry and I saw will", "NAME_1 I NAME_2"},
+		{"I'll call Quenbry tomorrow", "I'll call Quenbry", "I'll NAME_1 tomorrow"},
+		{"it was Quenbry and I", "it was Quenbry and I", "it NAME_1 I"},
+	} {
+		t.Run("one name span over a pronoun and an unknown name: "+tc.text, func(t *testing.T) {
+			masked := maskSpans(t, threadctx.Dictionary{Own: own}, dm(tc.text), map[string][]threadctx.NameSpan{tc.text: {over(t, tc.text, tc.span)}})
+			assert.Equal(t, tc.want, masked.Entries()[0].Text)
+		})
+	}
+
+	t.Run("one name span over a pronoun and lower-case common words", func(t *testing.T) {
+		const text = "and I saw it there"
+		masked := maskSpans(t, threadctx.Dictionary{Own: own}, dm(text), map[string][]threadctx.NameSpan{text: {over(t, text, "and I saw it")}})
+		assert.Equal(t, text, masked.Entries()[0].Text)
+	})
+
 	t.Run("a name span over I beside a span over an unknown name", func(t *testing.T) {
 		const text = "I'll call Quenbry tomorrow"
 		masked := maskSpans(t, threadctx.Dictionary{Own: own}, dm(text), map[string][]threadctx.NameSpan{text: {over(t, text, "I"), over(t, text, "Quenbry")}})
