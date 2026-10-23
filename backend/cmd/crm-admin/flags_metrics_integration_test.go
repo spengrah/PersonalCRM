@@ -334,7 +334,7 @@ func TestScorecardCountsJudgedUnjudgedAndFlaggedMessages(t *testing.T) {
 	t.Run("a message_over_limit message in a night whose other messages were judged", func(t *testing.T) {
 		// spec: KNW-087.judged-unjudged-flagged-counted, KNW-087.unjudged-never-a-no
 		e := newFlagsEnv(t, "")
-		th, keys, _ := e.nightOf(t, filler(0), filler(1), filler(2), huge, filler(4), filler(5))
+		th, keys, _ := e.nightOf(t, filler(0), filler(1), filler(2), oversized, filler(4), filler(5))
 		limit := e.windowLimit(t, fakeDefinition(jevKey, roomy), th, jan(5, 0), 4, 4)
 		set := methods{jevKey: e.method(jevKey, newVendor(t), decision.Limits{Tokens: limit, Questions: 1 << 20})}
 		e.judgeMonth(t, set, jevKey)
