@@ -1278,13 +1278,15 @@ behaviors:
       - key: contractions-stay-whole
         text: a contraction that does not end in 's, is a common word and is no known name ("I'll", "don't") stays whole, and no part of it is masked as a name; a lower-case word ending in 's whose head is a common word ("it's", "let's") stays whole too
       - key: known-apostrophized-name-masked
-        text: a known name written with an apostrophe ("Teal'c") is masked like any other name, even where the word list holds it as a contraction
+        text: a known name written with an apostrophe ("Teal'c") is masked like any other name, even where the word list holds it as a contraction, unless a personal pronoun heads it
+      - key: pronouns-never-names
+        text: a personal pronoun (I, me, you, he, she, it, we, they, us, them), in any case, and a contraction headed by one ("I'll", "I'd", "It's", "we're") is never masked as a name and stays whole, even where a known name holds the word or the contraction
       - key: lowercase-common-words-kept
         text: a common English word written in lower case is never masked as a name, even when a contact's name holds it
       - key: capitalized-known-name-masked
         text: a known name that is also a common word is masked when capitalized, at the start of a sentence too
       - key: possessive-suffix-kept
-        text: a word ending in 's is its head word and a suffix, and the head is masked by the rule every word is, so a possessive of a known name ("Emily's") and a capitalized contraction whose head is a known name ("It's" with a contact named It) are masked with the suffix kept beside the placeholder, and a possessive of a word that is no name stays intact
+        text: a word ending in 's is its head word and a suffix, and the head is masked by the rule every word is, so a possessive of a known name ("Emily's") and a capitalized contraction whose head is a known name ("Mine's" with a contact named Mine) are masked with the suffix kept beside the placeholder, and a possessive of a word that is no name stays intact
       - key: unknown-capitalized-kept
         text: no rule masks a word for being capitalized and unknown, so a capitalized word no known name holds ("Happy New Year", "Rose", an invented word) survives the dictionary; the name model finds unknown names
       - key: address-header-words-masked
@@ -1310,6 +1312,8 @@ behaviors:
         text: the masker masks the union of the dictionary's matches and the name spans, every masked range taking its placeholder from the one per-request placeholder map, so a span over an unknown name becomes a numbered placeholder shared across entries, a span over a participant's alias its role label and a span over the user's own name ME; overlapping ranges are masked whole, a span is widened to every word it touches, and a known name the model misses is still masked
       - key: lowercase-common-spans-kept
         text: a name span every word of which is a common English word written in lower case, judged by the masker's common-word list and its 's split, masks nothing, and any other span masks every word it touches, whole
+      - key: pronoun-spans-kept
+        text: a personal pronoun or a contraction headed by one ("I", "I'll", "You're"), in any case, counts as an ordinary word in a name span, so a span made only of such words and lower-case common words masks nothing
       - key: no-spans-no-send
         text: a request with a text the name model has not covered is not sent, and the run records its cut-off as it records a failed call (call_failed), whether the socket has no listener, the model answers a non-success status or refuses the model identity, the deadline expires, or the answer does not align with the texts asked or holds a span that is not a range of whole characters of its text; a rerun once the model answers sends it, and a run with NAME_MODEL_SOCKET unset fails before any call
       - key: threshold-setting
