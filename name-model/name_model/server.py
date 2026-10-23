@@ -12,6 +12,8 @@ import http.server
 import json
 import math
 import re
+import select
+import socket
 import socketserver
 import sys
 
@@ -23,6 +25,10 @@ WORD = re.compile(r"\w+(?:[-_]\w+)*|\S")
 
 class RequestError(Exception):
     """A request the server cannot answer as asked: a 422."""
+
+
+class ClientGone(Exception):
+    """The client closed its connection before its answer was ready."""
 
 
 def parse_request(body, model_name):
@@ -76,10 +82,17 @@ def windows(text, window_words, overlap_words):
     return ranges
 
 
-def text_spans(model, text, label, threshold):
-    """The model's spans of text at threshold or more, as UTF-8 byte ranges."""
+def text_spans(model, text, label, threshold, client_gone):
+    """The model's spans of text at threshold or more, as UTF-8 byte ranges.
+
+    It asks client_gone before each window and raises ClientGone once the
+    client has gone away, so an abandoned request holds the server for at
+    most one more window.
+    """
     found = set()
     for lo, hi in windows(text, model.window_words, model.overlap_words):
+        if client_gone():
+            raise ClientGone
         for start, end, score in model.predict(text[lo:hi], label, threshold):
             if score >= threshold and 0 <= start < end <= hi - lo:
                 found.add((lo + start, lo + end))
@@ -118,7 +131,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._send(422, {"error": str(e)})
             return
         try:
-            spans = [text_spans(model, t, label, threshold) for t in texts]
+            spans = [text_spans(model, t, label, threshold, self._client_gone) for t in texts]
+        except ClientGone:
+            self.log_message("client went away; request dropped")
+            self.close_connection = True
+            return
         except Exception as e:  # noqa: BLE001 - log the type only: a message may quote text
             self.log_message("inference failed: %s", type(e).__name__)
             self._send(500, {"error": "inference failed"})
@@ -130,13 +147,28 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
     def _send(self, status, payload):
         data = json.dumps(payload).encode()
-        self.send_response(status)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(data)))
-        self.send_header("Connection", "close")
-        self.end_headers()
-        self.wfile.write(data)
         self.close_connection = True
+        try:
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(data)))
+            self.send_header("Connection", "close")
+            self.end_headers()
+            self.wfile.write(data)
+        except (BrokenPipeError, ConnectionResetError):
+            self.log_message("client went away before its answer")
+
+    def _client_gone(self):
+        """Whether the client has closed its connection. A client waiting for
+        its answer sends nothing, so a readable connection that holds no data
+        is one the client has closed."""
+        readable, _, _ = select.select([self.connection], [], [], 0)
+        if not readable:
+            return False
+        try:
+            return self.connection.recv(1, socket.MSG_PEEK) == b""
+        except ConnectionError:
+            return True
 
     def log_message(self, format, *args):
         # The request line holds the method and path only; no body is logged.

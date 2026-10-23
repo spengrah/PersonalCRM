@@ -20,16 +20,26 @@ import (
 )
 
 // Deadline bounds one request: Start for the model to start and load, which
-// a request after the model went idle waits for, and PerText for each text it
-// answers.
+// a request after the model went idle waits for, PerText for each text it
+// answers, and PerCharacter for each character of those texts.
 type Deadline struct {
-	Start, PerText time.Duration
+	Start, PerText, PerCharacter time.Duration
 }
 
-// DefaultDeadline covers the model's cold start, about 25 s on the Pi, and a
-// text's answer, about half a second at the median, each with room for a slow
-// load and a long email.
-var DefaultDeadline = Deadline{Start: 90 * time.Second, PerText: 5 * time.Second}
+// DefaultDeadline allows twice what the Pi needs, measured 2026-10-23: a cold
+// start of about 30 s, about 1.5 s for a short text, and about 16 ms per word
+// once a text is long. A word holds at least one character, so 32 ms per
+// character covers any text however it divides into words.
+var DefaultDeadline = Deadline{Start: 90 * time.Second, PerText: 5 * time.Second, PerCharacter: 32 * time.Millisecond}
+
+// of returns the time a request for the texts may take.
+func (d Deadline) of(texts []string) time.Duration {
+	total := d.Start
+	for _, text := range texts {
+		total += d.PerText + time.Duration(utf8.RuneCountInString(text))*d.PerCharacter
+	}
+	return total
+}
 
 // Client asks the name model for spans.
 type Client struct {
@@ -92,7 +102,7 @@ func (c *Client) Spans(ctx context.Context, model threadctx.ModelVersion, texts 
 	if err != nil {
 		return nil, fmt.Errorf("name model: encode request: %w", err)
 	}
-	ctx, cancel := context.WithTimeout(ctx, c.deadline.Start+time.Duration(len(texts))*c.deadline.PerText)
+	ctx, cancel := context.WithTimeout(ctx, c.deadline.of(texts))
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://name-model/v1/spans", bytes.NewReader(body))
 	if err != nil {
