@@ -1316,6 +1316,10 @@ behaviors:
         text: a personal pronoun or a contraction headed by one ("I", "I'll", "You're"), in any case, counts as an ordinary word in a name span, so a span made only of such words and lower-case common words masks nothing
       - key: no-spans-no-send
         text: a request with a text the name model has not covered is not sent, and the run records its cut-off as it records a failed call (call_failed), whether the socket has no listener, the model answers a non-success status or refuses the model identity, the deadline expires, or the answer does not align with the texts asked or holds a span that is not a range of whole characters of its text; a rerun once the model answers sends it, and a run with NAME_MODEL_SOCKET unset fails before any call
+      - key: abandoned-request-stops
+        text: a request whose caller has given up, by its deadline or a cancellation, stops the name model's work on it, so a request sent after it is answered within its own deadline
+      - key: deadline-covers-length
+        text: a request's deadline grows with the length of the texts it carries, allowing at least twice what the model needs on the production host (about 1.5 s per 128-word window, measured 2026-10-23, after a cold start of about 30 s), so a long text the model can read is not cut off by a deadline counted in texts
       - key: threshold-setting
         text: the run asks the model at the cutoff NAME_MODEL_THRESHOLD sets, 0.5 when unset; the cutoff is part of the model version, which every masked method's version and every stored span's key derive from, so a change to it makes a rerun judge again and ask the model again, and equal values written differently ("0.5", "0.50") are one version; a value that is not a number or lies outside (0, 1] is refused when the configuration loads, before any call
     provenance: [threadctx.Masker.Cover, threadctx.NameSpans, threadctx.ModelVersion, namemodel.Client, repository.NameSpanRepository, decision.NewMaskedMethod, config.DecisionConfig, migrations/104_message_name_span, .agents/spec/2026-10-21-masking-fixes.md G6 G7 G8 HC2 HC3 SC6 SC7]
