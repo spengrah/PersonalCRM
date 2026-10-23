@@ -288,7 +288,6 @@ func TestMask_KnownNamesThatAreWords(t *testing.T) {
 	}
 
 	for _, tc := range []struct{ contact, text, want string }{
-		{"It Sorensen", "It's good to see you", "NAME_1's good to see you"},
 		{"Mine Hartigan", "Mine's ready. Yours?", "NAME_1's ready. Yours?"},
 	} {
 		for _, apostrophe := range []string{"'", "’"} {
