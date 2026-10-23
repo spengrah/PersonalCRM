@@ -45,7 +45,7 @@ func TestJudgeMonthReportsContentFree(t *testing.T) {
 		failing := e.newThread(t)
 		failing.say(t, jan(3, 9), false, "zanzibar failme in the garden")
 		huge := e.newThread(t)
-		huge.say(t, jan(3, 9), false, "zanzibar "+strings.Repeat("and the weather ", 400))
+		huge.say(t, jan(3, 9), false, oversized)
 		batch := e.newThread(t)
 		batch.sayFiller(t, jan(3, 9), false, 0)
 		for i := 1; i <= 5; i++ {
@@ -72,7 +72,7 @@ func TestJudgeMonthReportsContentFree(t *testing.T) {
 		e := newFlagsEnv(t, "")
 		th := e.chat(t, 6)
 		huge := e.newThread(t)
-		huge.say(t, jan(3, 9), false, "zanzibar "+strings.Repeat("and the weather ", 400))
+		huge.say(t, jan(3, 9), false, oversized)
 		v := newVendor(t)
 		limit := e.tokensFor(t, fakeDefinition(jevKey, roomy), decision.Request{Context: th.context(t, jan(4, 0))}, th.keys(t)[4])
 		m := e.method(jevKey, v, decision.Limits{Tokens: limit, Questions: 1 << 20})

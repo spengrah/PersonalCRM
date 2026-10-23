@@ -185,7 +185,9 @@ func TestJudgeMonthJudgesAnOverflowingNightInChunks(t *testing.T) {
 	// which no window holds, while the one whose larger chunk comes first fits.
 	t.Run("a night whose new messages fit two chunks only with the larger chunk first, judged in two chunks", func(t *testing.T) {
 		e := newFlagsEnv(t, "")
-		long := func(i int) string { return filler(i) + strings.Repeat("and the weather ", 60) }
+		// Each long message outweighs three short messages' flag questions, so
+		// the three short ones fit in a chunk measured from the two long ones.
+		long := func(i int) string { return filler(i) + strings.Repeat("and the weather ", 240) }
 		th, _, texts := e.nightOf(t, filler(0), "ok one", "ok two", "ok three", long(4), long(5))
 		limit := e.windowLimit(t, fakeDefinition(jevKey, roomy), th, second, 4, 4)
 		v := newVendor(t)
@@ -394,8 +396,8 @@ func TestJudgeMonthAsksBallInCourtInTheLastChunk(t *testing.T) {
 	}
 }
 
-// huge is a message that alone exceeds the limits a test sets.
-var huge = "zanzibar " + strings.Repeat("and the weather ", 400)
+// oversized is a message that alone exceeds the limits a test sets.
+var oversized = "zanzibar " + strings.Repeat("and the weather ", 1600)
 
 // A run of a new method version leaves no new message unjudged for lying
 // before its window: a new message that alone exceeds the method's limits is
@@ -430,7 +432,7 @@ func TestJudgeMonthLeavesNoNewMessageUnjudgedBeforeItsWindow(t *testing.T) {
 
 	t.Run("an oversized message in the middle of a night, unjudged with no flag decision while its neighbors are judged", func(t *testing.T) {
 		e := newFlagsEnv(t, "")
-		th, keys, _ := e.nightOf(t, filler(0), filler(1), filler(2), huge, filler(4), filler(5))
+		th, keys, _ := e.nightOf(t, filler(0), filler(1), filler(2), oversized, filler(4), filler(5))
 		limit := e.windowLimit(t, fakeDefinition(jevKey, roomy), th, jan(5, 0), 4, 4)
 		m := e.method(jevKey, newVendor(t), decision.Limits{Tokens: limit, Questions: 1 << 20})
 
@@ -450,7 +452,7 @@ func TestJudgeMonthLeavesNoNewMessageUnjudgedBeforeItsWindow(t *testing.T) {
 
 	t.Run("an oversized newest message, whose cut-off is reported incomplete with message_over_limit as stage 1 reports it", func(t *testing.T) {
 		e := newFlagsEnv(t, "")
-		th, keys, _ := e.nightOf(t, filler(0), filler(1), filler(2), huge)
+		th, keys, _ := e.nightOf(t, filler(0), filler(1), filler(2), oversized)
 		limit := 3 * e.tokensFor(t, fakeDefinition(jevKey, roomy), decision.Request{Context: th.context(t, jan(4, 0))}, keys[0])
 		v := newVendor(t)
 		m := e.method(jevKey, v, decision.Limits{Tokens: limit, Questions: 1 << 20})
@@ -545,7 +547,7 @@ func TestStoreReadsAChunkedNightAsOneJudgment(t *testing.T) {
 
 	t.Run("a chunked night holding an oversized message, which appears among its unjudged messages and not among its new messages", func(t *testing.T) {
 		e := newFlagsEnv(t, "")
-		th, keys, _ := e.nightOf(t, filler(0), filler(1), filler(2), huge, filler(4), filler(5))
+		th, keys, _ := e.nightOf(t, filler(0), filler(1), filler(2), oversized, filler(4), filler(5))
 		m := e.method(jevKey, newVendor(t), decision.Limits{Tokens: e.windowLimit(t, fakeDefinition(jevKey, roomy), th, second, 4, 4), Questions: 1 << 20})
 
 		e.judgeMonth(t, methods{jevKey: m}, jevKey)
