@@ -1,6 +1,7 @@
 package google
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -25,24 +26,32 @@ func reply(name string, payload *gmail.MessagePart, want string) quotedCase {
 	return quotedCase{name: name, gmailID: "g2", threadID: "g1", subject: "Re: Plan", payload: payload, want: want}
 }
 
+// processQuoted runs one inbound message with the case's ids, subject and
+// payload through processMessage and returns the row it stores.
+func processQuoted(t *testing.T, tc quotedCase) qualifiedRow {
+	t.Helper()
+	contactA := uuid.New()
+	knownMap := map[string][]uuid.UUID{"contact@example.com": {contactA}}
+	meSet := map[string]struct{}{"me@example.com": {}}
+	msg := buildMessage(t, tc.gmailID, tc.threadID, "Contact A <contact@example.com>",
+		[]string{"me@example.com"}, nil, nil, tc.subject, "", "<m1@example.com>", 1700000000000)
+	tc.payload.Headers = msg.Payload.Headers
+	msg.Payload = tc.payload
+
+	rows, err := newProviderForResolution().RunProcessMessageForTest(t.Context(), msg, "me@example.com", knownMap, meSet)
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	return rows[0]
+}
+
 // runQuotedCases stores each case's message and asserts its body.
 func runQuotedCases(t *testing.T, cases []quotedCase) {
 	t.Helper()
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			contactA := uuid.New()
-			knownMap := map[string][]uuid.UUID{"contact@example.com": {contactA}}
-			meSet := map[string]struct{}{"me@example.com": {}}
-			msg := buildMessage(t, tc.gmailID, tc.threadID, "Contact A <contact@example.com>",
-				[]string{"me@example.com"}, nil, nil, tc.subject, "", "<m1@example.com>", 1700000000000)
-			tc.payload.Headers = msg.Payload.Headers
-			msg.Payload = tc.payload
-
-			rows, err := newProviderForResolution().RunProcessMessageForTest(t.Context(), msg, "me@example.com", knownMap, meSet)
-			require.NoError(t, err)
-			require.Len(t, rows, 1)
-			require.NotNil(t, rows[0].Body)
-			require.Equal(t, tc.want, *rows[0].Body)
+			row := processQuoted(t, tc)
+			require.NotNil(t, row.Body)
+			require.Equal(t, tc.want, *row.Body)
 		})
 	}
 }
@@ -123,24 +132,109 @@ func TestQuotedMail_InlineReplyKeepsQuotes(t *testing.T) {
 	})
 }
 
-// spec: ING-047.thread-start-kept-whole
-func TestQuotedMail_ThreadStartKeptWhole(t *testing.T) {
-	const quoted = "Introducing you two.\n\nOn Mon, Contact A wrote:\n> Know anyone?\n"
-	const quotedHTML = `<div>Introducing you two.</div><blockquote>Know anyone?</blockquote>`
-	runQuotedCases(t, []quotedCase{
-		{name: "first message, plain", gmailID: "g1", threadID: "g1", subject: "Intro", payload: plainTextPart(quoted), want: quoted},
-		{name: "first message, html", gmailID: "g1", threadID: "g1", subject: "Intro", payload: htmlPart(quotedHTML), want: "Introducing you two. Know anyone?"},
-		{name: "unknown thread id, plain", gmailID: "g2", threadID: "", subject: "Re: Intro", payload: plainTextPart(quoted), want: quoted},
-		{name: "unknown thread id, html", gmailID: "g2", threadID: "", subject: "Re: Intro", payload: htmlPart(quotedHTML), want: "Introducing you two. Know anyone?"},
-		{name: "unknown message id, plain", gmailID: "", threadID: "g1", subject: "Re: Intro", payload: plainTextPart(quoted), want: quoted},
-		{name: "unknown message id, html", gmailID: "", threadID: "g1", subject: "Re: Intro", payload: htmlPart(quotedHTML), want: "Introducing you two. Know anyone?"},
-	})
+// threadStart is a message that starts its thread in the mailbox.
+func threadStart(name string, payload *gmail.MessagePart) quotedCase {
+	return quotedCase{name: name, gmailID: "g1", threadID: "g1", subject: "Intro", payload: payload}
 }
 
-// spec: ING-047.forward-kept-whole
-func TestQuotedMail_ForwardKeptWhole(t *testing.T) {
+// spec: ING-047.thread-start-quote-stored-apart
+func TestQuotedMail_ThreadStartStoresQuoteApart(t *testing.T) {
+	const plain = "Introducing you two.\n\nOn Mon, Contact A wrote:\n> Know anyone?\n"
+	const quotedHTML = `<div>Introducing you two.</div><blockquote>Know anyone?</blockquote>`
+	cases := []struct {
+		quotedCase
+		wantQuoted string
+	}{
+		{threadStart("first message, plain", plainTextPart(plain)), "On Mon, Contact A wrote:\n> Know anyone?"},
+		{threadStart("first message, html", htmlPart(quotedHTML)), "Know anyone?"},
+		{quotedCase{name: "unknown thread id", gmailID: "g2", threadID: "", subject: "Re: Intro", payload: plainTextPart(plain)}, "On Mon, Contact A wrote:\n> Know anyone?"},
+		{quotedCase{name: "unknown message id", gmailID: "", threadID: "g1", subject: "Re: Intro", payload: htmlPart(quotedHTML)}, "Know anyone?"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			row := processQuoted(t, tc.quotedCase)
+			require.NotNil(t, row.Body)
+			require.Equal(t, "Introducing you two.", *row.Body)
+			require.NotNil(t, row.QuotedHistory)
+			require.Equal(t, tc.wantQuoted, *row.QuotedHistory)
+		})
+	}
+}
+
+// quoteLines returns n quoted lines of width characters each, the line's
+// number then the character c repeated.
+func quoteLines(n, width int, c string) []string {
+	return numberedLines("> ", n, width, c)
+}
+
+// numberedLines returns n lines of width characters each: the prefix, the
+// line's number, then the character c repeated.
+func numberedLines(prefix string, n, width int, c string) []string {
+	lines := make([]string, n)
+	for i := range lines {
+		head := fmt.Sprintf("%s%03d ", prefix, i)
+		lines[i] = head + strings.Repeat(c, width-len(head))
+	}
+	return lines
+}
+
+// spec: ING-047.quoted-history-capped
+func TestQuotedMail_ThreadStartQuoteCapped(t *testing.T) {
+	const own = "Introducing you two."
+	const attribution = "On Mon, Contact A wrote:"
+	// The attribution line and its break take 25 characters, and each quoted
+	// line and its break 100, so line i starts at character 25+100i.
+	lines := quoteLines(100, 99, "q")
+	start := func(quote string) quotedCase {
+		return threadStart("", plainTextPart(own+"\n\n"+quote+"\n"))
+	}
+	cases := []struct {
+		name       string
+		tc         quotedCase
+		wantQuoted string
+	}{
+		{
+			name:       "over the cap, cut back to the line break before the 10,000th character",
+			tc:         start(attribution + "\n" + strings.Join(lines, "\n")),
+			wantQuoted: attribution + "\n" + strings.Join(lines[:99], "\n") + "\n" + QuoteTrimmedMarker,
+		},
+		{
+			name:       "over the cap, its 10,000th character ending a line",
+			tc:         start(attribution + "\n" + strings.Join(lines[:99], "\n") + "\n> " + strings.Repeat("r", 73) + "\n> later"),
+			wantQuoted: attribution + "\n" + strings.Join(lines[:99], "\n") + "\n> " + strings.Repeat("r", 73) + "\n" + QuoteTrimmedMarker,
+		},
+		{
+			name:       "at the cap, kept whole",
+			tc:         start(attribution + "\n" + strings.Join(lines[:99], "\n") + "\n> " + strings.Repeat("r", 73)),
+			wantQuoted: attribution + "\n" + strings.Join(lines[:99], "\n") + "\n> " + strings.Repeat("r", 73),
+		},
+		{
+			name:       "at the cap in characters, over it in bytes, kept whole",
+			tc:         start(attribution + "\n" + strings.Join(quoteLines(99, 99, "é"), "\n") + "\n> " + strings.Repeat("é", 73)),
+			wantQuoted: attribution + "\n" + strings.Join(quoteLines(99, 99, "é"), "\n") + "\n> " + strings.Repeat("é", 73),
+		},
+		{
+			name: "html over the cap, a line per quoted line",
+			tc: threadStart("", htmlPart("<div>"+own+"</div><blockquote><div>"+
+				strings.Join(quoteLines(120, 99, "q"), "</div><div>")+"</div></blockquote>")),
+			wantQuoted: strings.Join(quoteLines(100, 99, "q"), "\n") + "\n" + QuoteTrimmedMarker,
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			row := processQuoted(t, c.tc)
+			require.NotNil(t, row.Body)
+			require.Equal(t, own, *row.Body)
+			require.NotNil(t, row.QuotedHistory)
+			require.Equal(t, c.wantQuoted, *row.QuotedHistory)
+		})
+	}
+}
+
+// spec: ING-047.forward-content-kept-capped
+func TestQuotedMail_ForwardKeepsContentCapped(t *testing.T) {
 	appleForward := "FYI\n\nBegin forwarded message:\n\nFrom: Contact A <a@example.com>\nSent: Monday, October 20, 2026\nSubject: Plan\n\n> Are we on?"
-	runQuotedCases(t, []quotedCase{
+	runForwardCases(t, []quotedCase{
 		{name: "forward subject keeps a forwarded header block", gmailID: "g2", threadID: "g1", subject: "Fwd: Plan",
 			payload: plainTextPart(appleForward), want: appleForward},
 		{name: "outlook FW subject keeps quoted html", gmailID: "g2", threadID: "g1", subject: "FW: Plan",
@@ -175,6 +269,49 @@ func TestQuotedMail_ForwardKeptWhole(t *testing.T) {
 		reply("gmail html forward in a reply is not a quote",
 			htmlPart(`<div>FYI</div><div class="gmail_quote">---------- Forwarded message ---------<br>From: Contact A<br>Date: Mon<br><br><div>Plan details</div></div>`),
 			"FYI ---------- Forwarded message --------- From: Contact A Date: Mon Plan details"),
+	})
+}
+
+// runForwardCases stores each case's message and asserts its body, and that it
+// stores no quoted history apart.
+func runForwardCases(t *testing.T, cases []quotedCase) {
+	t.Helper()
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			row := processQuoted(t, tc)
+			require.NotNil(t, row.Body)
+			require.Equal(t, tc.want, *row.Body)
+			require.Nil(t, row.QuotedHistory)
+		})
+	}
+}
+
+// spec: ING-047.forward-content-kept-capped
+func TestQuotedMail_ForwardContentCapped(t *testing.T) {
+	const intro = "---------- Forwarded message ---------"
+	// The forwarded content's header takes 100 characters with its line
+	// breaks, as does each carried line, so line i starts at character
+	// 100(i+1) and the 10,000th character starts line 99.
+	header := intro + "\nSubject: " + strings.Repeat("s", 51) + "\n"
+	lines := numberedLines("", 120, 99, "c")
+	kept := header + strings.Join(lines[:99], "\n") + "\n" + QuoteTrimmedMarker
+	const attribution = "On Mon, Contact A wrote:"
+	quoted := quoteLines(100, 99, "q")
+	atCap := header + strings.Join(lines[:98], "\n") + "\n" + strings.Repeat("c", 100)
+	runForwardCases(t, []quotedCase{
+		{name: "plain forward over the cap", gmailID: "g2", threadID: "g2", subject: "Fwd: Plan",
+			payload: plainTextPart("FYI\n\n" + header + strings.Join(lines, "\n") + "\n"),
+			want:    "FYI\n\n" + kept},
+		reply("html forward introduction in a reply, over the cap",
+			htmlPart(`<div>FYI</div><div>`+intro+`</div><div>Subject: `+strings.Repeat("s", 51)+`</div><div>`+
+				strings.Join(lines, "</div><div>")+`</div>`),
+			"FYI\n\n"+kept),
+		{name: "forward subject over a quote over the cap", gmailID: "g2", threadID: "g1", subject: "FW: Plan",
+			payload: plainTextPart("FYI\n\n" + attribution + "\n" + strings.Join(quoted, "\n") + "\n"),
+			want:    "FYI\n\n" + attribution + "\n" + strings.Join(quoted[:99], "\n") + "\n" + QuoteTrimmedMarker},
+		{name: "plain forward at the cap, kept whole", gmailID: "g2", threadID: "g2", subject: "Fwd: Plan",
+			payload: plainTextPart("FYI\n\n" + atCap + "\n"),
+			want:    "FYI\n\n" + atCap + "\n"},
 	})
 }
 

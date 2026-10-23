@@ -44,3 +44,7 @@ linters:
       # D1 covers non-test files only.
       - path: '_test\.go$'
         linters: [dupl]
+      # sqlc generates one shape per query signature, so two queries of one
+      # shape generate identical code; D1 judges written code only.
+      - path: 'internal/db/.*\.sql\.go$'
+        linters: [dupl]

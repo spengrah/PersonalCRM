@@ -133,6 +133,32 @@ func TestReadThread(t *testing.T) {
 		assert.Nil(t, read.Review, "no run, no review")
 	})
 
+	t.Run("an email's quoted history is returned beside its text, and none for a message without one or of another source", func(t *testing.T) {
+		// spec: IXN-089.quoted-history-beside-text
+		b := newBenchEnv(t)
+		c := b.contact(t)
+		mail := b.venueThread(t, repository.InteractionSourceEmail, repository.VenueKindEmailThread, "mail-"+uuid.NewString(), "")
+		start := messageParams(mail, c, false, b.day(1))
+		quoted := "On Mon, Contact A wrote:\n> Know anyone?"
+		start.QuotedHistory = &quoted
+		_, err := b.comms.UpsertMessage(b.ctx, start)
+		require.NoError(t, err)
+		reply := b.say(t, mail, c, true, b.day(2))
+		chat := b.venueThread(t, repository.InteractionSourceTelegram, repository.VenueKindDM, "778", "")
+		b.say(t, chat, c, false, b.day(1))
+
+		read := b.readThread(t, mail.id.String(), "")
+		other := b.readThread(t, chat.id.String(), "")
+
+		require.Equal(t, []string{"email:" + start.ExternalID, reply}, messageKeysOf(read.Messages))
+		require.NotNil(t, read.Messages[0].QuotedHistory)
+		assert.Equal(t, quoted, *read.Messages[0].QuotedHistory)
+		assert.Equal(t, "synthetic message body", read.Messages[0].Text, "the text is the body alone")
+		assert.Nil(t, read.Messages[1].QuotedHistory)
+		require.Len(t, other.Messages, 1)
+		assert.Nil(t, other.Messages[0].QuotedHistory)
+	})
+
 	t.Run("a meeting's notes are its messages", func(t *testing.T) {
 		// spec: IXN-089.messages-once-in-order
 		b := newBenchEnv(t)

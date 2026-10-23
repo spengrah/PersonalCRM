@@ -5441,7 +5441,7 @@
         },
         "/threads/{thread_id}": {
             "get": {
-                "description": "The thread's header, every message once in thread order, and its place in the list that type, contact_id and run_id keep. With run_id, it adds the run's nights, one per cut-off at which the run recorded or reused a judgment of the thread, each placing its messages once with the flags they show, its clearing decisions, its reply proposal and its status.",
+                "description": "The thread's header, every message once in thread order with an email's quoted history beside its text, and its place in the list that type, contact_id and run_id keep. With run_id, it adds the run's nights, one per cut-off at which the run recorded or reused a judgment of the thread, each placing its messages once with the flags they show, its clearing decisions, its reply proposal and its status.",
                 "produces": [
                     "application/json"
                 ],
@@ -9241,6 +9241,9 @@
             "type": "object",
             "properties": {
                 "message_key": {
+                    "type": "string"
+                },
+                "quoted_history": {
                     "type": "string"
                 },
                 "sender": {

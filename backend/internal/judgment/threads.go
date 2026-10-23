@@ -168,9 +168,13 @@ type ThreadPosition struct {
 type ThreadRead struct {
 	Row      ThreadRow
 	Messages []ThreadMessage
-	Names    map[uuid.UUID]string
-	Position *ThreadPosition
-	Review   *ThreadReview
+	// QuotedHistories holds the quoted history of each email of the thread
+	// that stores one, by message key. It sits beside the messages, never in
+	// them: a message's text is its body alone, as the decision model reads it.
+	QuotedHistories map[string]string
+	Names           map[uuid.UUID]string
+	Position        *ThreadPosition
+	Review          *ThreadReview
 }
 
 // ReviewRuns returns the historical and scheduled runs of the compared methods,
@@ -326,7 +330,11 @@ func (t *Threads) Read(ctx context.Context, thread uuid.UUID, q ThreadQuery) (*T
 	if err != nil {
 		return nil, err
 	}
-	read := &ThreadRead{Row: rows[0], Messages: messages.list, Names: messages.names}
+	quoted, err := t.threads.ListQuotedHistories(ctx, thread)
+	if err != nil {
+		return nil, err
+	}
+	read := &ThreadRead{Row: rows[0], Messages: messages.list, QuotedHistories: quoted, Names: messages.names}
 	if at := slices.IndexFunc(kept, func(s repository.ThreadSummary) bool { return s.ID == thread }); at >= 0 {
 		read.Position = &ThreadPosition{Index: at + 1, Total: len(kept)}
 		if at > 0 {

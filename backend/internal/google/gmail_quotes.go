@@ -6,38 +6,165 @@ import (
 	"golang.org/x/net/html"
 )
 
-// keepsQuotedMail reports whether a Gmail message is stored whole, quoted
-// earlier mail included: the message that starts its thread, or a forward. Gmail
+// quoteCap is how many characters of quoted mail an email keeps: a thread
+// start's quoted history, or a forward's forwarded content. A quote starts with
+// its newest mail, so the cap keeps the quote's first characters.
+const quoteCap = 10000
+
+// QuoteTrimmedMarker is the line that follows quoted mail the cap cut short.
+const QuoteTrimmedMarker = "[Older quoted mail trimmed]"
+
+// mailKind is how an email's quoted mail is stored (ING-047).
+type mailKind int
+
+const (
+	// mailReply drops the quoted mail, since each earlier message of the
+	// thread is stored as its own message.
+	mailReply mailKind = iota
+	// mailThreadStart stores the quoted mail apart from the body, as the
+	// thread's history the mailbox holds no other copy of.
+	mailThreadStart
+	// mailForward keeps the forwarded mail in the body, as its content.
+	mailForward
+)
+
+// mailKindOf tells a Gmail message's kind from its ids and subject. Gmail
 // gives a thread the id of the message that started it in that mailbox, so an
 // introduction received fresh starts a thread even though it carries earlier
-// mail. A forward's carried message is its content. An unknown message or
-// thread id counts as a start.
-func keepsQuotedMail(gmailMessageID, threadID, subject string) bool {
-	if gmailMessageID == "" || threadID == "" || threadID == gmailMessageID {
-		return true
-	}
+// mail. An unknown message or thread id counts as a start. A body that carries
+// a forward introduction is a forward whatever its kind here (storedText).
+func mailKindOf(gmailMessageID, threadID, subject string) mailKind {
 	s := strings.ToLower(strings.TrimSpace(subject))
-	return strings.HasPrefix(s, "fwd:") || strings.HasPrefix(s, "fw:")
+	switch {
+	case strings.HasPrefix(s, "fwd:") || strings.HasPrefix(s, "fw:"):
+		return mailForward
+	case gmailMessageID == "" || threadID == "" || threadID == gmailMessageID:
+		return mailThreadStart
+	default:
+		return mailReply
+	}
 }
 
-// messageText returns the text stored as an email's body: the text/plain part,
-// or the text/html part stripped to text when the message has no plain part. A
-// message that does not keep its quoted mail drops the earlier messages it
-// quotes, since each of those is stored as its own message (ING-047).
-func messageText(plain, htmlBody string, keepQuoted bool) string {
-	if plain != "" {
-		if keepQuoted {
-			return plain
+// emailText is what an email stores of its text: the body, and the quoted
+// history apart from it, "" for none.
+type emailText struct {
+	body   string
+	quoted string
+}
+
+// storedText returns the text an email stores, from its text/plain part, or
+// from its text/html part stripped to text when it has no plain part. The body
+// is the message's own text, up to where ownTextEnd finds its quoted mail. A
+// thread start stores that quoted mail apart as its quoted history, a forward
+// keeps it in the body as its content, and a reply drops it. Quoted mail kept
+// either way is capped (capQuote). A body with nothing to cut is stored
+// unchanged, or as stripHTML's text.
+func storedText(plain, htmlBody string, kind mailKind) emailText {
+	var b splitBody
+	switch {
+	case plain != "":
+		b = splitPlain(plain)
+	case htmlBody != "":
+		b = splitHTML(htmlBody)
+	default:
+		return emailText{}
+	}
+	if b.forward {
+		kind = mailForward
+	}
+	if b.carried == "" {
+		return emailText{body: b.whole}
+	}
+	switch kind {
+	case mailThreadStart:
+		quoted, _ := capQuote(b.carried)
+		return emailText{body: b.own, quoted: quoted}
+	case mailForward:
+		carried, cut := capQuote(b.carried)
+		if !cut {
+			return emailText{body: b.whole}
 		}
-		return trimQuotedText(plain)
+		return emailText{body: strings.TrimLeft(b.own+"\n\n"+carried, "\n")}
+	default:
+		return emailText{body: b.own}
 	}
-	if htmlBody == "" {
-		return ""
+}
+
+// splitBody is an email body split where its own text ends. own is the text
+// before the split and carried the quoted or forwarded mail after it, one line
+// per line; whole is the body's text when nothing is cut. forward reports a
+// split at a forward introduction line.
+type splitBody struct {
+	own, carried, whole string
+	forward             bool
+}
+
+// splitAt returns the index of the line where a body's own text ends: its
+// forward introduction line, else ownTextEnd's boundary.
+func splitAt(lines []bodyLine) (end int, forward bool) {
+	if i := forwardLine(lines); i >= 0 {
+		return i, true
 	}
-	if keepQuoted {
-		return stripHTML(htmlBody)
+	return ownTextEnd(lines), false
+}
+
+// splitPlain splits a plain-text body, where a quoted line starts with ">".
+func splitPlain(s string) splitBody {
+	raw := strings.Split(strings.ReplaceAll(s, "\r\n", "\n"), "\n")
+	lines := make([]bodyLine, len(raw))
+	for i, line := range raw {
+		lines[i] = bodyLine{text: line, quoted: strings.HasPrefix(strings.TrimSpace(line), ">")}
 	}
-	return trimQuotedHTML(htmlBody)
+	end, forward := splitAt(lines)
+	return splitBody{
+		own:     strings.TrimRight(strings.Join(raw[:end], "\n"), " \t\n"),
+		carried: strings.TrimSpace(strings.Join(raw[end:], "\n")),
+		whole:   s,
+		forward: forward,
+	}
+}
+
+// splitHTML splits an HTML body. Text inside a blockquote or a Yahoo quote
+// container is quoted; block elements and <br> break lines. The own text is
+// one line, its words joined by single spaces, as stripHTML gives them; the
+// carried mail keeps a line per line.
+func splitHTML(s string) splitBody {
+	lines := htmlLines(s)
+	end, forward := splitAt(lines)
+	own := make([]string, end)
+	for i, line := range lines[:end] {
+		own[i] = line.text
+	}
+	var carried []string
+	for _, line := range lines[end:] {
+		if text := strings.Join(strings.Fields(line.text), " "); text != "" {
+			carried = append(carried, text)
+		}
+	}
+	return splitBody{
+		own:     strings.Join(strings.Fields(strings.Join(own, " ")), " "),
+		carried: strings.Join(carried, "\n"),
+		whole:   stripHTML(s),
+		forward: forward,
+	}
+}
+
+// capQuote caps quoted mail at quoteCap characters. A longer quote keeps its
+// first quoteCap characters, cut back to the last line break among them, then
+// a line holding QuoteTrimmedMarker; a quote with no line break there is cut
+// at the cap. It reports whether it cut. A capped quote caps to itself.
+func capQuote(s string) (string, bool) {
+	runes := []rune(s)
+	if len(runes) <= quoteCap {
+		return s, false
+	}
+	kept := string(runes[:quoteCap])
+	if runes[quoteCap] != '\n' {
+		if i := strings.LastIndexByte(kept, '\n'); i >= 0 {
+			kept = kept[:i]
+		}
+	}
+	return strings.TrimRight(kept, " \t\n") + "\n" + QuoteTrimmedMarker, true
 }
 
 // bodyLine is one line of a message body and whether it is quoted.
@@ -46,16 +173,12 @@ type bodyLine struct {
 	quoted bool
 }
 
-// ownTextEnd returns how many leading lines are the message's own text. A body
-// that carries a forwarded message is all its own. Otherwise an Outlook
-// original-message header ends it, and below that the trailing block of quoted
-// lines, with the "... wrote:" attribution that introduces it, is not the
-// message's own; quoted lines followed by new text (an inline reply) are. It
-// returns len(lines) when there is nothing to drop.
+// ownTextEnd returns how many leading lines are the message's own text. An
+// Outlook original-message header ends it, and below that the trailing block
+// of quoted lines, with the "... wrote:" attribution that introduces it, is
+// not the message's own; quoted lines followed by new text (an inline reply)
+// are. It returns len(lines) when there is no quoted mail.
 func ownTextEnd(lines []bodyLine) int {
-	if carriesForward(lines) {
-		return len(lines)
-	}
 	end := len(lines)
 	if i := outlookHeaderLine(lines); i >= 0 {
 		end = i
@@ -112,56 +235,23 @@ func outlookHeaderLine(lines []bodyLine) int {
 	return -1
 }
 
-// carriesForward reports whether a body carries a forwarded message: an
-// unquoted line is a client's forward introduction, Gmail's and Thunderbird's
-// "---------- Forwarded message ---------" or Apple Mail's "Begin forwarded
-// message:". The forwarded message is the body's content, its own quotes and
-// headers included.
-func carriesForward(lines []bodyLine) bool {
-	for _, l := range lines {
+// forwardLine returns the index of the line that introduces a forwarded
+// message, or -1: an unquoted line that is a client's forward introduction,
+// Gmail's and Thunderbird's "---------- Forwarded message ---------" or Apple
+// Mail's "Begin forwarded message:". The forwarded message is the body's
+// content, its own quotes and headers included.
+func forwardLine(lines []bodyLine) int {
+	for i, l := range lines {
 		if l.quoted {
 			continue
 		}
 		// Fields collapses the spaces HTML tags and &nbsp; leave inside a line.
 		intro := strings.ToLower(strings.Trim(strings.Join(strings.Fields(l.text), " "), "-: "))
 		if intro == "forwarded message" || intro == "begin forwarded message" {
-			return true
+			return i
 		}
 	}
-	return false
-}
-
-// trimQuotedText removes the quoted earlier messages from a plain-text body,
-// where a quoted line starts with ">". A body with nothing to remove is
-// returned unchanged.
-func trimQuotedText(s string) string {
-	raw := strings.Split(strings.ReplaceAll(s, "\r\n", "\n"), "\n")
-	lines := make([]bodyLine, len(raw))
-	for i, line := range raw {
-		lines[i] = bodyLine{text: line, quoted: strings.HasPrefix(strings.TrimSpace(line), ">")}
-	}
-	end := ownTextEnd(lines)
-	if end == len(lines) {
-		return s
-	}
-	return strings.TrimRight(strings.Join(raw[:end], "\n"), " \t\n")
-}
-
-// trimQuotedHTML removes the quoted earlier messages from an HTML body and
-// returns its text as stripHTML would. Text inside a blockquote or a Yahoo
-// quote container is quoted; block elements and <br> break lines. A body with
-// nothing to remove is stripHTML's text.
-func trimQuotedHTML(s string) string {
-	lines := htmlLines(s)
-	end := ownTextEnd(lines)
-	if end == len(lines) {
-		return stripHTML(s)
-	}
-	texts := make([]string, end)
-	for i, line := range lines[:end] {
-		texts[i] = line.text
-	}
-	return strings.Join(strings.Fields(strings.Join(texts, " ")), " ")
+	return -1
 }
 
 // htmlLineBreaks are the elements that start a new line of text.

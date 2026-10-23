@@ -215,7 +215,7 @@ func TestExtractContent_HTMLOnly_RetainsHTML(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, plain)
 	require.Equal(t, raw, htmlBody)
-	require.Equal(t, "Hi & bye", messageText(plain, htmlBody, true))
+	require.Equal(t, "Hi & bye", storedText(plain, htmlBody, mailThreadStart).body)
 }
 
 func TestExtractContent_MultipartAlternative_PrefersPlain_RetainsHTML(t *testing.T) {

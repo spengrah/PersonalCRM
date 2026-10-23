@@ -16,11 +16,11 @@
 -- the gmail-id (stable per account). The ON CONFLICT clause MUST name the
 -- partial index's WHERE predicate so Postgres infers the partial unique index.
 INSERT INTO comms_message (
-    source, external_id, thread_id, subject, body, snippet,
+    source, external_id, thread_id, subject, body, quoted_history, snippet,
     peer_handle, peer_normalized, direction, sent_at, account_id,
     source_metadata, matched_contact_id
 ) VALUES (
-    @source, @external_id, @thread_id, @subject, @body, @snippet,
+    @source, @external_id, @thread_id, @subject, @body, @quoted_history, @snippet,
     @peer_handle, @peer_normalized, @direction, @sent_at, @account_id,
     -- LEVEL 3 (outermost): set the per-account gmail id under
     -- account_gmail_ids.<account_id>. Lands only because LEVEL 2 seeded the
@@ -722,8 +722,8 @@ ORDER BY source, thread_id, sent_at DESC, id DESC;
 -- --trim-email-quotes), paged by id > @after_id. gmail_message_id is the
 -- observing account's per-mailbox gmail id (the upsert's account_gmail_ids
 -- key, '__unknown__' when account_id is NULL); with thread_id and subject it
--- tells a message stored whole from a reply. html is the stored source HTML,
--- '' when absent.
+-- tells a thread start and a forward from a reply. html is the stored source
+-- HTML, '' when absent.
 SELECT
     cm.id,
     COALESCE(cm.thread_id, '')::text AS thread_id,
@@ -739,10 +739,12 @@ WHERE cm.source = 'email'
 ORDER BY cm.id
 LIMIT @batch_size;
 
--- name: UpdateCommsMessageBody :execrows
--- Rewrite one stored body. Only the one-time quote trim writes here; ingest
--- never rewrites content (UpsertCommsMessage keeps the first writer's).
+-- name: UpdateCommsMessageText :execrows
+-- Rewrite one stored email's body and quoted history together. Only the
+-- one-time quote trim writes here; ingest never rewrites content
+-- (UpsertCommsMessage keeps the first writer's).
 UPDATE comms_message
-SET body = @body
+SET body = @body,
+    quoted_history = @quoted_history
 WHERE id = @id
   AND deleted_at IS NULL;

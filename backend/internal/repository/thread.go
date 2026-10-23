@@ -94,6 +94,20 @@ func (r *ThreadRepository) HoldsMessage(ctx context.Context, id uuid.UUID, messa
 	return held, nil
 }
 
+// ListQuotedHistories returns the quoted history of each email of the thread
+// that stores one, by message key.
+func (r *ThreadRepository) ListQuotedHistories(ctx context.Context, id uuid.UUID) (map[string]string, error) {
+	rows, err := r.queries.ListThreadQuotedHistories(ctx, id)
+	if err != nil {
+		return nil, fmt.Errorf("list thread quoted histories: %w", err)
+	}
+	out := make(map[string]string, len(rows))
+	for _, row := range rows {
+		out[row.MessageKey] = row.QuotedHistory
+	}
+	return out, nil
+}
+
 // ListThreadParticipants returns the live contacts taking part in each given
 // thread, by name, then contact ID.
 func (r *ThreadRepository) ListThreadParticipants(ctx context.Context, threads []uuid.UUID) (map[uuid.UUID][]ThreadParticipant, error) {

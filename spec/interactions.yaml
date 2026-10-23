@@ -1604,6 +1604,8 @@ behaviors:
         text: the read returns the thread's header, naming its title, app, interaction type, whether it is a group chat and its participant contacts
       - key: messages-once-in-order
         text: the read returns every message of the thread once, in thread order, with its sender, time and text
+      - key: quoted-history-beside-text
+        text: an email that stores a quoted history (ING-047) carries it beside its text, which is its body alone; a message without one, or of another source, carries none
       - key: position-in-filtered-list
         text: the read returns the thread's position in the list as the filters keep it, with the list's total and the previous and next threads
       - key: unknown-thread-not-found
@@ -1749,3 +1751,20 @@ behaviors:
         text: without a run, the route answers with the reviewed outcome alone
     provenance: [.agents/spec/2026-10-18-message-flags-and-threads.md G12, designs/threads.md]
     notes: The route's validation and derived verdict are KNW-049.
+
+  - id: IXN-097
+    title: A thread page shows an email's quoted history collapsed under the message
+    type: ux
+    status: current
+    surface: ui
+    given: a thread page whose messages include an email that starts its thread carrying earlier mail
+    when: the thread page is shown
+    then:
+      - key: quoted-history-collapsed
+        text: a message with a quoted history shows it collapsed beneath its text, and opens it when the user asks
+      - key: trimmed-marker-shown
+        text: a quoted history ingest trimmed ends with the trimmed marker line
+      - key: no-quoted-history-nothing-extra
+        text: a message without a quoted history shows nothing beneath its text but its chips
+    provenance: [ING-047, IXN-089]
+    notes: The quoted history keeps a thread-starting email's context on the page while the decision model judges the email's own text alone. It shows the same with Review on and off, since both draw messages alike.

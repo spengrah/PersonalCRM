@@ -1,6 +1,11 @@
 package declare
 
-// Thread-page resolutions (IXN-078 to IXN-086): a thread's page, with Review
+import (
+	"fmt"
+	"strings"
+)
+
+// Thread-page resolutions (IXN-078 to IXN-086, IXN-097): a thread's page, with Review
 // off and on. A browser test opens a thread of a declared world, records the
 // run's judgments of its threads through the judgment store's testing-only
 // route, naming each thread's messages by the keys the thread read returns,
@@ -15,6 +20,27 @@ func init() {
 	RegisterNone("IXN-084", "its citing tests seed the IXN-080 world and record nights that flag nothing through the testing route, then confirm their Nones")
 	RegisterNone("IXN-085", "its citing tests seed the IXN-080 world and record a run through the testing route, then hold the review saves' responses in the browser")
 	RegisterNone("IXN-086", "its citing tests seed the IXN-080 world and record a run whose judgments answer ball-in-court questions through the testing route, then review the reply lists")
+	Register(Declaration{Behavior: "IXN-097", Entities: quotedHistoryWorld()})
+}
+
+// quotedHistoryWorld is three contacts, each in one email thread of one
+// message. Ana's message starts its thread carrying a short quote and Ben's a
+// quote longer than ingest keeps, so its quoted history ends trimmed; Cai's
+// message carries none.
+func quotedHistoryWorld() []Entity {
+	long := []string{"On Mon, Synthetic Sender wrote:"}
+	for i := range 150 {
+		long = append(long, fmt.Sprintf("> Earlier synthetic line %03d of a long quoted conversation.%s", i, strings.Repeat(" filler", 4)))
+	}
+	return []Entity{
+		Contact("ana", Methods(MethodEmail)),
+		Contact("ben", Methods(MethodEmail)),
+		Contact("cai", Methods(MethodEmail)),
+		MessageInteraction("short-quote", "ana", "email", AgoDays(3),
+			StartsThreadQuoting("On Mon, Synthetic Sender wrote:\n> Earlier synthetic question?")),
+		MessageInteraction("long-quote", "ben", "email", AgoDays(3), StartsThreadQuoting(strings.Join(long, "\n"))),
+		MessageInteraction("no-quote", "cai", "email", AgoDays(3)),
+	}
 }
 
 // longChatMessages is the length of the review world's long chat: more messages

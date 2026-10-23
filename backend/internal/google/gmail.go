@@ -188,6 +188,7 @@ type qualifiedRow struct {
 	ThreadID       string
 	Subject        *string
 	Body           *string
+	QuotedHistory  *string
 	Snippet        *string
 	PeerHandle     string
 	PeerNormalized string
@@ -1040,6 +1041,7 @@ func (p *GmailSyncProvider) persistRow(ctx context.Context, row qualifiedRow) (e
 		ThreadID:         &row.ThreadID,
 		Subject:          row.Subject,
 		Body:             row.Body,
+		QuotedHistory:    row.QuotedHistory,
 		Snippet:          row.Snippet,
 		PeerHandle:       &row.PeerHandle,
 		PeerNormalized:   &row.PeerNormalized,
@@ -1230,7 +1232,7 @@ func (p *GmailSyncProvider) processMessage(
 
 	headers := newHeaderLookup(msg.Payload)
 	subject := headers.first("Subject")
-	body := messageText(plain, htmlBody, keepsQuotedMail(msg.Id, msg.ThreadId, subject))
+	text := storedText(plain, htmlBody, mailKindOf(msg.Id, msg.ThreadId, subject))
 	fromRaw, fromNorm, fromName := parseSingleAddress(headers.first("From"))
 	toRaw, toNorm, toNames := parseAddressList(headers.first("To"))
 	ccRaw, ccNorm, ccNames := parseAddressList(headers.first("Cc"))
@@ -1269,7 +1271,8 @@ func (p *GmailSyncProvider) processMessage(
 	orderedRecipients := buildOrderedRecipients(toRaw, toNorm, ccRaw, ccNorm, bccRaw, bccNorm)
 
 	contentSubject := strPtrIfNotEmpty(subject)
-	contentBody := strPtrIfNotEmpty(body)
+	contentBody := strPtrIfNotEmpty(text.body)
+	quotedHistory := strPtrIfNotEmpty(text.quoted)
 	contentSnippet := strPtrIfNotEmpty(msg.Snippet)
 
 	// Candidate contacts: every contact sharing a matched address in {f} ∪ R.
@@ -1300,6 +1303,7 @@ func (p *GmailSyncProvider) processMessage(
 				ThreadID:       msg.ThreadId,
 				Subject:        contentSubject,
 				Body:           contentBody,
+				QuotedHistory:  quotedHistory,
 				Snippet:        contentSnippet,
 				PeerHandle:     fromRaw,
 				PeerNormalized: fromNorm,
@@ -1322,6 +1326,7 @@ func (p *GmailSyncProvider) processMessage(
 					ThreadID:       msg.ThreadId,
 					Subject:        contentSubject,
 					Body:           contentBody,
+					QuotedHistory:  quotedHistory,
 					Snippet:        contentSnippet,
 					PeerHandle:     rawPeer,
 					PeerNormalized: normPeer,
@@ -1533,7 +1538,7 @@ func isAttachmentPart(part *gmail.MessagePart) bool {
 }
 
 // extractContent MIME-walks payload, returning the first text/plain part, the
-// first text/html part, and attachment metadata; messageText derives the
+// first text/html part, and attachment metadata; storedText derives the
 // stored body from the two text parts. A part is an
 // attachment when it has a non-empty filename and/or a Body.AttachmentId
 // (inline attachments often carry an attachment id without a filename); only
@@ -1608,7 +1613,7 @@ func decodePartBody(b *gmail.MessagePartBody) (string, error) {
 // stripHTML reduces an HTML body to conservative plaintext: tags removed, basic
 // entities unescaped, whitespace collapsed. The high-fidelity HTML is retained
 // verbatim in source_metadata.html, so this only feeds the canonical body when
-// no text/plain part exists (messageText).
+// no text/plain part exists (storedText).
 func stripHTML(s string) string {
 	s = htmlTagRegex.ReplaceAllString(s, " ")
 	s = html.UnescapeString(s)

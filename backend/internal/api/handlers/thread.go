@@ -78,7 +78,7 @@ func (h *ThreadHandler) ListThreads(c *gin.Context) {
 
 // GetThread returns a thread.
 // @Summary Get a thread
-// @Description The thread's header, every message once in thread order, and its place in the list that type, contact_id and run_id keep. With run_id, it adds the run's nights, one per cut-off at which the run recorded or reused a judgment of the thread, each placing its messages once with the flags they show, its clearing decisions, its reply proposal and its status.
+// @Description The thread's header, every message once in thread order with an email's quoted history beside its text, and its place in the list that type, contact_id and run_id keep. With run_id, it adds the run's nights, one per cut-off at which the run recorded or reused a judgment of the thread, each placing its messages once with the flags they show, its clearing decisions, its reply proposal and its status.
 // @Tags threads
 // @Produce json
 // @Param thread_id path string true "Thread (venue) ID" format(uuid)
@@ -106,6 +106,9 @@ func (h *ThreadHandler) GetThread(c *gin.Context) {
 	out := ThreadReadResponse{Thread: threadRowResponse(read.Row), Messages: make([]ThreadMessageResponse, len(read.Messages))}
 	for i, m := range read.Messages {
 		out.Messages[i] = ThreadMessageResponse{MessageKey: m.Key, Sender: messageSender(m, read.Names), SentAt: m.SentAt, Text: m.Text}
+		if quoted, ok := read.QuotedHistories[m.Key]; ok {
+			out.Messages[i].QuotedHistory = &quoted
+		}
 	}
 	if p := read.Position; p != nil {
 		out.Position = &ThreadPositionResponse{Index: p.Index, Total: p.Total}

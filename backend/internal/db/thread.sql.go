@@ -119,6 +119,50 @@ func (q *Queries) ListThreadParticipants(ctx context.Context, venueIds []uuid.UU
 	return items, nil
 }
 
+const ListThreadQuotedHistories = `-- name: ListThreadQuotedHistories :many
+SELECT DISTINCT ON (cm.external_id)
+       (cm.source || ':' || cm.external_id)::text AS message_key,
+       cm.quoted_history::text AS quoted_history
+FROM comms_message cm
+JOIN venue v
+  ON v.source = cm.source
+ AND v.source_container_id = cm.thread_id
+WHERE v.node_id = $1
+  AND cm.source = 'email'
+  AND cm.quoted_history IS NOT NULL
+  AND cm.deleted_at IS NULL
+ORDER BY cm.external_id, cm.id
+`
+
+type ListThreadQuotedHistoriesRow struct {
+	MessageKey    string `json:"message_key"`
+	QuotedHistory string `json:"quoted_history"`
+}
+
+// The quoted history of each email of one thread that stores one, by its
+// thread_content message_key, read once however many per-contact copies hold
+// the email. Only the thread read reads it: the thread_content view carries no
+// quoted history, so no decision-model context holds one.
+func (q *Queries) ListThreadQuotedHistories(ctx context.Context, venueID uuid.UUID) ([]*ListThreadQuotedHistoriesRow, error) {
+	rows, err := q.db.Query(ctx, ListThreadQuotedHistories, venueID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []*ListThreadQuotedHistoriesRow{}
+	for rows.Next() {
+		var i ListThreadQuotedHistoriesRow
+		if err := rows.Scan(&i.MessageKey, &i.QuotedHistory); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const ListThreads = `-- name: ListThreads :many
 
 SELECT t.venue_id, v.kind, v.source, v.title, t.message_count, t.latest_at

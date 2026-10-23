@@ -656,7 +656,7 @@ behaviors:
     notes: Calendar sync already records the meeting itself, so an invitation email would count it twice. Every kind of calendar message is dropped, an accept or decline reply with a typed note included.
 
   - id: ING-047
-    title: A Gmail reply stores only its new text
+    title: An email stores its own text as its body
     type: data
     status: current
     surface: none
@@ -671,14 +671,16 @@ behaviors:
         text: a reply with no plain-text part stores the text of its HTML under the same rule, where text inside a blockquote or a Yahoo quote container is quoted
       - key: inline-reply-keeps-quotes
         text: quoted lines followed by new text, as in an inline reply, are kept
-      - key: thread-start-kept-whole
-        text: the message that starts its thread in the mailbox, such as an introduction received fresh, keeps everything it carries, as does a message whose Gmail id or thread id is unknown
-      - key: forward-kept-whole
-        text: a forward keeps everything it carries, whether its subject starts with Fwd or Fw or its body carries an unquoted forward introduction line from a mail client, the forwarded message's own quotes and headers included
+      - key: thread-start-quote-stored-apart
+        text: the message that starts its thread in the mailbox, such as an introduction received fresh, stores its own text as its body and the quoted mail it carries apart, as its quoted history, as does a message whose Gmail id or thread id is unknown; a reply stores no quoted history
+      - key: quoted-history-capped
+        text: a quoted history over 10,000 characters keeps its first 10,000 characters, the newest mail, cut back to the last line break among them and followed by the trimmed marker line; one at or under 10,000 characters is kept whole with no marker
+      - key: forward-content-kept-capped
+        text: a forward, whose subject starts with Fwd or Fw or whose body carries an unquoted forward introduction line from a mail client, keeps its own text and its forwarded content, the forwarded message's own quotes and headers included, as its body, with the forwarded content capped as a quoted history is, and stores no quoted history
       - key: unquoted-body-unchanged
         text: a body with no quoted mail is stored unchanged
     provenance: [messageText, keepsQuotedMail, trimQuotedText, trimQuotedHTML]
-    notes: Each earlier message in a thread is stored as its own message, so a reply's quoted copy only repeats it. The source_metadata HTML stays verbatim. crm-admin --trim-email-quotes applies the same rule once to bodies stored before it.
+    notes: Each earlier message in a thread is stored as its own message, so a reply's quoted copy only repeats it; a thread start's quoted mail is the only copy the mailbox holds, so it is kept for the thread page (IXN-097) apart from the body the decision model judges. The cap keeps the quote's start because a quote starts with its newest mail. The source_metadata HTML stays verbatim. crm-admin --trim-email-quotes applies the same rule once to bodies stored before it (ING-050).
 
   - id: ING-048
     title: Ingest stores a message reaction's facts on the reaction's own message
@@ -709,3 +711,24 @@ behaviors:
       - every other row, of iMessage or of another source, carries no reaction facts
     provenance: [ThreadContentRepository.ListThreadContent, thread_content view (migration 103)]
     notes: The facts reach the decision model in the read it already makes, beside each message, so it needs no second query. How judgments treat reactions belongs to the decision-model work.
+
+  - id: ING-050
+    title: crm-admin --trim-email-quotes applies the email text rule once to stored emails
+    type: data
+    status: current
+    surface: none
+    given: emails stored before ingest applied ING-047, whole or already trimmed
+    when: crm-admin --trim-email-quotes runs
+    then:
+      - key: thread-start-split
+        text: a stored thread-starting email is split into its own text as its body and its quoted history apart, capped as ingest caps it
+      - key: forward-capped
+        text: a stored forward keeps its own text and its forwarded content as its body, capped as ingest caps it, with no quoted history
+      - key: trimmed-reply-unchanged
+        text: a reply already stored with its own text alone is unchanged
+      - key: second-run-changes-nothing
+        text: a second run rewrites no row
+      - key: counts-only
+        text: the command prints the number of emails it scanned and rewrote, and no message content
+    provenance: [EmailQuoteTrimService.TrimStoredBodies, runTrimEmailQuotes]
+    notes: The command re-derives each row by the rule ingest uses (storedText) from what the row stores, so it makes no Gmail calls, and writes the body and quoted history together only where the body changes.

@@ -34,6 +34,7 @@ type CommsMessage struct {
 	ThreadID          *string
 	Subject           *string
 	Body              *string
+	QuotedHistory     *string
 	Snippet           *string
 	PeerHandle        *string
 	PeerNormalized    *string
@@ -64,6 +65,7 @@ type UpsertCommsMessageParams struct {
 	ThreadID         *string
 	Subject          *string
 	Body             *string
+	QuotedHistory    *string
 	Snippet          *string
 	PeerHandle       *string
 	PeerNormalized   *string
@@ -352,6 +354,7 @@ func convertDbCommsMessage(m *db.CommsMessage) CommsMessage {
 	msg.ThreadID = m.ThreadID
 	msg.Subject = m.Subject
 	msg.Body = m.Body
+	msg.QuotedHistory = m.QuotedHistory
 	msg.Snippet = m.Snippet
 	msg.PeerHandle = m.PeerHandle
 	msg.PeerNormalized = m.PeerNormalized
@@ -389,6 +392,7 @@ func buildUpsertCommsMessageParams(params UpsertCommsMessageParams) db.UpsertCom
 		ThreadID:         params.ThreadID,
 		Subject:          params.Subject,
 		Body:             params.Body,
+		QuotedHistory:    params.QuotedHistory,
 		Snippet:          params.Snippet,
 		PeerHandle:       params.PeerHandle,
 		PeerNormalized:   params.PeerNormalized,
@@ -1164,7 +1168,8 @@ func (r *CommsMessageRepository) ListEmailBodies(ctx context.Context, afterID uu
 	return out, nil
 }
 
-// UpdateBody rewrites one live row's stored body; nil stores no body.
-func (r *CommsMessageRepository) UpdateBody(ctx context.Context, id uuid.UUID, body *string) (int64, error) {
-	return r.queries.UpdateCommsMessageBody(ctx, db.UpdateCommsMessageBodyParams{ID: id, Body: body})
+// UpdateText rewrites one live row's stored body and quoted history together;
+// nil stores none.
+func (r *CommsMessageRepository) UpdateText(ctx context.Context, id uuid.UUID, body, quotedHistory *string) (int64, error) {
+	return r.queries.UpdateCommsMessageText(ctx, db.UpdateCommsMessageTextParams{ID: id, Body: body, QuotedHistory: quotedHistory})
 }
