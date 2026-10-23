@@ -51,6 +51,9 @@ import (
 // name the dictionary holds is written with that very word ("Teal'c"). A word
 // ending in 's is its head word and a suffix ("Emily's", "it's"): the head
 // matches a name by the rule every word does, and the suffix stays beside it.
+// A personal pronoun, and a contraction it heads ("I'll", "It's"), is no name
+// in upper or lower case, whatever name the dictionary holds or a span covers:
+// no match or span holds it, and the name's other words are masked around it.
 //
 // The user's own names become ME, even where another identity's name shares
 // one of their words; a participant's names and handles become its role label
@@ -110,7 +113,7 @@ func LoadMasker(ctx context.Context, content *repository.ThreadContentRepository
 // to what Mask hides or keeps: every masked method's version derives from
 // MaskingVersion, so a rerun then judges again instead of reusing judgments
 // made on the old masking.
-const maskingRules = "2026-10-22.1"
+const maskingRules = "2026-10-22.2"
 
 // MaskingVersion identifies how Mask masks with the name model's spans of the
 // version: its rules, the content of the common-word list they read and the
@@ -538,15 +541,17 @@ func (s *masking) mask(text string, addressHeader bool, names []NameSpan) string
 
 // spanned returns the ranges the name spans mask, unlabeled: each span
 // widened to every word it touches, whole, a word written with apostrophes
-// included ("Teal'c"). A span every word of which is a common English word
-// written in lower case is no name, as a dictionary match is none, and masks
-// nothing; an 's suffix is no word of it.
+// included ("Teal'c"), and split at each personal pronoun it touches, which
+// stays outside every range. A part every word of which is a common English
+// word written in lower case is no name, as a dictionary match is none, and
+// masks nothing; an 's suffix is no word of it.
 func (s *masking) spanned(text string, names []NameSpan) []span {
 	if len(names) == 0 {
 		return nil
 	}
 	tokens := tokenize(text)
 	joined, suffix := apostrophized(text, tokens)
+	pronoun := pronouns(tokens, joined, suffix)
 	// The range of the word each token is part of.
 	wordStart, wordEnd := make([]int, len(tokens)), make([]int, len(tokens))
 	for i, t := range tokens {
@@ -562,20 +567,32 @@ func (s *masking) spanned(text string, names []NameSpan) []span {
 	}
 	var out []span
 	for _, n := range names {
-		start, end, named := n.Start, n.End, false
+		// The tokens the span touches, in parts between its pronouns.
+		parts := [][]int{nil}
 		for i, t := range tokens {
 			if t.end <= n.Start || t.start >= n.End {
 				continue
 			}
-			start, end = min(start, wordStart[i]), max(end, wordEnd[i])
-			if suffix[i] {
+			if pronoun[i] {
+				parts = append(parts, nil)
 				continue
 			}
-			if !ordinaryWord(text[wordStart[i]:wordEnd[i]], cmp.Or(joined[i], t.lower)) {
-				named = true
-			}
+			parts[len(parts)-1] = append(parts[len(parts)-1], i)
 		}
-		if named {
+		for p, part := range parts {
+			named := slices.ContainsFunc(part, func(i int) bool {
+				return !suffix[i] && !ordinaryWord(text[wordStart[i]:wordEnd[i]], cmp.Or(joined[i], tokens[i].lower))
+			})
+			if !named {
+				continue
+			}
+			start, end := wordStart[part[0]], wordEnd[part[len(part)-1]]
+			if p == 0 {
+				start = min(start, n.Start)
+			}
+			if p == len(parts)-1 {
+				end = max(end, n.End)
+			}
 			out = append(out, span{start: start, end: end})
 		}
 	}
@@ -630,24 +647,25 @@ func (s *masking) merged(text string, spans []span) []span {
 }
 
 // runsBetween returns the words of text outside the identifier spans, which
-// are in text order, split into runs at each span, at each contraction and at
-// each 's suffix, none of which is a name: no name match crosses any of them,
-// so every span rendered is disjoint from the others. A contraction is a word
-// written with an apostrophe that is a common word ("I'll", "don't") and that
-// no name of the dictionary holds ("Teal'c"). Every other such word's parts
-// are words of their own.
+// are in text order, split into runs at each span, at each personal pronoun,
+// at each contraction and at each 's suffix, none of which is a name: no name
+// match crosses any of them, so every span rendered is disjoint from the
+// others. A contraction is a word written with an apostrophe that is a common
+// word ("don't") no name of the dictionary holds ("Teal'c"). Every other such
+// word's parts are words of their own.
 func (s *masking) runsBetween(text string, identifiers []span) [][]token {
 	runs := [][]token{nil}
 	next := 0
 	tokens := tokenize(text)
 	joined, suffix := apostrophized(text, tokens)
+	pronoun := pronouns(tokens, joined, suffix)
 	for i, t := range tokens {
 		for next < len(identifiers) && identifiers[next].end <= t.start {
 			next++
 			runs = append(runs, nil)
 		}
 		contraction := commonWords[joined[i]] && !s.namedWords[joined[i]]
-		if suffix[i] || contraction || (next < len(identifiers) && identifiers[next].start < t.end) {
+		if suffix[i] || pronoun[i] || contraction || (next < len(identifiers) && identifiers[next].start < t.end) {
 			runs = append(runs, nil)
 			continue
 		}
@@ -740,4 +758,24 @@ func namesSomeone(t token) bool {
 // makes it a possible name.
 func ordinaryWord(written, common string) bool {
 	return written == strings.ToLower(written) && commonWords[common]
+}
+
+// personalPronouns are the personal pronouns, which never name anyone.
+var personalPronouns = map[string]bool{"i": true, "me": true, "you": true, "he": true, "she": true, "it": true, "we": true, "they": true, "us": true, "them": true}
+
+// contractionTails are the endings an apostrophe joins to a pronoun ("I'm",
+// "you'd", "we'll", "they've", "you're", "it's").
+var contractionTails = map[string]bool{"m": true, "d": true, "ll": true, "ve": true, "re": true, "s": true}
+
+// pronouns reports, for each token, whether it is part of a personal pronoun
+// in any letter case, of a contraction one heads ("I'll", "we're") or of the
+// 's suffix after one ("It's"), given the words and suffixes apostrophized
+// returns for the tokens.
+func pronouns(tokens []token, joined []string, suffix []bool) []bool {
+	out := make([]bool, len(tokens))
+	for i, t := range tokens {
+		head, tail, contracted := strings.Cut(cmp.Or(joined[i], t.lower), "'")
+		out[i] = (personalPronouns[head] && (!contracted || contractionTails[tail])) || (suffix[i] && i > 0 && out[i-1])
+	}
+	return out
 }
