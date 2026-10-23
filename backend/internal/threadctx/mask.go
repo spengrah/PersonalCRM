@@ -542,9 +542,10 @@ func (s *masking) mask(text string, addressHeader bool, names []NameSpan) string
 // spanned returns the ranges the name spans mask, unlabeled: each span
 // widened to every word it touches, whole, a word written with apostrophes
 // included ("Teal'c"), and split at each personal pronoun it touches, which
-// stays outside every range. A part every word of which is a common English
-// word written in lower case is no name, as a dictionary match is none, and
-// masks nothing; an 's suffix is no word of it.
+// stays outside every range. A span every other word of which is a common
+// English word written in lower case is no name, as a dictionary match is
+// none, and masks nothing; an 's suffix is no word of it. Any other span masks
+// every part between its pronouns.
 func (s *masking) spanned(text string, names []NameSpan) []span {
 	if len(names) == 0 {
 		return nil
@@ -579,11 +580,16 @@ func (s *masking) spanned(text string, names []NameSpan) []span {
 			}
 			parts[len(parts)-1] = append(parts[len(parts)-1], i)
 		}
-		for p, part := range parts {
-			named := slices.ContainsFunc(part, func(i int) bool {
+		named := slices.ContainsFunc(parts, func(part []int) bool {
+			return slices.ContainsFunc(part, func(i int) bool {
 				return !suffix[i] && !ordinaryWord(text[wordStart[i]:wordEnd[i]], cmp.Or(joined[i], tokens[i].lower))
 			})
-			if !named {
+		})
+		if !named {
+			continue
+		}
+		for p, part := range parts {
+			if len(part) == 0 {
 				continue
 			}
 			start, end := wordStart[part[0]], wordEnd[part[len(part)-1]]
