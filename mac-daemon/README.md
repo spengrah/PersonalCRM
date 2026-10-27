@@ -2,7 +2,7 @@
 
 Single-binary Swift daemon that ingests Apple Messages + iCloud Contacts from a Mac and pushes events to the Pi-side Personal CRM API.
 
-See `../.agents/spec/mac-daemon.md` for the authoritative scope. This README covers local install + smoke procedures only.
+See https://github.com/spengrah/PersonalCRM/blob/9efb37ebd2157a2ac58c4b3c9c30703afce34f40/.agents/spec/mac-daemon.md for the authoritative scope. This README covers local install + smoke procedures only.
 
 ## Requirements
 

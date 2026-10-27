@@ -537,7 +537,7 @@ behaviors:
     provenance: [settings/mac/cursor-cell.ts renderCursorCell/cursorCellState, useMacHostSourceCounts, MacHostHandler.GetSourceCounts]
     notes: 'The regression guard for issue #327: an iCloud change-token cursor is meaningless to the operator, so the cell shows a live count only when the count is trustworthy (backfill complete) and otherwise the neutral placeholder — never the raw change-token. The counts endpoint contract is MAC-018.'
 
-  # --- Anarlog CLI source (spec: .agents/spec/2026-09-29-anarlog-cli-source.md) ---
+  # --- Anarlog CLI source ---
 
   - id: MAC-047
     title: Anarlog sessions are read through the Anarlog CLI
@@ -553,7 +553,6 @@ behaviors:
       - a session younger than three hours is not sent
       - a session at least three hours old, and any later change to it, reaches the CRM within the spec's latency target while the daemon runs
       - a session created before the backfill floor is never sent
-    provenance: [.agents/spec/2026-09-29-anarlog-cli-source.md]
 
   - id: MAC-048
     title: A changed Anarlog session is re-sent
@@ -566,7 +565,6 @@ behaviors:
       - the session is sent again on a later tick
       - the change is detected from the CLI's record of the session, not from Anarlog's updated-at timestamp
       - a session whose record is unchanged is not sent again
-    provenance: [.agents/spec/2026-09-29-anarlog-cli-source.md]
 
   - id: MAC-049
     title: An Anarlog session that disappears is deleted in the CRM
@@ -580,7 +578,6 @@ behaviors:
       - a tick whose deletions exceed the cap sends no deletions and raises the broken-source notification naming the withheld count
       - an empty listing never deletes more sessions than the cap allows
       - the notification clears once a tick's deletions fall within the cap
-    provenance: [.agents/spec/2026-09-29-anarlog-cli-source.md]
 
   - id: MAC-050
     title: Anarlog people are derived from session participants
@@ -594,7 +591,6 @@ behaviors:
       - a change to a person is sent even when none of their sessions changed
       - a person who participates in no eligible session is not sent
       - people sync whether or not the Anarlog sessions source is enabled
-    provenance: [.agents/spec/2026-09-29-anarlog-cli-source.md]
 
   - id: MAC-051
     title: The operator's Anarlog identity is configured, never inferred
@@ -606,7 +602,6 @@ behaviors:
     then:
       - the Anarlog sources send nothing
       - the daemon raises the Anarlog source-broken notification naming the missing setting
-    provenance: [.agents/spec/2026-09-29-anarlog-cli-source.md]
 
   - id: MAC-052
     title: A broken Anarlog CLI raises one sticky notification
@@ -622,7 +617,6 @@ behaviors:
       - a single failed tick followed by a clean one raises no notification
       - additional fields the daemon does not use never raise the notification
       - the notification is removed on the next clean tick
-    provenance: [.agents/spec/2026-09-29-anarlog-cli-source.md]
 
   - id: MAC-053
     title: A quiet Anarlog source raises one notification
@@ -634,7 +628,6 @@ behaviors:
     then:
       - one macOS notification says no new Anarlog sessions have arrived
       - the notification is removed once a session created within the last 14 days appears
-    provenance: [.agents/spec/2026-09-29-anarlog-cli-source.md]
 
   - id: MAC-054
     title: Anarlog data is read only through the Anarlog CLI
@@ -642,7 +635,6 @@ behaviors:
     status: current
     surface: none
     statement: the daemon reads Anarlog sessions and people only through the Anarlog CLI's JSON output and never reads Anarlog's database or its legacy session and people file tree directly.
-    provenance: [.agents/spec/2026-09-29-anarlog-cli-source.md]
 
   - id: MAC-055
     title: The Anarlog people source never deletes a person
@@ -650,9 +642,8 @@ behaviors:
     status: current
     surface: none
     statement: the Anarlog people source never sends a person deletion; an identity the CRM holds is kept when the person's last session is deleted, when they are removed from a session, or when they stop appearing in the CLI's output.
-    provenance: [.agents/spec/2026-09-29-anarlog-cli-source.md]
 
-  # --- iMessage body capture and re-scan (spec: .agents/spec/2026-10-13-interaction-review-readiness.md) ---
+  # --- iMessage body capture and re-scan ---
 
   - id: MAC-056
     title: The daemon captures an iMessage body from either stored representation
@@ -666,7 +657,7 @@ behaviors:
       - a body made only of attachment placeholders or whitespace is published as no body
       - a rich-text body that cannot be decoded is published as no body
       - every daemon read of the messages database, whether a live tick, a backfill, or an operator scan, decides a message's body through the same single step
-    provenance: [MessageBodyExtractor.extract, ChatDBReader, .agents/spec/2026-10-13-interaction-review-readiness.md]
+    provenance: [MessageBodyExtractor.extract, ChatDBReader]
     notes: Group-chat capture is outside this behavior.
 
   - id: MAC-057
@@ -693,7 +684,7 @@ behaviors:
         text: submitting the same items again changes nothing, and the answer reports each item as unchanged
       - key: invalid-request-writes-nothing
         text: a request with an unknown op, an item missing its guid or body, more than the per-request item cap, or a body over the request size cap is rejected whole, and none of its items is written
-    provenance: [MessagesEnrichmentHandler.ListMissingBodies/FillBodies, MessagesEnrichmentService, messages_enrichment_test.go, .agents/spec/2026-10-13-interaction-review-readiness.md]
+    provenance: [MessagesEnrichmentHandler.ListMissingBodies/FillBodies, MessagesEnrichmentService, messages_enrichment_test.go]
     notes: Group-chat messages are outside this behavior.
 
   - id: MAC-064
@@ -722,7 +713,7 @@ behaviors:
         text: a request with a set_reaction item that misses its guid or its reaction, or whose reaction is invalid as ingest judges one (ING-048), or with more than the per-request item cap, is rejected whole, and none of its items is written
       - key: requires-host-credentials
         text: a request without the host's bearer key is refused, and writes nothing
-    provenance: [MessagesEnrichmentHandler.ListWithoutReactionFacts/ApplyItems, MessagesEnrichmentService.ListWithoutReactionFacts/markOne, messages_enrichment_reaction_test.go, .agents/spec/2026-10-21-message-reactions.md]
+    provenance: [MessagesEnrichmentHandler.ListWithoutReactionFacts/ApplyItems, MessagesEnrichmentService.ListWithoutReactionFacts/markOne, messages_enrichment_reaction_test.go]
     notes: The answer's per-outcome counts carry marked beside the other enrichment outcomes. Ingest stores a live message with an invalid reaction object as one without facts, while this exchange rejects the request, because an operator run can be corrected and rerun. The re-scan that drives this exchange is MAC-063.
 
   - id: MAC-058
@@ -739,10 +730,10 @@ behaviors:
       - the script reads the messages database read-only and writes no file, so a body exists only in memory and in the request that carries it to the Pi
       - a second run submits nothing the first run filled and reports the same classification
       - a Pi that rejects a request, cannot be reached, or cannot hold a body in one request ends the run non-zero with no report
-    provenance: [rescan-messages, RescanMessagesTests, .agents/spec/2026-10-13-interaction-review-readiness.md]
+    provenance: [rescan-messages, RescanMessagesTests]
     notes: The script is an operator tool run from the source tree. It is not part of the shipped daemon, its subcommands, or its assembled bundle.
 
-  # --- Group-chat capture and re-scan (spec: .agents/spec/2026-10-13-interaction-review-readiness.md) ---
+  # --- Group-chat capture and re-scan ---
 
   - id: MAC-060
     title: The daemon publishes group-chat messages from non-contacts and the user's own, naming no member for the user's
@@ -762,7 +753,7 @@ behaviors:
         text: a one-to-one message is still published only when its peer is a known contact, and an outbound one still names that peer
       - key: every-read-path-same-rule
         text: the live tick, the backfill and the scan decide which messages are published and which peer each carries through the same single step
-    provenance: [MessagesSourcePlugin.filterAndShape, ChatDBReader.resolveGroupMembers, GroupChatCaptureTests, .agents/spec/2026-10-13-interaction-review-readiness.md]
+    provenance: [MessagesSourcePlugin.filterAndShape, ChatDBReader.resolveGroupMembers, GroupChatCaptureTests]
     notes: What the Pi does with these messages is ING-041 and ING-043.
 
   - id: MAC-061
@@ -787,10 +778,10 @@ behaviors:
         text: a second run against the state the first left reports no add and no clear
       - key: failure-ends-run-non-zero
         text: a Pi that rejects the listing or a submission, or cannot be reached, ends the run non-zero with no further submission and no body pass
-    provenance: [rescan-messages, ChatDBReader.fetchChatWindow, GroupPassTests, ChatWindowReadTests, .agents/spec/2026-10-13-interaction-review-readiness.md]
+    provenance: [rescan-messages, ChatDBReader.fetchChatWindow, GroupPassTests, ChatWindowReadTests]
     notes: Like the body pass (MAC-058), the group pass is an operator tool run from the source tree. It is not part of the shipped daemon, its subcommands, or its assembled bundle.
 
-  # --- Reaction facts (spec: .agents/spec/2026-10-21-message-reactions.md) ---
+  # --- Reaction facts ---
 
   - id: MAC-062
     title: The daemon publishes a reaction's facts with the reaction message
@@ -816,7 +807,7 @@ behaviors:
         text: the body, message type, reply link and every other payload field are published as they are for a message that carries no facts
       - key: every-read-path-same-step
         text: the live tick, the backfill, the scan and the re-scan script decide a row's facts through the same single step
-    provenance: [ReactionRecognition.facts, ChatDBReader.mapMessageRow, PayloadShaping.shape, MessageReaction, ReactionCaptureTests, .agents/spec/2026-10-21-message-reactions.md]
+    provenance: [ReactionRecognition.facts, ChatDBReader.mapMessageRow, PayloadShaping.shape, MessageReaction, ReactionCaptureTests]
     notes: How the Pi stores the facts is ING-048. An older daemon sends no reaction object, and the Pi stores its messages as before.
 
   - id: MAC-063
@@ -841,5 +832,5 @@ behaviors:
         text: a second run against the state the first left submits nothing
       - key: failure-ends-run-non-zero
         text: a Pi that rejects the listing or a submission, or cannot be reached, ends the run non-zero with no report
-    provenance: [rescan-messages, ReactionRecognition.facts, ReactionPassTests, .agents/spec/2026-10-21-message-reactions.md]
+    provenance: [rescan-messages, ReactionRecognition.facts, ReactionPassTests]
     notes: Like the body pass (MAC-058) and the group pass (MAC-061), the reaction pass is an operator tool run from the source tree. The Pi's half of the exchange is MAC-064.

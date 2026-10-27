@@ -2,7 +2,7 @@ package scheduler
 
 // SchedulerTickArgs are the args for the 5-minute periodic job that enumerates
 // due sync states and enqueues per-account jobs. See
-// .agents/spec/event-bus-foundation.md §3.6 and §3.7.
+// https://github.com/spengrah/PersonalCRM/blob/9efb37ebd2157a2ac58c4b3c9c30703afce34f40/.agents/spec/event-bus-foundation.md §3.6 and §3.7.
 type SchedulerTickArgs struct{}
 
 // Kind implements river.JobArgs.

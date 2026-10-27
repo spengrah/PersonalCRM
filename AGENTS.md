@@ -58,4 +58,4 @@ Repo rules get anything another agent or environment needs. Private memory gets 
 ## Privacy
 
 - **Never include PII in code, comments, commit messages, PR descriptions, GitHub issues, plan docs, or any other repo artifact.** PII = real contact full names, email addresses, phone numbers, contact UUIDs, account IDs, prod hostnames, anything that could identify a real person or system. Use placeholders ("contact A", "the affected contact", "two contacts on date X", `<prod-host>`), redact UUIDs, and keep specifics in private notes outside the repo. The repo is the user's own CRM and the data inside it is real — leaking PII into git history is irreversible.
-- `.agents/log/` is gitignored (safe scratch space for plans and raw prod observations).
+- `.agents/log/` is gitignored (safe scratch space for raw prod observations and verify evidence). Design documents (specs, arcs, plans, reviews and the rest) live in the bosun memory store, reached at `.agents/docs/<class>/` (classes: spec, arc, plan, progress, exploration, review, roadmap, research, pr, archive). A fresh clone has no `.agents/docs/`, so no tracked file points there.

@@ -762,5 +762,4 @@ behaviors:
         text: no gmail_participant create candidate is produced from it
       - key: no-correspondence-evidence
         text: it adds no message count or co-occurrence evidence to any gmail_correspondence link candidate
-    provenance: [.agents/spec/2026-10-20-gmail-calendar-invites.md]
     notes: Pairs with ING-046, which drops the same messages from storage.

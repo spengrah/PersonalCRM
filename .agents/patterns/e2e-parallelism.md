@@ -1,6 +1,6 @@
 # E2E Parallelism — writing parallel-safe Playwright tests
 
-Every worker in the Playwright suite runs against the same Postgres DB, backend, and frontend. Tests stay safe under parallelism by never observing another worker's data, not by hoping workers don't collide. See `.agents/spec/2026-07-16-e2e-parallelization-design.md` for the audit and full rationale.
+Every worker in the Playwright suite runs against the same Postgres DB, backend, and frontend. Tests stay safe under parallelism by never observing another worker's data, not by hoping workers don't collide. See https://github.com/spengrah/PersonalCRM/blob/9efb37ebd2157a2ac58c4b3c9c30703afce34f40/.agents/spec/2026-07-16-e2e-parallelization-design.md for the audit and full rationale.
 
 ## The prefix contract
 

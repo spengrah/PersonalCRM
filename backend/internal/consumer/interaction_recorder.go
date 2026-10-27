@@ -1,6 +1,6 @@
 // Package consumer holds the event-bus consumer services that subscribe
 // to events and perform domain writes. See
-// .agents/spec/event-bus-foundation.md §3.4.
+// https://github.com/spengrah/PersonalCRM/blob/9efb37ebd2157a2ac58c4b3c9c30703afce34f40/.agents/spec/event-bus-foundation.md §3.4.
 //
 // InteractionRecorder is the sole writer of interaction rows for its
 // six input kinds (message.received/sent, calendar.attended,

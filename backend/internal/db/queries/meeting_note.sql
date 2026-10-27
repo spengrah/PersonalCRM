@@ -1,5 +1,5 @@
 -- Meeting Note queries
--- Spec: .agents/spec/mac-daemon-phase-2-anarlog-matching.md
+-- Spec: https://github.com/spengrah/PersonalCRM/blob/9efb37ebd2157a2ac58c4b3c9c30703afce34f40/.agents/spec/mac-daemon-phase-2-anarlog-matching.md
 
 -- name: InsertMeetingNote :one
 -- Inserts a meeting_note staging row. linkage_state must be supplied by the
