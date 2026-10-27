@@ -1,7 +1,7 @@
 # consumer
 
 Consumer services that subscribe to events and perform domain writes
-(see issue #180 and `.agents/spec/event-bus-foundation.md`).
+(see issue #180 and https://github.com/spengrah/PersonalCRM/blob/9efb37ebd2157a2ac58c4b3c9c30703afce34f40/.agents/spec/event-bus-foundation.md).
 
 ## Consumers
 

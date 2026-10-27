@@ -43,7 +43,7 @@ inert until `SyncService.ReconcileGChatSyncStates`
 account whose stored requested-scope list contains ALL THREE chat scopes
 (`chat.spaces.readonly`, `chat.messages.readonly`, `chat.memberships.readonly`),
 so the feature does no work until the operator re-consents — see
-`.agents/spec/2026-06-04-gchat-integration-design.md` §7.
+https://github.com/spengrah/PersonalCRM/blob/9efb37ebd2157a2ac58c4b3c9c30703afce34f40/.agents/spec/2026-06-04-gchat-integration-design.md §7.
 
 **Not every push source has a provider stub.** The `anarlog_humans` and
 `anarlog_sessions` push sources are accepted by the ingest pipeline but

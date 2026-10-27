@@ -1821,7 +1821,7 @@ type desiredInteraction struct {
 // meeting_note.recorded envelope inside the per-event savepoint.
 //
 // Implements the full linkage-detection algorithm per
-// .agents/spec/mac-daemon-phase-2-anarlog-matching.md §Linkage detection,
+// https://github.com/spengrah/PersonalCRM/blob/9efb37ebd2157a2ac58c4b3c9c30703afce34f40/.agents/spec/mac-daemon-phase-2-anarlog-matching.md §Linkage detection,
 // including Step 3 participant-signal disambiguation: 2+ candidates
 // with a strict-max-non-zero overlap against the implied set (tagged
 // ∪ title-matched) auto-link; otherwise the row lands on

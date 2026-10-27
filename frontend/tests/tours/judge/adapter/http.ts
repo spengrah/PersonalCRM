@@ -23,7 +23,7 @@ export function makeHttpJudge(opts: HttpJudgeOptions = {}): Judge {
   return async (input: JudgeInput): Promise<PerItemVerdict[]> => {
     if (!url) {
       throw new Error(
-        'QA_JUDGE_HTTP_URL is not set — the HTTP judge is an interface stub (see .agents/spec/2026-07-19-codex-sdk-judge-transport.md)'
+        'QA_JUDGE_HTTP_URL is not set — the HTTP judge is an interface stub (see https://github.com/spengrah/PersonalCRM/blob/9efb37ebd2157a2ac58c4b3c9c30703afce34f40/.agents/spec/2026-07-19-codex-sdk-judge-transport.md)'
       )
     }
     // This adapter posts text only — it cannot attach image files, so the

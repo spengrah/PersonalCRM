@@ -659,7 +659,7 @@ Pi-side surface in PR1 is:
 
 Subsequent PRs add the Swift daemon, source readers (Messages, iCloud
 Contacts), the aggregator extraction, and the new event kinds. See
-`.agents/spec/mac-daemon.md` for the full phase spec.
+https://github.com/spengrah/PersonalCRM/blob/9efb37ebd2157a2ac58c4b3c9c30703afce34f40/.agents/spec/mac-daemon.md for the full phase spec.
 
 ---
 

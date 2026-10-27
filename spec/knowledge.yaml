@@ -505,7 +505,6 @@ behaviors:
         text: an observation can name only an interaction node, never a person, venue, or entity node
       - key: merge-alias
         text: an interaction node merged into another aliases its winner through the registry's merge alias, keeps no tombstone, and moves no assertion; an alias, once set, never changes
-    provenance: [.agents/spec/2026-10-13-interaction-review-readiness.md]
     notes: Interaction nodes join the structural tier beside venues and entities. Corrections and claims about an interaction attach to the node in later behaviors of this domain.
 
   - id: KNW-037
@@ -530,7 +529,6 @@ behaviors:
         text: the judged nodes, members and scope stay readable after any later merge, because a correction stays bound to the node it judged and a merge never rewrites an alias or an assertion
       - key: raw-evidence-survives
         text: no correction changes or removes an observation or a content row
-    provenance: [.agents/spec/2026-10-13-interaction-review-readiness.md]
     notes: The correction predicates are marked in the predicate catalog, the one source of that set. Effective participation derives from observations, merge aliases and these accepted assertions alone (IXN-016, IXN-017, IXN-018); a proposed, rejected or retracted correction excludes nothing.
 
   - id: KNW-038
@@ -562,7 +560,7 @@ behaviors:
         text: two methods agreeing on one input stay two judgments, and the accepted fact (an obligation's task, a flag) is a record apart from the judgments behind it
       - key: one-per-method-version-and-input
         text: a method version holds at most one judgment per thread, input hash and what it read (KNW-062); a run that meets it again records it at its own cut-off and lists it among its threads, sending nothing
-    provenance: [judgment.Store.RecordJudgment, judgment.Store.ReuseJudgment, 092_judgment_store.up.sql, .agents/spec/2026-10-14-decision-model-extraction.md G4 HC4 HC10]
+    provenance: [judgment.Store.RecordJudgment, judgment.Store.ReuseJudgment, 092_judgment_store.up.sql]
 
   - id: KNW-044
     title: The apply rule is catalog data the shared assertion write path enforces
@@ -586,7 +584,7 @@ behaviors:
         text: an applied big-moment outcome raises a flag on the thread, a participant's moment and another person's moment read apart
       - key: catalog-alone-decides
         text: the landing comes from the judgment predicates' catalog rows alone; no request field, forced confirmation included, changes it, so loosening the rule is a catalog edit
-    provenance: [AssertService landsAccepted, 093_judgment_predicates.up.sql, judgment.Store.landTx, .agents/spec/2026-10-14-decision-model-extraction.md G6 HC5 NG9 SC6 SC8 SC10]
+    provenance: [AssertService landsAccepted, 093_judgment_predicates.up.sql, judgment.Store.landTx]
 
   - id: KNW-045
     title: Only the production method's current judgments in scheduled and historical runs change live state
@@ -604,7 +602,7 @@ behaviors:
         text: a judgment whose cut-off precedes the thread's latest content is evidence
       - key: effect-decided-by-appearing-run
         text: whether an appearance changes live state is decided by the run it appears in, and an effect applied once is never applied again
-    provenance: [judgment.Store.changesLiveState, config.DecisionConfig, .agents/spec/2026-10-14-decision-model-extraction.md HC7 "only a current judgment opens an obligation"]
+    provenance: [judgment.Store.changesLiveState, config.DecisionConfig]
 
   - id: KNW-046
     title: A review states the right outcome and the verdict is derived from it
@@ -624,7 +622,7 @@ behaviors:
         text: reviewing an evidence outcome records the label and changes no live state
       - key: invalid-right-outcome-refused
         text: an empty right outcome, or one not among the question's outcome values, is refused and nothing is recorded
-    provenance: [judgment.Store.ReviewOutcome, .agents/spec/2026-10-14-decision-model-extraction.md G5 G8]
+    provenance: [judgment.Store.ReviewOutcome]
 
   - id: KNW-047
     title: The user's verdict wins over a later judgment of the same input
@@ -640,7 +638,7 @@ behaviors:
         text: another method's or version's outcome on the reviewed question is evidence and never overwrites the user's correction
       - key: changed-content-reopens
         text: changed content, a new input hash, reopens the question
-    provenance: [judgment.Store.landTx, .agents/spec/2026-10-14-decision-model-extraction.md HC6 SC9]
+    provenance: [judgment.Store.landTx]
 
   - id: KNW-048
     title: Example IDs are opaque and the export reads carry no content or identities
@@ -656,7 +654,7 @@ behaviors:
         text: each reviewed example lists the user's latest right outcome per question and contact, labelling that input for every method; a method's outcomes are read by example, and an example the method did not judge is absent
       - key: export-records-content-free
         text: finished runs, the judgments appearing in a run (reused ones included) and the reviews are keyed by example ID and question ID, with no thread content, thread ID or contact ID
-    provenance: [judgment.Store.ReviewedExamples, judgment.Store.OutcomesFor, judgment.Store.FinishedRuns, judgment.Store.JudgmentRecords, judgment.Store.ReviewRecords, .agents/spec/2026-10-14-decision-model-extraction.md G12 G15]
+    provenance: [judgment.Store.ReviewedExamples, judgment.Store.OutcomesFor, judgment.Store.FinishedRuns, judgment.Store.JudgmentRecords, judgment.Store.ReviewRecords]
 
   - id: KNW-049
     title: The review route records a right outcome and returns the derived verdict
@@ -712,7 +710,7 @@ behaviors:
         text: each judgment reads its window of the thread's content up to its cut-off (KNW-055), content from before the range included
       - key: writes-as-production
         text: each judgment and incomplete report is recorded through the judgment store as a production run's would be, so the production method's current judgments change live state
-    provenance: [judgerun.Runner.Historical, judgerun.eachEligible, judgerun.Days.CutOffs, crm-admin --judge-start-day --judge-end-day, .agents/spec/2026-10-14-decision-model-extraction.md G10 SC1 "historical runs simulate the production schedule"]
+    provenance: [judgerun.Runner.Historical, judgerun.eachEligible, judgerun.Days.CutOffs, crm-admin --judge-start-day --judge-end-day]
 
   - id: KNW-052
     title: Every eligible thread of a run ends with a recorded judgment or an incomplete report
@@ -732,7 +730,7 @@ behaviors:
         text: a context whose newest message alone exceeds the method's limits is reported message_over_limit without being sent
       - key: summary-counts-both
         text: the run's summary counts the eligible thread contexts and how each ended, judged, reused or incomplete by reason
-    provenance: [judgerun.Runner.judge, judgerun.judgeWithRetries, .agents/spec/2026-10-14-decision-model-extraction.md G11 HC11 SC1]
+    provenance: [judgerun.Runner.judge, judgerun.judgeWithRetries]
 
   - id: KNW-053
     title: A run sends each thread context at most once per method version and input
@@ -748,7 +746,7 @@ behaviors:
         text: a group thread is sent once per cut-off per method, never once per member
       - key: rerun-reviewed-examples
         text: a rerun replays each reviewed example's thread, as an evidence-only run, from the start of the run the reviewed judgment appeared in (KNW-062), in place of judging it at the example's cut-off alone, reusing any judgment that read the same, and reports an example whose rebuilt input differs as input_changed
-    provenance: [judgerun.Runner.judge, judgerun.Runner.Rerun, judgment.Store.ReuseJudgment, .agents/spec/2026-10-14-decision-model-extraction.md HC10 SC9]
+    provenance: [judgerun.Runner.judge, judgerun.Runner.Rerun, judgment.Store.ReuseJudgment]
 
   - id: KNW-054
     title: Runs check the production designation before any call and report content-free without blocking
@@ -770,7 +768,7 @@ behaviors:
         text: a historical run's summary counts the new messages left unjudged, by reason (KNW-058)
       - key: content-free-never-blocking
         text: run output holds only IDs, counts, probabilities and reasons, and no run refuses or stops on a size or a count
-    provenance: [judgerun.New, judgerun.Runner.Measure, judgerun.Summary, crm-admin --judge-start-day --judge-end-day --measure, .agents/spec/2026-10-14-decision-model-extraction.md HC1 HC7 G15 "Assumptions & deferred questions"]
+    provenance: [judgerun.New, judgerun.Runner.Measure, judgerun.Summary, crm-admin --judge-start-day --judge-end-day --measure]
 
   # --- Message flags and windows ---
 
@@ -790,7 +788,6 @@ behaviors:
         text: no message is split, so a window starts at a message boundary
       - key: newest-message-over-limit-incomplete
         text: a context whose newest message alone exceeds the limits is reported incomplete with reason message_over_limit and nothing is sent
-    provenance: [.agents/spec/2026-10-18-message-flags-and-threads.md G1 T1]
 
   - id: KNW-056
     title: A cut-off's content leaves once per thread context per method
@@ -804,7 +801,6 @@ behaviors:
         text: the cut-off's content leaves in one call that carries every flag, clearing and ball-in-court question
       - key: over-question-limit-fewest-further-calls
         text: when the questions exceed the method's question limit, the fewest further calls over the same window carry the rest
-    provenance: [.agents/spec/2026-10-18-message-flags-and-threads.md G1 HC1]
 
   - id: KNW-057
     title: A judgment flags each new message once per flag kind
@@ -826,7 +822,6 @@ behaviors:
         text: at any later cut-off the new messages are those after the previous scheduled cut-off (the nightly cut-off immediately before) and at or before this one
       - key: meeting-notes-flagged-no-ball-in-court
         text: meeting notes are flagged and asked no ball-in-court question
-    provenance: [.agents/spec/2026-10-18-message-flags-and-threads.md G2 T2 T3 T4 A1]
 
   - id: KNW-058
     title: A new message no judgment answered is recorded unjudged, never as a no
@@ -842,7 +837,6 @@ behaviors:
         text: the message is counted as unjudged and never as a no
       - key: rerun-judges-it
         text: rerunning its cut-off judges it
-    provenance: [.agents/spec/2026-10-18-message-flags-and-threads.md G2 T5b SC10]
 
   - id: KNW-059
     title: A method re-checks its own earlier commitments and clears the done ones
@@ -858,7 +852,6 @@ behaviors:
         text: a commitment is cleared once one of its clearing decisions answers done
       - key: outside-window-neither-cleared-nor-kept
         text: a commitment whose message lies before the window is not re-checked, and that judgment neither clears nor keeps it
-    provenance: [.agents/spec/2026-10-18-message-flags-and-threads.md G3 T5a A2]
 
   - id: KNW-060
     title: Flag decisions, clearing decisions and unjudged messages change no live state
@@ -874,7 +867,6 @@ behaviors:
         text: it closes or changes no task, obligation or live flag
       - key: reply-obligations-keep-apply-rule
         text: ball-in-court's reply obligations still follow the apply rule (KNW-044) within the window rules (CAD-061)
-    provenance: [.agents/spec/2026-10-18-message-flags-and-threads.md G5 HC2]
 
   - id: KNW-061
     title: A new method version asks only flag, clearing and ball-in-court questions
@@ -888,7 +880,6 @@ behaviors:
         text: it asks only flag, clearing and ball-in-court questions
       - key: no-whole-thread-questions
         text: it asks no whole-thread commitment, date, source-message or big-moment question
-    provenance: [.agents/spec/2026-10-18-message-flags-and-threads.md G7]
 
   - id: KNW-062
     title: A run replays cut-offs in order and reuses a judgment only when what it read is the same
@@ -904,7 +895,6 @@ behaviors:
         text: the run reuses a recorded judgment only when what it read is the same, meaning its window, its new messages and the earlier judgments it re-checked
       - key: different-read-judged-anew
         text: a context whose recorded judgments all read something different is judged anew
-    provenance: [.agents/spec/2026-10-18-message-flags-and-threads.md AD4]
 
   - id: KNW-063
     title: The store's reads return window starts, new messages, flag decisions, clearing decisions and unjudged counts
@@ -920,7 +910,6 @@ behaviors:
         text: a judgment of a method version from before windows and flags reads back with no new messages, flag decisions or clearing decisions, and its window starting at its context's first message
       - key: run-read-counts-unjudged-by-reason
         text: the run read returns each run's unjudged messages, counted by reason
-    provenance: [.agents/spec/2026-10-18-message-flags-and-threads.md AD1 G6 S1]
 
   - id: KNW-064
     title: The display threshold and the clearing floor are stored data with one source each
@@ -936,7 +925,6 @@ behaviors:
         text: a method's display threshold is strictly above its clearing floor
       - key: threshold-change-needs-no-rerun
         text: changing a display threshold needs no rerun, since every probability is stored
-    provenance: [.agents/spec/2026-10-18-message-flags-and-threads.md AD3 S2]
 
   - id: KNW-065
     title: Every method's judgment of one thread context records the same example
@@ -950,7 +938,6 @@ behaviors:
         text: every method's judgment records one example, naming the thread and the full context's input hash
       - key: hash-of-full-context-whatever-window
         text: the input hash is that of the full context, whatever window the method read
-    provenance: [.agents/spec/2026-10-18-message-flags-and-threads.md G1]
 
   - id: KNW-066
     title: The Langfuse export of window starts, flag decisions, clearing decisions and unjudged messages is content-free
@@ -966,7 +953,6 @@ behaviors:
         text: they carry no message text, sender or contact identity
       - key: message-keys-opaque-candidates
         text: message keys travel as opaque candidates
-    provenance: [.agents/spec/2026-10-18-message-flags-and-threads.md G6 HC3]
 
   - id: KNW-067
     title: A method reads only its window and its own earlier judgments
@@ -980,7 +966,6 @@ behaviors:
         text: its inputs are its window and its own earlier judgments
       - key: reads-no-review-or-label
         text: no method reads a review or a label, so methods stay comparable
-    provenance: [.agents/spec/2026-10-18-message-flags-and-threads.md HC4 A2]
 
   # --- Chunked nights and the compared methods ---
 
@@ -1000,7 +985,7 @@ behaviors:
         text: the new messages are spread evenly over the chunks, their counts differing by at most one
       - key: flagged-once-in-its-chunk
         text: each new message is flagged once per flag kind, in its chunk
-    provenance: [decision.method.Plan, decision.method.chunk, decision.method.spread, decision.method.window, .agents/spec/2026-10-18-message-flags-and-threads.md G15 SC11, decision 20261019T142354Z-73bbb941ef65]
+    provenance: [decision.method.Plan, decision.method.chunk, decision.method.spread, decision.method.window, decision 20261019T142354Z-73bbb941ef65]
 
   - id: KNW-069
     title: Each chunk of a night re-checks the commitments inside its window
@@ -1018,7 +1003,7 @@ behaviors:
         text: a commitment an earlier chunk of the night answered done is not asked again
       - key: one-clearing-latest-answer
         text: the night's judgment holds one clearing decision per commitment re-checked, carrying the latest chunk's answer
-    provenance: [decision.method.window, decision.method.Judge, .agents/spec/2026-10-18-message-flags-and-threads.md G15 G3]
+    provenance: [decision.method.window, decision.method.Judge]
 
   - id: KNW-070
     title: Ball-in-court is asked once per chunked night, in its last chunk
@@ -1032,7 +1017,7 @@ behaviors:
         text: ball-in-court is asked once, in the last chunk, about the thread's state at the cut-off; no earlier chunk asks it
       - key: evidence-against-last-chunk-window
         text: the reply-obligation rule (CAD-061) compares an obligation's evidence with the last chunk's window, so evidence before that window leaves the obligation as it was even when an earlier chunk's window holds it
-    provenance: [decision.windowOf, judgment.Store.landTx, migration 100, .agents/spec/2026-10-18-message-flags-and-threads.md G15 G4]
+    provenance: [decision.windowOf, judgment.Store.landTx, migration 100]
 
   - id: KNW-071
     title: A new method version leaves no new message unjudged for lying before its window
@@ -1048,7 +1033,7 @@ behaviors:
         text: a new message that alone exceeds the method's limits is recorded only as unjudged message_over_limit, never among the judgment's new messages and with no flag decision, and the night's other new messages are judged around it
       - key: oversized-newest-incomplete
         text: a night whose newest message alone exceeds the limits is reported incomplete with message_over_limit and every new message unjudged message_over_limit, as before chunks (KNW-055)
-    provenance: [judgerun.Runner.judge, decision.Plan.OverLimit, .agents/spec/2026-10-18-message-flags-and-threads.md G15 SC11 D2 T5b]
+    provenance: [judgerun.Runner.judge, decision.Plan.OverLimit]
 
   - id: KNW-072
     title: A chunked night reads back as one judgment
@@ -1066,7 +1051,7 @@ behaviors:
         text: its new messages are the night's new messages its chunks answered, in thread order, each with one flag decision per kind
       - key: unjudged-not-new
         text: a new message no chunk answered appears among the run's unjudged messages, never among the judgment's new messages, and has no flag decision
-    provenance: [judgment.Store.RecordJudgment, judgment.Store.ListJudgments, .agents/spec/2026-10-18-message-flags-and-threads.md G15 G1 AD2, threads-tab arc S1]
+    provenance: [judgment.Store.RecordJudgment, judgment.Store.ListJudgments, threads-tab arc S1]
 
   - id: KNW-073
     title: A chunked night's judgment is reused only when every chunk read the same
@@ -1084,7 +1069,7 @@ behaviors:
         text: a night that now splits into a different number of chunks is judged again, even when its first window start and new messages are the same
       - key: different-later-window-judged-again
         text: a night whose later chunk now reads a different window is judged again, even when its chunks and first window are the same
-    provenance: [judgment.Read.digest, decision.method.chunking, .agents/spec/2026-10-18-message-flags-and-threads.md AD4 G15]
+    provenance: [judgment.Read.digest, decision.method.chunking]
 
   - id: KNW-074
     title: Runs and the scorecard accept only the compared methods
@@ -1102,7 +1087,7 @@ behaviors:
         text: a production designation naming a removed method is refused as one naming an unknown method is
       - key: stored-judgments-still-read
         text: a removed method's stored judgments, with their flag decisions, and its runs still read from the judgment store
-    provenance: [decision.NewRegistry, judgerun.New, scorecard.Scorecard.selectMethods, .agents/spec/2026-10-18-message-flags-and-threads.md G16, decisions 20261019T135325Z-b40e61f4e0d5 and 20261019T142002Z-781d8c72e07a]
+    provenance: [decision.NewRegistry, judgerun.New, scorecard.Scorecard.selectMethods, decisions 20261019T135325Z-b40e61f4e0d5 and 20261019T142002Z-781d8c72e07a]
 
   - id: KNW-075
     title: A flag label belongs to a flag decision and is shared by every method, run and cut-off
@@ -1118,7 +1103,7 @@ behaviors:
         text: the decision has at most one current label, and a later review replaces it
       - key: shared-by-every-judgment
         text: the label is shared by every method, run and cut-off that judged that message and kind
-    provenance: [.agents/spec/2026-10-18-message-flags-and-threads.md T5 AD2, designs/threads.md]
+    provenance: [designs/threads.md]
 
   - id: KNW-076
     title: A clearing label belongs to a clearing decision and is shared by every method
@@ -1134,7 +1119,7 @@ behaviors:
         text: the decision has at most one current label, and a later review replaces it
       - key: shared-by-every-method
         text: the label is shared by every method's clearing decision of that commitment at that cut-off
-    provenance: [.agents/spec/2026-10-18-message-flags-and-threads.md T5a AD2, designs/threads.md]
+    provenance: [designs/threads.md]
 
   - id: KNW-077
     title: The judgment store reads a thread's current flag and clearing labels
@@ -1152,7 +1137,7 @@ behaviors:
         text: the read returns each decision's current label once
       - key: close-and-confirm-nones-read-as-any
         text: a label a close or Confirm Nones wrote reads as any other label
-    provenance: [.agents/spec/2026-10-18-message-flags-and-threads.md T5 T5a T6, designs/threads.md]
+    provenance: [designs/threads.md]
 
   - id: KNW-078
     title: Every label is recorded by the judgment store's one review writer
@@ -1160,7 +1145,7 @@ behaviors:
     status: current
     surface: none
     statement: every label, whether a reply-item review, a flag label, a clearing label, Confirm Nones or a close, is recorded by the judgment store's one review writer, and no other code records a label.
-    provenance: [.agents/spec/2026-10-18-message-flags-and-threads.md G12, designs/threads.md]
+    provenance: [designs/threads.md]
 
   # --- Flag scorecard and Langfuse metrics ---
 
@@ -1184,7 +1169,7 @@ behaviors:
         text: only flag and clearing labels count toward a flag metric; a review of an earlier method version's whole-thread commitment or big-moment outcome counts toward none
       - key: rate-without-labels-none
         text: a rate with no labeled decision behind it reports none, never 0
-    provenance: [scorecard.Scorecard.labeledTargets, scorecard.Reader.scoreFlags, judgment.Store.Labels, judgment.Shows, crm-admin --scorecard, .agents/spec/2026-10-18-message-flags-and-threads.md G13 SC7 NG4]
+    provenance: [scorecard.Scorecard.labeledTargets, scorecard.Reader.scoreFlags, judgment.Store.Labels, judgment.Shows, crm-admin --scorecard]
 
   - id: KNW-086
     title: The scorecard reports clearing accuracy per method over labeled clearing decisions
@@ -1200,7 +1185,7 @@ behaviors:
         text: a clearing decision without a label counts in neither
       - key: rejected-commitment-clearings-skipped
         text: a labeled clearing decision of a commitment the user rejected (its message holding a commitment label saying it holds none) counts in neither, in the scorecard and in the export that reads the same metrics, so a run whose only labeled clearing decisions are of rejected commitments has no clearing accuracy
-    provenance: [scorecard.Reader.scoreFlags, crm-admin --scorecard, crm-admin --langfuse-export, .agents/spec/2026-10-18-message-flags-and-threads.md G13, .agents/spec/2026-10-21-threads-review-fixes.md G2 SC2]
+    provenance: [scorecard.Reader.scoreFlags, crm-admin --scorecard, crm-admin --langfuse-export]
 
   - id: KNW-087
     title: The scorecard counts the new messages a method judged, left unjudged and flagged, and never counts an unjudged message as a no
@@ -1216,7 +1201,7 @@ behaviors:
         text: an unjudged message, whatever its label, is counted unjudged and not judged, and lies outside every precision and recall
       - key: stage-1-before-window-read
         text: a stored stage-1 rerun's before_window record is counted unjudged with that reason
-    provenance: [scorecard.Reader.scoreFlags, crm-admin --scorecard, crm-admin --langfuse-export, .agents/spec/2026-10-18-message-flags-and-threads.md G13 SC10, coordinator ruling PR3-R1]
+    provenance: [scorecard.Reader.scoreFlags, crm-admin --scorecard, crm-admin --langfuse-export, coordinator ruling PR3-R1]
 
   - id: KNW-091
     title: The name model container turns texts into person spans, on demand, and holds nothing else
@@ -1231,7 +1216,7 @@ behaviors:
       - a request for any model other than the one its image holds, a threshold outside (0, 1], an empty label, or texts that are missing or not all strings is refused with 422 and no spans, and an unknown path is never answered with spans
       - a connection while the model is down starts it and is answered once the model has loaded; the model exits after an idle period, and with its units stopped a request fails at once
       - it runs under its memory cap with no network, no database and no credentials, its weights in its image, and writes no text to its logs or its disk
-    provenance: [name-model/name_model/server.py, name-model/units, scripts/deploy-artifact.sh swap_model, name-model/tests/test_endpoint.py, .agents/spec/2026-10-21-masking-fixes.md G6 G9 HC2 D2]
+    provenance: [name-model/name_model/server.py, name-model/units, scripts/deploy-artifact.sh swap_model, name-model/tests/test_endpoint.py]
     notes: The coverage scanner reads no Python, so the endpoint tests in name-model/tests reference this behavior in prose. The on-demand start, idle exit and memory cap are shown by a live capture on the Pi, not by a test.
 
   - id: KNW-088
@@ -1250,7 +1235,7 @@ behaviors:
         text: after an export Langfuse holds no value, never 0, for a rate with no labeled decision behind it, nor for i_owe_missed and corrections_caused when the run covered no review; a count, each confusion cell among them, is sent on every export, zero included
       - key: scores-content-free
         text: the scores carry no message text, sender or contact identity
-    provenance: [langfuseexport.scorecardScores, langfuseexport.Exporter.Export, langfuseexport.client.deleteScores, crm-admin --langfuse-export, .agents/spec/2026-10-18-message-flags-and-threads.md G14 HC3 SC7]
+    provenance: [langfuseexport.scorecardScores, langfuseexport.Exporter.Export, langfuseexport.client.deleteScores, crm-admin --langfuse-export]
 
   # --- Masking ---
 
@@ -1295,7 +1280,7 @@ behaviors:
       - key: refused-without-own-names
         text: the masker refuses to build when OWN_NAMES holds no name, so a run that would mask fails before any call
       - every masked method's version derives from the masking version, which the masking rules, the common-word list's content and the name model's version (KNW-090) make and no dictionary name feeds, so a masking change makes a rerun judge again
-    provenance: [threadctx.Masker, threadctx.LoadMasker, threadctx.MaskingVersion, decision.NewMaskedMethod, cmd/gen-mask-words, .agents/spec/2026-10-21-masking-fixes.md G1 G2 G3 G5 HC1 SC1 SC2 SC3 SC4]
+    provenance: [threadctx.Masker, threadctx.LoadMasker, threadctx.MaskingVersion, decision.NewMaskedMethod, cmd/gen-mask-words]
     notes: The common-word list is generated by backend/cmd/gen-mask-words from vendored sources that the file's header names with their licenses. A common name written in lower case ("talked to will") passes, by the user's ruling (decision 20261021T190726Z-a4122783cf5c).
   - id: KNW-090
     title: The masker masks the name model's spans with the dictionary's matches, and sends nothing the model has not covered
@@ -1322,5 +1307,5 @@ behaviors:
         text: a request's deadline grows with the length of the texts it carries, allowing at least twice what the model needs on the production host (about 1.5 s per 128-word window, measured 2026-10-23, after a cold start of about 30 s), so a long text the model can read is not cut off by a deadline counted in texts
       - key: threshold-setting
         text: the run asks the model at the cutoff NAME_MODEL_THRESHOLD sets, 0.5 when unset; the cutoff is part of the model version, which every masked method's version and every stored span's key derive from, so a change to it makes a rerun judge again and ask the model again, and equal values written differently ("0.5", "0.50") are one version; a value that is not a number or lies outside (0, 1] is refused when the configuration loads, before any call
-    provenance: [threadctx.Masker.Cover, threadctx.NameSpans, threadctx.ModelVersion, namemodel.Client, repository.NameSpanRepository, decision.NewMaskedMethod, config.DecisionConfig, migrations/104_message_name_span, .agents/spec/2026-10-21-masking-fixes.md G6 G7 G8 HC2 HC3 SC6 SC7]
+    provenance: [threadctx.Masker.Cover, threadctx.NameSpans, threadctx.ModelVersion, namemodel.Client, repository.NameSpanRepository, decision.NewMaskedMethod, config.DecisionConfig, migrations/104_message_name_span]
     notes: A lower-case word the common-word list lacks is masked when a span covers it ("mom" is not on the list), by the spec's tradeoff rule (hide the name). The cutoff is the user's ruling (decision 20261022T002648Z-a01b4678d1a9); the lower-case rule for spans is decision 20261022T021159Z-25b0429017f3.

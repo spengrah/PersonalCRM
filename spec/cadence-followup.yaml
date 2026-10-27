@@ -513,14 +513,12 @@ behaviors:
     type: intent
     status: current
     statement: a contact's detail page answers where things stand with this person — when we last talked in each direction, whether a reply is pending, and what work is queued — without the user digging through raw history
-    provenance: ['.agents/spec/2026-07-10-ssot-intent-layer-and-judged-ux-goals-design.md']
 
   - id: CAD-037
     title: CRM task actions are safe for remote task state
     type: intent
     status: retired
     statement: managing a linked task from the CRM never silently mutates or destroys the user's task in the remote app — remote state changes only where the user expects them to happen
-    provenance: ['.agents/spec/2026-07-10-ssot-intent-layer-and-judged-ux-goals-design.md']
     notes: Superseded by CAD-039 (the backend invariant that unlinking issues no outbound call) and the CAD-033 UI affordance; retired from the judged intent set because the guarantee is deterministic and belongs in tests, not the agentic judge.
 
   - id: CAD-038
@@ -529,7 +527,6 @@ behaviors:
     status: current
     statement: a user who opens the app to find out who they are losing touch with can go from that signal to having acted, in one continuous pass — the contact they are sent to answers where the relationship stands, the action they take is acknowledged where they take it, and the surface that sent them reflects it when they come back; at no point do they lose their place, have to re-derive context the app already showed them, or have to guess whether the action landed
     notes: The app's core value loop, taken end to end as one journey rather than as three independent surfaces. It carries no serving behaviors on purpose; the sanity check's intent transcription (frontend/tests/tours/judge/intent-catalog.ts) records why. Frontend-surface scope only; the integration/sync half of the loop is deliberately out of scope.
-    provenance: ['.agents/spec/2026-07-12-qa-architecture-restructuring.md']
 
   - id: CAD-040
     title: Awaiting a reply is derived from the contact's own interaction timestamps
@@ -686,7 +683,6 @@ behaviors:
         text: only the contacts whose effective participation the correction can change are recomputed — for a merge the contacts observed in a merged interaction, for a removal the contacts it removes — and every other contact keeps every field
       - key: merge-recomputes-observed-contacts
         text: merging a contact's inbound with its later outbound leaves its fields as one mutual participation at the later time implies, while an attendee present only in the earlier member keeps its fields
-    provenance: [.agents/spec/2026-10-13-interaction-review-readiness.md]
     notes: The recompute starts from effective participation and never adjusts only a column whose value equals a corrected observation's time, and nothing decides that a value was set by hand by comparing values. A due date set directly before this behavior shipped counts as absent. CAD-045's withdrawal of undo on an interaction deletion or merge is the skip rule applied here.
 
   - id: CAD-048
@@ -709,7 +705,6 @@ behaviors:
         text: the cadence-due task follows the corrected next-contact date at the next task reconciliation (CAD-018, CAD-042)
       - key: local-close-independent-of-todoist
         text: the correction and its local follow-up changes commit whether or not the remote task app is reachable, and the remote close lands once it is
-    provenance: [.agents/spec/2026-10-13-interaction-review-readiness.md]
     notes: Local correction and remote task effect are distinct states. A removal that makes a contact due raises the cadence-due task at reconciliation; a follow-up tracks an awaited reply and is never created merely because a contact is due.
 
 
@@ -731,7 +726,7 @@ behaviors:
         text: the task is a reach_out for the user's owed reply and for anything a participant owes, and a reminder for a commitment the user owes
       - key: user-obligation-on-most-confident-contact
         text: when the user owes several participants on one thread, the one obligation's task belongs to the owed contact judged most confidently
-    provenance: [judgment.Store landTx, 094_obligation_task.up.sql, .agents/spec/2026-10-14-decision-model-extraction.md G7a]
+    provenance: [judgment.Store landTx, 094_obligation_task.up.sql]
 
   - id: CAD-055
     title: A commitment supersedes a reply, and one party's commitments share the earliest date
@@ -747,7 +742,7 @@ behaviors:
         text: several commitments of one party on one thread are one obligation dated at the earliest known date
       - key: upgrade-takes-selected-date
         text: a commitment that supersedes an open reply obligation is due on the commitment's selected date, else keeps the reply's date; a selected date later than the reply's delays the obligation, so it lands as a claim and the reply obligation stays open until the user confirms it
-    provenance: [judgment.planner.plan, .agents/spec/2026-10-14-decision-model-extraction.md G3b G7a SC4]
+    provenance: [judgment.planner.plan]
 
   - id: CAD-056
     title: An obligation task is due on the commitment's date, else by who owes it
@@ -765,7 +760,7 @@ behaviors:
         text: for a contact without a cadence it is due seven days after the day it opens
       - key: user-selected-date-else-day-opened
         text: an obligation the user owes is due on the commitment's selected date, else on the day it opens
-    provenance: [judgment.Store nudgeDueTx, judgment.planner.defaultDueTx, .agents/spec/2026-10-14-decision-model-extraction.md G7c G7d SC5]
+    provenance: [judgment.Store nudgeDueTx, judgment.planner.defaultDueTx]
 
   - id: CAD-057
     title: The user's act on an obligation task closes the obligation
@@ -783,7 +778,7 @@ behaviors:
         text: dismissing the task (deleting it, removing its CRM label or removing its deadline) closes the obligation and records nothing
       - key: open-commitment-reappears
         text: a commitment still open reappears at the next current judgment of changed content as a new obligation with a new task, and the closed one stays closed
-    provenance: [CadenceSyncProvider.handleTaskCompletion, CadenceSyncProvider.handleManualDismissal, .agents/spec/2026-10-14-decision-model-extraction.md G7a G7b G7c]
+    provenance: [CadenceSyncProvider.handleTaskCompletion, CadenceSyncProvider.handleManualDismissal]
 
   - id: CAD-058
     title: A new message closes the reply obligation it answers
@@ -801,7 +796,7 @@ behaviors:
         text: no message closes a commitment
       - key: other-threads-untouched
         text: a message on one thread closes no obligation on another
-    provenance: [judgment.Store.CloseAnsweredObligationsTx, CadenceUpdater.SetObligationCloser, .agents/spec/2026-10-14-decision-model-extraction.md "obligations are durable"]
+    provenance: [judgment.Store.CloseAnsweredObligationsTx, CadenceUpdater.SetObligationCloser]
 
   - id: CAD-059
     title: A "they owe a reply" judgment composes with the awaiting-reply wait
@@ -817,7 +812,7 @@ behaviors:
         text: when it shows none, one obligation with a reach_out task opens for the participant
       - key: nobody-owes-on-wait-thread-is-claim
         text: a "nobody owes" judgment on the thread whose outreach started the contact's wait is a claim that leaves the wait in place
-    provenance: [judgment.planner.plan, judgment.Store.waitStartedHereTx, .agents/spec/2026-10-14-decision-model-extraction.md G7e SC7]
+    provenance: [judgment.planner.plan, judgment.Store.waitStartedHereTx]
 
   - id: CAD-060
     title: Confirming a "nobody owes" claim ends the wait without a skip
@@ -835,7 +830,7 @@ behaviors:
         text: the live follow-up reminder that tracked the wait is closed
       - key: cadence-task-proceeds
         text: the next task reconciliation creates the due cadence task (CAD-042)
-    provenance: [CadenceUpdater.EndAwaitingReplyTx, judgment.Store.endWaitTx, .agents/spec/2026-10-14-decision-model-extraction.md SC7]
+    provenance: [CadenceUpdater.EndAwaitingReplyTx, judgment.Store.endWaitTx]
 
   - id: CAD-061
     title: A windowed judgment keeps or removes a reply obligation only when its evidence lies inside the window
@@ -853,4 +848,3 @@ behaviors:
         text: a window starting exactly at that message counts as inside
       - key: unknown-evidence-preserved
         text: under a windowed judgment an obligation whose evidence is unknown is preserved
-    provenance: [.agents/spec/2026-10-18-message-flags-and-threads.md G4]

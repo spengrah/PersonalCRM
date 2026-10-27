@@ -534,7 +534,6 @@ behaviors:
         text: an outbound whose only later response the user removed gets the follow-up the rules give with no response on record
       - key: excluded-evidence-acknowledged
         text: the source still acknowledges an event whose observation a correction excludes, and its re-delivery is deduplicated
-    provenance: [.agents/spec/2026-10-13-interaction-review-readiness.md]
     notes: Corrections are applied at the one place an observation becomes effective, which every sync path passes through; no source keeps a tombstone of its own.
 
   - id: ING-045
@@ -559,9 +558,8 @@ behaviors:
         text: a call ingested again keeps its node
       - key: after-merge-new-row-same-node
         text: after a contact merge, re-processing that writes a new observation for the surviving contact resolves to the node of the observation moved from the merged contact
-    provenance: [.agents/spec/2026-10-13-interaction-review-readiness.md]
 
-  # --- Group-chat evidence and attribution (spec: .agents/spec/2026-10-13-interaction-review-readiness.md) ---
+  # --- Group-chat evidence and attribution ---
 
   - id: ING-041
     title: Group-chat messages from non-contacts are kept as evidence that credits no one, and the user's own are stored unattributed
@@ -581,7 +579,7 @@ behaviors:
         text: the user's own group message is stored with an empty sender, no normalized peer and no matched contact, whatever peer the payload names, and an empty peer handle is accepted for it alone
       - key: drill-down-labels-senders-honestly
         text: the drill-down labels a non-contact message by its sender's handle and the user's own message as the user's, and names no member as the author of the user's message
-    provenance: [IngestService.handleRawMessage, validateRawMessagePayload, messages_group_ingest_test.go, .agents/spec/2026-10-13-interaction-review-readiness.md]
+    provenance: [IngestService.handleRawMessage, validateRawMessagePayload, messages_group_ingest_test.go]
     notes: Window containment is closed at both ends. Messages outside every window wait for chat-burst identity, which the readiness spec defers. The daemon-side publish rule is MAC-060; the one-time re-scan that adds missed messages is ING-042.
 
   - id: ING-042
@@ -610,7 +608,7 @@ behaviors:
         text: submitting the same items again changes nothing, and the answer reports each as unchanged
       - key: invalid-request-writes-nothing
         text: a request with an unknown op, an item missing its guid or chat, an unparseable time, an inbound item with no sender, an outbound item that names one, more than the per-request item cap, or a body over the request size cap is rejected whole, and none of its items is written
-    provenance: [MessagesEnrichmentHandler.ListGroupChats/ApplyItems, MessagesEnrichmentService, ListMessagesGroupBurstWindows, messages_group_evidence_test.go, .agents/spec/2026-10-13-interaction-review-readiness.md]
+    provenance: [MessagesEnrichmentHandler.ListGroupChats/ApplyItems, MessagesEnrichmentService, ListMessagesGroupBurstWindows, messages_group_evidence_test.go]
     notes: The body half of the exchange is MAC-057. The window derivation is shared with ING-043, so the listing, the containment test and the promotion agree on what a window is.
 
   - id: ING-043
@@ -635,7 +633,7 @@ behaviors:
         text: a burst that is already mutual or outbound is left as it is
       - key: one-to-one-outbound-unchanged
         text: an outbound one-to-one message still names its peer and records its outbound interaction with its outreach effect
-    provenance: [GroupBurstPromoter, IngestService.handleRawMessage, InteractionRecorder.HandleEvent, Engine.promoteIfReplied, messages_group_ingest_test.go, .agents/spec/2026-10-13-interaction-review-readiness.md]
+    provenance: [GroupBurstPromoter, IngestService.handleRawMessage, InteractionRecorder.HandleEvent, Engine.promoteIfReplied, messages_group_ingest_test.go]
     notes: A group burst credits only the members who spoke in it, so the user's message reaches a member through the burst that member's own message made. Only the user's own group message as ingest stores it credits a reply, recorded on the stored row (migration 086). A message the re-scan added or cleared (ING-042) never does, whatever its processing state, and ingesting an added guid again promotes nothing. The ingest and aggregation promotions read that one marker.
 
   - id: ING-046
@@ -652,7 +650,6 @@ behaviors:
         text: the message records no interaction and moves no contact's cadence or last-contacted date
       - key: non-calendar-reply-stored
         text: a message without a text/calendar part, such as a plain reply in an invitation's thread, is stored and recorded as before
-    provenance: [.agents/spec/2026-10-20-gmail-calendar-invites.md]
     notes: Calendar sync already records the meeting itself, so an invitation email would count it twice. Every kind of calendar message is dropped, an accept or decline reply with a typed note included.
 
   - id: ING-047
@@ -696,7 +693,7 @@ behaviors:
         text: a message whose payload carries no reaction object, a null one, or an invalid one (a kind outside the eight, an empty target key, the emoji kind without an emoji, an emoji on another kind, or no removal flag) is stored with no kind, no target and no removal, and every other column as without the field
       - key: reaction-effects-unchanged
         text: a reaction message that carries facts has the same interaction effect, reply link, reply credit, outreach promotion and cadence fields as the same message without facts, and keeps its body and message type, inbound or outbound, one-to-one or in a group
-    provenance: [MessageReaction.Validate, ReactionFacts, IngestService.handleRawMessage, migration 103, .agents/spec/2026-10-21-message-reactions.md]
+    provenance: [MessageReaction.Validate, ReactionFacts, IngestService.handleRawMessage, migration 103]
     notes: A message is a reaction exactly when it has a kind; the schema stores the kind, target and removal flag all present or all absent, and an emoji exactly on the emoji kind. The facts' names and values name no source. A stored guid keeps its own facts when pushed again. The daemon decides what a chat.db row's facts are (MAC-062); the one-time backfill of stored reactions is MAC-064.
 
   - id: ING-049

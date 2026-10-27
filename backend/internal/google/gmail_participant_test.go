@@ -1,5 +1,5 @@
 // Unit coverage for the trust-anchored gmail_participant discovery gate
-// (spec `.agents/spec/2026-08-11-gmail-participant-discovery.md`, IMP-042..045,
+// (spec https://github.com/spengrah/PersonalCRM/blob/9efb37ebd2157a2ac58c4b3c9c30703afce34f40/.agents/spec/2026-08-11-gmail-participant-discovery.md, IMP-042..045,
 // IMP-049). Drives the REAL fold: builds real *gmail.Message values (with
 // Gmail-faithful headers — address-only participants have NO name part, and
 // the no-Subject case OMITS the header entirely), calls the real

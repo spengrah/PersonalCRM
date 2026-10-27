@@ -254,7 +254,7 @@ type WhatsAppConfig struct {
 	GroupMaxMembers      int // WHATSAPP_GROUP_MAX_MEMBERS, default 10, valid 2..100
 }
 
-// RiverConfig holds River worker-queue settings. See .agents/spec/event-bus-foundation.md §3.9.
+// RiverConfig holds River worker-queue settings. See https://github.com/spengrah/PersonalCRM/blob/9efb37ebd2157a2ac58c4b3c9c30703afce34f40/.agents/spec/event-bus-foundation.md §3.9.
 type RiverConfig struct {
 	WorkerConcurrency int // Default: 10 (Pi-optimized; river's own default is much higher)
 	// JobTimeout is the per-job context deadline. River will cancel a
@@ -270,7 +270,7 @@ type RiverConfig struct {
 }
 
 // EventBusConfig holds the event-bus consumer mode flags. See
-// .agents/spec/event-bus-foundation.md §3.9.
+// https://github.com/spengrah/PersonalCRM/blob/9efb37ebd2157a2ac58c4b3c9c30703afce34f40/.agents/spec/event-bus-foundation.md §3.9.
 //
 // InteractionMode controls the InteractionRecorder consumer:
 //   - "off":     emergency override that disables publisher-driven

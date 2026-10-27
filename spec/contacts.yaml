@@ -996,7 +996,7 @@ behaviors:
       - key: returning-lands-list-page
         text: returning lands on the list page that contains the contact that was open, rather than page 1
     serves: [CON-051]
-    provenance: [ContactNavigationBar back control, buildBackToListUrl, 'contacts page ?page URL sync', contact-navigation.spec.ts, '.agents/spec/2026-07-21-contact-list-back-navigation-design.md']
+    provenance: [ContactNavigationBar back control, buildBackToListUrl, 'contacts page ?page URL sync', contact-navigation.spec.ts]
 
   - id: CON-066
     title: Changing list context resets pagination to the first page
@@ -1040,18 +1040,15 @@ behaviors:
     type: intent
     status: current
     statement: contact data is never lost through a single accidental interaction — destructive flows demand an explicit, informed confirmation, and what will happen is visible before it happens
-    provenance: ['.agents/spec/2026-07-10-ssot-intent-layer-and-judged-ux-goals-design.md']
 
   - id: CON-051
     title: Browsing contacts never loses the user's place
     type: intent
     status: current
     statement: moving between the contact list and contact detail feels like traversing one consistent, ordered list — sort, search, and filter context carries across navigation in both directions, with keyboard and mouse as equals
-    provenance: ['.agents/spec/2026-07-10-ssot-intent-layer-and-judged-ux-goals-design.md']
 
   - id: CON-052
     title: The birthdays page is a planning surface, not a data dump
     type: intent
     status: current
     statement: the birthdays page answers whose birthday needs attention now and soon — imminent birthdays stand apart from distant ones, celebrated ones recede, and the user never has to compute dates themselves
-    provenance: ['.agents/spec/2026-07-10-ssot-intent-layer-and-judged-ux-goals-design.md']

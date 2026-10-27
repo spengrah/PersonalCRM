@@ -19,7 +19,6 @@ behaviors:
         text: additional pages extend the history without gaps or duplicate rows
       - key: section-replaces-meetings
         text: the unified interaction history takes the place of the separate meetings history
-    provenance: [.agents/spec/contact-interactions-surface.md]
 
   - id: IXN-002
     title: Every interaction row communicates its source and content shape
@@ -47,7 +46,6 @@ behaviors:
         text: a calendar row summarizes its event time, place, attendee size, and link when available
       - key: call-row-details
         text: a call row summarizes its service, answer state, voicemail state, and duration
-    provenance: [.agents/spec/contact-interactions-surface.md]
 
   - id: IXN-003
     title: Venue tags follow constituent content rather than graph pointers
@@ -55,7 +53,7 @@ behaviors:
     status: current
     surface: none
     statement: an interaction's venue tags are derived from the distinct containers of its live constituent content and never from interaction.venue_id, which remains only the graph's primary-container pointer.
-    provenance: [.agents/spec/contact-interactions-surface.md, InteractionContentService]
+    provenance: [InteractionContentService]
 
   - id: IXN-004
     title: Message evidence expands in place as a complete plaintext thread window
@@ -75,7 +73,6 @@ behaviors:
         text: group evidence includes every speaker represented inside the interaction's thread window
       - key: expand-in-place-no-nav
         text: the evidence opens within the interaction history without navigating away
-    provenance: [.agents/spec/contact-interactions-surface.md]
 
   - id: IXN-005
     title: Meeting-note evidence preserves the linked notes and their provenance
@@ -91,7 +88,6 @@ behaviors:
         text: every live note linked to the interaction is represented
       - key: provenance-footnote
         text: the evidence includes its on-device processing provenance
-    provenance: [.agents/spec/contact-interactions-surface.md]
 
   - id: IXN-006
     title: Upcoming calendar events share the history without becoming interactions
@@ -113,7 +109,6 @@ behaviors:
         text: every event returned by the bounded upcoming read remains reachable
       - key: in-progress-still-upcoming
         text: an event that has started but not ended remains in the upcoming set
-    provenance: [.agents/spec/contact-interactions-surface.md]
 
   - id: IXN-007
     title: Venue filtering follows content-container membership
@@ -127,7 +122,6 @@ behaviors:
         text: the history contains only interactions with live constituent content in the selected venue
       - key: expanded-shows-venue-messages
         text: expanded evidence shows the messages relevant to the selected venue
-    provenance: [.agents/spec/contact-interactions-surface.md]
 
   - id: IXN-008
     title: Date filters bound the history while preserving an all-time view
@@ -147,7 +141,6 @@ behaviors:
         text: the unbounded view includes upcoming events as well as past interactions
       - key: custom-range-bounds-upcoming
         text: custom bounds apply consistently to upcoming events on the shared time axis
-    provenance: [.agents/spec/contact-interactions-surface.md]
 
   - id: IXN-009
     title: The interaction history renders recorded state honestly
@@ -163,7 +156,6 @@ behaviors:
         text: separately recorded interactions remain distinct even when they appear duplicative
       - key: empty-state-explicit
         text: a contact with no recorded interactions or missed calls receives an explicit empty state
-    provenance: [.agents/spec/contact-interactions-surface.md]
 
   - id: IXN-010
     title: The contact interactions surface is read-only end to end
@@ -171,7 +163,6 @@ behaviors:
     status: retired
     surface: api
     statement: the contact interactions surface exposes only reads, adds no mutation endpoint or interaction writer, and leaves interaction creation to the existing recording paths.
-    provenance: [.agents/spec/contact-interactions-surface.md]
     notes: Retired when the user's corrections of interactions became writes on this surface. Merging interactions is IXN-016 and removing participations is IXN-018; their answers and refusals are IXN-029.
 
   - id: IXN-011
@@ -180,7 +171,7 @@ behaviors:
     status: current
     surface: none
     statement: interaction content assembly is an independently invocable service seam rather than logic embedded in an HTTP handler.
-    provenance: [.agents/spec/contact-interactions-surface.md, InteractionContentService]
+    provenance: [InteractionContentService]
 
   - id: IXN-012
     title: List enrichment performs no per-row content fan-out
@@ -188,7 +179,7 @@ behaviors:
     status: current
     surface: none
     statement: enriching an interaction page uses batched content reads whose statement count stays constant as the number of rows grows for the same source-family mix.
-    provenance: [.agents/spec/contact-interactions-surface.md, InteractionContentService]
+    provenance: [InteractionContentService]
 
   - id: IXN-013
     title: The contact interaction list API returns a stable enriched page
@@ -220,7 +211,7 @@ behaviors:
         text: rows order by occurrence time descending and interaction id descending
       - key: soft-deleted-excluded
         text: soft-deleted interactions and content do not contribute rows, enrichment, totals, or venue options
-    provenance: [.agents/spec/contact-interactions-surface.md, InteractionContentService]
+    provenance: [InteractionContentService]
 
   - id: IXN-014
     title: The per-interaction content API returns bounded, deterministic evidence
@@ -254,7 +245,7 @@ behaviors:
         text: a soft-deleted interaction receives an HTTP 404 response and its content is inaccessible
       - key: empty-arrays-not-null
         text: absent messages or meeting notes are represented by empty arrays rather than null
-    provenance: [.agents/spec/contact-interactions-surface.md, InteractionContentService]
+    provenance: [InteractionContentService]
 
   - id: IXN-015
     title: Every correctable interaction resolves to one interaction node, and message bursts resolve to none
@@ -278,7 +269,6 @@ behaviors:
         text: a message burst from Telegram, iMessage, Google Chat or WhatsApp resolves to no interaction node, however it is extended or promoted to mutual
       - key: assigned-node-kept
         text: a later write to the observation (extension, promotion to mutual, re-link, soft delete, or the transfer to a surviving contact in a contact merge) leaves its interaction node unchanged
-    provenance: [.agents/spec/2026-10-13-interaction-review-readiness.md]
     notes: Merging interactions and removing participations act on interaction nodes in later behaviors of this domain; this behavior fixes only which node each observation belongs to.
 
   - id: IXN-016
@@ -301,7 +291,6 @@ behaviors:
         text: naming an interaction that was already merged into another acts on the interaction it was merged into
       - key: answer-is-first-root
         text: the merge answers with the interaction the first listed one belongs to
-    provenance: [.agents/spec/2026-10-13-interaction-review-readiness.md]
     notes: A merge is a judgment of event identity, global across attendees. Unmerge is out of scope.
 
   - id: IXN-017
@@ -324,7 +313,6 @@ behaviors:
         text: the merge preview answers exactly what the merge answers for the same request
       - key: preview-writes-nothing
         text: the merge preview changes no interaction, judgment, cadence field or task and publishes nothing
-    provenance: [.agents/spec/2026-10-13-interaction-review-readiness.md]
     notes: Nothing invents a direction or a time. If mutual would be wrong, the interactions are not one interaction and the user does not merge them.
 
   - id: IXN-018
@@ -353,7 +341,6 @@ behaviors:
         text: naming an interaction that was merged into another acts on the interaction it was merged into
       - key: survives-contact-merge
         text: a removal survives a later merge of the removed contact into another contact
-    provenance: [.agents/spec/2026-10-13-interaction-review-readiness.md]
     notes: The removal dialog pre-selects the current contact; the request always names its scope explicitly.
 
   - id: IXN-019
@@ -372,7 +359,6 @@ behaviors:
         text: every content item of the expanded evidence is attributed to its own channel, whichever member it belongs to
       - key: unmerged-shows-its-one-source
         text: an interaction that was not merged is one row with its one source and its content
-    provenance: [.agents/spec/2026-10-13-interaction-review-readiness.md]
     notes: The row and its evidence render from a typed identity and a participation context (IXN-022), so the same member sections appear wherever the components are used.
 
   - id: IXN-022
@@ -381,7 +367,6 @@ behaviors:
     status: current
     surface: none
     statement: every timeline item has a typed identity whose kind decides which actions it offers, only the kind interaction offering corrections, and the row and drill-down render from that identity plus a participation context, independent of the contact page.
-    provenance: [.agents/spec/2026-10-13-interaction-review-readiness.md]
     notes: The kinds are interaction, message burst, upcoming event and missed call. No source decides whether an item is correctable.
 
   - id: IXN-026
@@ -402,7 +387,6 @@ behaviors:
         text: no column of any observation other than its interaction node changes
       - key: idempotent
         text: running the backfill again changes no observation and creates no node
-    provenance: [.agents/spec/2026-10-13-interaction-review-readiness.md]
 
   - id: IXN-029
     title: The correction requests answer with the result or refuse without writing
@@ -434,7 +418,6 @@ behaviors:
         text: a refused request changes no interaction, judgment, cadence field or task and publishes nothing
       - key: removal-is-only-delete
         text: the removal request is the only way over HTTP to remove a participation; the surface has no request that deletes an interaction
-    provenance: [.agents/spec/2026-10-13-interaction-review-readiness.md]
     notes: No correction answer carries an assertion, predicate or provenance (KNW-038).
 
   - id: IXN-020
@@ -451,7 +434,6 @@ behaviors:
         text: the row visibly states that the missed call did not count toward cadence
       - key: no-row-actions
         text: the row offers no actions
-    provenance: [.agents/spec/2026-10-13-interaction-review-readiness.md]
     notes: The missed call stays a call record with no interaction (ING-039); IXN-024 owns its list item and IXN-025 its cadence-inertness at ingest.
 
   - id: IXN-021
@@ -468,7 +450,6 @@ behaviors:
         text: an outbound call with zero duration shows as an unanswered attempt, never as missed
       - key: missed-inbound-shows-missed
         text: an inbound call the user did not answer shows as missed, including one that left a voicemail
-    provenance: [.agents/spec/2026-10-13-interaction-review-readiness.md]
     notes: Missed names an inbound call the user did not answer. The call record's direction and duration decide the state; the recorded interaction direction is unchanged (ING-039).
 
   - id: IXN-024
@@ -491,7 +472,7 @@ behaviors:
         text: a missed call that left a voicemail remains an interaction item
       - key: own-calls-only
         text: another contact's missed calls are absent
-    provenance: [.agents/spec/2026-10-13-interaction-review-readiness.md, InteractionContentService.ListTimeline]
+    provenance: [InteractionContentService.ListTimeline]
     notes: A missed call has no content container, so a venue filter excludes it; date filters apply to the call's time.
 
   - id: IXN-025
@@ -505,7 +486,7 @@ behaviors:
       - no interaction is recorded for the contact
       - the contact's cadence fields, awaiting-reply window and skip state are unchanged
       - the contact's follow-up tasks are unchanged and no follow-up operation is enqueued
-    provenance: [.agents/spec/2026-10-13-interaction-review-readiness.md, decideCallInteraction]
+    provenance: [decideCallInteraction]
 
   - id: IXN-033
     title: The contact interaction list carries one typed item per effective participation
@@ -527,7 +508,7 @@ behaviors:
         text: interactions that were not merged stay separate items, even when they look duplicative
       - key: effective-time-order-and-filters
         text: items order newest first by their effective time with a deterministic tie-breaker, and date bounds, pagination totals and the venue filter apply to items, the venue filter keeping an item when any of its members would be kept and dropping missed calls
-    provenance: [.agents/spec/2026-10-13-interaction-review-readiness.md, InteractionContentService.ListTimeline]
+    provenance: [InteractionContentService.ListTimeline]
     notes: Missed-call items are IXN-024's; the requests that produce merged and removed participations are IXN-029's.
 
   - id: IXN-034
@@ -554,7 +535,7 @@ behaviors:
         text: an unknown kind, a malformed id, and a missing or malformed contact are refused as invalid
       - key: not-found-404
         text: an id that names no item of its kind, and a contact that does not exist, are refused as not found
-    provenance: [.agents/spec/2026-10-13-interaction-review-readiness.md, InteractionContentService.GetTimelineContent]
+    provenance: [InteractionContentService.GetTimelineContent]
     notes: The content a member holds is what the per-interaction content read of IXN-014 gives for that member.
 
   - id: IXN-036
@@ -573,7 +554,7 @@ behaviors:
         text: naming an interaction that was merged into another, or the one it was merged into, reads the participants of the merged interaction
       - key: no-interaction-not-found
         text: an id that names no interaction, such as a message burst or a contact, is refused as not found
-    provenance: [.agents/spec/2026-10-13-interaction-review-readiness.md, InteractionCorrectionService.Participants]
+    provenance: [InteractionCorrectionService.Participants]
     notes: The read derives nothing of its own; it reads the effective participation the correction requests (IXN-029) act on.
 
   - id: IXN-037
@@ -598,7 +579,6 @@ behaviors:
         text: choosing everyone removes the interaction from every attendee's history
       - key: cadence-refreshes-without-reload
         text: after submitting, the row leaves the history and the contact's recent activity shows the recomputed values without a reload
-    provenance: [.agents/spec/2026-10-13-interaction-review-readiness.md]
     notes: The removal is the request of IXN-018; the attendees it lists are IXN-036's.
 
   - id: IXN-038
@@ -621,7 +601,6 @@ behaviors:
         text: the confirmation states the current contact's resulting direction and time as the merge preview answers them
       - key: one-row-as-stated
         text: after confirming, the history shows one row in place of the selected interactions, with the direction and time the confirmation stated
-    provenance: [.agents/spec/2026-10-13-interaction-review-readiness.md]
     notes: The merge is the request of IXN-016 and IXN-017; the frontend computes no merged direction or time of its own.
 
   - id: IXN-023
@@ -636,7 +615,7 @@ behaviors:
         text: each such assertion appears beside the content item it cites, stating its subject, predicate, value and recorded review status
       - key: read-only-no-review-controls
         text: the assertions offer no accept or reject control, no baseline, no verdict and no way into the knowledge graph
-    provenance: [.agents/spec/2026-10-13-interaction-review-readiness.md, InteractionDrillDown]
+    provenance: [InteractionDrillDown]
     notes: Which assertions appear is IXN-039. Reviewing them belongs to a later claim-review surface.
 
   - id: IXN-039
@@ -657,7 +636,7 @@ behaviors:
         text: an assertion under a correction predicate of the catalog is never returned, whatever its provenance cites
       - key: no-cited-content-empty
         text: an item with no cited content answers an empty list
-    provenance: [.agents/spec/2026-10-13-interaction-review-readiness.md, TimelineAssertionService.ListTimelineAssertions]
+    provenance: [TimelineAssertionService.ListTimelineAssertions]
     notes: The displayed content is IXN-034's content read for the same identity and contact. This read is the one HTTP read of the assertion store (KNW-038).
 
   - id: IXN-041
@@ -686,7 +665,7 @@ behaviors:
         text: the tab is paginated, and further pages extend it without gaps or duplicate rows
       - key: main-navigation-leads
         text: the main navigation leads to the tab
-    provenance: [.agents/spec/2026-10-14-decision-model-extraction.md G9, .agents/spec/2026-10-18-message-flags-and-threads.md G8, designs/threads.md]
+    provenance: [designs/threads.md]
     notes: The tab corrects frequency data, with merge, delete and correct through each row's menu. The Review switch does not change it (IXN-075). The row and drill-down are IXN-002, IXN-004 and IXN-022's.
 
   - id: IXN-042
@@ -709,7 +688,7 @@ behaviors:
         text: the filters are part of the tab's address, so a link opens the tab filtered
       - key: no-other-filter
         text: the tab offers no other filter, no run filter among them
-    provenance: [.agents/spec/2026-10-14-decision-model-extraction.md G9 NG4, .agents/spec/2026-10-18-message-flags-and-threads.md G8, designs/threads.md]
+    provenance: [designs/threads.md]
 
   - id: IXN-043
     title: A view narrowed to a run states the run and lists its incomplete threads
@@ -725,7 +704,7 @@ behaviors:
         text: the view states the run's kind, method, method version, content window, whether it finished, and how many threads it judged
       - key: incomplete-listed
         text: every incomplete thread of the run is listed with its cut-off and the reason it is incomplete
-    provenance: [.agents/spec/2026-10-14-decision-model-extraction.md G9 G11 SC1, designs/bench.md]
+    provenance: [designs/bench.md]
     notes: Retired when the Interactions tab dropped its run filter. The Threads list's Run filter and summary line are IXN-077. No behavior lists a run's incomplete threads.
 
   - id: IXN-044
@@ -746,7 +725,7 @@ behaviors:
         text: judgments of several methods on the same content appear together on that row, the production method's first
       - key: run-shows-its-judgments
         text: a view narrowed to a run shows only the judgments appearing in that run
-    provenance: [.agents/spec/2026-10-14-decision-model-extraction.md G9 SC1, .agents/spec/2026-10-17-bench-negative-decisions.md G6 SC1 SC8, designs/bench.md]
+    provenance: [designs/bench.md]
     notes: Retired when the Threads tab replaced the bench's row-held judgments. One row per thread is IXN-076, a run's threads and their status are IXN-077, and a judgment's place on its night is IXN-080.
 
   - id: IXN-045
@@ -767,7 +746,7 @@ behaviors:
         text: the proposal names its method, its method version and whether that method is the production method
       - key: other-method-collapsed
         text: a proposal of another method on the same content is set apart, collapsed, and marked as not acting
-    provenance: [.agents/spec/2026-10-14-decision-model-extraction.md G9 SC1 HC7, designs/bench.md]
+    provenance: [designs/bench.md]
     notes: Replaced by IXN-080, where a night's judgment box sits beneath the new messages it read and its heading states what it read.
 
   - id: IXN-046
@@ -796,7 +775,7 @@ behaviors:
         text: each item not yet reviewed shows one state of live, suggested, not acting, or live with a suggested removal or later date, and the four are told apart; an item whose removal by the user took effect shows its removal mark in place of a state, and every other reviewed item shows its live state beside its mark
       - key: no-item-hidden
         text: no item is hidden because of its confidence
-    provenance: [.agents/spec/2026-10-14-decision-model-extraction.md G3 G3b G3c G6 G9 HC7 NG3 SC4, .agents/spec/2026-10-17-bench-negative-decisions.md G8, designs/bench.md]
+    provenance: [designs/bench.md]
     notes: Replaced by IXN-086, which reviews a judgment box's reply lists with each item's state, and by IXN-081, which shows flags as chips on their messages. Commitments and the big moment are flags and clearing decisions, no longer proposal lists.
 
   - id: IXN-047
@@ -827,7 +806,7 @@ behaviors:
         text: every correction happens on the proposal itself, with no modal or separate form, and the client never sends a verdict
       - key: shows-without-reload-or-error
         text: each correction shows on its item without a reload, and a failed correction leaves the item's controls in place with an error
-    provenance: [.agents/spec/2026-10-14-decision-model-extraction.md G3c G5 G7d G8 SC5 SC7, .agents/spec/2026-10-17-bench-negative-decisions.md G7, designs/bench.md]
+    provenance: [designs/bench.md]
     notes: Replaced by IXN-086, which corrects the reply lists inline, and by IXN-081 and IXN-082, which confirm, remove, change and add flag and clearing labels.
 
   - id: IXN-048
@@ -848,7 +827,7 @@ behaviors:
         text: a reviewed item offers Change as its one control
       - key: counts-exclude-reviewed
         text: the proposal's and its row's counts of items awaiting review leave out the reviewed items
-    provenance: [.agents/spec/2026-10-14-decision-model-extraction.md G5 G8 HC6, .agents/spec/2026-10-17-bench-negative-decisions.md G7 G8, designs/bench.md]
+    provenance: [designs/bench.md]
     notes: Replaced by IXN-081 and IXN-086, where a reviewed chip or item shows its label in place and offers Change, and by IXN-085, where a saved item shows what the server recorded.
 
   - id: IXN-049
@@ -865,7 +844,7 @@ behaviors:
         text: a participant's own moment and another person's moment mentioned in passing show as the same flag
       - key: no-summary
         text: the flag carries no summary of the moment
-    provenance: [.agents/spec/2026-10-14-decision-model-extraction.md G3c G7f SC10 NG3, designs/bench.md]
+    provenance: [designs/bench.md]
     notes: Replaced by IXN-081, where a flag reaching its method's display threshold shows as a chip on its message.
 
   - id: IXN-050
@@ -882,7 +861,7 @@ behaviors:
         text: following the link opens the Interactions tab listing only the rows that contact takes part in
       - key: history-no-review
         text: the contact's history offers no judgment review of its own
-    provenance: [.agents/spec/2026-10-14-decision-model-extraction.md G9, .agents/spec/2026-10-18-message-flags-and-threads.md G8, designs/threads.md]
+    provenance: [designs/threads.md]
 
   - id: IXN-051
     title: The interactions list route returns every interaction across contacts, filtered and paginated, carrying no judgment
@@ -900,7 +879,6 @@ behaviors:
         text: the contact filter keeps the rows a contact takes part in, the type filter the rows of one interaction type (message, email, event, call or other, event holding calendar meetings and anarlog sessions), and the two combine
       - key: carries-no-judgment
         text: no row carries a judgment, a proposal or a review status, and the route offers no run filter, so a request naming a run answers as the same request without it
-    provenance: [.agents/spec/2026-10-14-decision-model-extraction.md G9, .agents/spec/2026-10-18-message-flags-and-threads.md G8 G12]
     notes: The Interactions tab's list (IXN-041, IXN-042) reads this route. A thread's judgments are read through the thread read (IXN-089).
 
   - id: IXN-052
@@ -923,7 +901,7 @@ behaviors:
         text: a suggested removal sits in the list of the live obligation or wait it would take away, and keeping it states that live outcome, whatever obligations the thread held before
       - key: state-is-live-effect
         text: an item whose live effect no longer holds, its obligation closed or its flag withdrawn, is not acting even when another obligation of the same party is open, whatever judgment, method or review opened it, and any review of it records the label only, reopening nothing and leaving that other obligation as it is; an obligation a commitment superseded or a contact merge combined or moved stays the item's, and a review of the item acts on it
-    provenance: [.agents/spec/2026-10-14-decision-model-extraction.md G3b G6 G9 HC7, designs/bench.md]
+    provenance: [designs/bench.md]
     notes: Replaced by IXN-089, where the thread read returns a run's nights with their reply proposals, flags and clearing decisions. IXN-053, IXN-055, IXN-058, IXN-059 and IXN-060 keep the reply proposal's rules. The bench's proposals (IXN-046) read these lists.
 
   - id: IXN-053
@@ -948,7 +926,6 @@ behaviors:
         text: a decision an item of the list represents is never that list's closest decision
       - key: no-candidate
         text: a list carries no closest decision when every decision of its question is an item of the list or none stored option probabilities
-    provenance: [.agents/spec/2026-10-17-bench-negative-decisions.md G1 G2 SC5 HC2]
     notes: The closest decision is display only and creates no labeling obligation.
 
   - id: IXN-054
@@ -967,7 +944,6 @@ behaviors:
         text: a negative decision is an answered outcome that stands for no item; a no-effect outcome that suggests removing a live item is an item, and a probability stored for a question that yields no outcome adds none
       - key: confirm-nones-offered
         text: a proposal offers Confirm Nones exactly when it has no items and holds a negative decision without a label that no proposal on the same content holds as an item without a label
-    provenance: [.agents/spec/2026-10-17-bench-negative-decisions.md G3 G6 T3 A1 SC1 SC10]
     notes: Replaced by IXN-094, where the server computes each night's and each thread's status, and by IXN-093, which states when a night offers Confirm Nones.
 
   - id: IXN-055
@@ -984,7 +960,6 @@ behaviors:
         text: a decision's label is its latest review from any proposal on the content
       - key: nones-reviewed
         text: a list reads its nones reviewed exactly when at least one negative decision sits behind it and none is a None to review (IXN-054), whichever proposal labeled them
-    provenance: [.agents/spec/2026-10-17-bench-negative-decisions.md G5 T1 T2 SC4]
 
   - id: IXN-056
     title: Confirm Nones labels a proposal's negative decisions in one act
@@ -1004,7 +979,6 @@ behaviors:
         text: a proposal with an item, or with no negative decision left that it would label, is refused with nothing recorded, and an unknown judgment is not found
       - key: all-or-nothing
         text: a Confirm Nones that fails records none of its labels, and the list reads as before it
-    provenance: [.agents/spec/2026-10-17-bench-negative-decisions.md G3 G9 HC1 SC2 SC9 SC10]
     notes: Replaced by IXN-093, where Confirm Nones labels a night that shows nothing.
 
   - id: IXN-057
@@ -1029,7 +1003,6 @@ behaviors:
         text: a label that exists is never replaced
       - key: review-labels-no-negative
         text: a review of an item, a proposal's last unlabeled item included, labels its own decision and no negative decision
-    provenance: [.agents/spec/2026-10-17-bench-negative-decisions.md G4 SC3 HC1 HC3]
     notes: Replaced by IXN-092, where a close labels the unlabeled flag decisions and reply negatives of each night holding a label. The rule runs on Confirm Nones (IXN-056), on a close (IXN-068) and once in crm-admin --infer-negative-labels, which brings every labeled content under it as a close of its row would; never when a judgment is recorded, so a scorecard rerun never labels the rerun method's own answers (ruling R3).
 
   - id: IXN-058
@@ -1044,7 +1017,6 @@ behaviors:
         text: the new review becomes the decision's label and opens, closes or redates no task, raises or withdraws no flag, and settles no claim again
       - key: controls-again
         text: a reviewed item carries its review controls, whose reviews record the label only
-    provenance: [.agents/spec/2026-10-17-bench-negative-decisions.md G7 SC7 HC4 NG2]
 
   - id: IXN-059
     title: The Add pickers offer every participant or pair a list does not hold, and an Add relabels its decision
@@ -1060,7 +1032,6 @@ behaviors:
         text: each reply list's picker offers every participant whose ball-in-court decision the list holds no item for, a positive decision with a label among them; an Add on such a decision relabels it with the list's value, so its item moves to that list marked added and the list it left no longer holds it, and it records the label only, opening, closing or redating nothing; no participant is held by both reply lists
       - key: add-effect
         text: an Add on a negative decision becomes the decision's label, the scorecard's included, and opens what the same Add opens on an unlabeled negative where the proposal acts, recording the label only where it does not
-    provenance: [.agents/spec/2026-10-17-bench-negative-decisions.md G7 SC6 HC4, .agents/spec/2026-10-21-threads-review-fixes.md G4 A1 HC1]
 
   - id: IXN-060
     title: An item whose label and live state disagree carries its live state beside its mark
@@ -1078,7 +1049,6 @@ behaviors:
         text: a commitment whose label kept a date the obligation no longer holds carries the kept date and the obligation's live date beside it
       - key: agrees-as-before
         text: an item whose label agrees with the live state reads as before, and only a removal that took effect carries no state
-    provenance: [.agents/spec/2026-10-17-bench-negative-decisions.md G8 SC7]
 
   - id: IXN-061
     title: Each list of a proposal names the decision the judgment came closest to making with the list's value
@@ -1098,7 +1068,7 @@ behaviors:
         text: a list shows one closest decision however many decisions sit behind it
       - key: no-closest-plain
         text: a list with no closest decision reads plain None, or shows nothing on its heading line
-    provenance: [.agents/spec/2026-10-17-bench-negative-decisions.md G1 G2 SC5, designs/bench.md]
+    provenance: [designs/bench.md]
     notes: Replaced by IXN-086, where an empty reply list names the decision the judgment came closest to making. The server chooses each list's closest decision (IXN-053); it is display only and asks for no review.
 
   - id: IXN-062
@@ -1119,7 +1089,7 @@ behaviors:
         text: every Add stays usable after Confirm Nones
       - key: failed-leaves-as-was
         text: a failed Confirm Nones leaves the proposal as it was, with an error, and a reload shows the same labels and counts
-    provenance: [.agents/spec/2026-10-17-bench-negative-decisions.md G3 G9 SC2 SC9 SC10 NG3, designs/bench.md]
+    provenance: [designs/bench.md]
     notes: Replaced by IXN-084, where a night that shows nothing offers Confirm Nones.
 
   - id: IXN-063
@@ -1134,7 +1104,7 @@ behaviors:
         text: a proposal's header reads "{n} to review" while its items await review, else "Nones to review" while its negative decisions do, else "All reviewed", from the server's review status
       - key: describes-itself
         text: in a row of several proposals, each header describes only its own proposal
-    provenance: [.agents/spec/2026-10-17-bench-negative-decisions.md G6 SC1 SC8, designs/bench.md]
+    provenance: [designs/bench.md]
     notes: Replaced by IXN-077 for the list's status pill, IXN-080 for the thread header's status pill and IXN-094 for the server's status.
 
   - id: IXN-064
@@ -1155,7 +1125,7 @@ behaviors:
         text: a close made while a review on the row is still being saved takes effect after the review is recorded
       - key: nones-mark-copy
         text: a list with items whose Nones are confirmed reads "Nones confirmed" on its heading line, and a None line reads "Confirmed"
-    provenance: [.agents/spec/2026-10-17-bench-negative-decisions.md G4 G14 SC3 T5, designs/bench.md]
+    provenance: [designs/bench.md]
     notes: Replaced by IXN-083, where Done and Next close the thread and each night the close labeled reports it. Leaving the page, changing page or reloading is not a close. The server decides what a close labels (IXN-057, IXN-068).
 
   - id: IXN-065
@@ -1178,7 +1148,7 @@ behaviors:
         text: a commitment changed to keep its date while its obligation stays at another date shows the obligation's date and, in its mark, the date the user kept
       - key: struck-only-taken-effect
         text: strikethrough marks only a removal that took effect
-    provenance: [.agents/spec/2026-10-17-bench-negative-decisions.md G7 G8 SC7, designs/bench.md]
+    provenance: [designs/bench.md]
     notes: Replaced by IXN-081 for a chip's Change and IXN-086 for a reply item's Change. A change of review records the label only (IXN-058), so the live state can differ from the new mark.
 
   - id: IXN-066
@@ -1193,7 +1163,7 @@ behaviors:
         text: the Add offers a participant whose None was confirmed
       - key: add-acts-as-before
         text: the participant then shows as Live and Added by you, as the same Add shows on an unreviewed None
-    provenance: [.agents/spec/2026-10-17-bench-negative-decisions.md G7 SC6 HC4, designs/bench.md]
+    provenance: [designs/bench.md]
     notes: Replaced by IXN-086, where the Add pickers offer negative decisions.
 
   - id: IXN-067
@@ -1206,7 +1176,7 @@ behaviors:
     then:
       - key: review-shown-in-other
         text: the other proposal's item for the same decision shows that review as its mark
-    provenance: [.agents/spec/2026-10-17-bench-negative-decisions.md G5 SC4, designs/bench.md]
+    provenance: [designs/bench.md]
     notes: Replaced by IXN-081, where a label shows on every run's chip for that message and kind, and by IXN-055 for reply items.
 
   - id: IXN-068
@@ -1223,7 +1193,6 @@ behaviors:
         text: a close that fails records none of its labels, and the list reads as before it
       - key: unknown-judgment
         text: a close naming an unknown judgment is not found and records nothing
-    provenance: [.agents/spec/2026-10-17-bench-negative-decisions.md G4 G9 SC3 SC9]
     notes: Replaced by IXN-092, where a close records its labels all or nothing. The close, like a review and Confirm Nones, returns the rows it can change as the server recorded them (IXN-073), which the bench shows in place (IXN-069).
 
   - id: IXN-069
@@ -1240,7 +1209,6 @@ behaviors:
         text: the recorded state shows, with its controls working again, without waiting on a read of the page's whole list
       - key: row-agrees-with-proposals
         text: the row's review indicator changes with its proposals, reading what they now show, without waiting on a read of the page's whole list
-    provenance: [.agents/spec/2026-10-17-bench-negative-decisions.md G6 G10 SC11]
     notes: Replaced by IXN-085, where no review click waits on the server and a saved item shows what the server recorded.
 
   - id: IXN-070
@@ -1255,7 +1223,6 @@ behaviors:
         text: the commitment shows its source message, whether or not its removal took effect
       - key: kept-during-change
         text: the source message still shows while the user changes its review
-    provenance: [.agents/spec/2026-10-17-bench-negative-decisions.md G11 SC12]
     notes: No behavior replaces it. A removed flag keeps its chip on its message (IXN-081), so its message never separates from it.
 
   - id: IXN-071
@@ -1268,7 +1235,6 @@ behaviors:
     then:
       - key: header-stays-visible
         text: the row's header, with its collapse control, stays at the top of the window, and the user closes the row from it without scrolling back
-    provenance: [.agents/spec/2026-10-17-bench-negative-decisions.md G12 SC13]
     notes: Replaced by IXN-078, where a thread page's bar and header stay at the top.
 
   - id: IXN-072
@@ -1281,7 +1247,6 @@ behaviors:
     then:
       - key: sender-and-time-one-line
         text: the message's sender and time share one line, and its text sits beneath them
-    provenance: [.agents/spec/2026-10-17-bench-negative-decisions.md G13 SC14]
     notes: Replaced by IXN-079, where a thread page's message shows its sender and time on one line. The contact history's drill-down renders messages through the same component, so it shows them the same way.
 
   - id: IXN-073
@@ -1296,7 +1261,6 @@ behaviors:
         text: the save returns each named row, in the order named, with the proposals, count to review and review status a read of the list made after it shows for that row
       - key: unknown-judgment
         text: a row naming an unknown judgment is not found, and the save records nothing
-    provenance: [.agents/spec/2026-10-17-bench-negative-decisions.md G6 G10]
     notes: Replaced by IXN-094, where every read and save returns the thread's and each night's status, and by IXN-096, where the review route returns the thread's review state. The server alone compiles a row's count and status (IXN-051); the bench applies each returned row whole (IXN-069).
 
   - id: IXN-074
@@ -1313,7 +1277,7 @@ behaviors:
         text: the chosen tab is part of the page's address, so a link opens that tab
       - key: no-tab-opens-interactions
         text: an address naming no tab opens the Interactions tab
-    provenance: [.agents/spec/2026-10-18-message-flags-and-threads.md G8, designs/threads.md]
+    provenance: [designs/threads.md]
 
   - id: IXN-075
     title: The Review switch is one setting that shows or hides everything about judgments
@@ -1331,7 +1295,7 @@ behaviors:
         text: with Review off neither the list nor a thread page shows a run filter, review status, judged count, flag, judgment box or review control
       - key: order-unchanged
         text: the list's order with Review off equals its order with Review on
-    provenance: [.agents/spec/2026-10-18-message-flags-and-threads.md G9 SC12, designs/threads.md]
+    provenance: [designs/threads.md]
 
   - id: IXN-076
     title: The Threads list shows one row per thread, newest message first, and each row opens its thread
@@ -1357,7 +1321,7 @@ behaviors:
         text: the filters combine, and the list pages, its totals counting the filtered threads
       - key: row-opens-thread-page
         text: each row opens the thread's page, carrying the list's filters
-    provenance: [.agents/spec/2026-10-18-message-flags-and-threads.md G9 SC5, designs/threads.md]
+    provenance: [designs/threads.md]
 
   - id: IXN-077
     title: With Review on the Threads list narrows to a run and shows each thread's judged count and status
@@ -1379,7 +1343,7 @@ behaviors:
         text: a summary line states how many threads the run judged, how many are to review, have nothing flagged and are reviewed
       - key: no-method-filter
         text: the list has no method filter, since a run fixes its method
-    provenance: [.agents/spec/2026-10-18-message-flags-and-threads.md G9 G11 G17, designs/threads.md]
+    provenance: [designs/threads.md]
 
   - id: IXN-078
     title: A thread page has its own address, the contact page's navigation bar and a header naming the thread
@@ -1399,7 +1363,7 @@ behaviors:
         text: a header names the thread, its venue and its participants
       - key: bar-and-header-stay
         text: the bar and the header stay at the top while the page scrolls
-    provenance: [.agents/spec/2026-10-18-message-flags-and-threads.md G9 G10, designs/threads.md]
+    provenance: [designs/threads.md]
 
   - id: IXN-079
     title: With Review off a thread page shows the thread's messages in order
@@ -1415,7 +1379,7 @@ behaviors:
         text: a message's sender and time share one line
       - key: earlier-messages-collapsed
         text: earlier messages sit behind a collapsed toggle, a bar spanning the card with its label, "{n} earlier messages", centered
-    provenance: [.agents/spec/2026-10-18-message-flags-and-threads.md G10 SC12, designs/threads.md]
+    provenance: [designs/threads.md]
 
   - id: IXN-080
     title: With Review on a thread page shows the run's judged nights as one timeline
@@ -1441,7 +1405,7 @@ behaviors:
         text: messages after the run's last night sit behind a collapsed toggle, a bar spanning the card with its label centered
       - key: header-adds-status-run-done
         text: the header adds the status pill, the run and Done
-    provenance: [.agents/spec/2026-10-18-message-flags-and-threads.md G10 G11 SC5, designs/threads.md]
+    provenance: [designs/threads.md]
 
   - id: IXN-081
     title: A flag shows on its message as a chip the user labels, and a label shows on every run's chip
@@ -1463,7 +1427,7 @@ behaviors:
         text: a label shows on every run's chip for that message and kind
       - key: commitment-cleared
         text: a commitment a later night judged done reads "cleared {date}"
-    provenance: [.agents/spec/2026-10-18-message-flags-and-threads.md G11 SC6 AD2, designs/threads.md]
+    provenance: [designs/threads.md]
 
   - id: IXN-082
     title: A judgment box lists each clearing decision its judgment made, for the user to mark done or not done
@@ -1479,7 +1443,7 @@ behaviors:
         text: each decision offers "Show in thread ↑" to its commitment's message and shows its probability
       - key: done-not-done
         text: each decision offers exactly two controls, "Done" and "Not done", each labeling the clearing decision with its own answer whatever the method answered; a labeled decision reads "Marked done" or "Marked not done" with Change, and Change offers the same two controls
-    provenance: [.agents/spec/2026-10-18-message-flags-and-threads.md G11 T5a, .agents/spec/2026-10-21-threads-review-fixes.md G3 SC3, designs/threads.md]
+    provenance: [designs/threads.md]
 
   - id: IXN-083
     title: Done and Next close a thread, and nothing else does
@@ -1495,7 +1459,7 @@ behaviors:
         text: Back to list, the previous control, the left-arrow key and leaving the page do not close it
       - key: footer-reports-nones
         text: after a close, each night it labeled reads "{n} unflagged new messages labeled none when you moved on"
-    provenance: [.agents/spec/2026-10-18-message-flags-and-threads.md G11 T6 SC6, designs/threads.md]
+    provenance: [designs/threads.md]
 
   - id: IXN-084
     title: A night that shows nothing and holds no label offers Confirm Nones
@@ -1511,7 +1475,7 @@ behaviors:
         text: a night that shows any of them, or holds a label, offers no Confirm Nones
       - key: night-labeled-and-offer-ends
         text: after Confirm Nones the night holds a label and offers it no more
-    provenance: [.agents/spec/2026-10-18-message-flags-and-threads.md G11, designs/threads.md]
+    provenance: [designs/threads.md]
 
   - id: IXN-085
     title: No review click waits on the server
@@ -1529,7 +1493,7 @@ behaviors:
         text: a close takes effect after every earlier save
       - key: saved-item-shows-recorded
         text: a saved item then shows what the server recorded
-    provenance: [.agents/spec/2026-10-18-message-flags-and-threads.md G12 SC9, designs/threads.md]
+    provenance: [designs/threads.md]
 
   - id: IXN-086
     title: A judgment box's reply lists are reviewed as a proposal's lists were
@@ -1551,7 +1515,7 @@ behaviors:
         text: once the user removes or confirms a participant's item in one reply list, the other list offers Add with that participant, and adding them moves the item to that list, marked "Added by you"
       - key: empty-list-names-closest
         text: an empty list names the decision the judgment came closest to making
-    provenance: [.agents/spec/2026-10-18-message-flags-and-threads.md G10 G12, .agents/spec/2026-10-21-threads-review-fixes.md G4 SC4 SC5, designs/threads.md]
+    provenance: [designs/threads.md]
     notes: The rules the server applies to reply items are IXN-053, IXN-055, IXN-058, IXN-059 and IXN-060.
 
   - id: IXN-087
@@ -1576,7 +1540,7 @@ behaviors:
         text: with a run, the response adds the run's summary counts of threads judged, to review, with nothing flagged and reviewed
       - key: unknown-run-not-found
         text: an unknown run is not found
-    provenance: [.agents/spec/2026-10-18-message-flags-and-threads.md G9 G11 G17 SC5, designs/threads.md]
+    provenance: [designs/threads.md]
 
   - id: IXN-088
     title: The review runs route lists the compared methods' historical and scheduled runs
@@ -1590,7 +1554,7 @@ behaviors:
         text: the historical and scheduled runs are listed newest first, each with its kind, method, method version, window and start
       - key: no-rerun-no-removed-method
         text: no rerun and no run of a method the method registry does not list is listed
-    provenance: [.agents/spec/2026-10-18-message-flags-and-threads.md G16 G17, designs/threads.md]
+    provenance: [designs/threads.md]
 
   - id: IXN-089
     title: The thread read returns the thread, its position in the list and, given a run, the run's nights
@@ -1618,7 +1582,7 @@ behaviors:
         text: a night carries a clearing decision only when the commitment it re-checks shows as a flag, its probability reaching the display threshold or the user having labeled it held
       - key: rechecks-of-rejected-hidden
         text: a night carries no clearing decision of a commitment the user rejected, its message holding a commitment label saying it holds none, whichever route wrote the label; such a re-check counts in no night status, to-review count or thread status, never stops a night from offering Confirm Nones, and shows again with any label it had once the user labels the commitment held
-    provenance: [.agents/spec/2026-10-18-message-flags-and-threads.md G10 G11 SC5, .agents/spec/2026-10-21-threads-review-fixes.md G1 SC1, designs/threads.md]
+    provenance: [designs/threads.md]
 
   - id: IXN-090
     title: The flag label route records whether a message holds a flag kind
@@ -1636,7 +1600,7 @@ behaviors:
         text: the route answers with the thread's review state in the run
       - key: invalid-refused
         text: a kind outside the three flag kinds, a message the thread does not hold, a missing run and an unknown thread or run are refused, and nothing is recorded
-    provenance: [.agents/spec/2026-10-18-message-flags-and-threads.md G11 T5 AD2, designs/threads.md]
+    provenance: [designs/threads.md]
 
   - id: IXN-091
     title: The clearing label route records whether a commitment is done as of a cut-off
@@ -1654,7 +1618,7 @@ behaviors:
         text: the route answers with the thread's review state in the run
       - key: invalid-refused
         text: a clearing decision no judgment of the thread made, a missing run and an unknown thread or run are refused, and nothing is recorded
-    provenance: [.agents/spec/2026-10-18-message-flags-and-threads.md G11 T5a, designs/threads.md]
+    provenance: [designs/threads.md]
 
   - id: IXN-092
     title: A close labels what each reviewed night left unflagged, all or nothing
@@ -1676,7 +1640,7 @@ behaviors:
         text: a close that fails records none of its labels
       - key: answers-review-state
         text: the route answers with the thread's review state in the run, each night reporting how many unflagged messages the close labeled
-    provenance: [.agents/spec/2026-10-18-message-flags-and-threads.md G11 T6 SC6, .agents/spec/2026-10-17-bench-negative-decisions.md G4, designs/threads.md]
+    provenance: [designs/threads.md]
     notes: A label on a flag chip, a clearing decision the night shows or a reply item counts as the night's label; a label on a re-check of a commitment the user rejected, which the night does not show, does not (IXN-089).
 
   - id: IXN-093
@@ -1699,7 +1663,7 @@ behaviors:
         text: a Confirm Nones that fails records none of its labels
       - key: answers-review-state
         text: the route answers with the thread's review state in the run
-    provenance: [.agents/spec/2026-10-18-message-flags-and-threads.md G11 T5b, .agents/spec/2026-10-17-bench-negative-decisions.md G3, designs/threads.md]
+    provenance: [designs/threads.md]
 
   - id: IXN-094
     title: The server computes every thread's and night's status and returns it with every read and save
@@ -1719,7 +1683,7 @@ behaviors:
         text: otherwise a thread that shows nothing is Nothing flagged
       - key: returned-with-every-answer
         text: each of these statuses is returned with the list, the thread read and every save, so the client computes none
-    provenance: [.agents/spec/2026-10-18-message-flags-and-threads.md G11 SC9, designs/threads.md]
+    provenance: [designs/threads.md]
 
   - id: IXN-095
     title: A flag or clearing label changes no live state, and a reply item's review keeps its effect
@@ -1735,7 +1699,6 @@ behaviors:
         text: a review of a reply item takes its live effect on a first review and records the label only on a re-review, as IXN-058 and IXN-059 state
       - key: stale-effect-label-only
         text: a review of a reply item whose live effect no longer holds records the label only and changes no obligation
-    provenance: [.agents/spec/2026-10-18-message-flags-and-threads.md HC2 G5]
 
   - id: IXN-096
     title: The review route, given a run, returns the reviewed outcome with the thread's review state
@@ -1749,7 +1712,7 @@ behaviors:
         text: given a run, the route answers with the reviewed outcome and the review state, in that run, of the thread its judgment judged
       - key: no-run-answers-outcome
         text: without a run, the route answers with the reviewed outcome alone
-    provenance: [.agents/spec/2026-10-18-message-flags-and-threads.md G12, designs/threads.md]
+    provenance: [designs/threads.md]
     notes: The route's validation and derived verdict are KNW-049.
 
   - id: IXN-097

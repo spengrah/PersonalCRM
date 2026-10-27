@@ -1,6 +1,6 @@
 # Threads tab: your threads, with a Review switch
 
-The Threads tab is the second tab of `/interactions`. It is both the user's regular view of their threads and the bench on which the user reviews message flags. A Review switch shows or hides everything about judgments. Stage 2 of `.agents/spec/2026-10-18-message-flags-and-threads.md` (G8–G17) builds it from this note, without opening the canvas.
+The Threads tab is the second tab of `/interactions`. It is both the user's regular view of their threads and the bench on which the user reviews message flags. A Review switch shows or hides everything about judgments. Stage 2 of https://github.com/spengrah/PersonalCRM/blob/9efb37ebd2157a2ac58c4b3c9c30703afce34f40/.agents/spec/2026-10-18-message-flags-and-threads.md (G8–G17) builds it from this note, without opening the canvas.
 
 The canvas is "Judgment Bench" (https://claude.ai/artifact/1d1TcFH9iXtdtRABK6n4iX), page "Threads tab". The user approved this design on 2026-10-19 (decision 20261019T162753Z-305f42dc685c). Every person, message and date on it is synthetic.
 
