@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"sync"
 
 	"personal-crm/backend/internal/repository"
 
@@ -178,14 +179,23 @@ func keepRow(row InteractionRow, f InteractionsFilter) bool {
 // candidateRows groups every live contact's effective participations into
 // rows: the participations of one merged interaction are one row, and so are
 // message bursts holding copies of the same group message. Every missed call
-// of a live contact is a row of its own.
+// of a live contact is a row of its own. The four whole-history reads are
+// independent, so they run concurrently on the pool.
 func (s *InteractionContentService) candidateRows(ctx context.Context) ([]candidateRow, error) {
-	participations, err := s.interactions.ListAllEffectiveParticipation(ctx)
-	if err != nil {
-		return nil, err
-	}
-	calls, err := s.phoneCalls.ListMissedCalls(ctx, repository.MissedCallFilter{})
-	if err != nil {
+	var (
+		participations                               []repository.EffectiveParticipation
+		calls                                        []repository.PhoneCall
+		venues                                       map[uuid.UUID]uuid.UUID
+		copies                                       []repository.MessageCopy
+		participationErr, callErr, venueErr, copyErr error
+		wg                                           sync.WaitGroup
+	)
+	wg.Go(func() { calls, callErr = s.phoneCalls.ListMissedCalls(ctx, repository.MissedCallFilter{}) })
+	wg.Go(func() { venues, venueErr = s.interactions.ListLiveObservationVenues(ctx) })
+	wg.Go(func() { copies, copyErr = s.interactions.ListGroupChatMessageCopies(ctx) })
+	participations, participationErr = s.interactions.ListAllEffectiveParticipation(ctx)
+	wg.Wait()
+	if err := cmp.Or(participationErr, callErr, venueErr, copyErr); err != nil {
 		return nil, err
 	}
 	contactIDs := make([]uuid.UUID, 0, len(participations)+len(calls))
@@ -201,14 +211,7 @@ func (s *InteractionContentService) candidateRows(ctx context.Context) ([]candid
 	if err != nil {
 		return nil, err
 	}
-	venues, err := s.interactions.ListLiveObservationVenues(ctx)
-	if err != nil {
-		return nil, err
-	}
-	groups, err := s.groupParticipations(ctx, participations)
-	if err != nil {
-		return nil, err
-	}
+	groups := groupParticipations(participations, copies)
 
 	candidates := make([]candidateRow, 0, len(groups)+len(calls))
 	for _, group := range groups {
@@ -269,7 +272,7 @@ func compareParticipants(a, b RowParticipant) int {
 // groupParticipations groups participations into rows: by root interaction
 // node, and for message bursts by the group messages their observations hold
 // copies of.
-func (s *InteractionContentService) groupParticipations(ctx context.Context, participations []repository.EffectiveParticipation) ([][]repository.EffectiveParticipation, error) {
+func groupParticipations(participations []repository.EffectiveParticipation, copies []repository.MessageCopy) [][]repository.EffectiveParticipation {
 	byRoot := map[uuid.UUID][]repository.EffectiveParticipation{}
 	var roots []uuid.UUID
 	bursts := map[uuid.UUID]repository.EffectiveParticipation{}
@@ -294,10 +297,6 @@ func (s *InteractionContentService) groupParticipations(ctx context.Context, par
 			id = parent[id]
 		}
 		return id
-	}
-	copies, err := s.interactions.ListGroupChatMessageCopies(ctx)
-	if err != nil {
-		return nil, err
 	}
 	holder := map[string]uuid.UUID{}
 	for _, c := range copies {
@@ -335,7 +334,7 @@ func (s *InteractionContentService) groupParticipations(ctx context.Context, par
 	for _, root := range groupRoots {
 		groups = append(groups, byGroup[root])
 	}
-	return groups, nil
+	return groups
 }
 
 // readPage reads the members, enrichment and preview of each row on a page,
