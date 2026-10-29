@@ -6,7 +6,7 @@
 -- name: ListAllEffectiveParticipationMembers :many
 -- Every live contact's effective participations, one row per member
 -- observation. The repository combines direction and time while grouping
--- adjacent rows into entries, in the effective_participation view's member order.
+-- rows into entries in the effective_participation view's member order.
 -- The root is the observation's own node unless that node was merged, and only
 -- then does interaction_node_root walk the alias chain. Leaving the view's
 -- root_node_id unread lets the planner drop the view's root join, which calls
@@ -34,8 +34,7 @@ FROM (
     LEFT JOIN node n ON n.id = v.interaction_node_id
     WHERE NOT v.excluded
       AND v.contact_id IN (SELECT id FROM live_contact)
-) m
-ORDER BY m.contact_id, m.root_node_id, CASE WHEN m.root_node_id IS NULL THEN m.observation_id END, m.occurred_at, m.observation_id;
+) m;
 
 -- name: ListGroupChatMessageCopies :many
 -- Each group-chat message key with every observation holding a copy of it: a

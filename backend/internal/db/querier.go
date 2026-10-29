@@ -1349,7 +1349,7 @@ type Querier interface {
 	// of migrations 091 and 096.
 	// Every live contact's effective participations, one row per member
 	// observation. The repository combines direction and time while grouping
-	// adjacent rows into entries, in the effective_participation view's member order.
+	// rows into entries in the effective_participation view's member order.
 	// The root is the observation's own node unless that node was merged, and only
 	// then does interaction_node_root walk the alias chain. Leaving the view's
 	// root_node_id unread lets the planner drop the view's root join, which calls

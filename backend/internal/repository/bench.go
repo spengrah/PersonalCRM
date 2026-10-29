@@ -1,9 +1,11 @@
 package repository
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"personal-crm/backend/internal/db"
@@ -15,12 +17,37 @@ import (
 // ListAllEffectiveParticipation returns every live contact's effective
 // participations, read as one row per member and grouped here: a message
 // burst is an entry of its own, and the members of one contact's root are
-// adjacent.
+// adjacent after sorting the returned row pointers here.
 func (r *InteractionRepository) ListAllEffectiveParticipation(ctx context.Context) ([]EffectiveParticipation, error) {
 	rows, err := r.queries.ListAllEffectiveParticipationMembers(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("list all effective participation: %w", err)
 	}
+	// Match the view's grouping and member order without asking PostgreSQL
+	// to sort on the computed root expression.
+	slices.SortFunc(rows, func(a, b *db.ListAllEffectiveParticipationMembersRow) int {
+		if c := bytes.Compare(a.ContactID[:], b.ContactID[:]); c != 0 {
+			return c
+		}
+		switch {
+		case a.RootNodeID == nil && b.RootNodeID != nil:
+			return 1
+		case a.RootNodeID != nil && b.RootNodeID == nil:
+			return -1
+		case a.RootNodeID != nil && b.RootNodeID != nil:
+			if c := bytes.Compare(a.RootNodeID[:], b.RootNodeID[:]); c != 0 {
+				return c
+			}
+		default:
+			if c := bytes.Compare(a.ObservationID[:], b.ObservationID[:]); c != 0 {
+				return c
+			}
+		}
+		if c := a.OccurredAt.Compare(b.OccurredAt); c != 0 {
+			return c
+		}
+		return bytes.Compare(a.ObservationID[:], b.ObservationID[:])
+	})
 	var out []EffectiveParticipation
 	for _, row := range rows {
 		last := len(out) - 1
