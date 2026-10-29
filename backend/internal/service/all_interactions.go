@@ -138,13 +138,14 @@ func (s *InteractionContentService) IndexInteractions(ctx context.Context) (*Int
 // enriched as the contact history enriches it, in its context contact's
 // participation.
 func (s *InteractionContentService) ListInteractions(ctx context.Context, idx *InteractionIndex, f InteractionsFilter) (*InteractionsPage, error) {
-	var kept []candidateRow
-	for _, c := range idx.candidates {
+	kept := make([]*candidateRow, 0, len(idx.candidates))
+	for i := range idx.candidates {
+		c := &idx.candidates[i]
 		if keepRow(c.row, f) {
 			kept = append(kept, c)
 		}
 	}
-	slices.SortFunc(kept, func(a, b candidateRow) int {
+	slices.SortFunc(kept, func(a, b *candidateRow) int {
 		if c := b.row.OccurredAt.Compare(a.row.OccurredAt); c != 0 {
 			return c
 		}
@@ -339,7 +340,7 @@ func groupParticipations(participations []repository.EffectiveParticipation, cop
 
 // readPage reads the members, enrichment and preview of each row on a page,
 // in its context contact's participation, as ListTimeline reads them.
-func (s *InteractionContentService) readPage(ctx context.Context, page []candidateRow) ([]InteractionRow, error) {
+func (s *InteractionContentService) readPage(ctx context.Context, page []*candidateRow) ([]InteractionRow, error) {
 	var roots, bursts []uuid.UUID
 	for _, c := range page {
 		switch c.row.Identity.Kind {
