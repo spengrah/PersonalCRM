@@ -29,11 +29,16 @@ func (r *InteractionRepository) ListAllEffectiveParticipation(ctx context.Contex
 			out = append(out, EffectiveParticipation{
 				ContactID:         row.ContactID,
 				InteractionNodeID: row.RootNodeID,
-				Direction:         row.EntryDirection,
-				OccurredAt:        row.EntryOccurredAt.UTC(),
+				Direction:         row.Direction,
 			})
 			last++
 		}
+		// The schema allows inbound, outbound and mutual: any two different
+		// directions combine to mutual. Members arrive oldest first.
+		if out[last].Direction != row.Direction {
+			out[last].Direction = InteractionDirectionMutual
+		}
+		out[last].OccurredAt = row.OccurredAt.UTC()
 		out[last].Members = append(out[last].Members, EffectiveParticipationMember{
 			ObservationID:     row.ObservationID,
 			Source:            row.Source,

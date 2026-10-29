@@ -56,17 +56,11 @@ SELECT
     v.source,
     v.source_ref,
     v.interaction_node_id,
-    (CASE
-        WHEN bool_or(v.direction = 'mutual') OVER entry
-          OR (bool_or(v.direction = 'inbound') OVER entry AND bool_or(v.direction = 'outbound') OVER entry)
-        THEN 'mutual'
-        ELSE min(v.direction) OVER entry
-    END)::text AS entry_direction,
-    (max(v.occurred_at) OVER entry)::timestamptz AS entry_occurred_at
+    v.direction,
+    v.occurred_at
 FROM interaction_observation_verdict v
 WHERE NOT v.excluded
   AND v.contact_id IN (SELECT id FROM live_contact)
-WINDOW entry AS (PARTITION BY v.contact_id, v.root_node_id, CASE WHEN v.root_node_id IS NULL THEN v.observation_id END)
 ORDER BY v.contact_id, v.root_node_id, CASE WHEN v.root_node_id IS NULL THEN v.observation_id END, v.occurred_at, v.observation_id
 `
 
@@ -77,8 +71,8 @@ type ListAllEffectiveParticipationMembersRow struct {
 	Source            string     `json:"source"`
 	SourceRef         *string    `json:"source_ref"`
 	InteractionNodeID *uuid.UUID `json:"interaction_node_id"`
-	EntryDirection    string     `json:"entry_direction"`
-	EntryOccurredAt   time.Time  `json:"entry_occurred_at"`
+	Direction         string     `json:"direction"`
+	OccurredAt        time.Time  `json:"occurred_at"`
 }
 
 // Reads of the all-interactions list. Participation comes from the
@@ -86,9 +80,8 @@ type ListAllEffectiveParticipationMembersRow struct {
 // comes from the one definition of a thread's content, the thread_content view
 // of migrations 091 and 096.
 // Every live contact's effective participations, one row per member
-// observation: the effective_participation view's grouping, direction and time,
-// computed as window aggregates over the view's GROUP BY so no entry's members
-// are built as JSON. An entry's rows are adjacent, in the view's member order.
+// observation. The repository combines direction and time while grouping
+// adjacent rows into entries, in the effective_participation view's member order.
 func (q *Queries) ListAllEffectiveParticipationMembers(ctx context.Context) ([]*ListAllEffectiveParticipationMembersRow, error) {
 	rows, err := q.db.Query(ctx, ListAllEffectiveParticipationMembers)
 	if err != nil {
@@ -105,8 +98,8 @@ func (q *Queries) ListAllEffectiveParticipationMembers(ctx context.Context) ([]*
 			&i.Source,
 			&i.SourceRef,
 			&i.InteractionNodeID,
-			&i.EntryDirection,
-			&i.EntryOccurredAt,
+			&i.Direction,
+			&i.OccurredAt,
 		); err != nil {
 			return nil, err
 		}

@@ -1348,9 +1348,8 @@ type Querier interface {
 	// comes from the one definition of a thread's content, the thread_content view
 	// of migrations 091 and 096.
 	// Every live contact's effective participations, one row per member
-	// observation: the effective_participation view's grouping, direction and time,
-	// computed as window aggregates over the view's GROUP BY so no entry's members
-	// are built as JSON. An entry's rows are adjacent, in the view's member order.
+	// observation. The repository combines direction and time while grouping
+	// adjacent rows into entries, in the effective_participation view's member order.
 	ListAllEffectiveParticipationMembers(ctx context.Context) ([]*ListAllEffectiveParticipationMembersRow, error)
 	// List all OAuth credentials
 	ListAllOAuthCredentials(ctx context.Context) ([]*OauthCredential, error)
