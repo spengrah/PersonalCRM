@@ -47,33 +47,62 @@ func (q *Queries) GetThreadMessage(ctx context.Context, arg GetThreadMessagePara
 	return &i, err
 }
 
-const ListAllEffectiveParticipation = `-- name: ListAllEffectiveParticipation :many
+const ListAllEffectiveParticipationMembers = `-- name: ListAllEffectiveParticipationMembers :many
 
-SELECT ep.contact_id, ep.interaction_node_id, ep.direction, ep.occurred_at, ep.members FROM effective_participation ep
-WHERE ep.contact_id IN (SELECT id FROM live_contact)
-ORDER BY ep.contact_id, ep.occurred_at DESC, ep.members->0->>'observation_id'
+SELECT
+    m.contact_id,
+    m.entry_id,
+    m.root_node_id,
+    m.observation_id,
+    m.source,
+    m.source_ref,
+    m.interaction_node_id,
+    m.member_ordinal,
+    m.entry_direction,
+    m.entry_occurred_at
+FROM effective_participation_member m
+WHERE m.contact_id IN (SELECT id FROM live_contact)
 `
 
+type ListAllEffectiveParticipationMembersRow struct {
+	ContactID         uuid.UUID  `json:"contact_id"`
+	EntryID           uuid.UUID  `json:"entry_id"`
+	RootNodeID        *uuid.UUID `json:"root_node_id"`
+	ObservationID     uuid.UUID  `json:"observation_id"`
+	Source            string     `json:"source"`
+	SourceRef         *string    `json:"source_ref"`
+	InteractionNodeID *uuid.UUID `json:"interaction_node_id"`
+	MemberOrdinal     int32      `json:"member_ordinal"`
+	EntryDirection    string     `json:"entry_direction"`
+	EntryOccurredAt   time.Time  `json:"entry_occurred_at"`
+}
+
 // Reads of the all-interactions list. Participation comes from the
-// one derivation, the effective_participation view of migration 089; content
-// comes from the one definition of a thread's content, the thread_content view
-// of migrations 091 and 096.
-// Every live contact's effective participations.
-func (q *Queries) ListAllEffectiveParticipation(ctx context.Context) ([]*EffectiveParticipation, error) {
-	rows, err := q.db.Query(ctx, ListAllEffectiveParticipation)
+// one derivation, the effective_participation_member view of migration 106;
+// content comes from the one definition of a thread's content, the
+// thread_content view of migrations 091 and 096.
+// Every live contact's effective participations, one row per member
+// observation, with its entry's key, member place, direction and time.
+func (q *Queries) ListAllEffectiveParticipationMembers(ctx context.Context) ([]*ListAllEffectiveParticipationMembersRow, error) {
+	rows, err := q.db.Query(ctx, ListAllEffectiveParticipationMembers)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []*EffectiveParticipation{}
+	items := []*ListAllEffectiveParticipationMembersRow{}
 	for rows.Next() {
-		var i EffectiveParticipation
+		var i ListAllEffectiveParticipationMembersRow
 		if err := rows.Scan(
 			&i.ContactID,
+			&i.EntryID,
+			&i.RootNodeID,
+			&i.ObservationID,
+			&i.Source,
+			&i.SourceRef,
 			&i.InteractionNodeID,
-			&i.Direction,
-			&i.OccurredAt,
-			&i.Members,
+			&i.MemberOrdinal,
+			&i.EntryDirection,
+			&i.EntryOccurredAt,
 		); err != nil {
 			return nil, err
 		}
@@ -110,39 +139,6 @@ func (q *Queries) ListGroupChatMessageCopies(ctx context.Context) ([]*ListGroupC
 	for rows.Next() {
 		var i ListGroupChatMessageCopiesRow
 		if err := rows.Scan(&i.ObservationID, &i.MessageKey); err != nil {
-			return nil, err
-		}
-		items = append(items, &i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const ListLiveObservationVenues = `-- name: ListLiveObservationVenues :many
-SELECT id, venue_id::uuid AS venue_id
-FROM interaction
-WHERE deleted_at IS NULL
-  AND venue_id IS NOT NULL
-`
-
-type ListLiveObservationVenuesRow struct {
-	ID      uuid.UUID `json:"id"`
-	VenueID uuid.UUID `json:"venue_id"`
-}
-
-// The venue of every live observation recorded in one.
-func (q *Queries) ListLiveObservationVenues(ctx context.Context) ([]*ListLiveObservationVenuesRow, error) {
-	rows, err := q.db.Query(ctx, ListLiveObservationVenues)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []*ListLiveObservationVenuesRow{}
-	for rows.Next() {
-		var i ListLiveObservationVenuesRow
-		if err := rows.Scan(&i.ID, &i.VenueID); err != nil {
 			return nil, err
 		}
 		items = append(items, &i)

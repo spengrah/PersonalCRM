@@ -619,7 +619,7 @@ ORDER BY ep.occurred_at DESC, ep.members->0->>'observation_id'
 
 // Effective participation reads (arc seam S4). Each reads the one derivation,
 // the effective_participation and interaction_observation_verdict views of
-// migration 089; none derives participation of its own.
+// migrations 089 and 106; none derives participation of its own.
 // One row per effective participation of the contact, latest first.
 func (q *Queries) ListEffectiveParticipationForContact(ctx context.Context, contactID uuid.UUID) ([]*EffectiveParticipation, error) {
 	rows, err := q.db.Query(ctx, ListEffectiveParticipationForContact, contactID)

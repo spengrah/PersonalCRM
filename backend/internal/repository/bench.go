@@ -1,9 +1,12 @@
 package repository
 
 import (
+	"bytes"
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"personal-crm/backend/internal/db"
@@ -13,27 +16,40 @@ import (
 )
 
 // ListAllEffectiveParticipation returns every live contact's effective
-// participations.
+// participations. It reads the derivation's member rows
+// (effective_participation_member) and packs each entry's rows, in member
+// order, as the effective_participation view packs them, without its JSON.
 func (r *InteractionRepository) ListAllEffectiveParticipation(ctx context.Context) ([]EffectiveParticipation, error) {
-	rows, err := r.queries.ListAllEffectiveParticipation(ctx)
+	rows, err := r.queries.ListAllEffectiveParticipationMembers(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("list all effective participation: %w", err)
 	}
-	return convertEffectiveParticipations(rows)
-}
-
-// ListLiveObservationVenues maps every live observation recorded in a venue to
-// that venue.
-func (r *InteractionRepository) ListLiveObservationVenues(ctx context.Context) (map[uuid.UUID]uuid.UUID, error) {
-	rows, err := r.queries.ListLiveObservationVenues(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("list observation venues: %w", err)
+	slices.SortFunc(rows, func(a, b *db.ListAllEffectiveParticipationMembersRow) int {
+		return cmp.Or(
+			bytes.Compare(a.ContactID[:], b.ContactID[:]),
+			bytes.Compare(a.EntryID[:], b.EntryID[:]),
+			cmp.Compare(a.MemberOrdinal, b.MemberOrdinal),
+		)
+	})
+	var out []EffectiveParticipation
+	for i, row := range rows {
+		if i == 0 || row.ContactID != rows[i-1].ContactID || row.EntryID != rows[i-1].EntryID {
+			out = append(out, EffectiveParticipation{
+				ContactID:         row.ContactID,
+				InteractionNodeID: row.RootNodeID,
+				Direction:         row.EntryDirection,
+				OccurredAt:        row.EntryOccurredAt.UTC(),
+			})
+		}
+		last := len(out) - 1
+		out[last].Members = append(out[last].Members, EffectiveParticipationMember{
+			ObservationID:     row.ObservationID,
+			Source:            row.Source,
+			SourceRef:         row.SourceRef,
+			InteractionNodeID: row.InteractionNodeID,
+		})
 	}
-	venues := make(map[uuid.UUID]uuid.UUID, len(rows))
-	for _, row := range rows {
-		venues[row.ID] = row.VenueID
-	}
-	return venues, nil
+	return out, nil
 }
 
 // MessageCopy is one observation holding a copy of one message.

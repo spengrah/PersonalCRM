@@ -1,20 +1,24 @@
 -- Reads of the all-interactions list. Participation comes from the
--- one derivation, the effective_participation view of migration 089; content
--- comes from the one definition of a thread's content, the thread_content view
--- of migrations 091 and 096.
+-- one derivation, the effective_participation_member view of migration 106;
+-- content comes from the one definition of a thread's content, the
+-- thread_content view of migrations 091 and 096.
 
--- name: ListAllEffectiveParticipation :many
--- Every live contact's effective participations.
-SELECT ep.* FROM effective_participation ep
-WHERE ep.contact_id IN (SELECT id FROM live_contact)
-ORDER BY ep.contact_id, ep.occurred_at DESC, ep.members->0->>'observation_id';
-
--- name: ListLiveObservationVenues :many
--- The venue of every live observation recorded in one.
-SELECT id, venue_id::uuid AS venue_id
-FROM interaction
-WHERE deleted_at IS NULL
-  AND venue_id IS NOT NULL;
+-- name: ListAllEffectiveParticipationMembers :many
+-- Every live contact's effective participations, one row per member
+-- observation, with its entry's key, member place, direction and time.
+SELECT
+    m.contact_id,
+    m.entry_id,
+    m.root_node_id,
+    m.observation_id,
+    m.source,
+    m.source_ref,
+    m.interaction_node_id,
+    m.member_ordinal,
+    m.entry_direction,
+    m.entry_occurred_at
+FROM effective_participation_member m
+WHERE m.contact_id IN (SELECT id FROM live_contact);
 
 -- name: ListGroupChatMessageCopies :many
 -- Each group-chat message key with every observation holding a copy of it: a

@@ -35,9 +35,10 @@ import (
 // message-burst entry has no interaction node and is its own only member.
 //
 // Every value here is derived on demand from observation rows, interaction-node
-// merge aliases and accepted correction assertions by the effective_participation
-// view (migration 089), the one implementation of the derivation. Nothing
-// stores it.
+// merge aliases and accepted correction assertions by the
+// effective_participation_member view (migration 106), the one implementation
+// of the derivation; the effective_participation view and
+// ListAllEffectiveParticipation only pack its rows. Nothing stores it.
 type EffectiveParticipation struct {
 	ContactID uuid.UUID
 	// InteractionNodeID is the root interaction node of the entry; nil for a

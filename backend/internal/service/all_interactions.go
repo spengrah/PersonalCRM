@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"sync"
 
 	"personal-crm/backend/internal/repository"
 
@@ -73,21 +74,15 @@ type InteractionRow struct {
 	Participants []RowParticipant
 	// Types are the interaction types of the row's members.
 	Types []InteractionType
-	// Threads are the venues the row's observations were recorded in.
-	Threads []uuid.UUID
-	// Observations are the row's observations, of every participant.
-	Observations []uuid.UUID
 	// Preview is nil for a row that shows no content.
 	Preview *RowPreview
 }
 
 // InteractionsFilter selects rows of the all-interactions view. A nil field
-// keeps every row; Rows keeps the rows whose identity it holds, so an empty
-// non-nil set keeps none.
+// keeps every row.
 type InteractionsFilter struct {
 	ContactID *uuid.UUID
 	Type      *InteractionType
-	Rows      map[TimelineIdentity]struct{}
 	Limit     int32
 	Offset    int32
 }
@@ -100,11 +95,9 @@ type InteractionsPage struct {
 }
 
 // InteractionIndex is every row of the all-interactions view, before any
-// filter or page. RowOf maps every observation of every row to its row's
-// identity.
+// filter or page.
 type InteractionIndex struct {
 	candidates []candidateRow
-	RowOf      map[uuid.UUID]TimelineIdentity
 }
 
 // candidateRow is a row before its page is read, with its first
@@ -123,13 +116,7 @@ func (s *InteractionContentService) IndexInteractions(ctx context.Context) (*Int
 	if err != nil {
 		return nil, err
 	}
-	rowOf := map[uuid.UUID]TimelineIdentity{}
-	for _, c := range candidates {
-		for _, id := range c.row.Observations {
-			rowOf[id] = c.row.Identity
-		}
-	}
-	return &InteractionIndex{candidates: candidates, RowOf: rowOf}, nil
+	return &InteractionIndex{candidates: candidates}, nil
 }
 
 // ListInteractions returns one page of the index's rows the filter keeps,
@@ -137,13 +124,14 @@ func (s *InteractionContentService) IndexInteractions(ctx context.Context) (*Int
 // enriched as the contact history enriches it, in its context contact's
 // participation.
 func (s *InteractionContentService) ListInteractions(ctx context.Context, idx *InteractionIndex, f InteractionsFilter) (*InteractionsPage, error) {
-	var kept []candidateRow
-	for _, c := range idx.candidates {
+	kept := make([]*candidateRow, 0, len(idx.candidates))
+	for i := range idx.candidates {
+		c := &idx.candidates[i]
 		if keepRow(c.row, f) {
 			kept = append(kept, c)
 		}
 	}
-	slices.SortFunc(kept, func(a, b candidateRow) int {
+	slices.SortFunc(kept, func(a, b *candidateRow) int {
 		if c := b.row.OccurredAt.Compare(a.row.OccurredAt); c != 0 {
 			return c
 		}
@@ -167,25 +155,27 @@ func keepRow(row InteractionRow, f InteractionsFilter) bool {
 	if f.Type != nil && !slices.Contains(row.Types, *f.Type) {
 		return false
 	}
-	if f.Rows != nil {
-		if _, ok := f.Rows[row.Identity]; !ok {
-			return false
-		}
-	}
 	return true
 }
 
 // candidateRows groups every live contact's effective participations into
 // rows: the participations of one merged interaction are one row, and so are
 // message bursts holding copies of the same group message. Every missed call
-// of a live contact is a row of its own.
+// of a live contact is a row of its own. The three whole-history reads are
+// independent, so they run concurrently on the pool.
 func (s *InteractionContentService) candidateRows(ctx context.Context) ([]candidateRow, error) {
-	participations, err := s.interactions.ListAllEffectiveParticipation(ctx)
-	if err != nil {
-		return nil, err
-	}
-	calls, err := s.phoneCalls.ListMissedCalls(ctx, repository.MissedCallFilter{})
-	if err != nil {
+	var (
+		participations                     []repository.EffectiveParticipation
+		calls                              []repository.PhoneCall
+		copies                             []repository.MessageCopy
+		participationErr, callErr, copyErr error
+		wg                                 sync.WaitGroup
+	)
+	wg.Go(func() { calls, callErr = s.phoneCalls.ListMissedCalls(ctx, repository.MissedCallFilter{}) })
+	wg.Go(func() { copies, copyErr = s.interactions.ListGroupChatMessageCopies(ctx) })
+	participations, participationErr = s.interactions.ListAllEffectiveParticipation(ctx)
+	wg.Wait()
+	if err := cmp.Or(participationErr, callErr, copyErr); err != nil {
 		return nil, err
 	}
 	contactIDs := make([]uuid.UUID, 0, len(participations)+len(calls))
@@ -201,14 +191,7 @@ func (s *InteractionContentService) candidateRows(ctx context.Context) ([]candid
 	if err != nil {
 		return nil, err
 	}
-	venues, err := s.interactions.ListLiveObservationVenues(ctx)
-	if err != nil {
-		return nil, err
-	}
-	groups, err := s.groupParticipations(ctx, participations)
-	if err != nil {
-		return nil, err
-	}
+	groups := groupParticipations(participations, copies)
 
 	candidates := make([]candidateRow, 0, len(groups)+len(calls))
 	for _, group := range groups {
@@ -216,17 +199,12 @@ func (s *InteractionContentService) candidateRows(ctx context.Context) ([]candid
 		for _, ep := range group {
 			row.Participants = append(row.Participants, RowParticipant{ContactID: ep.ContactID, Name: names[ep.ContactID]})
 			for _, member := range ep.Members {
-				row.Observations = append(row.Observations, member.ObservationID)
 				row.Types = append(row.Types, InteractionTypeOf(member.Source))
-				if venue, ok := venues[member.ObservationID]; ok {
-					row.Threads = append(row.Threads, venue)
-				}
 			}
 		}
 		slices.SortFunc(row.Participants, compareParticipants)
 		slices.Sort(row.Types)
 		row.Types = slices.Compact(row.Types)
-		row.Threads = uniqueUUIDs(row.Threads)
 		lead := group[slices.IndexFunc(group, func(ep repository.EffectiveParticipation) bool {
 			return ep.ContactID == row.Participants[0].ContactID
 		})]
@@ -269,7 +247,7 @@ func compareParticipants(a, b RowParticipant) int {
 // groupParticipations groups participations into rows: by root interaction
 // node, and for message bursts by the group messages their observations hold
 // copies of.
-func (s *InteractionContentService) groupParticipations(ctx context.Context, participations []repository.EffectiveParticipation) ([][]repository.EffectiveParticipation, error) {
+func groupParticipations(participations []repository.EffectiveParticipation, copies []repository.MessageCopy) [][]repository.EffectiveParticipation {
 	byRoot := map[uuid.UUID][]repository.EffectiveParticipation{}
 	var roots []uuid.UUID
 	bursts := map[uuid.UUID]repository.EffectiveParticipation{}
@@ -294,10 +272,6 @@ func (s *InteractionContentService) groupParticipations(ctx context.Context, par
 			id = parent[id]
 		}
 		return id
-	}
-	copies, err := s.interactions.ListGroupChatMessageCopies(ctx)
-	if err != nil {
-		return nil, err
 	}
 	holder := map[string]uuid.UUID{}
 	for _, c := range copies {
@@ -335,12 +309,12 @@ func (s *InteractionContentService) groupParticipations(ctx context.Context, par
 	for _, root := range groupRoots {
 		groups = append(groups, byGroup[root])
 	}
-	return groups, nil
+	return groups
 }
 
 // readPage reads the members, enrichment and preview of each row on a page,
 // in its context contact's participation, as ListTimeline reads them.
-func (s *InteractionContentService) readPage(ctx context.Context, page []candidateRow) ([]InteractionRow, error) {
+func (s *InteractionContentService) readPage(ctx context.Context, page []*candidateRow) ([]InteractionRow, error) {
 	var roots, bursts []uuid.UUID
 	for _, c := range page {
 		switch c.row.Identity.Kind {
@@ -377,6 +351,24 @@ func (s *InteractionContentService) readPage(ctx context.Context, page []candida
 	if err != nil {
 		return nil, err
 	}
+	// Each row's preview is a few round trips of its own, so the rows read
+	// theirs concurrently, at most previewReaders at a time to leave the pool
+	// to other work.
+	previews := make([]*RowPreview, len(page))
+	previewErrs := make([]error, len(page))
+	slots := make(chan struct{}, previewReaders)
+	var wg sync.WaitGroup
+	for i := range page {
+		wg.Go(func() {
+			slots <- struct{}{}
+			defer func() { <-slots }()
+			previews[i], previewErrs[i] = s.preview(ctx, members[i])
+		})
+	}
+	wg.Wait()
+	if err := cmp.Or(previewErrs...); err != nil {
+		return nil, err
+	}
 	rows := make([]InteractionRow, len(page))
 	for i, c := range page {
 		row := c.row
@@ -387,13 +379,14 @@ func (s *InteractionContentService) readPage(ctx context.Context, page []candida
 			r := member.representative
 			row.Members = append(row.Members, TimelineMember{Source: r.Source, SourceRef: r.SourceRef, Enrichment: enrichment[r.ID]})
 		}
-		if row.Preview, err = s.preview(ctx, members[i]); err != nil {
-			return nil, err
-		}
+		row.Preview = previews[i]
 		rows[i] = row
 	}
 	return rows, nil
 }
+
+// previewReaders is how many of a page's rows read their previews at once.
+const previewReaders = 4
 
 // preview is the latest message the members show, else their first meeting
 // note's text; nil when they show neither.

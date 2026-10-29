@@ -1344,11 +1344,12 @@ type Querier interface {
 	ListAcceptedSlotNodes(ctx context.Context, arg ListAcceptedSlotNodesParams) ([]*ListAcceptedSlotNodesRow, error)
 	ListActiveMacHosts(ctx context.Context) ([]*MacHost, error)
 	// Reads of the all-interactions list. Participation comes from the
-	// one derivation, the effective_participation view of migration 089; content
-	// comes from the one definition of a thread's content, the thread_content view
-	// of migrations 091 and 096.
-	// Every live contact's effective participations.
-	ListAllEffectiveParticipation(ctx context.Context) ([]*EffectiveParticipation, error)
+	// one derivation, the effective_participation_member view of migration 106;
+	// content comes from the one definition of a thread's content, the
+	// thread_content view of migrations 091 and 096.
+	// Every live contact's effective participations, one row per member
+	// observation, with its entry's key, member place, direction and time.
+	ListAllEffectiveParticipationMembers(ctx context.Context) ([]*ListAllEffectiveParticipationMembersRow, error)
 	// List all OAuth credentials
 	ListAllOAuthCredentials(ctx context.Context) ([]*OauthCredential, error)
 	ListAllUnmatchedExternalContacts(ctx context.Context, arg ListAllUnmatchedExternalContactsParams) ([]*ExternalContact, error)
@@ -1498,7 +1499,7 @@ type Querier interface {
 	ListDueSyncStates(ctx context.Context, nextSyncAt *time.Time) ([]*ExternalSyncState, error)
 	// Effective participation reads (arc seam S4). Each reads the one derivation,
 	// the effective_participation and interaction_observation_verdict views of
-	// migration 089; none derives participation of its own.
+	// migrations 089 and 106; none derives participation of its own.
 	// One row per effective participation of the contact, latest first.
 	ListEffectiveParticipationForContact(ctx context.Context, contactID uuid.UUID) ([]*EffectiveParticipation, error)
 	// Keyset-paged email bodies for the one-time quote trim (crm-admin
@@ -1649,8 +1650,6 @@ type Querier interface {
 	// so a soft-deleted (merged-away or deleted) endpoint drops the row. A fact
 	// (object_node_id NULL) is gated on the subject only.
 	ListLiveEdgesForNode(ctx context.Context, arg ListLiveEdgesForNodeParams) ([]*Assertion, error)
-	// The venue of every live observation recorded in one.
-	ListLiveObservationVenues(ctx context.Context) ([]*ListLiveObservationVenuesRow, error)
 	ListMacHosts(ctx context.Context) ([]*MacHost, error)
 	// List all managed tasks for a provider (for reconciliation)
 	ListManagedContactTasks(ctx context.Context, provider string) ([]*ListManagedContactTasksRow, error)
