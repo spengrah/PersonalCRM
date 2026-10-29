@@ -274,7 +274,7 @@ WHERE interaction.id = ANY(sqlc.arg('observation_ids')::uuid[])
 
 -- Effective participation reads (arc seam S4). Each reads the one derivation,
 -- the effective_participation and interaction_observation_verdict views of
--- migration 089; none derives participation of its own.
+-- migrations 089 and 106; none derives participation of its own.
 
 -- name: ListEffectiveParticipationForContact :many
 -- One row per effective participation of the contact, latest first.

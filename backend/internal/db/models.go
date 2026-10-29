@@ -307,6 +307,20 @@ type EffectiveParticipation struct {
 	Members           []byte     `json:"members"`
 }
 
+type EffectiveParticipationMember struct {
+	ContactID         uuid.UUID  `json:"contact_id"`
+	EntryID           uuid.UUID  `json:"entry_id"`
+	RootNodeID        *uuid.UUID `json:"root_node_id"`
+	ObservationID     uuid.UUID  `json:"observation_id"`
+	Source            string     `json:"source"`
+	SourceRef         *string    `json:"source_ref"`
+	InteractionNodeID *uuid.UUID `json:"interaction_node_id"`
+	OccurredAt        time.Time  `json:"occurred_at"`
+	MemberOrdinal     int32      `json:"member_ordinal"`
+	EntryDirection    string     `json:"entry_direction"`
+	EntryOccurredAt   time.Time  `json:"entry_occurred_at"`
+}
+
 type Embedding struct {
 	TargetKind   string          `json:"target_kind"`
 	TargetID     uuid.UUID       `json:"target_id"`

@@ -1344,16 +1344,11 @@ type Querier interface {
 	ListAcceptedSlotNodes(ctx context.Context, arg ListAcceptedSlotNodesParams) ([]*ListAcceptedSlotNodesRow, error)
 	ListActiveMacHosts(ctx context.Context) ([]*MacHost, error)
 	// Reads of the all-interactions list. Participation comes from the
-	// one derivation, the effective_participation view of migration 089; content
-	// comes from the one definition of a thread's content, the thread_content view
-	// of migrations 091 and 096.
+	// one derivation, the effective_participation_member view of migration 106;
+	// content comes from the one definition of a thread's content, the
+	// thread_content view of migrations 091 and 096.
 	// Every live contact's effective participations, one row per member
-	// observation. The repository combines direction and time while grouping
-	// rows into entries in the effective_participation view's member order.
-	// The root is the observation's own node unless that node was merged, and only
-	// then does interaction_node_root walk the alias chain. Leaving the view's
-	// root_node_id unread lets the planner drop the view's root join, which calls
-	// the function for every observation with a node.
+	// observation, with its entry's key, member place, direction and time.
 	ListAllEffectiveParticipationMembers(ctx context.Context) ([]*ListAllEffectiveParticipationMembersRow, error)
 	// List all OAuth credentials
 	ListAllOAuthCredentials(ctx context.Context) ([]*OauthCredential, error)
@@ -1504,7 +1499,7 @@ type Querier interface {
 	ListDueSyncStates(ctx context.Context, nextSyncAt *time.Time) ([]*ExternalSyncState, error)
 	// Effective participation reads (arc seam S4). Each reads the one derivation,
 	// the effective_participation and interaction_observation_verdict views of
-	// migration 089; none derives participation of its own.
+	// migrations 089 and 106; none derives participation of its own.
 	// One row per effective participation of the contact, latest first.
 	ListEffectiveParticipationForContact(ctx context.Context, contactID uuid.UUID) ([]*EffectiveParticipation, error)
 	// Keyset-paged email bodies for the one-time quote trim (crm-admin

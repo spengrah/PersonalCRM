@@ -2,6 +2,7 @@ package repository
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -15,57 +16,32 @@ import (
 )
 
 // ListAllEffectiveParticipation returns every live contact's effective
-// participations, read as one row per member and grouped here: a message
-// burst is an entry of its own, and the members of one contact's root are
-// adjacent after sorting the returned row pointers here.
+// participations. It reads the derivation's member rows
+// (effective_participation_member) and packs each entry's rows, in member
+// order, as the effective_participation view packs them, without its JSON.
 func (r *InteractionRepository) ListAllEffectiveParticipation(ctx context.Context) ([]EffectiveParticipation, error) {
 	rows, err := r.queries.ListAllEffectiveParticipationMembers(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("list all effective participation: %w", err)
 	}
-	// Match the view's grouping and member order without asking PostgreSQL
-	// to sort on the computed root expression.
 	slices.SortFunc(rows, func(a, b *db.ListAllEffectiveParticipationMembersRow) int {
-		if c := bytes.Compare(a.ContactID[:], b.ContactID[:]); c != 0 {
-			return c
-		}
-		switch {
-		case a.RootNodeID == nil && b.RootNodeID != nil:
-			return 1
-		case a.RootNodeID != nil && b.RootNodeID == nil:
-			return -1
-		case a.RootNodeID != nil && b.RootNodeID != nil:
-			if c := bytes.Compare(a.RootNodeID[:], b.RootNodeID[:]); c != 0 {
-				return c
-			}
-		default:
-			if c := bytes.Compare(a.ObservationID[:], b.ObservationID[:]); c != 0 {
-				return c
-			}
-		}
-		if c := a.OccurredAt.Compare(b.OccurredAt); c != 0 {
-			return c
-		}
-		return bytes.Compare(a.ObservationID[:], b.ObservationID[:])
+		return cmp.Or(
+			bytes.Compare(a.ContactID[:], b.ContactID[:]),
+			bytes.Compare(a.EntryID[:], b.EntryID[:]),
+			cmp.Compare(a.MemberOrdinal, b.MemberOrdinal),
+		)
 	})
 	var out []EffectiveParticipation
-	for _, row := range rows {
-		last := len(out) - 1
-		if last < 0 || row.RootNodeID == nil || out[last].ContactID != row.ContactID ||
-			out[last].InteractionNodeID == nil || *out[last].InteractionNodeID != *row.RootNodeID {
+	for i, row := range rows {
+		if i == 0 || row.ContactID != rows[i-1].ContactID || row.EntryID != rows[i-1].EntryID {
 			out = append(out, EffectiveParticipation{
 				ContactID:         row.ContactID,
 				InteractionNodeID: row.RootNodeID,
-				Direction:         row.Direction,
+				Direction:         row.EntryDirection,
+				OccurredAt:        row.EntryOccurredAt.UTC(),
 			})
-			last++
 		}
-		// The schema allows inbound, outbound and mutual: any two different
-		// directions combine to mutual. Members arrive oldest first.
-		if out[last].Direction != row.Direction {
-			out[last].Direction = InteractionDirectionMutual
-		}
-		out[last].OccurredAt = row.OccurredAt.UTC()
+		last := len(out) - 1
 		out[last].Members = append(out[last].Members, EffectiveParticipationMember{
 			ObservationID:     row.ObservationID,
 			Source:            row.Source,

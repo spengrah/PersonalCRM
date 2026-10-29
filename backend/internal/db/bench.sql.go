@@ -51,52 +51,38 @@ const ListAllEffectiveParticipationMembers = `-- name: ListAllEffectiveParticipa
 
 SELECT
     m.contact_id,
+    m.entry_id,
     m.root_node_id,
     m.observation_id,
     m.source,
     m.source_ref,
     m.interaction_node_id,
-    m.direction,
-    m.occurred_at
-FROM (
-    SELECT
-        v.contact_id,
-        COALESCE(interaction_node_root(n.merged_into), v.interaction_node_id) AS root_node_id,
-        v.observation_id,
-        v.source,
-        v.source_ref,
-        v.interaction_node_id,
-        v.direction,
-        v.occurred_at
-    FROM interaction_observation_verdict v
-    LEFT JOIN node n ON n.id = v.interaction_node_id
-    WHERE NOT v.excluded
-      AND v.contact_id IN (SELECT id FROM live_contact)
-) m
+    m.member_ordinal,
+    m.entry_direction,
+    m.entry_occurred_at
+FROM effective_participation_member m
+WHERE m.contact_id IN (SELECT id FROM live_contact)
 `
 
 type ListAllEffectiveParticipationMembersRow struct {
 	ContactID         uuid.UUID  `json:"contact_id"`
+	EntryID           uuid.UUID  `json:"entry_id"`
 	RootNodeID        *uuid.UUID `json:"root_node_id"`
 	ObservationID     uuid.UUID  `json:"observation_id"`
 	Source            string     `json:"source"`
 	SourceRef         *string    `json:"source_ref"`
 	InteractionNodeID *uuid.UUID `json:"interaction_node_id"`
-	Direction         string     `json:"direction"`
-	OccurredAt        time.Time  `json:"occurred_at"`
+	MemberOrdinal     int32      `json:"member_ordinal"`
+	EntryDirection    string     `json:"entry_direction"`
+	EntryOccurredAt   time.Time  `json:"entry_occurred_at"`
 }
 
 // Reads of the all-interactions list. Participation comes from the
-// one derivation, the effective_participation view of migration 089; content
-// comes from the one definition of a thread's content, the thread_content view
-// of migrations 091 and 096.
+// one derivation, the effective_participation_member view of migration 106;
+// content comes from the one definition of a thread's content, the
+// thread_content view of migrations 091 and 096.
 // Every live contact's effective participations, one row per member
-// observation. The repository combines direction and time while grouping
-// rows into entries in the effective_participation view's member order.
-// The root is the observation's own node unless that node was merged, and only
-// then does interaction_node_root walk the alias chain. Leaving the view's
-// root_node_id unread lets the planner drop the view's root join, which calls
-// the function for every observation with a node.
+// observation, with its entry's key, member place, direction and time.
 func (q *Queries) ListAllEffectiveParticipationMembers(ctx context.Context) ([]*ListAllEffectiveParticipationMembersRow, error) {
 	rows, err := q.db.Query(ctx, ListAllEffectiveParticipationMembers)
 	if err != nil {
@@ -108,13 +94,15 @@ func (q *Queries) ListAllEffectiveParticipationMembers(ctx context.Context) ([]*
 		var i ListAllEffectiveParticipationMembersRow
 		if err := rows.Scan(
 			&i.ContactID,
+			&i.EntryID,
 			&i.RootNodeID,
 			&i.ObservationID,
 			&i.Source,
 			&i.SourceRef,
 			&i.InteractionNodeID,
-			&i.Direction,
-			&i.OccurredAt,
+			&i.MemberOrdinal,
+			&i.EntryDirection,
+			&i.EntryOccurredAt,
 		); err != nil {
 			return nil, err
 		}
