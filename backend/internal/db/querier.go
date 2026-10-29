@@ -1350,6 +1350,10 @@ type Querier interface {
 	// Every live contact's effective participations, one row per member
 	// observation. The repository combines direction and time while grouping
 	// adjacent rows into entries, in the effective_participation view's member order.
+	// The root is the observation's own node unless that node was merged, and only
+	// then does interaction_node_root walk the alias chain. Leaving the view's
+	// root_node_id unread lets the planner drop the view's root join, which calls
+	// the function for every observation with a node.
 	ListAllEffectiveParticipationMembers(ctx context.Context) ([]*ListAllEffectiveParticipationMembersRow, error)
 	// List all OAuth credentials
 	ListAllOAuthCredentials(ctx context.Context) ([]*OauthCredential, error)

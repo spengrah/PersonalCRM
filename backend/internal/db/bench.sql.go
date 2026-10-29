@@ -50,18 +50,30 @@ func (q *Queries) GetThreadMessage(ctx context.Context, arg GetThreadMessagePara
 const ListAllEffectiveParticipationMembers = `-- name: ListAllEffectiveParticipationMembers :many
 
 SELECT
-    v.contact_id,
-    v.root_node_id,
-    v.observation_id,
-    v.source,
-    v.source_ref,
-    v.interaction_node_id,
-    v.direction,
-    v.occurred_at
-FROM interaction_observation_verdict v
-WHERE NOT v.excluded
-  AND v.contact_id IN (SELECT id FROM live_contact)
-ORDER BY v.contact_id, v.root_node_id, CASE WHEN v.root_node_id IS NULL THEN v.observation_id END, v.occurred_at, v.observation_id
+    m.contact_id,
+    m.root_node_id,
+    m.observation_id,
+    m.source,
+    m.source_ref,
+    m.interaction_node_id,
+    m.direction,
+    m.occurred_at
+FROM (
+    SELECT
+        v.contact_id,
+        COALESCE(interaction_node_root(n.merged_into), v.interaction_node_id) AS root_node_id,
+        v.observation_id,
+        v.source,
+        v.source_ref,
+        v.interaction_node_id,
+        v.direction,
+        v.occurred_at
+    FROM interaction_observation_verdict v
+    LEFT JOIN node n ON n.id = v.interaction_node_id
+    WHERE NOT v.excluded
+      AND v.contact_id IN (SELECT id FROM live_contact)
+) m
+ORDER BY m.contact_id, m.root_node_id, CASE WHEN m.root_node_id IS NULL THEN m.observation_id END, m.occurred_at, m.observation_id
 `
 
 type ListAllEffectiveParticipationMembersRow struct {
@@ -82,6 +94,10 @@ type ListAllEffectiveParticipationMembersRow struct {
 // Every live contact's effective participations, one row per member
 // observation. The repository combines direction and time while grouping
 // adjacent rows into entries, in the effective_participation view's member order.
+// The root is the observation's own node unless that node was merged, and only
+// then does interaction_node_root walk the alias chain. Leaving the view's
+// root_node_id unread lets the planner drop the view's root join, which calls
+// the function for every observation with a node.
 func (q *Queries) ListAllEffectiveParticipationMembers(ctx context.Context) ([]*ListAllEffectiveParticipationMembersRow, error) {
 	rows, err := q.db.Query(ctx, ListAllEffectiveParticipationMembers)
 	if err != nil {
