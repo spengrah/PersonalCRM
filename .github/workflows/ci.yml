@@ -119,7 +119,7 @@ jobs:
 
       # The derived-column sole-writer, CRM-marker construction, and sqlc
       # SELECT-list duplication invariants are enforced by static tests in
-      # backend/tests (run by Backend Tests), and
+      # backend/tests (run by the backend test jobs), and
       # the rematch sole-dispatcher rule by forbidigo in golangci-lint above.
       - name: Check ingest-registry descriptor invariant
         run: ./scripts/check-ingest-registry.sh
@@ -234,7 +234,7 @@ jobs:
 
   # The unit lane runs beside the integration lane rather than before it: it
   # needs no database, and running it first put its whole runtime on the
-  # Backend Tests critical path.
+  # integration lane's critical path. Branch protection requires both jobs.
   backend-unit-tests:
     name: Backend Unit Tests
     runs-on: ubuntu-latest
@@ -262,7 +262,9 @@ jobs:
             go-mod-${{ runner.os }}-go1.25.5-
 
       # Namespaced per job: this job builds without the integration_testdb tag,
-      # plus a race-detector build of the WhatsApp package.
+      # plus a race-detector build of the WhatsApp package. The go-build-tests
+      # fallback is the cache of the job that ran this lane before the split,
+      # which holds these build outputs, so the job never starts cold.
       - name: Restore Go build cache
         id: go-build-unit
         uses: actions/cache/restore@v4
@@ -271,6 +273,7 @@ jobs:
           key: go-build-unit-${{ runner.os }}-go1.25.5-${{ github.sha }}
           restore-keys: |
             go-build-unit-${{ runner.os }}-go1.25.5-
+            go-build-tests-${{ runner.os }}-go1.25.5-
 
       - name: Pin GOCACHE to the restored go-build cache
         run: echo "GOCACHE=$(go env GOCACHE)" >> "$GITHUB_ENV"
@@ -418,24 +421,6 @@ jobs:
         with:
           path: ~/.cache/go-build
           key: ${{ steps.go-build-tests.outputs.cache-primary-key }}
-
-  # Stable required-check surface over the two backend lanes, as the E2E Tests
-  # aggregator is over the shards: it owns the "Backend Tests" name branch
-  # protection pins, passes only if both lanes passed, and is skipped (treated
-  # as satisfied) when no backend path changed.
-  backend-tests:
-    name: Backend Tests
-    runs-on: ubuntu-latest
-    needs: [changes, backend-unit-tests, backend-integration-tests]
-    if: ${{ always() && needs.changes.outputs.backend == 'true' }}
-    steps:
-      - name: Assert both backend lanes passed
-        env:
-          UNIT_RESULT: ${{ needs.backend-unit-tests.result }}
-          INTEGRATION_RESULT: ${{ needs.backend-integration-tests.result }}
-        run: |
-          echo "unit=$UNIT_RESULT integration=$INTEGRATION_RESULT"
-          test "$UNIT_RESULT" = "success" && test "$INTEGRATION_RESULT" = "success" || { echo "FAIL: a backend lane did not pass"; exit 1; }
 
   # Shell suites: git hook + worktree tests and the deploy/backup script tests.
   # Gated on the scripts path group so an ops-script or infra change runs only
