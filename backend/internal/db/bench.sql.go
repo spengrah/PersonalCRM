@@ -47,33 +47,66 @@ func (q *Queries) GetThreadMessage(ctx context.Context, arg GetThreadMessagePara
 	return &i, err
 }
 
-const ListAllEffectiveParticipation = `-- name: ListAllEffectiveParticipation :many
+const ListAllEffectiveParticipationMembers = `-- name: ListAllEffectiveParticipationMembers :many
 
-SELECT ep.contact_id, ep.interaction_node_id, ep.direction, ep.occurred_at, ep.members FROM effective_participation ep
-WHERE ep.contact_id IN (SELECT id FROM live_contact)
-ORDER BY ep.contact_id, ep.occurred_at DESC, ep.members->0->>'observation_id'
+SELECT
+    v.contact_id,
+    v.root_node_id,
+    v.observation_id,
+    v.source,
+    v.source_ref,
+    v.interaction_node_id,
+    (CASE
+        WHEN bool_or(v.direction = 'mutual') OVER entry
+          OR (bool_or(v.direction = 'inbound') OVER entry AND bool_or(v.direction = 'outbound') OVER entry)
+        THEN 'mutual'
+        ELSE min(v.direction) OVER entry
+    END)::text AS entry_direction,
+    (max(v.occurred_at) OVER entry)::timestamptz AS entry_occurred_at
+FROM interaction_observation_verdict v
+WHERE NOT v.excluded
+  AND v.contact_id IN (SELECT id FROM live_contact)
+WINDOW entry AS (PARTITION BY v.contact_id, v.root_node_id, CASE WHEN v.root_node_id IS NULL THEN v.observation_id END)
+ORDER BY v.contact_id, v.root_node_id, CASE WHEN v.root_node_id IS NULL THEN v.observation_id END, v.occurred_at, v.observation_id
 `
+
+type ListAllEffectiveParticipationMembersRow struct {
+	ContactID         uuid.UUID  `json:"contact_id"`
+	RootNodeID        *uuid.UUID `json:"root_node_id"`
+	ObservationID     uuid.UUID  `json:"observation_id"`
+	Source            string     `json:"source"`
+	SourceRef         *string    `json:"source_ref"`
+	InteractionNodeID *uuid.UUID `json:"interaction_node_id"`
+	EntryDirection    string     `json:"entry_direction"`
+	EntryOccurredAt   time.Time  `json:"entry_occurred_at"`
+}
 
 // Reads of the all-interactions list. Participation comes from the
 // one derivation, the effective_participation view of migration 089; content
 // comes from the one definition of a thread's content, the thread_content view
 // of migrations 091 and 096.
-// Every live contact's effective participations.
-func (q *Queries) ListAllEffectiveParticipation(ctx context.Context) ([]*EffectiveParticipation, error) {
-	rows, err := q.db.Query(ctx, ListAllEffectiveParticipation)
+// Every live contact's effective participations, one row per member
+// observation: the effective_participation view's grouping, direction and time,
+// computed as window aggregates over the view's GROUP BY so no entry's members
+// are built as JSON. An entry's rows are adjacent, in the view's member order.
+func (q *Queries) ListAllEffectiveParticipationMembers(ctx context.Context) ([]*ListAllEffectiveParticipationMembersRow, error) {
+	rows, err := q.db.Query(ctx, ListAllEffectiveParticipationMembers)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []*EffectiveParticipation{}
+	items := []*ListAllEffectiveParticipationMembersRow{}
 	for rows.Next() {
-		var i EffectiveParticipation
+		var i ListAllEffectiveParticipationMembersRow
 		if err := rows.Scan(
 			&i.ContactID,
+			&i.RootNodeID,
+			&i.ObservationID,
+			&i.Source,
+			&i.SourceRef,
 			&i.InteractionNodeID,
-			&i.Direction,
-			&i.OccurredAt,
-			&i.Members,
+			&i.EntryDirection,
+			&i.EntryOccurredAt,
 		); err != nil {
 			return nil, err
 		}

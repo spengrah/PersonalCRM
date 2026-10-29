@@ -13,13 +13,35 @@ import (
 )
 
 // ListAllEffectiveParticipation returns every live contact's effective
-// participations.
+// participations, read as one row per member and grouped here: a message
+// burst is an entry of its own, and the members of one contact's root are
+// adjacent.
 func (r *InteractionRepository) ListAllEffectiveParticipation(ctx context.Context) ([]EffectiveParticipation, error) {
-	rows, err := r.queries.ListAllEffectiveParticipation(ctx)
+	rows, err := r.queries.ListAllEffectiveParticipationMembers(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("list all effective participation: %w", err)
 	}
-	return convertEffectiveParticipations(rows)
+	var out []EffectiveParticipation
+	for _, row := range rows {
+		last := len(out) - 1
+		if last < 0 || row.RootNodeID == nil || out[last].ContactID != row.ContactID ||
+			out[last].InteractionNodeID == nil || *out[last].InteractionNodeID != *row.RootNodeID {
+			out = append(out, EffectiveParticipation{
+				ContactID:         row.ContactID,
+				InteractionNodeID: row.RootNodeID,
+				Direction:         row.EntryDirection,
+				OccurredAt:        row.EntryOccurredAt.UTC(),
+			})
+			last++
+		}
+		out[last].Members = append(out[last].Members, EffectiveParticipationMember{
+			ObservationID:     row.ObservationID,
+			Source:            row.Source,
+			SourceRef:         row.SourceRef,
+			InteractionNodeID: row.InteractionNodeID,
+		})
+	}
+	return out, nil
 }
 
 // ListLiveObservationVenues maps every live observation recorded in a venue to
