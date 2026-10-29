@@ -54,7 +54,7 @@ jobs:
           cache: false
 
       # Rolling Go module download cache. Per-job primary key (trailing token)
-      # so the three parallel Go jobs never race to save the same key, with a
+      # so the parallel Go jobs never race to save the same key, with a
       # shared restore-keys prefix so they still restore each other's identical
       # module set (on subsequent runs; saves land post-job, so this warms a
       # sibling job on a LATER run, not the others running concurrently here).
@@ -232,8 +232,70 @@ jobs:
       - name: Check generated sqlc code has no unnamed params
         run: make sqlc-params-check
 
-  backend-tests:
-    name: Backend Tests
+  # The unit lane runs beside the integration lane rather than before it: it
+  # needs no database, and running it first put its whole runtime on the
+  # Backend Tests critical path.
+  backend-unit-tests:
+    name: Backend Unit Tests
+    runs-on: ubuntu-latest
+    needs: changes
+    if: ${{ needs.changes.outputs.backend == 'true' }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.5'
+          cache: false
+
+      # See backend-integration-tests for the module and build cache keys.
+      - name: Cache Go module download cache
+        uses: actions/cache@v4
+        with:
+          path: ~/go/pkg/mod
+          key: go-mod-${{ runner.os }}-go1.25.5-${{ hashFiles('backend/go.sum') }}-unit
+          restore-keys: |
+            go-mod-${{ runner.os }}-go1.25.5-${{ hashFiles('backend/go.sum') }}-
+            go-mod-${{ runner.os }}-go1.25.5-
+
+      # Namespaced per job: this job builds without the integration_testdb tag,
+      # plus a race-detector build of the WhatsApp package.
+      - name: Restore Go build cache
+        id: go-build-unit
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.cache/go-build
+          key: go-build-unit-${{ runner.os }}-go1.25.5-${{ github.sha }}
+          restore-keys: |
+            go-build-unit-${{ runner.os }}-go1.25.5-
+
+      - name: Pin GOCACHE to the restored go-build cache
+        run: echo "GOCACHE=$(go env GOCACHE)" >> "$GITHUB_ENV"
+
+      - name: Download Go modules
+        working-directory: backend
+        run: go mod download
+
+      # make test-unit is the one definition of the backend unit lane: short
+      # mode over every package, then the WhatsApp actor race run.
+      - name: Run unit tests
+        env:
+          GOTEST_VERBOSE: ""
+        run: make test-unit
+
+      # Only a develop push saves the build cache (see backend-integration-tests).
+      - name: Save Go build cache
+        if: github.event_name == 'push' && github.ref == 'refs/heads/develop'
+        uses: actions/cache/save@v4
+        with:
+          path: ~/.cache/go-build
+          key: ${{ steps.go-build-unit.outputs.cache-primary-key }}
+
+  backend-integration-tests:
+    name: Backend Integration Tests
     runs-on: ubuntu-latest
     needs: changes
     if: ${{ needs.changes.outputs.backend == 'true' }}
@@ -249,7 +311,7 @@ jobs:
           cache: false
 
       # Rolling Go module download cache. Per-job primary key (trailing token)
-      # so the three parallel Go jobs never race to save the same key, with a
+      # so the parallel Go jobs never race to save the same key, with a
       # shared restore-keys prefix so they still restore each other's identical
       # module set (on subsequent runs; saves land post-job, so this warms a
       # sibling job on a LATER run, not the others running concurrently here).
@@ -315,13 +377,6 @@ jobs:
         working-directory: backend
         run: go mod download
 
-      # make test-unit is the one definition of the backend unit lane: short
-      # mode over every package, then the WhatsApp actor race run.
-      - name: Run unit tests
-        env:
-          GOTEST_VERBOSE: ""
-        run: make test-unit
-
       - name: Wait for PostgreSQL
         run: |
           timeout 30 bash -c 'until pg_isready -h localhost -p 5432; do sleep 1; done'
@@ -363,6 +418,24 @@ jobs:
         with:
           path: ~/.cache/go-build
           key: ${{ steps.go-build-tests.outputs.cache-primary-key }}
+
+  # Stable required-check surface over the two backend lanes, as the E2E Tests
+  # aggregator is over the shards: it owns the "Backend Tests" name branch
+  # protection pins, passes only if both lanes passed, and is skipped (treated
+  # as satisfied) when no backend path changed.
+  backend-tests:
+    name: Backend Tests
+    runs-on: ubuntu-latest
+    needs: [changes, backend-unit-tests, backend-integration-tests]
+    if: ${{ always() && needs.changes.outputs.backend == 'true' }}
+    steps:
+      - name: Assert both backend lanes passed
+        env:
+          UNIT_RESULT: ${{ needs.backend-unit-tests.result }}
+          INTEGRATION_RESULT: ${{ needs.backend-integration-tests.result }}
+        run: |
+          echo "unit=$UNIT_RESULT integration=$INTEGRATION_RESULT"
+          test "$UNIT_RESULT" = "success" && test "$INTEGRATION_RESULT" = "success" || { echo "FAIL: a backend lane did not pass"; exit 1; }
 
   # Shell suites: git hook + worktree tests and the deploy/backup script tests.
   # Gated on the scripts path group so an ops-script or infra change runs only
@@ -614,7 +687,7 @@ jobs:
           cache: false
 
       # Rolling Go module download cache. Per-job primary key (trailing token)
-      # so the three parallel Go jobs never race to save the same key, with a
+      # so the parallel Go jobs never race to save the same key, with a
       # shared restore-keys prefix so they still restore each other's identical
       # module set (on subsequent runs; saves land post-job, so this warms a
       # sibling job on a LATER run, not the others running concurrently here).
