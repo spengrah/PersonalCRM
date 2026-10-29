@@ -376,6 +376,24 @@ func (s *InteractionContentService) readPage(ctx context.Context, page []candida
 	if err != nil {
 		return nil, err
 	}
+	// Each row's preview is a few round trips of its own, so the rows read
+	// theirs concurrently, at most previewReaders at a time to leave the pool
+	// to other work.
+	previews := make([]*RowPreview, len(page))
+	previewErrs := make([]error, len(page))
+	slots := make(chan struct{}, previewReaders)
+	var wg sync.WaitGroup
+	for i := range page {
+		wg.Go(func() {
+			slots <- struct{}{}
+			defer func() { <-slots }()
+			previews[i], previewErrs[i] = s.preview(ctx, members[i])
+		})
+	}
+	wg.Wait()
+	if err := cmp.Or(previewErrs...); err != nil {
+		return nil, err
+	}
 	rows := make([]InteractionRow, len(page))
 	for i, c := range page {
 		row := c.row
@@ -386,13 +404,14 @@ func (s *InteractionContentService) readPage(ctx context.Context, page []candida
 			r := member.representative
 			row.Members = append(row.Members, TimelineMember{Source: r.Source, SourceRef: r.SourceRef, Enrichment: enrichment[r.ID]})
 		}
-		if row.Preview, err = s.preview(ctx, members[i]); err != nil {
-			return nil, err
-		}
+		row.Preview = previews[i]
 		rows[i] = row
 	}
 	return rows, nil
 }
+
+// previewReaders is how many of a page's rows read their previews at once.
+const previewReaders = 4
 
 // preview is the latest message the members show, else their first meeting
 // note's text; nil when they show neither.
