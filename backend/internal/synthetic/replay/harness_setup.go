@@ -197,6 +197,12 @@ func newHarness(ctx context.Context, database *db.Database, namespace string, se
 		Workers:  workers,
 		Hooks:    []rivertype.Hook{&syntheticQueueRouter{queue: queueName}},
 		TestOnly: true, // immediate processing, no staggered maintenance
+		// River sends at most one insert notification per queue per
+		// FetchCooldown, so a cascade job inserted just after another waits for
+		// the next poll. At River's 1s default that poll dominated every Settle's
+		// Gate B: the IXN-076 world took 30s to seed, 7s at these values.
+		FetchCooldown:     10 * time.Millisecond,
+		FetchPollInterval: settlePollInterval,
 	})
 	if err != nil {
 		return nil, nil, fmt.Errorf("build river client: %w", err)
