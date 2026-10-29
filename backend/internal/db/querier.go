@@ -1651,8 +1651,6 @@ type Querier interface {
 	// so a soft-deleted (merged-away or deleted) endpoint drops the row. A fact
 	// (object_node_id NULL) is gated on the subject only.
 	ListLiveEdgesForNode(ctx context.Context, arg ListLiveEdgesForNodeParams) ([]*Assertion, error)
-	// The venue of every live observation recorded in one.
-	ListLiveObservationVenues(ctx context.Context) ([]*ListLiveObservationVenuesRow, error)
 	ListMacHosts(ctx context.Context) ([]*MacHost, error)
 	// List all managed tasks for a provider (for reconciliation)
 	ListManagedContactTasks(ctx context.Context, provider string) ([]*ListManagedContactTasksRow, error)

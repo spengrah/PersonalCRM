@@ -74,21 +74,15 @@ type InteractionRow struct {
 	Participants []RowParticipant
 	// Types are the interaction types of the row's members.
 	Types []InteractionType
-	// Threads are the venues the row's observations were recorded in.
-	Threads []uuid.UUID
-	// Observations are the row's observations, of every participant.
-	Observations []uuid.UUID
 	// Preview is nil for a row that shows no content.
 	Preview *RowPreview
 }
 
 // InteractionsFilter selects rows of the all-interactions view. A nil field
-// keeps every row; Rows keeps the rows whose identity it holds, so an empty
-// non-nil set keeps none.
+// keeps every row.
 type InteractionsFilter struct {
 	ContactID *uuid.UUID
 	Type      *InteractionType
-	Rows      map[TimelineIdentity]struct{}
 	Limit     int32
 	Offset    int32
 }
@@ -101,11 +95,9 @@ type InteractionsPage struct {
 }
 
 // InteractionIndex is every row of the all-interactions view, before any
-// filter or page. RowOf maps every observation of every row to its row's
-// identity.
+// filter or page.
 type InteractionIndex struct {
 	candidates []candidateRow
-	RowOf      map[uuid.UUID]TimelineIdentity
 }
 
 // candidateRow is a row before its page is read, with its first
@@ -124,13 +116,7 @@ func (s *InteractionContentService) IndexInteractions(ctx context.Context) (*Int
 	if err != nil {
 		return nil, err
 	}
-	rowOf := map[uuid.UUID]TimelineIdentity{}
-	for _, c := range candidates {
-		for _, id := range c.row.Observations {
-			rowOf[id] = c.row.Identity
-		}
-	}
-	return &InteractionIndex{candidates: candidates, RowOf: rowOf}, nil
+	return &InteractionIndex{candidates: candidates}, nil
 }
 
 // ListInteractions returns one page of the index's rows the filter keeps,
@@ -169,34 +155,27 @@ func keepRow(row InteractionRow, f InteractionsFilter) bool {
 	if f.Type != nil && !slices.Contains(row.Types, *f.Type) {
 		return false
 	}
-	if f.Rows != nil {
-		if _, ok := f.Rows[row.Identity]; !ok {
-			return false
-		}
-	}
 	return true
 }
 
 // candidateRows groups every live contact's effective participations into
 // rows: the participations of one merged interaction are one row, and so are
 // message bursts holding copies of the same group message. Every missed call
-// of a live contact is a row of its own. The four whole-history reads are
+// of a live contact is a row of its own. The three whole-history reads are
 // independent, so they run concurrently on the pool.
 func (s *InteractionContentService) candidateRows(ctx context.Context) ([]candidateRow, error) {
 	var (
-		participations                               []repository.EffectiveParticipation
-		calls                                        []repository.PhoneCall
-		venues                                       map[uuid.UUID]uuid.UUID
-		copies                                       []repository.MessageCopy
-		participationErr, callErr, venueErr, copyErr error
-		wg                                           sync.WaitGroup
+		participations                     []repository.EffectiveParticipation
+		calls                              []repository.PhoneCall
+		copies                             []repository.MessageCopy
+		participationErr, callErr, copyErr error
+		wg                                 sync.WaitGroup
 	)
 	wg.Go(func() { calls, callErr = s.phoneCalls.ListMissedCalls(ctx, repository.MissedCallFilter{}) })
-	wg.Go(func() { venues, venueErr = s.interactions.ListLiveObservationVenues(ctx) })
 	wg.Go(func() { copies, copyErr = s.interactions.ListGroupChatMessageCopies(ctx) })
 	participations, participationErr = s.interactions.ListAllEffectiveParticipation(ctx)
 	wg.Wait()
-	if err := cmp.Or(participationErr, callErr, venueErr, copyErr); err != nil {
+	if err := cmp.Or(participationErr, callErr, copyErr); err != nil {
 		return nil, err
 	}
 	contactIDs := make([]uuid.UUID, 0, len(participations)+len(calls))
@@ -220,17 +199,12 @@ func (s *InteractionContentService) candidateRows(ctx context.Context) ([]candid
 		for _, ep := range group {
 			row.Participants = append(row.Participants, RowParticipant{ContactID: ep.ContactID, Name: names[ep.ContactID]})
 			for _, member := range ep.Members {
-				row.Observations = append(row.Observations, member.ObservationID)
 				row.Types = append(row.Types, InteractionTypeOf(member.Source))
-				if venue, ok := venues[member.ObservationID]; ok {
-					row.Threads = append(row.Threads, venue)
-				}
 			}
 		}
 		slices.SortFunc(row.Participants, compareParticipants)
 		slices.Sort(row.Types)
 		row.Types = slices.Compact(row.Types)
-		row.Threads = uniqueUUIDs(row.Threads)
 		lead := group[slices.IndexFunc(group, func(ep repository.EffectiveParticipation) bool {
 			return ep.ContactID == row.Participants[0].ContactID
 		})]

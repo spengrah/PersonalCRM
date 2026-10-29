@@ -145,36 +145,3 @@ func (q *Queries) ListGroupChatMessageCopies(ctx context.Context) ([]*ListGroupC
 	}
 	return items, nil
 }
-
-const ListLiveObservationVenues = `-- name: ListLiveObservationVenues :many
-SELECT id, venue_id::uuid AS venue_id
-FROM interaction
-WHERE deleted_at IS NULL
-  AND venue_id IS NOT NULL
-`
-
-type ListLiveObservationVenuesRow struct {
-	ID      uuid.UUID `json:"id"`
-	VenueID uuid.UUID `json:"venue_id"`
-}
-
-// The venue of every live observation recorded in one.
-func (q *Queries) ListLiveObservationVenues(ctx context.Context) ([]*ListLiveObservationVenuesRow, error) {
-	rows, err := q.db.Query(ctx, ListLiveObservationVenues)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []*ListLiveObservationVenuesRow{}
-	for rows.Next() {
-		var i ListLiveObservationVenuesRow
-		if err := rows.Scan(&i.ID, &i.VenueID); err != nil {
-			return nil, err
-		}
-		items = append(items, &i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}

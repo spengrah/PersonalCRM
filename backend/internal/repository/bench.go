@@ -49,20 +49,6 @@ func (r *InteractionRepository) ListAllEffectiveParticipation(ctx context.Contex
 	return out, nil
 }
 
-// ListLiveObservationVenues maps every live observation recorded in a venue to
-// that venue.
-func (r *InteractionRepository) ListLiveObservationVenues(ctx context.Context) (map[uuid.UUID]uuid.UUID, error) {
-	rows, err := r.queries.ListLiveObservationVenues(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("list observation venues: %w", err)
-	}
-	venues := make(map[uuid.UUID]uuid.UUID, len(rows))
-	for _, row := range rows {
-		venues[row.ID] = row.VenueID
-	}
-	return venues, nil
-}
-
 // MessageCopy is one observation holding a copy of one message.
 type MessageCopy struct {
 	ObservationID uuid.UUID

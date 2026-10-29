@@ -21,13 +21,6 @@ WHERE NOT v.excluded
   AND v.contact_id IN (SELECT id FROM live_contact)
 ORDER BY v.contact_id, v.root_node_id, CASE WHEN v.root_node_id IS NULL THEN v.observation_id END, v.occurred_at, v.observation_id;
 
--- name: ListLiveObservationVenues :many
--- The venue of every live observation recorded in one.
-SELECT id, venue_id::uuid AS venue_id
-FROM interaction
-WHERE deleted_at IS NULL
-  AND venue_id IS NOT NULL;
-
 -- name: ListGroupChatMessageCopies :many
 -- Each group-chat message key with every observation holding a copy of it: a
 -- group message is stored once per member contact.
