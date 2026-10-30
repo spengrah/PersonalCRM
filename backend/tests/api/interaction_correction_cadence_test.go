@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"personal-crm/backend/internal/cadence"
 	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/service"
 	"personal-crm/backend/internal/todoist"
@@ -125,8 +126,9 @@ func TestInteractionCorrection_RecomputesCadence(t *testing.T) {
 
 	t.Run("a cadence-frequency change whose derived date equals the replayed date sets no floor", func(t *testing.T) {
 		// spec: CAD-047.direct-due-date-floor
-		// contact_by is a date, so two inbounds on one day derive one date.
-		day := e.base.Truncate(24*time.Hour).AddDate(0, 0, -10)
+		// contact_by is a date in the server's zone, so two inbounds on one
+		// server-zone day derive one date.
+		day := cadence.DateOnly(e.base).AddDate(0, 0, -10)
 		a, sameDayTwin, olderTwin := e.contact(t, "monthly"), e.contact(t, "quarterly"), e.contact(t, "quarterly")
 		e.call(t, a, e.ref("call"), repository.InteractionDirectionInbound, day.AddDate(0, 0, -40))
 		sameDay := e.call(t, a, e.ref("call"), repository.InteractionDirectionInbound, day.Add(time.Hour))
