@@ -161,7 +161,7 @@ test.describe('Birthdays - Placeholder Years @area:birthdays', () => {
   test('groups birthdays into today, upcoming, and already-celebrated', async ({ page }) => {
     // spec: CON-045.contacts-grouped-into-today
     // Freeze the frame mid-year so the three groups are deterministic and
-    // parallel-safe (the same per-page frame-mock idiom used for CON-045.gift-planning-near-year-end).
+    // parallel-safe.
     await mockFrozenSystemTime(page, '2026-06-15T12:00:00Z')
     const seeded = await testApi.seedBehavior('CON-045')
     const todayName = seeded.entities['mocked-today'].name
@@ -277,24 +277,6 @@ test.describe('Birthdays - Placeholder Years @area:birthdays', () => {
     await expect(page.getByText(/September 3, 2026/)).toBeVisible()
   })
 
-  test('shows the gift-planning section near year end', async ({ page }) => {
-    // spec: CON-045.gift-planning-near-year-end
-    // December frame → the page surfaces early-next-year (Jan-Mar) birthdays.
-    await mockFrozenSystemTime(page, '2026-12-15T12:00:00Z')
-    const seeded = await testApi.seedBehavior('CON-045')
-    const febName = seeded.entities['gift-feb'].name
-
-    await page.goto('/birthdays')
-    await page.waitForLoadState('domcontentloaded')
-    // Scope to the seeded contact INSIDE the gift-planning section — another
-    // worker's Jan-Mar birthday could otherwise satisfy the bare heading.
-    const giftSection = page.locator('section', {
-      has: page.getByRole('heading', { name: /Gift Planning/ }),
-    })
-    await expect(giftSection).toBeVisible({ timeout: SLOW_TIMEOUT_MS })
-    await expect(giftSection.getByText(febName, { exact: true })).toBeVisible()
-  })
-
   test('a February 29 birthday is observed on February 29 in a leap year', async ({ page }) => {
     // spec: CON-045.leap-day-next-occurrence
     // The declared fixture stores February 29 against a REAL leap birth year:
@@ -352,20 +334,5 @@ test.describe('Birthdays - Placeholder Years @area:birthdays', () => {
       has: page.getByRole('heading', { name: /Already Celebrated This Year/ }),
     })
     await expect(celebratedSection.getByText(leapName, { exact: true })).toHaveCount(0)
-  })
-
-  test('hides the gift-planning section away from year end', async ({ page }) => {
-    // spec: CON-045.gift-planning-near-year-end
-    // June frame → no gift-planning section, even with a Jan-Mar birthday.
-    await mockFrozenSystemTime(page, '2026-06-15T12:00:00Z')
-    const seeded = await testApi.seedBehavior('CON-045')
-    const febName = seeded.entities['gift-feb'].name
-
-    await page.goto('/birthdays')
-    await page.waitForLoadState('domcontentloaded')
-    // Wait for the sections to render (the Feb contact shows as celebrated),
-    // then assert the gift-planning section is absent.
-    await expect(page.getByText(febName, { exact: true })).toBeVisible({ timeout: SLOW_TIMEOUT_MS })
-    await expect(page.getByRole('heading', { name: /Gift Planning/ })).toHaveCount(0)
   })
 })

@@ -17,7 +17,6 @@ interface BirthdayInfo {
   ageThisYear?: number
   daysUntil: number
   isPastThisYear: boolean
-  isNextYear?: boolean
 }
 
 // Calculate age turning this year
@@ -53,54 +52,6 @@ function calculateDaysUntilBirthday(birthday: Date, currentTime: Date): number {
   // Calculate difference in days
   const diffTime = nextBirthday.getTime() - currentDay.getTime()
   return Math.ceil(diffTime / (1000 * 60 * 60 * 24))
-}
-
-// Check if we should show next year's early birthdays (for gift planning)
-function shouldShowNextYearBirthdays(currentTime: Date): boolean {
-  const month = currentTime.getMonth() + 1 // getMonth() is 0-based
-
-  // Show next year's Jan-Mar birthdays if we're in November or December
-  return month >= 11 // November (11) or December (12)
-}
-
-// Get next year's early birthdays for gift planning
-function getNextYearEarlyBirthdays(contacts: Contact[], currentTime: Date): BirthdayInfo[] {
-  if (!shouldShowNextYearBirthdays(currentTime)) {
-    return []
-  }
-
-  return contacts
-    .filter(contact => contact.birthday)
-    .map(contact => {
-      const birthday = parseDateOnly(contact.birthday)
-      if (!birthday) return null
-
-      const birthdayMonth = birthday.getMonth() + 1
-
-      // Only include Jan-Mar birthdays from next year
-      if (birthdayMonth > 3) return null
-
-      const nextYear = currentTime.getFullYear() + 1
-      const currentDay = startOfLocalDay(currentTime)
-      const nextYearBirthday = birthdayInYear(birthday, nextYear)
-      const daysUntil = Math.ceil(
-        (nextYearBirthday.getTime() - currentDay.getTime()) / (1000 * 60 * 60 * 24)
-      )
-
-      return {
-        contact,
-        birthday: nextYearBirthday,
-        dayOfWeek: nextYearBirthday.toLocaleDateString('en-US', { weekday: 'long' }),
-        monthDay: nextYearBirthday.toLocaleDateString('en-US', { month: 'long', day: 'numeric' }),
-        ageThisYear: isPlaceholderBirthday(contact.birthday)
-          ? undefined
-          : calculateAgeThisYear(birthday, nextYear),
-        daysUntil,
-        isPastThisYear: false,
-        isNextYear: true,
-      }
-    })
-    .filter(info => info !== null) as (BirthdayInfo & { isNextYear: boolean })[]
 }
 
 // Check if birthday already passed this year
@@ -147,14 +98,12 @@ function processBirthdayContacts(contacts: Contact[], currentTime: Date): Birthd
 
 // Birthday card component
 function BirthdayCard({ birthdayInfo }: { birthdayInfo: BirthdayInfo }) {
-  const { contact, dayOfWeek, monthDay, ageThisYear, daysUntil, isPastThisYear, isNextYear } =
-    birthdayInfo
+  const { contact, dayOfWeek, monthDay, ageThisYear, daysUntil, isPastThisYear } = birthdayInfo
 
   // Special styling for birthdays that are today or very soon
   const isToday = daysUntil === 0
   const isThisWeek = daysUntil <= 7 && daysUntil > 0
   const isPastDue = isPastThisYear
-  const isGiftPlanningTime = isNextYear // Next year's early birthdays for gift planning
 
   return (
     <div
@@ -164,7 +113,6 @@ function BirthdayCard({ birthdayInfo }: { birthdayInfo: BirthdayInfo }) {
       ${isToday ? 'border-pink-300 bg-pink-50' : ''}
       ${isThisWeek ? 'border-yellow-300 bg-yellow-50' : ''}
       ${isPastDue ? 'border-gray-200 bg-gray-50' : ''}
-      ${isGiftPlanningTime ? 'border-purple-300 bg-purple-50' : ''}
     `}
     >
       <div className="flex items-center justify-between">
@@ -175,17 +123,10 @@ function BirthdayCard({ birthdayInfo }: { birthdayInfo: BirthdayInfo }) {
             ${isToday ? 'bg-pink-100 text-pink-600' : ''}
             ${isThisWeek ? 'bg-yellow-100 text-yellow-600' : ''}
             ${isPastDue ? 'bg-gray-100 text-gray-500' : ''}
-            ${isGiftPlanningTime ? 'bg-purple-100 text-purple-600' : ''}
-            ${!isToday && !isThisWeek && !isPastDue && !isGiftPlanningTime ? 'bg-blue-100 text-blue-600' : ''}
+            ${!isToday && !isThisWeek && !isPastDue ? 'bg-blue-100 text-blue-600' : ''}
           `}
           >
-            {isToday ? (
-              <Gift className="w-5 h-5" />
-            ) : isGiftPlanningTime ? (
-              <Gift className="w-5 h-5" />
-            ) : (
-              <Cake className="w-5 h-5" />
-            )}
+            {isToday ? <Gift className="w-5 h-5" /> : <Cake className="w-5 h-5" />}
           </div>
 
           <div>
@@ -207,9 +148,6 @@ function BirthdayCard({ birthdayInfo }: { birthdayInfo: BirthdayInfo }) {
           {ageThisYear !== undefined && (
             <p className="text-lg font-semibold text-gray-900">
               {isPastDue ? `Turned ${ageThisYear}` : `Turning ${ageThisYear}`}
-              {isGiftPlanningTime && (
-                <span className="text-xs text-purple-600 ml-1">(next year)</span>
-              )}
             </p>
           )}
           <p
@@ -220,18 +158,14 @@ function BirthdayCard({ birthdayInfo }: { birthdayInfo: BirthdayInfo }) {
                   ? 'text-yellow-600'
                   : isPastDue
                     ? 'text-gray-500'
-                    : isGiftPlanningTime
-                      ? 'text-purple-600'
-                      : 'text-gray-600'
+                    : 'text-gray-600'
             }`}
           >
             {isToday
               ? '🎉 Today!'
               : isPastDue
                 ? `${365 - Math.abs(daysUntil)} days ago`
-                : isGiftPlanningTime
-                  ? `🎁 ${daysUntil} day${daysUntil === 1 ? '' : 's'} (gift planning)`
-                  : `${daysUntil} day${daysUntil === 1 ? '' : 's'}`}
+                : `${daysUntil} day${daysUntil === 1 ? '' : 's'}`}
           </p>
         </div>
       </div>
@@ -250,14 +184,10 @@ export default function BirthdaysPage() {
   const birthdayInfos = contactsData
     ? processBirthdayContacts(contactsData.contacts, currentTime)
     : []
-  const nextYearEarlyBirthdays = contactsData
-    ? getNextYearEarlyBirthdays(contactsData.contacts, currentTime)
-    : []
 
   const todaysBirthdays = birthdayInfos.filter(info => info.daysUntil === 0)
   const upcomingBirthdays = birthdayInfos.filter(info => info.daysUntil > 0 && !info.isPastThisYear)
   const pastBirthdays = birthdayInfos.filter(info => info.isPastThisYear)
-  const giftPlanningBirthdays = nextYearEarlyBirthdays
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -328,31 +258,6 @@ export default function BirthdaysPage() {
                 <div className="space-y-3">
                   {todaysBirthdays.map(birthdayInfo => (
                     <BirthdayCard key={birthdayInfo.contact.id} birthdayInfo={birthdayInfo} />
-                  ))}
-                </div>
-              </section>
-            )}
-
-            {/* Gift Planning (Next Year Early Birthdays) */}
-            {giftPlanningBirthdays.length > 0 && (
-              <section>
-                <h2 className="text-xl font-semibold text-gray-900 mb-4 flex items-center">
-                  <Gift className="w-5 h-5 text-purple-600 mr-2" />
-                  Gift Planning - Early {currentTime.getFullYear() + 1} Birthdays (
-                  {giftPlanningBirthdays.length})
-                </h2>
-                <div className="bg-purple-50 border border-purple-200 rounded-lg p-3 mb-4">
-                  <p className="text-sm text-purple-700">
-                    🎁 These Jan-Mar birthdays are coming up next year. Plan ahead for gifts during
-                    holiday shopping!
-                  </p>
-                </div>
-                <div className="space-y-3">
-                  {giftPlanningBirthdays.map(birthdayInfo => (
-                    <BirthdayCard
-                      key={`next-year-${birthdayInfo.contact.id}`}
-                      birthdayInfo={birthdayInfo}
-                    />
                   ))}
                 </div>
               </section>
