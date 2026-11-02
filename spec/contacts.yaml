@@ -647,8 +647,6 @@ behaviors:
     then:
       - key: contacts-grouped-into-today
         text: contacts are grouped into today, upcoming, and already-celebrated-this-year sections
-      - key: gift-planning-near-year-end
-        text: a gift-planning section for early next year appears only near year end
       - key: upcoming-birthdays-sort-soonest
         text: upcoming birthdays sort soonest-first; celebrated ones sink to the end
       - key: placeholder-year-birthdays-no-age

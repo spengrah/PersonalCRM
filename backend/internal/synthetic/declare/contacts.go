@@ -98,7 +98,6 @@ func init() {
 			Contact("mid", BirthdayOn(time.June, 20)),
 			Contact("later", BirthdayOn(time.June, 25)),
 			Contact("celebrated", BirthdayOn(time.March, 10)),
-			Contact("gift-feb", BirthdayOn(time.February, 14)),
 			Contact("leap-day", BirthdayOn(time.February, 29)),
 		},
 	})

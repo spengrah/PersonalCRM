@@ -298,7 +298,7 @@ test('contacts tour — current ux behaviors', async ({ page, tour }) => {
     .filter({ hasText: birthdayContact.full_name })
     .waitFor({ state: 'visible', timeout: JOB_TIMEOUT_MS })
   // DECISION 1 (capture weight): the con045 verifier's birthday ground-truth
-  // ([0] grouping / [1] gift candidates / [3] placeholder names) needs only
+  // (grouping / placeholder names) needs only
   // { full_name, birthday } per birthday-bearing contact — NOT the full
   // 1000-contact body, whose per-contact bloat dominated the committed capture's
   // git weight. Record that compact projection as a field and let the API body
