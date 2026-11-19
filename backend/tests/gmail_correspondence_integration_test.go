@@ -81,7 +81,7 @@ func newDiscoveryEnv(t *testing.T) *discoveryEnv {
 	// harness). email.* kinds are drained by the harness's no-op email worker.
 	bus := setupTestEventBus(t, ctx, database, contactService)
 
-	provider := google.NewGmailSyncProvider(nil, commsRepo, bus, database.Pool)
+	provider := google.NewGmailSyncProvider(nil, commsRepo, repository.NewSyncRepository(database.Queries), bus, database.Pool)
 
 	gen, _ := migrationGenerator(t)
 
@@ -200,7 +200,7 @@ func TestDiscovery_RunsBetweenFetchAndStorage(t *testing.T) {
 		[]string{other}, []string{patName + " <" + patAddr + ">"}, nil,
 		"Subj", "body", "<"+prefix+"disc@synthetic.example>", 1700000100000)
 	e.provider.SetFetcherFactoryForTest(google.NewFakeGmailFetcherFactoryForTest(newFakeMessageStore([]*gmailapi.Message{msg}).fetcherFuncs()))
-	e.provider.SetMeSetForTest(map[string]struct{}{me: {}})
+	e.provider.SetAccountAddressesForTest(map[string]struct{}{me: {}})
 
 	result, err := e.provider.Sync(e.ctx, discoverySyncState(me), nil)
 	require.NoError(t, err)
@@ -254,7 +254,7 @@ func TestDiscovery_LinkAddsMethodAndDispatchesRematch(t *testing.T) {
 		[]string{other}, []string{patName + " <" + patAddr + ">"}, nil,
 		"Subj", "body", "<"+prefix+"disclink@synthetic.example>", 1700000100000)
 	e.provider.SetFetcherFactoryForTest(google.NewFakeGmailFetcherFactoryForTest(newFakeMessageStore([]*gmailapi.Message{msg}).fetcherFuncs()))
-	e.provider.SetMeSetForTest(map[string]struct{}{me: {}})
+	e.provider.SetAccountAddressesForTest(map[string]struct{}{me: {}})
 
 	_, err := e.provider.Sync(e.ctx, discoverySyncState(me), nil)
 	require.NoError(t, err)
@@ -352,7 +352,7 @@ func TestDiscovery_ErrorNonFatalToSync(t *testing.T) {
 
 	e.provider.SetFetcherFactoryForTest(google.NewFakeGmailFetcherFactoryForTest(
 		newFakeMessageStore([]*gmailapi.Message{discMsg, storeMsg}).fetcherFuncs()))
-	e.provider.SetMeSetForTest(map[string]struct{}{me: {}})
+	e.provider.SetAccountAddressesForTest(map[string]struct{}{me: {}})
 
 	result, err := e.provider.Sync(e.ctx, discoverySyncState(me), nil)
 

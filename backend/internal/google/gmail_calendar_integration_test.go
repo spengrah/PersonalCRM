@@ -91,7 +91,9 @@ func (e *calendarEnv) sync(t *testing.T, provider *google.GmailSyncProvider, acc
 func (e *calendarEnv) scanIdentifier(t *testing.T, provider *google.GmailSyncProvider, account string, contactID uuid.UUID, addr string) {
 	t.Helper()
 	norm := matching.NormalizeEmail(addr)
-	_, err := provider.ScanIdentifier(e.ctx, account, norm, map[string][]uuid.UUID{norm: {contactID}}, map[string]struct{}{account: {}}, nil, 0)
+	meSet, err := provider.MeSet(e.ctx)
+	require.NoError(t, err)
+	_, err = provider.ScanIdentifier(e.ctx, account, norm, map[string][]uuid.UUID{norm: {contactID}}, meSet, 0)
 	require.NoError(t, err)
 	require.NoError(t, e.h.DrainGateB(e.ctx))
 }

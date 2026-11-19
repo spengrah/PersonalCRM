@@ -451,7 +451,7 @@ func newCorrectionMailEnv(t *testing.T) *correctionMailEnv {
 	return &correctionMailEnv{
 		nodeMailEnv: &nodeMailEnv{
 			emailEnv: mail,
-			provider: google.NewGmailSyncProvider(nil, commsRepo, bus, database.Pool),
+			provider: google.NewGmailSyncProvider(nil, commsRepo, repository.NewSyncRepository(database.Queries), bus, database.Pool),
 			nodes:    repository.NewNodeRepository(database.Queries),
 			me:       gen.Prefix() + "me@synthetic.example",
 		},

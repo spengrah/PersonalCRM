@@ -33,7 +33,7 @@ func TestGmailProvider_TypedNilBusTrap(t *testing.T) {
 	// interface-typed bus field, the interface is NON-nil (it carries a type),
 	// so the provider's own `p.bus == nil` guard would NOT catch it. This is
 	// the trap the cutover gate exists to avoid.
-	p := NewGmailSyncProvider(nil, nil, nilBus, nil)
+	p := NewGmailSyncProvider(nil, nil, nil, nilBus, nil)
 	require.False(t, p.bus == nil,
 		"typed-nil *events.Bus assigned to the busTx interface is NOT == nil — "+
 			"the provider's own nil guard cannot save off-mode; the main.go pubBus!=nil gate must")

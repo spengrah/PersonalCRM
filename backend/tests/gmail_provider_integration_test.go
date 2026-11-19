@@ -87,7 +87,7 @@ func newGmailProviderEnv(t *testing.T) *gmailProviderEnv {
 	// rows, not the derived interaction.
 	bus := setupTestEventBus(t, ctx, database, contactService)
 
-	provider := google.NewGmailSyncProvider(nil, commsRepo, bus, database.Pool)
+	provider := google.NewGmailSyncProvider(nil, commsRepo, repository.NewSyncRepository(database.Queries), bus, database.Pool)
 
 	gen, _ := migrationGenerator(t)
 
@@ -218,10 +218,11 @@ func fakeQueryEpoch(query, prefix string) (int64, bool) {
 	return 0, false
 }
 
-// inject wires the store as the provider's fetcher + sets the me-set.
+// inject wires the store as the provider's fetcher + sets the connected
+// accounts' addresses the me-set is built from.
 func (e *gmailProviderEnv) inject(store *fakeMessageStore, meSet map[string]struct{}) {
 	e.provider.SetFetcherFactoryForTest(google.NewFakeGmailFetcherFactoryForTest(store.fetcherFuncs()))
-	e.provider.SetMeSetForTest(meSet)
+	e.provider.SetAccountAddressesForTest(meSet)
 }
 
 // gmailMsg builds a text/plain *gmail.Message for the fake fetcher.
@@ -762,7 +763,7 @@ func TestGmailProvider_Onboarding_EmptyCursor_BackfillSince(t *testing.T) {
 			return nil, fmt.Errorf("message %s not found", id)
 		},
 	}))
-	e.provider.SetMeSetForTest(map[string]struct{}{me: {}})
+	e.provider.SetAccountAddressesForTest(map[string]struct{}{me: {}})
 
 	// Onboarding: nil cursor + backfill_since metadata override.
 	state := &repository.SyncState{

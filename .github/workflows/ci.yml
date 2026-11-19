@@ -653,7 +653,10 @@ jobs:
 
   e2e-tests:
     name: E2E Tests (shard ${{ matrix.shard }})
-    runs-on: ubuntu-latest
+    # TODO: return to ubuntu-latest once frontend's Playwright supports the
+    # Ubuntu release ubuntu-latest resolves to; until then its browser install
+    # fails there before any test runs.
+    runs-on: ubuntu-24.04
     needs: changes
     if: ${{ needs.changes.outputs.backend == 'true' || needs.changes.outputs.frontend == 'true' }}
     strategy:

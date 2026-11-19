@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"maps"
+	"slices"
 	"testing"
 
 	"personal-crm/backend/internal/repository"
@@ -12,6 +14,25 @@ import (
 	"github.com/stretchr/testify/require"
 	gmailapi "google.golang.org/api/gmail/v1"
 )
+
+// RunDiscoverParticipantsForTest drives collectDiscoveryParticipants so tests
+// assert participant collection (From/To/Cc, no Bcc) against real
+// *gmail.Message structs, as DiscoveryParticipantForTest values.
+func (p *GmailSyncProvider) RunDiscoverParticipantsForTest(msg *gmailapi.Message) []DiscoveryParticipantForTest {
+	parts := p.collectDiscoveryParticipants(msg)
+	out := make([]DiscoveryParticipantForTest, 0, len(parts))
+	for _, part := range parts {
+		out = append(out, DiscoveryParticipantForTest{Name: part.name, Address: part.address})
+	}
+	return out
+}
+
+// DiscoveryParticipantForTest is the (display_name, address) pair of a
+// discovery participant.
+type DiscoveryParticipantForTest struct {
+	Name    string
+	Address string
+}
 
 // --- fakes (reused from the prior stored-row suite; only the comms/stored-row
 // plumbing was dropped — the contact + external fakes stay) ---
@@ -140,11 +161,17 @@ func runDiscovery(
 ) (int, error) {
 	t.Helper()
 	agg := map[string]*correspondenceAggregate{}
-	aggregateParticipants(parts, known, own, emptySet(), coOccurIDs, participantMessageContext{}, agg)
+	aggregateParticipants(parts, known, testMeSet(own), coOccurIDs, participantMessageContext{}, agg)
 	return d.EvaluateAddresses(context.WithoutCancel(t.Context()), sortedAggregates(agg))
 }
 
 func emptySet() map[string]struct{} { return map[string]struct{}{} }
+
+// testMeSet builds a me-set through its one builder from connected-account
+// addresses, with no own domain or own address configured.
+func testMeSet(accounts map[string]struct{}) GmailMeSet {
+	return buildGmailMeSet(slices.Collect(maps.Keys(accounts)), nil)
+}
 
 // --- §6.1 unit tests ---
 
@@ -278,9 +305,9 @@ func TestDiscovery_DedupByAddressAcrossMessages(t *testing.T) {
 
 	agg := map[string]*correspondenceAggregate{}
 	// msg1: To = the unknown address.
-	aggregateParticipants([]participant{{name: "Pat Carter", address: "pat@example.com"}}, emptySet(), emptySet(), emptySet(), nil, participantMessageContext{}, agg)
+	aggregateParticipants([]participant{{name: "Pat Carter", address: "pat@example.com"}}, emptySet(), GmailMeSet{}, nil, participantMessageContext{}, agg)
 	// msg2: Cc = the same unknown address.
-	aggregateParticipants([]participant{{name: "Pat Carter", address: "pat@example.com"}}, emptySet(), emptySet(), emptySet(), nil, participantMessageContext{}, agg)
+	aggregateParticipants([]participant{{name: "Pat Carter", address: "pat@example.com"}}, emptySet(), GmailMeSet{}, nil, participantMessageContext{}, agg)
 
 	n, err := d.EvaluateAddresses(t.Context(), sortedAggregates(agg))
 	require.NoError(t, err)
@@ -461,7 +488,7 @@ func TestDiscovery_BccKnownContactNotEvidence(t *testing.T) {
 
 	known := map[string]struct{}{"a@example.com": {}, "bcc@example.com": {}}
 	agg := map[string]*correspondenceAggregate{}
-	aggregateParticipants(parts, known, emptySet(), emptySet(), coOccurIDs, participantMessageContext{}, agg)
+	aggregateParticipants(parts, known, GmailMeSet{}, coOccurIDs, participantMessageContext{}, agg)
 	n, err := d.EvaluateAddresses(t.Context(), sortedAggregates(agg))
 	require.NoError(t, err)
 	require.Equal(t, 1, n, "the Cc unknown address still produces a candidate")
@@ -507,8 +534,8 @@ func TestDiscovery_PerAddressErrorAggregated(t *testing.T) {
 	d := NewCorrespondenceDiscoverer(contacts, ext)
 
 	agg := map[string]*correspondenceAggregate{}
-	aggregateParticipants([]participant{{name: "Good Person", address: "good@example.com"}}, emptySet(), emptySet(), emptySet(), nil, participantMessageContext{}, agg)
-	aggregateParticipants([]participant{{name: "Bad Person", address: "bad@example.com"}}, emptySet(), emptySet(), emptySet(), nil, participantMessageContext{}, agg)
+	aggregateParticipants([]participant{{name: "Good Person", address: "good@example.com"}}, emptySet(), GmailMeSet{}, nil, participantMessageContext{}, agg)
+	aggregateParticipants([]participant{{name: "Bad Person", address: "bad@example.com"}}, emptySet(), GmailMeSet{}, nil, participantMessageContext{}, agg)
 
 	n, err := d.EvaluateAddresses(t.Context(), sortedAggregates(agg))
 	require.Error(t, err, "an upsert failure must surface as a non-nil aggregated error")

@@ -2,275 +2,10 @@
 // tasks that don't fit the HTTP API surface. Operator-only; NOT
 // deployed as part of the production service.
 //
-// Subcommands (exactly one required):
-//
-//	--messages-rematch-stranded   Retroactively match messages_message
-//	                              rows whose matched_contact_id is NULL
-//	                              against the current contact_method set,
-//	                              update them, and enqueue
-//	                              MessagingAggregateForContactArgs River
-//	                              jobs per newly-matched contact.
-//
-//	--reconcile-address-book-methods
-//	                              One-time catchup for the address-book
-//	                              method leak: re-propagate any address
-//	                              book (gcontacts / icloud_contacts)
-//	                              method missing from an already-linked
-//	                              CRM contact. Auto-applies for
-//	                              auto-`matched` rows; records a pending
-//	                              suggestion for user-`imported` rows.
-//	                              Continue-on-error; exits non-zero iff
-//	                              any row failed. Idempotent — safe to
-//	                              re-run after fixing a failure cause.
-//	                              NOTE: pre-existing rows that were modal-
-//	                              linked-with-deselections BEFORE the
-//	                              LinkContact curated-status change are
-//	                              stored `matched`, so this one-time run
-//	                              may auto-apply a previously-deselected
-//	                              method (bounded; user-recoverable by
-//	                              deleting the method).
-//
-//	--rederive-correspondence-names
-//	                              One-time catchup for the gmail_correspondence
-//	                              source: re-fetch already-ingested email
-//	                              messages from Gmail and additively populate
-//	                              participant display names in comms_message
-//	                              metadata (preserving all existing content +
-//	                              provenance). Continue-on-error; exits
-//	                              non-zero iff any row FAILED (Skipped* do not
-//	                              fail). Idempotent — safe to re-run. Requires
-//	                              Google OAuth credentials; built lazily so
-//	                              other subcommands work on Google-less hosts.
-//	                              NOTE: candidate discovery now runs in-sync on
-//	                              the Gmail fetch loop, not here; this subcommand
-//	                              only backfills display names.
-//
-//	--trim-email-quotes
-//	                              One-time catchup: apply the ingest's text
-//	                              rule (ING-047) to stored emails, so each body
-//	                              is the email's own text: a thread start's
-//	                              quoted mail moves to its quoted history, a
-//	                              forward's content is capped and a reply's
-//	                              quotes are dropped (ING-050). Reads only
-//	                              stored rows; no Gmail calls. Prints counts
-//	                              only. Idempotent — safe to re-run.
-//
-//	--reset-gmail-backfill-cursors
-//	                              Rewind enabled Gmail sync cursors to each
-//	                              row's backfill floor, mark them due, and
-//	                              clear error state. Prints counts only.
-//
-//	--set-email-own-domains <comma-list>
-//	      [--account <email>]     Set (or, passed as an empty string, CLEAR)
-//	                              an email external_sync_state row's
-//	                              discovery_own_domains metadata: domains that
-//	                              count as "me" for Gmail participant
-//	                              discovery (anchors trust; excluded from the
-//	                              candidate pool). Read-modify-write —
-//	                              preserves every other metadata key.
-//	                              --account selects the target row when more
-//	                              than one email account is configured;
-//	                              omissible when exactly one exists. Prints
-//	                              the resulting domain list.
-//
-//	--mint-pairing-token          Mint a single-use pairing token for
-//	                              `crm-mac install --pair`. Optional
-//	                              --hostname-label is operator-side
-//	                              terminal context only; not persisted
-//	                              server-side.
-//
-//	--list-hosts                  Print active paired Mac hosts
-//	                              (id, hostname, created_at,
-//	                              last_heartbeat_at) for ambiguous-pair
-//	                              recovery.
-//
-//	--revoke-host <uuid>          Revoke a paired Mac host by id.
-//
-//	--rotate-host-key <uuid>      Validate the given host_id is an active
-//	                              paired host, mint a fresh pairing token,
-//	                              and print the templated
-//	                              `crm-mac install --re-pair --pair <token>`
-//	                              command. The rotation itself runs on the
-//	                              Mac — this binary does not hold the
-//	                              per-host pair-key.
-//
-//	--seed [--profile P]          Seed the selected synthetic world (P =
-//	      [--namespace N]         minimal-scoped|standard; default standard)
-//	      [--prng-seed S] --yes   into the DB (ADDITIVE). REFUSED in production
-//	                              (CRM_ENV gate) and when the river_job queue is
-//	                              not drained. The crm-api service MUST be
-//	                              STOPPED first (use `make dev-seed`). Requires
-//	                              --yes (or CRM_SEED_RESET_CONFIRM=1). Prints a
-//	                              counts-only summary. Re-running WITHOUT a reset
-//	                              accumulates contacts — use --reset-and-seed for
-//	                              a reproducible baseline.
-//
-//	--reset-and-seed [--profile P]  HARD-wipe every live data table (incl.
-//	      [--namespace N]           oauth_credential + sync-state + telegram
-//	      [--prng-seed S] --yes     session, preserving schema_migrations + River
-//	                                internals + the migration-seeded curated
-//	                                catalog [predicate/entity_type, provisional
-//	                                rows cleared]), then reseed (default profile
-//	                                standard). REFUSED in production.
-//	                                The crm-api service MUST be STOPPED (use
-//	                                `make staging-reset`). Requires --yes. The
-//	                                stable namespace makes the reseed reproducible.
-//
-//	--migrate                     Apply pending application + River migrations
-//	                              idempotently (the exact call crm-api boot
-//	                              makes). Exit 0 on success, 1 on error. The
-//	                              deploy script runs this from the NEW image,
-//	                              after a snapshot, before swapping the running
-//	                              container.
-//
-//	--migrate-check               Report whether migrations are pending WITHOUT
-//	                              mutating the DB. THREE distinct exit codes:
-//	                              0 = up-to-date, 2 = pending (app and/or River),
-//	                              1 = operational error (cannot connect, dirty DB,
-//	                              version read failed). The deploy script branches
-//	                              on exit 2 to snapshot-then-migrate; exit 1 aborts
-//	                              before touching anything. Prints a counts-only
-//	                              summary (no PII).
-//
-//	--list-jobs                   List River jobs (one key=value row per job) for
-//	      [--job-state S]         dead-letter inspection. --job-state is a
-//	      [--job-limit N]         comma-separated state filter (default
-//	                              "discarded,retryable"; each token validated
-//	                              against River's job states). --job-limit caps the
-//	                              row count (default 100; 1..10000). Newest job
-//	                              first. SAFE with crm-api running (read-only).
-//
-//	--retry-job <id>              Make a single River job available to run again
-//	                              (by numeric id from --list-jobs). On an exhausted
-//	                              job River bumps max_attempts so it can run once
-//	                              more. SAFE with crm-api running: the live worker
-//	                              pool picks the job up — that is the intended flow.
-//	                              Consumers are idempotent, so retrying an
-//	                              already-side-effected job re-runs into a no-op.
-//
-//	--migrate-tags                Mirror the legacy tag / contact_tag tables into
-//	                              the graph: each tag becomes a `tag` entity node
-//	                              (color carried in the entity's detail JSONB) and
-//	                              each contact_tag of a NON-deleted contact becomes
-//	                              an accepted `tagged_as` assertion authored by the
-//	                              user (knowledge time = contact_tag.created_at).
-//	                              FAILS LOUDLY on a case-insensitive tag-name
-//	                              collision (e.g. "Friend" vs "friend") so the
-//	                              operator dedups the legacy tags first. Idempotent
-//	                              (routes through AssertService proposition
-//	                              identity + find-or-create entity nodes) — safe to
-//	                              re-run. Prints a counts-only summary. The legacy
-//	                              tag / contact_tag tables are NOT dropped (rollback
-//	                              anchor, removed in a later migration).
-//	--migrate-contact-knowledge-columns
-//	                              Mirror the legacy contact.location / birthday /
-//	                              how_met cache columns into the graph: location
-//	                              becomes a `lives_in` edge to a place entity node,
-//	                              birthday/how_met become facts — for each NON-deleted
-//	                              contact, authored by the user (knowledge time =
-//	                              contact.created_at). Idempotent (routes through
-//	                              AssertService proposition identity + find-or-create
-//	                              place nodes) — safe to re-run. Counts-only summary.
-//	                              The cache columns are retained (the consumer keeps
-//	                              them in sync from the assertions).
-//
-//	--river-tier0 [--window-hours N]
-//	                              One-shot wait/run-by-kind read over live river_job
-//	                              rows finalized in the last N hours (default 24).
-//	                              An APPROXIMATE first signal before job_exec_sample
-//	                              accrues — its wait is attempted_at - scheduled_at
-//	                              over the last attempt only and River mutates
-//	                              scheduled_at on retry, so do NOT compare it
-//	                              numerically to the Tier-1 queue_wait_ms metric.
-//	                              Read-only; SAFE with crm-api running.
-//
-//	--judge-start-day YYYY-MM-DD  Historical decision-model run over a range of
-//	      --judge-end-day YYYY-MM-DD days, both included: at each simulated
-//	      --method KEY            nightly cut-off (the midnights in the
-//	      [--measure]             server's timezone that close the range's
-//	                              days), judge with method KEY every
-//	                              thread that gained content since the previous
-//	                              cut-off, a thread's cut-offs in order, over
-//	                              the window of its content up to the cut-off
-//	                              that fits the method's limits, flagging each
-//	                              new message and re-checking the method's own
-//	                              earlier commitments, and record each judgment,
-//	                              incomplete report and unjudged message through
-//	                              the judgment store. Only the method
-//	                              DECISION_PRODUCTION_METHOD designates changes
-//	                              live state, and only through ball-in-court's
-//	                              reply obligations; a designation the method
-//	                              registry lacks fails before any call. A
-//	                              judgment the method version already holds for
-//	                              what a cut-off reads (window, new messages,
-//	                              earlier judgments re-checked) is reused, so
-//	                              repeating a range sends nothing. The masker
-//	                              needs the user's own names and the name
-//	                              model: a run fails before any call when
-//	                              OWN_NAMES holds none or NAME_MODEL_SOCKET is
-//	                              unset, and a context the model cannot cover
-//	                              is not sent (reported call_failed).
-//	                              --measure builds the same contexts, sizes
-//	                              each whole request against the method's
-//	                              limits, and sends nothing to a vendor and
-//	                              writes no judgment; like any masking, it
-//	                              stores the name spans it asks for. Prints a
-//	                              content-free report (IDs, counts, reasons).
-//	                              SAFE with crm-api running (it runs the Todoist
-//	                              jobs a run's live effects enqueue).
-//
-//	--scorecard                   Score decision-model methods against the
-//	      [--method KEY           user's reviews and labels: rerun each method
-//	      [--compare-method KEY]] as an evidence-only rerun over every thread
-//	                              context the user reviewed or whose judgment
-//	                              answered a flag or clearing decision the user
-//	                              labeled, judging the thread's cut-offs in
-//	                              order from the start of the run the reviewed
-//	                              or labeled judgment appeared in (reusing
-//	                              judgments the method version holds for what a
-//	                              cut-off reads), and print,
-//	                              per method, the new messages judged, left
-//	                              unjudged by reason and flagged per kind; per
-//	                              flag kind, precision and recall over labeled
-//	                              flag decisions; clearing accuracy over
-//	                              labeled clearing decisions; per-outcome
-//	                              recall, precision and
-//	                              confusion, the user's "I owe" outcomes missed,
-//	                              the corrections caused and the method's terms
-//	                              status; the timestamp rule as a reference for
-//	                              they_owe_reply; and a proposed first
-//	                              production method among the scored
-//	                              methods. With no --method, every
-//	                              method in the registry is scored, and those
-//	                              whose route is not configured are listed.
-//	                              --compare-method adds the per-outcome
-//	                              difference and the
-//	                              examples that flipped, by example ID. Changes
-//	                              no designation and no live state. Prints a
-//	                              content-free report (IDs, keys, outcome
-//	                              values, flag kinds, counts, rates).
-//
-//	--infer-negative-labels       One-time catchup for the judgment bench:
-//	                              label, with its judged value, every negative
-//	                              decision of a proposal holding a label, as a
-//	                              close of its row on the bench would have.
-//	                              Never replaces a label and labels nothing in
-//	                              a proposal holding no label; a second run
-//	                              records nothing. Prints the count recorded.
-//	                              SAFE with crm-api running.
-//
-//	--langfuse-export             Send the decision-model records made since
-//	                              the previous export to the Langfuse
-//	                              extraction project (LANGFUSE_EXTRACTION_HOST,
-//	                              LANGFUSE_EXTRACTION_PUBLIC_KEY,
-//	                              LANGFUSE_EXTRACTION_SECRET_KEY): each
-//	                              judgment, finished run, review and rerun's
-//	                              scorecard metric (each its own numeric score
-//	                              on the rerun's trace), content-free and keyed by
-//	                              example ID, as one record however often it
-//	                              runs. The nightly langfuse_export_nightly job
-//	                              does the same. With a setting unset, sends
-//	                              nothing and says so. Prints counts only.
+// Exactly one subcommand flag is required. `crm-admin -h` prints every
+// subcommand and option with its definition. Each is defined once, where
+// parseArgs registers it (the email own-list verbs in emailOwnListVerbs), and
+// that registration drives the help, the usage errors and dispatch.
 //
 // The seed/reset subcommands inherit the process env (CRM_ENV / TIME_BASE /
 // TIME_ACCELERATION / DATABASE_URL / MIGRATIONS_PATH) — on the Pi via
@@ -380,14 +115,14 @@ type gmailBackfillCursorResetter interface {
 	ResetGmailBackfillCursors(ctx context.Context) (service.EmailBackfillCursorResetResult, error)
 }
 
-// emailOwnDomainsRepo is the narrow interface --set-email-own-domains needs:
-// list all sync states (to resolve/disambiguate the target email account) and
-// perform the read-modify-write metadata update. Production wires this to
-// *repository.SyncRepository (already constructed for --reset-gmail-backfill-
-// cursors, so no new repository dependency is introduced).
-type emailOwnDomainsRepo interface {
+// emailOwnListRepo is the narrow interface the emailOwnListVerbs need: list all
+// sync states (to resolve/disambiguate the target email account) and write one
+// metadata key. Production wires this to *repository.SyncRepository (already
+// constructed for --reset-gmail-backfill-cursors, so no new repository
+// dependency is introduced).
+type emailOwnListRepo interface {
 	ListSyncStates(ctx context.Context) ([]repository.SyncState, error)
-	UpdateSyncStateMetadata(ctx context.Context, id uuid.UUID, metadata map[string]any) (*repository.SyncState, error)
+	sync.EmailOwnListWriter
 }
 
 // tagMigrator is the narrow interface --migrate-tags needs. Production wires this
@@ -456,11 +191,11 @@ type adminDeps struct {
 	rederive   rederiveRunner
 	quoteTrim  emailQuoteTrimmer
 	gmailReset gmailBackfillCursorResetter
-	// emailOwnDomains serves --set-email-own-domains (resolve target email
-	// sync-state row + read-modify-write its discovery_own_domains metadata).
-	// Wired to *repository.SyncRepository.
-	emailOwnDomains emailOwnDomainsRepo
-	seed            seedRunner
+	// emailOwnLists serves the emailOwnListVerbs (resolve the target email
+	// sync-state row + write its list's metadata key). Wired to
+	// *repository.SyncRepository.
+	emailOwnLists emailOwnListRepo
+	seed          seedRunner
 	// jobs serves --list-jobs / --retry-job. Wired to the insert-only river
 	// client in buildProductionDeps (JobList/JobRetry go through the driver,
 	// no worker pool needed).
@@ -503,21 +238,17 @@ type runOptions struct {
 	rederiveCorrespondence bool
 	trimEmailQuotes        bool
 	resetGmailBackfill     bool
-	// setEmailOwnDomains <- --set-email-own-domains (comma-separated domain
-	// list; explicit "" CLEARS the key). setEmailOwnDomainsSet tracks flag
-	// PRESENCE (via fs.Visit at parse time) — the string's zero value alone
-	// cannot distinguish "flag omitted" from "flag passed as empty", and the
-	// dispatch/mutual-exclusion logic needs that distinction to make the
-	// documented clear semantics reachable. emailOwnDomainsAccount <-
-	// optional --account disambiguating among multiple email sync states.
-	setEmailOwnDomains     string
-	setEmailOwnDomainsSet  bool
-	emailOwnDomainsAccount string
-	mintPairingToken       bool
-	hostnameLabel          string
-	listHosts              bool
-	revokeHostID           string
-	rotateHostID           string
+	// emailOwnLists holds one request per emailOwnListVerbs flag the command
+	// line passed, so a flag passed as "" (the explicit clear) is distinct
+	// from an omitted flag. emailAccount <- optional --account disambiguating
+	// among multiple email sync states, for any of those flags.
+	emailOwnLists    []emailOwnListRequest
+	emailAccount     string
+	mintPairingToken bool
+	hostnameLabel    string
+	listHosts        bool
+	revokeHostID     string
+	rotateHostID     string
 	// Synthetic seed. doSeed ← --seed (the BOOL subcommand selector);
 	// resetAndSeed ← --reset-and-seed; prngSeed ← --prng-seed (the uint64 PRNG
 	// seed, a DISTINCT flag from --seed — Go's flag cannot bind one name to both
@@ -711,9 +442,7 @@ func validateSubcommand(opts runOptions) error {
 	if opts.resetGmailBackfill {
 		active++
 	}
-	if opts.setEmailOwnDomainsSet {
-		active++
-	}
+	active += len(opts.emailOwnLists)
 	if opts.mintPairingToken {
 		active++
 	}
@@ -786,10 +515,11 @@ func validateSubcommand(opts runOptions) error {
 }
 
 // subcommandList is the canonical subcommand enumeration shared by the
-// no-subcommand and mutual-exclusion usage errors.
-const subcommandList = "--messages-rematch-stranded, --reconcile-address-book-methods, " +
+// no-subcommand and mutual-exclusion usage errors. Its emailOwnListVerbs
+// entries derive from those verbs' definitions.
+var subcommandList = "--messages-rematch-stranded, --reconcile-address-book-methods, " +
 	"--rederive-correspondence-names, --trim-email-quotes, --reset-gmail-backfill-cursors, " +
-	"--set-email-own-domains <comma-list> [--account <email>], --mint-pairing-token, " +
+	emailOwnListUsages(" [--account <email>]", ", ") + ", --mint-pairing-token, " +
 	"--list-hosts, --revoke-host <uuid>, --rotate-host-key <uuid>, --seed, --reset-and-seed, " +
 	"--migrate, --migrate-check, --list-jobs, --retry-job <id>, --migrate-tags, " +
 	"--migrate-contact-knowledge-columns, --river-tier0, --whatsapp-list-history, " +
@@ -807,7 +537,10 @@ func parseArgs(args []string) (runOptions, error) {
 	fs.BoolVar(&opts.reconcileAddressBook, "reconcile-address-book-methods", false,
 		"One-time catchup: re-propagate address-book (gcontacts/icloud) methods "+
 			"missing from already-linked contacts (auto-apply for matched, record "+
-			"suggestion for imported). Continue-on-error; exits non-zero iff any row failed.")
+			"suggestion for imported). Continue-on-error; exits non-zero iff any row failed. "+
+			"NOTE: a row linked with deselected methods before the LinkContact curated-status "+
+			"change is stored matched, so a run may auto-apply a previously deselected method "+
+			"(bounded; delete the method to recover).")
 	fs.BoolVar(&opts.rederiveCorrespondence, "rederive-correspondence-names", false,
 		"One-time catchup: re-fetch already-ingested email messages from Gmail and "+
 			"additively populate participant display names in comms_message metadata "+
@@ -821,15 +554,15 @@ func parseArgs(args []string) (runOptions, error) {
 	fs.BoolVar(&opts.resetGmailBackfill, "reset-gmail-backfill-cursors", false,
 		"Rewind enabled Gmail sync cursors to each row's backfill floor, mark them due, "+
 			"and clear error state. Prints counts only.")
-	fs.StringVar(&opts.setEmailOwnDomains, "set-email-own-domains", "",
-		"Set (or, passed as an empty string, CLEAR) an email account's own-domain discovery "+
-			"list: a comma-separated list of domains that count as \"me\" for Gmail participant "+
-			"discovery (anchors trust; excluded from the candidate pool). Explicit empty is "+
-			"distinct from omitting the flag. With exactly one email sync-state row, --account "+
-			"is optional; with zero or multiple, --account selects the target.")
-	fs.StringVar(&opts.emailOwnDomainsAccount, "account", "",
+	for _, verb := range emailOwnListVerbs {
+		fs.Func(verb.flag, verb.usage, func(input string) error {
+			opts.emailOwnLists = withEmailOwnListRequest(opts.emailOwnLists, emailOwnListRequest{verb: verb, input: input})
+			return nil
+		})
+	}
+	fs.StringVar(&opts.emailAccount, "account", "",
 		"Email address selecting the target external_sync_state row for "+
-			"--set-email-own-domains, when more than one email account is configured.")
+			emailOwnListFlags(" or ")+", when more than one email account is configured.")
 	fs.BoolVar(&opts.mintPairingToken, "mint-pairing-token", false,
 		"Mint a single-use pairing token for `crm-mac install --pair`.")
 	fs.StringVar(&opts.hostnameLabel, "hostname-label", "",
@@ -911,7 +644,8 @@ func parseArgs(args []string) (runOptions, error) {
 		"First day (YYYY-MM-DD) of a historical decision-model run, with --judge-end-day: judge with "+
 			"--method, at the simulated nightly cut-off closing each day of the range, each thread that "+
 			"gained content since the previous cut-off over its window, recording every judgment, incomplete "+
-			"report and unjudged message. Only the designated production method changes live state. Prints "+
+			"report and unjudged message. Only the designated production method changes live state. Fails "+
+			"before any call when OWN_NAMES holds no name or NAME_MODEL_SOCKET is unset. Prints "+
 			"a content-free summary.")
 	fs.StringVar(&opts.judgeEndDay, "judge-end-day", "",
 		"Last day (YYYY-MM-DD) of a historical decision-model run, included, with --judge-start-day.")
@@ -930,7 +664,8 @@ func parseArgs(args []string) (runOptions, error) {
 			"the examples that flipped.")
 	fs.BoolVar(&opts.langfuseExport, "langfuse-export", false,
 		"Send the decision-model records made since the previous export (judgments, finished runs, "+
-			"scorecard metrics, reviews) to the Langfuse extraction project, content-free; with its settings "+
+			"scorecard metrics, reviews) to the Langfuse extraction project, content-free; with any of its "+
+			"settings (LANGFUSE_EXTRACTION_HOST, LANGFUSE_EXTRACTION_PUBLIC_KEY, LANGFUSE_EXTRACTION_SECRET_KEY) "+
 			"unset, send nothing and say so.")
 	fs.BoolVar(&opts.inferNegativeLabels, "infer-negative-labels", false,
 		"One-time catchup for the judgment bench: label, with its judged value, every negative decision of a "+
@@ -939,15 +674,6 @@ func parseArgs(args []string) (runOptions, error) {
 	if err := fs.Parse(args); err != nil {
 		return runOptions{}, err
 	}
-	// fs.Visit calls back only for flags that actually appeared on the command
-	// line (regardless of the value they were given), which is how
-	// --set-email-own-domains="" is distinguished from omitting the flag
-	// entirely — the zero value of the string alone cannot express that.
-	fs.Visit(func(f *flag.Flag) {
-		if f.Name == "set-email-own-domains" {
-			opts.setEmailOwnDomainsSet = true
-		}
-	})
 	return opts, nil
 }
 
@@ -1042,8 +768,8 @@ func run(ctx context.Context, opts runOptions, deps adminDeps) error {
 		return runTrimEmailQuotes(ctx, deps)
 	case opts.resetGmailBackfill:
 		return runResetGmailBackfillCursors(ctx, deps)
-	case opts.setEmailOwnDomainsSet:
-		return runSetEmailOwnDomains(ctx, opts, deps)
+	case len(opts.emailOwnLists) > 0:
+		return runSetEmailOwnList(ctx, opts.emailOwnLists[0], opts.emailAccount, deps)
 	case opts.doSeed:
 		return runSeed(ctx, opts, deps)
 	case opts.resetAndSeed:
@@ -1555,25 +1281,97 @@ func runResetGmailBackfillCursors(ctx context.Context, deps adminDeps) error {
 	return nil
 }
 
-// runSetEmailOwnDomains resolves the target email (source="email")
-// external_sync_state row, then read-modify-writes its metadata: it
-// normalizes the comma-separated domain list and applies
-// sync.WithEmailOwnDomains, which preserves every other metadata key
-// (backfill_since, terminal_reason, ...) because UpdateSyncStateMetadata is a
-// full JSONB replace. An explicit empty input (opts.setEmailOwnDomains == ""
-// with opts.setEmailOwnDomainsSet true) clears the key rather than adding no
-// domains and leaving the existing list untouched.
-func runSetEmailOwnDomains(ctx context.Context, opts runOptions, deps adminDeps) error {
-	var domains []string
-	if trimmed := strings.TrimSpace(opts.setEmailOwnDomains); trimmed != "" {
-		domains = strings.Split(trimmed, ",")
-	}
-	normalized, err := sync.NormalizeOwnDomains(domains)
-	if err != nil {
-		return fmt.Errorf("--set-email-own-domains: %w", err)
-	}
+// emailOwnListVerb is one crm-admin verb that sets an email account's own list:
+// the flag that selects it, the placeholder its usage error shows for its
+// argument, its help text, the noun its summary prints, and the list it sets.
+// The list owns its metadata key and the rules that parse, write and read it,
+// so a verb cannot pair one list's input with another's key. Registration, the
+// usage errors, the --account help, the one-subcommand check and dispatch all
+// derive from emailOwnListVerbs.
+type emailOwnListVerb struct {
+	flag  string
+	arg   string
+	usage string
+	noun  string
+	list  sync.EmailOwnList
+}
 
-	states, err := deps.emailOwnDomains.ListSyncStates(ctx)
+var emailOwnListVerbs = []emailOwnListVerb{
+	{
+		flag: "set-email-own-domains",
+		arg:  "<comma-list>",
+		usage: "Set (or, passed as an empty string, CLEAR) an email account's own-domain list: a " +
+			"comma-separated list of domains whose every address counts as the user for Gmail " +
+			"sync, the rematch scan and participant discovery. WARNING: every address at a listed " +
+			"domain counts as the user, so never list a domain shared with other people; use " +
+			"--set-email-own-addresses for one address at such a domain. Explicit empty is " +
+			"distinct from omitting the flag. With exactly one email sync-state row, --account " +
+			"is optional; with zero or multiple, --account selects the target.",
+		noun: "domains",
+		list: sync.EmailOwnDomains,
+	},
+	{
+		flag: "set-email-own-addresses",
+		arg:  "<address-list>",
+		usage: "Set (or, passed as an empty string, CLEAR) an email account's own-address list: a " +
+			"mail header address list of addresses that each count as the user for Gmail sync, " +
+			"the rematch scan and participant discovery, with no other address at their domains " +
+			"counting. Commas separate addresses, except inside a quoted local part, and the bare " +
+			"address each entry yields is stored. Explicit empty is distinct from omitting the " +
+			"flag. --account selects the target as for --set-email-own-domains.",
+		noun: "addresses",
+		list: sync.EmailOwnAddresses,
+	},
+}
+
+// emailOwnListFlags joins the emailOwnListVerbs' flags with sep.
+func emailOwnListFlags(sep string) string {
+	flags := make([]string, len(emailOwnListVerbs))
+	for i, verb := range emailOwnListVerbs {
+		flags[i] = "--" + verb.flag
+	}
+	return strings.Join(flags, sep)
+}
+
+// emailOwnListUsages joins each emailOwnListVerbs' flag, argument and suffix
+// with sep.
+func emailOwnListUsages(suffix, sep string) string {
+	usages := make([]string, len(emailOwnListVerbs))
+	for i, verb := range emailOwnListVerbs {
+		usages[i] = "--" + verb.flag + " " + verb.arg + suffix
+	}
+	return strings.Join(usages, sep)
+}
+
+// emailOwnListRequest is one emailOwnListVerb as the command line passed it.
+type emailOwnListRequest struct {
+	verb  emailOwnListVerb
+	input string
+}
+
+// withEmailOwnListRequest returns requests with req in place of an earlier
+// request for the same verb, so a flag passed twice keeps its last value as
+// any other flag does.
+func withEmailOwnListRequest(requests []emailOwnListRequest, req emailOwnListRequest) []emailOwnListRequest {
+	for i := range requests {
+		if requests[i].verb.flag == req.verb.flag {
+			requests[i] = req
+			return requests
+		}
+	}
+	return append(requests, req)
+}
+
+// runSetEmailOwnList resolves the target email (source="email")
+// external_sync_state row, then has the list parse the request's input and
+// write its metadata key. The write changes only that key, so every other key
+// (backfill_since, terminal_reason, the other own list, ...) is preserved even
+// when another write lands between the row's read and this write. An explicit
+// empty input clears the key rather than adding nothing and leaving the
+// existing list untouched.
+func runSetEmailOwnList(ctx context.Context, req emailOwnListRequest, account string, deps adminDeps) error {
+	verb := req.verb
+	states, err := deps.emailOwnLists.ListSyncStates(ctx)
 	if err != nil {
 		return fmt.Errorf("list sync states: %w", err)
 	}
@@ -1584,11 +1382,11 @@ func runSetEmailOwnDomains(ctx context.Context, opts runOptions, deps adminDeps)
 		}
 	}
 
-	account := strings.TrimSpace(opts.emailOwnDomainsAccount)
+	account = strings.TrimSpace(account)
 	var target *repository.SyncState
 	switch {
 	case len(emailStates) == 0:
-		return errors.New("--set-email-own-domains: no email sync state exists yet; connect Gmail first")
+		return fmt.Errorf("--%s: no email sync state exists yet; connect Gmail first", verb.flag)
 	case account != "":
 		for i := range emailStates {
 			if emailStates[i].AccountID != nil && *emailStates[i].AccountID == account {
@@ -1603,24 +1401,17 @@ func runSetEmailOwnDomains(ctx context.Context, opts runOptions, deps adminDeps)
 	case len(emailStates) == 1:
 		target = &emailStates[0]
 	default:
-		return fmt.Errorf("--set-email-own-domains: multiple email accounts configured, pass --account to select one (known: %s)",
-			emailAccountList(emailStates))
+		return fmt.Errorf("--%s: multiple email accounts configured, pass --account to select one (known: %s)",
+			verb.flag, emailAccountList(emailStates))
 	}
 
-	updatedMetadata := sync.WithEmailOwnDomains(target.Metadata, normalized)
-	updated, err := deps.emailOwnDomains.UpdateSyncStateMetadata(ctx, target.ID, updatedMetadata)
+	stored, err := verb.list.Set(ctx, deps.emailOwnLists, target.ID, req.input)
 	if err != nil {
-		return fmt.Errorf("update sync state metadata: %w", err)
+		return fmt.Errorf("--%s: %w", verb.flag, err)
 	}
 
-	result := sync.EmailOwnDomains(updated.Metadata)
-	printedDomains := make([]string, 0, len(result))
-	for d := range result {
-		printedDomains = append(printedDomains, d)
-	}
-	sort.Strings(printedDomains)
-	if _, err := fmt.Fprintf(deps.stdout, "set-email-own-domains: account=%s domains=%s\n",
-		accountLabel(target.AccountID), strings.Join(printedDomains, ",")); err != nil {
+	if _, err := fmt.Fprintf(deps.stdout, "%s: account=%s %s=%s\n",
+		verb.flag, accountLabel(target.AccountID), verb.noun, strings.Join(stored, ",")); err != nil {
 		return fmt.Errorf("write summary: %w", err)
 	}
 	return nil
@@ -1944,10 +1735,10 @@ func buildProductionDeps(ctx context.Context, cfg *config.Config, database *db.D
 		reconcile:  addressBookReconcile,
 		quoteTrim:  google.NewEmailQuoteTrimService(repository.NewCommsMessageRepository(database.Queries)),
 		gmailReset: service.NewEmailBackfillCursorResetService(syncRepo),
-		// --set-email-own-domains: resolve target email sync-state row(s) +
-		// read-modify-write metadata. syncRepo already satisfies the interface
-		// structurally (ListSyncStates + UpdateSyncStateMetadata).
-		emailOwnDomains: syncRepo,
+		// emailOwnListVerbs: resolve the target email sync-state row + write
+		// one metadata key. syncRepo already satisfies the interface
+		// structurally.
+		emailOwnLists: syncRepo,
 		seed: seedAdapter{
 			database: database,
 			support:  repository.NewSyntheticSupportRepository(database.Queries),
@@ -1979,7 +1770,7 @@ func buildProductionDeps(ctx context.Context, cfg *config.Config, database *db.D
 			return adminDeps{}, nil, fmt.Errorf("--rederive-correspondence-names requires Google OAuth credentials: %w", err)
 		}
 		commsRepo := repository.NewCommsMessageRepository(database.Queries)
-		gmailProvider := google.NewGmailSyncProvider(oauthService, commsRepo, eventBus, database.Pool)
+		gmailProvider := google.NewGmailSyncProvider(oauthService, commsRepo, syncRepo, eventBus, database.Pool)
 		deps.rederive = google.NewCorrespondenceNameRederiveService(commsRepo, gmailProvider)
 	}
 

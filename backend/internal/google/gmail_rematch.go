@@ -10,7 +10,6 @@ import (
 
 	"personal-crm/backend/internal/matching"
 	"personal-crm/backend/internal/repository"
-	"personal-crm/backend/internal/sync"
 )
 
 // emailSyncStateLister is the narrow seam the rematch handler uses to find the
@@ -100,8 +99,9 @@ func (h *GmailRematchHandler) Rematch(ctx context.Context, _ uuid.UUID, valueNor
 		knownMap[id.ValueNormalized] = append(knownMap[id.ValueNormalized], id.ContactID)
 	}
 
-	// Build the me-set ONCE through the provider's seam (tests override it via
-	// SetMeSetForTest, so no real OAuth is touched).
+	// Build the me-set ONCE through the provider, the one way Gmail code
+	// obtains it (tests inject the connected accounts' addresses via
+	// SetAccountAddressesForTest, so no real OAuth is touched).
 	meSet, err := h.provider.MeSet(ctx)
 	if err != nil {
 		return 0, err
@@ -119,8 +119,7 @@ func (h *GmailRematchHandler) Rematch(ctx context.Context, _ uuid.UUID, valueNor
 	var scanErrs []error
 	for _, st := range emailStates {
 		afterEpoch := backfillSinceEpoch(st.Metadata)
-		ownDomains := sync.EmailOwnDomains(st.Metadata)
-		n, scanErr := h.provider.ScanIdentifier(ctx, *st.AccountID, addr, knownMap, meSet, ownDomains, afterEpoch)
+		n, scanErr := h.provider.ScanIdentifier(ctx, *st.AccountID, addr, knownMap, meSet, afterEpoch)
 		matched += n
 		if scanErr != nil {
 			// The account id is the operator's OWN connected mailbox, kept raw

@@ -1,94 +1,210 @@
 package sync
 
 import (
+	"context"
 	"fmt"
+	"maps"
+	"net/mail"
+	"slices"
 	"strings"
+
+	"personal-crm/backend/internal/matching"
+	"personal-crm/backend/internal/repository"
+
+	"github.com/google/uuid"
 )
 
-// MetadataKeyEmailOwnDomains is the external_sync_state.metadata key holding
-// the per-account own-domain list used by Gmail participant discovery: a
-// domain in this list anchors trust (the sender counts as "me") and excludes
-// its addresses from the candidate pool. The value is deployment
-// configuration only — never hardcoded, and never a real domain in tests.
-const MetadataKeyEmailOwnDomains = "discovery_own_domains"
+// EmailOwnList selects one of the lists an email sync state's metadata holds
+// that make up the user's addresses for Gmail sync, the Gmail identifier
+// rematch scan and Gmail participant discovery. EmailOwnDomains and
+// EmailOwnAddresses are its values. Each list's definition (its metadata key,
+// the grammar that parses operator input for it, and the rules that read it
+// back) is private to this package and fixed at compile time, so every caller
+// that selects a list writes and reads the same key. Set parses and writes in
+// one operation, so no caller can write unparsed input or pair one list's
+// input with another list's key. The values are deployment configuration only:
+// never hardcoded, and never a real domain or address in tests.
+type EmailOwnList int
 
-// EmailOwnDomains parses the per-account own-domain list from an email sync
-// state's metadata. Nil-safe: nil/absent metadata, a missing key, or a value
-// that isn't a JSON array yields an empty set. Each entry is lowercased and
-// trimmed; entries that are empty or contain '@' are ignored rather than
-// rejected, since this reads back what NormalizeOwnDomains already validated
-// (or metadata written outside that path) — a malformed entry should degrade
-// silently, not panic or block discovery.
-func EmailOwnDomains(metadata map[string]any) map[string]struct{} {
-	domains := make(map[string]struct{})
-	if metadata == nil {
-		return domains
+const (
+	// EmailOwnDomains is the own-domain list: every address at a listed
+	// domain counts as the user. Its input is a comma-separated list of
+	// domains.
+	EmailOwnDomains EmailOwnList = iota + 1
+	// EmailOwnAddresses is the own-address list: each listed address counts
+	// as the user, and no other address at its domain does. It serves an
+	// address at a domain the user shares with other people. Its input is a
+	// mail header address list.
+	EmailOwnAddresses
+)
+
+// emailOwnListDef is one list's definition.
+type emailOwnListDef struct {
+	// key is the external_sync_state.metadata key holding the list.
+	key string
+	// parse validates non-empty operator input and returns the stored form
+	// of each entry.
+	parse func(input string) ([]string, error)
+	// normalize maps a stored entry to the form Gmail sync compares it in.
+	normalize func(stored string) string
+	// keepStored reports whether a stored entry, normalized by normalize, is
+	// well formed.
+	keepStored func(normalized string) bool
+}
+
+// def returns the definition l selects. The zero EmailOwnList selects no list,
+// so a selector left unset panics at its first use rather than writing another
+// list's key.
+func (l EmailOwnList) def() emailOwnListDef {
+	switch l {
+	case EmailOwnDomains:
+		return emailOwnListDef{
+			key:        "own_domains",
+			parse:      parseOwnDomains,
+			normalize:  matching.NormalizeEmail,
+			keepStored: func(s string) bool { return !strings.Contains(s, "@") },
+		}
+	case EmailOwnAddresses:
+		return emailOwnListDef{
+			key:        "own_addresses",
+			parse:      parseOwnAddresses,
+			normalize:  EmailOwnAddressKey,
+			keepStored: func(s string) bool { return strings.Contains(s, "@") },
+		}
+	default:
+		panic(fmt.Sprintf("sync: EmailOwnList %d selects no list", int(l)))
 	}
-	raw, ok := metadata[MetadataKeyEmailOwnDomains].([]any)
+}
+
+// Read parses the list from an email sync state's metadata. Nil-safe: nil or
+// absent metadata, a missing key, or a value that isn't a JSON array yields an
+// empty set. Each entry is normalized to the form Gmail sync compares it in:
+// an own domain by matching.NormalizeEmail, an own address by
+// EmailOwnAddressKey. A malformed entry is ignored
+// rather than rejected, so metadata written outside Set degrades silently
+// instead of blocking sync.
+func (l EmailOwnList) Read(metadata map[string]any) map[string]struct{} {
+	def := l.def()
+	out := make(map[string]struct{})
+	raw, ok := metadata[def.key].([]any)
 	if !ok {
-		return domains
+		return out
 	}
 	for _, v := range raw {
 		s, ok := v.(string)
 		if !ok {
 			continue
 		}
-		s = strings.ToLower(strings.TrimSpace(s))
-		if s == "" || strings.Contains(s, "@") {
+		s = def.normalize(s)
+		if s == "" || !def.keepStored(s) {
 			continue
 		}
-		domains[s] = struct{}{}
+		out[s] = struct{}{}
 	}
-	return domains
-}
-
-// NormalizeOwnDomains validates and lowercases a user-supplied domain list
-// (crm-admin --set-email-own-domains input). It rejects any entry that is
-// empty, contains '@' or whitespace, or lacks a dot — unlike EmailOwnDomains,
-// operator input errors loudly rather than degrading silently. An empty input
-// slice is valid and returns an empty slice (the explicit-clear case).
-func NormalizeOwnDomains(raw []string) ([]string, error) {
-	normalized := make([]string, 0, len(raw))
-	for _, d := range raw {
-		trimmed := strings.TrimSpace(d)
-		if trimmed == "" {
-			return nil, fmt.Errorf("own-domain entry must not be empty")
-		}
-		if strings.ContainsAny(trimmed, " \t\n\r") {
-			return nil, fmt.Errorf("own-domain entry %q must not contain whitespace", d)
-		}
-		if strings.Contains(trimmed, "@") {
-			return nil, fmt.Errorf("own-domain entry %q must be a domain, not an address", d)
-		}
-		lower := strings.ToLower(trimmed)
-		if !strings.Contains(lower, ".") {
-			return nil, fmt.Errorf("own-domain entry %q must contain a dot", d)
-		}
-		normalized = append(normalized, lower)
-	}
-	return normalized, nil
-}
-
-// WithEmailOwnDomains returns a COPY of metadata with
-// MetadataKeyEmailOwnDomains set to domains, or removed when domains is
-// empty (the explicit-clear case). Every other key is preserved — the caller
-// (crm-admin's --set-email-own-domains) must read-modify-write through this
-// helper because UpdateSyncStateMetadata is a full JSONB replace, so passing
-// a metadata map holding only the new key would silently drop
-// backfill_since/terminal_reason/etc. The input map is never mutated.
-func WithEmailOwnDomains(metadata map[string]any, domains []string) map[string]any {
-	out := make(map[string]any, len(metadata)+1)
-	for k, v := range metadata {
-		out[k] = v
-	}
-	if len(domains) == 0 {
-		delete(out, MetadataKeyEmailOwnDomains)
-		return out
-	}
-	list := make([]any, len(domains))
-	for i, d := range domains {
-		list[i] = d
-	}
-	out[MetadataKeyEmailOwnDomains] = list
 	return out
+}
+
+// EmailOwnListWriter is the repository surface Set writes through.
+// *repository.SyncRepository satisfies it.
+type EmailOwnListWriter interface {
+	SetSyncStateMetadataKey(ctx context.Context, id uuid.UUID, key string, value any) (*repository.SyncState, error)
+	DeleteSyncStateMetadataKey(ctx context.Context, id uuid.UUID, key string) (*repository.SyncState, error)
+}
+
+// Set parses input, operator input from crm-admin, by the list's grammar and
+// writes the entries it yields as the list on the sync state with id. Input
+// that is empty or only whitespace removes the list (the explicit-clear case),
+// and is the only input that does. Malformed input, and input that yields no
+// entry, such as the mail header empty group "undisclosed-recipients:;", errors
+// loudly and writes nothing. The write changes only this list's key, in one
+// statement, so every other key the row holds when it runs is kept, another
+// list's key included. It returns the list the row holds after the write,
+// sorted.
+func (l EmailOwnList) Set(ctx context.Context, w EmailOwnListWriter, id uuid.UUID, input string) ([]string, error) {
+	def := l.def()
+	var (
+		updated *repository.SyncState
+		err     error
+	)
+	if strings.TrimSpace(input) == "" {
+		updated, err = w.DeleteSyncStateMetadataKey(ctx, id, def.key)
+	} else {
+		entries, parseErr := def.parse(input)
+		if parseErr != nil {
+			return nil, parseErr
+		}
+		if len(entries) == 0 {
+			return nil, fmt.Errorf("%q names no entry for %s; pass an empty string to clear the list", input, def.key)
+		}
+		updated, err = w.SetSyncStateMetadataKey(ctx, id, def.key, entries)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("write metadata key %s: %w", def.key, err)
+	}
+	return slices.Sorted(maps.Keys(l.Read(updated.Metadata))), nil
+}
+
+// parseOwnDomains splits input at commas, which no domain contains, and
+// normalizes each entry by normalizeOwnDomain.
+func parseOwnDomains(input string) ([]string, error) {
+	var domains []string
+	for _, entry := range strings.Split(input, ",") {
+		domain, err := normalizeOwnDomain(entry)
+		if err != nil {
+			return nil, err
+		}
+		domains = append(domains, domain)
+	}
+	return domains, nil
+}
+
+// normalizeOwnDomain rejects an entry that is empty, contains '@' or
+// whitespace, or lacks a dot, and lowercases the rest.
+func normalizeOwnDomain(raw string) (string, error) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return "", fmt.Errorf("own-domain entry must not be empty")
+	}
+	if strings.ContainsAny(trimmed, " \t\n\r") {
+		return "", fmt.Errorf("own-domain entry %q must not contain whitespace", raw)
+	}
+	if strings.Contains(trimmed, "@") {
+		return "", fmt.Errorf("own-domain entry %q must be a domain, not an address", raw)
+	}
+	lower := strings.ToLower(trimmed)
+	if !strings.Contains(lower, ".") {
+		return "", fmt.Errorf("own-domain entry %q must contain a dot", raw)
+	}
+	return lower, nil
+}
+
+// parseOwnAddresses parses input as a mail header address list (net/mail), the
+// grammar Gmail sync parses a To header by, so a comma inside a quoted local
+// part stays within its address. It returns the EmailOwnAddressKey of each
+// address the list yields, the form Gmail sync compares a parsed header
+// mailbox in. An entry such as "<me@shared-domain.example>" is therefore
+// stored as the address a header carrying it would be compared in, and an
+// entry whose quoted local part holds a space keeps that space. Input net/mail
+// cannot parse as an address list is rejected.
+func parseOwnAddresses(input string) ([]string, error) {
+	addrs, err := mail.ParseAddressList(input)
+	if err != nil {
+		return nil, fmt.Errorf("own addresses %q must be a list of email addresses: %w", input, err)
+	}
+	keys := make([]string, 0, len(addrs))
+	for _, addr := range addrs {
+		keys = append(keys, EmailOwnAddressKey(addr.Address))
+	}
+	return keys, nil
+}
+
+// EmailOwnAddressKey is the one form an own address is stored and compared in:
+// the address net/mail parsed, its quoting removed, lowercased and otherwise
+// unchanged. Every character of a quoted local part is significant (RFC 5321
+// section 4.1.2), so the key keeps a space a quoted local part holds, where
+// matching.NormalizeEmail would trim it: " alias"@shared-domain.example and
+// alias@shared-domain.example are different mailboxes, and only the configured
+// one is the user.
+func EmailOwnAddressKey(address string) string {
+	return strings.ToLower(address)
 }

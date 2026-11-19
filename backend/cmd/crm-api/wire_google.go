@@ -91,6 +91,7 @@ func registerGoogleProviders(deps googleProviderDeps) (*google.GChatSyncProvider
 		gmailProvider := google.NewGmailSyncProvider(
 			deps.GoogleOAuthService,
 			deps.CommsMessageRepo,
+			deps.SyncRepo,
 			deps.PubBus,
 			deps.Pool,
 		)

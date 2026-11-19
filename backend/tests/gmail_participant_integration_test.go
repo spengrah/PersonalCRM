@@ -10,13 +10,6 @@
 //     stay stable);
 //   - the ScanIdentifier (rematch) seam produces an identical candidate shape
 //     to the Sync seam;
-//   - the own-domain config never leaks into the storage gate's meSet: a
-//     message from an own-domain sender (a third party from the storage
-//     gate's point of view — own-domain addresses are never registered
-//     contact_methods) still yields zero comms_message rows for an unrelated
-//     known co-recipient, proving the own-domain flag never reaches
-//     processMessage's meSet (a leak would manufacture a phantom OUTBOUND
-//     row for that co-recipient, since fromIsMe would wrongly become true);
 //   - a participant-upsert failure is non-fatal to Sync (logged, not
 //     returned), mirroring TestDiscovery_ErrorNonFatalToSync for the link
 //     path.
@@ -67,7 +60,7 @@ func TestParticipantDiscovery_SyncSeamAndIdempotent(t *testing.T) {
 		"Kickoff", "body", "<"+prefix+"partidem@synthetic.example>", 1700000100000)
 	store := newFakeMessageStore([]*gmailapi.Message{msg})
 	e.provider.SetFetcherFactoryForTest(google.NewFakeGmailFetcherFactoryForTest(store.fetcherFuncs()))
-	e.provider.SetMeSetForTest(map[string]struct{}{me: {}})
+	e.provider.SetAccountAddressesForTest(map[string]struct{}{me: {}})
 
 	_, err := e.provider.Sync(e.ctx, discoverySyncState(me), nil)
 	require.NoError(t, err)
@@ -127,11 +120,12 @@ func TestParticipantDiscovery_RematchSeamIdentical(t *testing.T) {
 		"Kickoff", "body", "<"+prefix+"partrematch@synthetic.example>", 1700000100000)
 	store := newFakeMessageStore([]*gmailapi.Message{msg})
 	e.provider.SetFetcherFactoryForTest(google.NewFakeGmailFetcherFactoryForTest(store.fetcherFuncs()))
-	e.provider.SetMeSetForTest(map[string]struct{}{me: {}})
+	e.provider.SetAccountAddressesForTest(map[string]struct{}{me: {}})
 
 	knownMap := map[string][]uuid.UUID{addrANorm: {contactA.ID}}
-	matched, err := e.provider.ScanIdentifier(e.ctx, me, guestNorm, knownMap,
-		map[string]struct{}{me: {}}, map[string]struct{}{}, 1700000000)
+	meSet, err := e.provider.MeSet(e.ctx)
+	require.NoError(t, err)
+	matched, err := e.provider.ScanIdentifier(e.ctx, me, guestNorm, knownMap, meSet, 1700000000)
 	require.NoError(t, err)
 	require.Equal(t, 0, matched, "storage gate: guest is not a known contact, no row qualifies")
 
@@ -148,66 +142,7 @@ func TestParticipantDiscovery_RematchSeamIdentical(t *testing.T) {
 	require.Equal(t, "Kickoff", row.Metadata["anchor_subject"])
 }
 
-// 3. The own-domain config never reaches the storage gate's meSet.
-//
-// From is an own-domain address that is NOT itself a registered
-// contact_method of anyone (a "wildcard" alias — own-domain addresses anchor
-// discovery trust but are never contacts). A KNOWN contact is a mere
-// CO-RECIPIENT of this message, unrelated to the sender. Under correct
-// behavior contact A is a bystander for THIS message (zero comms_message
-// rows): the sender isn't contact A's own address (fails the inbound check),
-// and the sender is not a real connected account (fails the outbound check —
-// this is exactly what "own-domain must never reach meSet" guarantees). If
-// own-domain leaked into the meSet passed to processMessage, the sender would
-// wrongly satisfy fromIsMe, and contact A (present in the recipient set)
-// would get a PHANTOM outbound row — the regression this test pins.
-func TestParticipantDiscovery_OwnDomainConfigAndStorageGateUnaffected(t *testing.T) {
-	// spec: IMP-049
-	t.Parallel()
-	e := newDiscoveryEnv(t)
-	e.wireDiscoverer()
-	prefix := e.gen.Prefix()
-
-	me := prefix + "me@synthetic.example"
-	ownDomain := prefix + "own-domain.example"
-	aliasAddr := "alias@" + ownDomain
-	contactA, addrA := e.newKnownContact(t) // an UNRELATED known contact, mere co-recipient
-	guestAddr := prefix + "guest@synthetic.example"
-	guestNorm := matching.NormalizeEmail(guestAddr)
-	cleanupExternalParticipant(t, e, guestNorm)
-	e.cleanupEvents(t, prefix+"partdom")
-
-	msg := gmailMsg("g-partdom-"+prefix, "thr-"+prefix, aliasAddr,
-		[]string{addrA, guestAddr}, nil, nil,
-		"Own-domain subj", "body", "<"+prefix+"partdom@synthetic.example>", 1700000100000)
-	e.provider.SetFetcherFactoryForTest(google.NewFakeGmailFetcherFactoryForTest(
-		newFakeMessageStore([]*gmailapi.Message{msg}).fetcherFuncs()))
-	e.provider.SetMeSetForTest(map[string]struct{}{me: {}})
-
-	state := discoverySyncState(me)
-	state.Metadata["discovery_own_domains"] = []any{ownDomain}
-
-	result, err := e.provider.Sync(e.ctx, state, nil)
-	require.NoError(t, err)
-
-	// (a) the own-domain-anchored participant candidate exists.
-	row, err := e.externalRepo.GetBySource(e.ctx, google.ParticipantSource, guestNorm, nil)
-	require.NoError(t, err)
-	require.NotNil(t, row, "own-domain sender anchors trust → participant candidate created")
-	trustedSender, ok := row.Metadata["trusted_sender"].(map[string]any)
-	require.True(t, ok)
-	require.Equal(t, true, trustedSender["self"], "own-domain sender is trusted_sender.self")
-
-	// (b) the storage gate is UNCHANGED: contact A (co-recipient, unrelated to
-	// the own-domain sender) gets ZERO comms_message rows — no phantom
-	// outbound row from an own-domain-to-meSet leak.
-	require.Equal(t, 0, result.ItemsMatched, "no storage-gate row for this message at all")
-	aRows, err := e.commsRepo.ListByContact(e.ctx, contactA.ID)
-	require.NoError(t, err)
-	require.Empty(t, aRows, "own-domain must never reach meSet/processMessage — no phantom row for the co-recipient")
-}
-
-// 4. A participant-upsert failure is non-fatal to Sync: logged, never
+// 3. A participant-upsert failure is non-fatal to Sync: logged, never
 // returned, cursor still advances, and the storage-gate-passing message is
 // still stored — mirroring TestDiscovery_ErrorNonFatalToSync for the link
 // path but exercising the participant upsert specifically.
@@ -244,7 +179,7 @@ func TestParticipantDiscovery_ErrorNonFatalToSync(t *testing.T) {
 
 	e.provider.SetFetcherFactoryForTest(google.NewFakeGmailFetcherFactoryForTest(
 		newFakeMessageStore([]*gmailapi.Message{discMsg, storeMsg}).fetcherFuncs()))
-	e.provider.SetMeSetForTest(map[string]struct{}{me: {}})
+	e.provider.SetAccountAddressesForTest(map[string]struct{}{me: {}})
 
 	result, err := e.provider.Sync(e.ctx, discoverySyncState(me), nil)
 

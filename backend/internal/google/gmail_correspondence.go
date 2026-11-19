@@ -3,6 +3,7 @@ package google
 import (
 	"context"
 	"fmt"
+	"net/mail"
 	"sort"
 	"strings"
 
@@ -81,8 +82,8 @@ type CorrespondenceDiscoverer struct {
 
 // NewCorrespondenceDiscoverer builds the discoverer over the two repos the gate
 // needs. The known/own filtering happens in the provider's Sync (which already
-// holds the knownMap + meSet), so the discoverer does not take a comms repo or
-// a meSet seam.
+// holds the knownMap + me-set), so the discoverer does not take a comms repo or
+// a me-set seam.
 func NewCorrespondenceDiscoverer(
 	contactRepo correspondenceContactRepo,
 	externalRepo correspondenceExternalRepo,
@@ -94,10 +95,12 @@ func NewCorrespondenceDiscoverer(
 }
 
 // participant is one (display_name, address) pair extracted from a message's
-// From/To/Cc participant lists.
+// From/To/Cc participant lists, with the mailbox net/mail parsed it from (nil
+// when its header did not parse; see parseAddressList).
 type participant struct {
 	name    string
 	address string
+	mailbox *mail.Address
 }
 
 // participantMessageContext carries the per-message trust-anchor facts
@@ -149,9 +152,9 @@ type correspondenceAggregate struct {
 }
 
 // aggregateParticipants folds one message's (name, address) participant pairs
-// into the shared per-pass aggregate map, dropping known, own-account, and
-// own-domain addresses (own-domain addresses are the user, so they must never
-// enter either candidate pool). coOccurIDs is the set of
+// into the shared per-pass aggregate map, dropping known addresses and every
+// address the me-set holds (the user's addresses must never enter either
+// candidate pool). coOccurIDs is the set of
 // known contacts present on this same message (computed by the provider over
 // From/To/Cc only) — each unknown address the message contributes accrues one
 // co-occurrence count per known id. msgCtx carries this message's trust-anchor
@@ -160,7 +163,8 @@ type correspondenceAggregate struct {
 // shared field), so concurrent account syncs never clobber each other.
 func aggregateParticipants(
 	parts []participant,
-	known, own, ownDomains map[string]struct{},
+	known map[string]struct{},
+	me GmailMeSet,
 	coOccurIDs []uuid.UUID,
 	msgCtx participantMessageContext,
 	into map[string]*correspondenceAggregate,
@@ -178,10 +182,14 @@ func aggregateParticipants(
 		if _, ok := known[normAddr]; ok {
 			continue
 		}
-		if _, ok := own[normAddr]; ok {
+		if me.Contains(normAddr, p.mailbox) {
 			continue
 		}
-		if _, ok := ownDomains[domainOf(normAddr)]; ok {
+		// A candidate is proposed under normAddr, which drops the spaces a
+		// quoted local part can hold, so a mailbox the me-set does not hold
+		// can still normalize to an own address. Never propose an address
+		// that, as proposed, is the user's (IMP-051.own-participant-never-proposed).
+		if p.mailbox != nil && me.Contains(normAddr, &mail.Address{Address: normAddr}) {
 			continue
 		}
 		agg := into[normAddr]

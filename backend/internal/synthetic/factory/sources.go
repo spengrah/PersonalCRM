@@ -106,10 +106,27 @@ type GmailMessageShape struct {
 	// Quote is earlier mail the message carries below its text, as a mail
 	// client quotes it. Empty carries none.
 	Quote string
+	// Mailbox is the connected account whose mailbox holds the message, and the
+	// account side of the default address headers. Empty is the generator's
+	// account.
+	Mailbox string
+	// Addresses, when non-nil, are the message's address headers in place of
+	// the default From and To between the account and the peer, so neither
+	// the sender nor any recipient need be the mailbox's account. To and Cc
+	// below still follow its recipients.
+	Addresses *GmailAddresses
 	// To and Cc are further recipients, after the account or peer the message is
-	// addressed to by default.
+	// addressed to by default, or after Addresses' recipients.
 	To []GmailAddress
 	Cc []GmailAddress
+}
+
+// GmailAddresses are a message's From, To, Cc and Bcc headers.
+type GmailAddresses struct {
+	From GmailAddress
+	To   []GmailAddress
+	Cc   []GmailAddress
+	Bcc  []GmailAddress
 }
 
 // GmailAddress is one mailbox in an address header. An empty Name renders the
@@ -121,6 +138,15 @@ type GmailAddress struct {
 
 func (a GmailAddress) header() string {
 	return (&mail.Address{Name: a.Name, Address: a.Email}).String()
+}
+
+// gmailAddressHeaders renders each address as an address header holds it.
+func gmailAddressHeaders(addrs []GmailAddress) []string {
+	out := make([]string, len(addrs))
+	for i, a := range addrs {
+		out[i] = a.header()
+	}
+	return out
 }
 
 // GmailCalendarLayout is a MIME tree that carries a text/calendar part, the
@@ -196,7 +222,10 @@ func (g *Generator) GmailMessage(target ContactSpec, intent MatchIntent, opts ..
 // GmailMessage, so the two are interchangeable from the determinism side.
 func (g *Generator) GmailMessageWithShape(target ContactSpec, intent MatchIntent, shape GmailMessageShape, opts ...MessageOption) GmailMessageSpec {
 	mo := applyMessageOptions(opts)
-	account := g.accountEmail()
+	account := shape.Mailbox
+	if account == "" {
+		account = g.accountEmail()
+	}
 	peer := target.Email
 	if intent == MatchUnknown {
 		peer = g.unknownEmail()
@@ -228,20 +257,23 @@ func (g *Generator) GmailMessageWithShape(target ContactSpec, intent MatchIntent
 		threadID = g.Prefix() + "thr-" + fmt.Sprint(g.sourceIDSeq)
 	}
 
-	toHeader := []string{to}
-	for _, a := range shape.To {
-		toHeader = append(toHeader, a.header())
+	// The default headers render the account and the peer bare.
+	fromHeader, toHeader := from, []string{to}
+	var ccHeader, bccHeader []string
+	if a := shape.Addresses; a != nil {
+		fromHeader, toHeader = a.From.header(), gmailAddressHeaders(a.To)
+		ccHeader, bccHeader = gmailAddressHeaders(a.Cc), gmailAddressHeaders(a.Bcc)
 	}
-	headers := []*gmailapi.MessagePartHeader{
-		{Name: "From", Value: from},
-		{Name: "To", Value: strings.Join(toHeader, ", ")},
-	}
-	if len(shape.Cc) > 0 {
-		cc := make([]string, len(shape.Cc))
-		for i, a := range shape.Cc {
-			cc[i] = a.header()
+	toHeader = append(toHeader, gmailAddressHeaders(shape.To)...)
+	ccHeader = append(ccHeader, gmailAddressHeaders(shape.Cc)...)
+	headers := []*gmailapi.MessagePartHeader{{Name: "From", Value: fromHeader}}
+	for _, h := range []struct {
+		name  string
+		addrs []string
+	}{{"To", toHeader}, {"Cc", ccHeader}, {"Bcc", bccHeader}} {
+		if len(h.addrs) > 0 {
+			headers = append(headers, &gmailapi.MessagePartHeader{Name: h.name, Value: strings.Join(h.addrs, ", ")})
 		}
-		headers = append(headers, &gmailapi.MessagePartHeader{Name: "Cc", Value: strings.Join(cc, ", ")})
 	}
 	headers = append(headers,
 		&gmailapi.MessagePartHeader{Name: "Subject", Value: "synthetic subject"},

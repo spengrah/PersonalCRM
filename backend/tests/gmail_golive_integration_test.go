@@ -77,7 +77,7 @@ func TestGmailGoLive_RegisteredProvider_SchedulerSweep_ProducesInteractionsAndCa
 	// main.go does (cutover). Inject a fake fetcher + me-set so no OAuth is
 	// touched. nil oauthService is safe: the fetcher + me-set seams are
 	// overridden, so the provider never dereferences it.
-	provider := google.NewGmailSyncProvider(nil, commsRepo, bus, database.Pool)
+	provider := google.NewGmailSyncProvider(nil, commsRepo, syncRepo, bus, database.Pool)
 
 	// Known contact + email method. The provider loads its own known-contact
 	// map from contact_method rows via ListEmailIdentitiesForSync. Seeded via the
@@ -117,7 +117,7 @@ func TestGmailGoLive_RegisteredProvider_SchedulerSweep_ProducesInteractionsAndCa
 
 	store := newFakeMessageStore([]*gmailapi.Message{inbound, outbound, unknownMsg})
 	provider.SetFetcherFactoryForTest(google.NewFakeGmailFetcherFactoryForTest(store.fetcherFuncs()))
-	provider.SetMeSetForTest(map[string]struct{}{account: {}})
+	provider.SetAccountAddressesForTest(map[string]struct{}{account: {}})
 
 	registry := syncpkg.NewProviderRegistry()
 	registry.Register(provider)
