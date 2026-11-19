@@ -34,8 +34,11 @@ type messageConfig struct {
 	age time.Duration
 	// outbound flips the message's direction marker so the real provider derives an
 	// OUTBOUND (I-sent-it) interaction instead of the default inbound. Each factory
-	// applies it to whichever field the provider reads for direction (Gmail From/
-	// LabelIds, GChat Sender, Telegram Out, iMessage kind). Direction is computed
+	// applies it to whichever field the provider reads for direction (Gmail From
+	// and To, with the SENT label set to match, GChat Sender, Telegram Out,
+	// iMessage kind). A Gmail message with explicit GmailMessageShape.Addresses
+	// takes its headers from them and its SENT label from GmailAddresses.Sent,
+	// and rejects outbound. Direction is computed
 	// provider-side, so this is purely a payload-shape change — no PRNG draw.
 	outbound bool
 }
@@ -59,8 +62,12 @@ func WithMessageAge(age time.Duration) MessageOption {
 // than the default inbound. The provider derives direction from the payload, so
 // each factory flips the field the provider reads: Gmail swaps From/To + the
 // INBOX→SENT label, GChat sets the sender to the me-user, Telegram sets the Out
-// flag, iMessage marshals the raw_message.sent kind. Counter-neutral (draws the
-// identical deterministic counters as inbound; no PRNG).
+// flag, iMessage marshals the raw_message.sent kind. A Gmail message with
+// explicit GmailMessageShape.Addresses takes its headers from them and its
+// SENT label from GmailAddresses.Sent, and combining them with WithOutbound
+// panics.
+// Counter-neutral (draws the identical deterministic counters as inbound; no
+// PRNG).
 func WithOutbound() MessageOption {
 	return func(c *messageConfig) {
 		c.outbound = true
@@ -112,8 +119,9 @@ type GmailMessageShape struct {
 	Mailbox string
 	// Addresses, when non-nil, are the message's address headers in place of
 	// the default From and To between the account and the peer, so neither
-	// the sender nor any recipient need be the mailbox's account. To and Cc
-	// below still follow its recipients.
+	// the sender nor any recipient need be the mailbox's account, and its Sent
+	// field gives the SENT or INBOX label in place of WithOutbound, which the
+	// factory rejects with it. To and Cc below still follow its recipients.
 	Addresses *GmailAddresses
 	// To and Cc are further recipients, after the account or peer the message is
 	// addressed to by default, or after Addresses' recipients.
@@ -121,12 +129,19 @@ type GmailMessageShape struct {
 	Cc []GmailAddress
 }
 
-// GmailAddresses are a message's From, To, Cc and Bcc headers.
+// GmailAddresses are a message's From, To, Cc and Bcc headers, and whether the
+// mailbox's owner sent it.
 type GmailAddresses struct {
 	From GmailAddress
 	To   []GmailAddress
 	Cc   []GmailAddress
 	Bcc  []GmailAddress
+	// Sent states that the mailbox's owner sent the message, which gives it
+	// the SENT label in place of INBOX. Set it for mail the user sent, such
+	// as mail From an own-domain address. Gmail sync and batch replay take the
+	// message's direction from its From address against the user's addresses
+	// (google.GmailMeSet.SentByUser), never from the label.
+	Sent bool
 }
 
 // GmailAddress is one mailbox in an address header. An empty Name renders the
@@ -235,15 +250,6 @@ func (g *Generator) GmailMessageWithShape(target ContactSpec, intent MatchIntent
 		// addressable synthetic email so the message is well-formed.
 		peer = g.unknownEmail()
 	}
-	// The provider derives direction from whether From ∈ meSet: inbound is
-	// From=peer/To=account with an INBOX label; outbound swaps them and carries a
-	// SENT label instead.
-	from, to := peer, account
-	label := "INBOX"
-	if mo.outbound {
-		from, to = account, peer
-		label = "SENT"
-	}
 	externalID := fmt.Sprintf("<%sgmail-%d@synthetic.example>", g.Prefix(), g.bumpSourceSeq())
 	// 2h before now − safety lag (anchor-relative) so it is inside the scanned,
 	// already-closed window; mo.age shifts it further back for the temporal spread.
@@ -257,12 +263,34 @@ func (g *Generator) GmailMessageWithShape(target ContactSpec, intent MatchIntent
 		threadID = g.Prefix() + "thr-" + fmt.Sprint(g.sourceIDSeq)
 	}
 
-	// The default headers render the account and the peer bare.
-	fromHeader, toHeader := from, []string{to}
-	var ccHeader, bccHeader []string
+	// sent is the one field the SENT or INBOX label derives from:
+	// GmailAddresses.Sent for explicit headers, WithOutbound for the default
+	// ones.
+	var (
+		sent                          bool
+		fromHeader                    string
+		toHeader, ccHeader, bccHeader []string
+	)
 	if a := shape.Addresses; a != nil {
+		if mo.outbound {
+			panic("factory: WithOutbound with explicit GmailMessageShape.Addresses; set GmailAddresses.Sent instead")
+		}
+		sent = a.Sent
 		fromHeader, toHeader = a.From.header(), gmailAddressHeaders(a.To)
 		ccHeader, bccHeader = gmailAddressHeaders(a.Cc), gmailAddressHeaders(a.Bcc)
+	} else {
+		// The provider derives direction from whether From ∈ meSet: inbound
+		// is From=peer/To=account; outbound swaps them. The default headers
+		// render the account and the peer bare.
+		sent = mo.outbound
+		fromHeader, toHeader = peer, []string{account}
+		if sent {
+			fromHeader, toHeader = account, []string{peer}
+		}
+	}
+	label := "INBOX"
+	if sent {
+		label = "SENT"
 	}
 	toHeader = append(toHeader, gmailAddressHeaders(shape.To)...)
 	ccHeader = append(ccHeader, gmailAddressHeaders(shape.Cc)...)

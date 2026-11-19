@@ -12,7 +12,6 @@ package tests
 
 import (
 	"context"
-	"net/mail"
 	"strings"
 	"testing"
 
@@ -23,6 +22,7 @@ import (
 	syncpkg "personal-crm/backend/internal/sync"
 	"personal-crm/backend/internal/synthetic"
 	"personal-crm/backend/internal/synthetic/factory"
+	"personal-crm/backend/internal/synthetic/replay"
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
@@ -69,7 +69,9 @@ func (e *ownAddressEnv) emailAccount(t *testing.T, account string, ownDomains, o
 		entries []string
 	}{{syncpkg.EmailOwnDomains, ownDomains}, {syncpkg.EmailOwnAddresses, ownAddresses}} {
 		if len(c.entries) > 0 {
-			_, err := c.list.Set(e.ctx, e.syncRepo, state.ID, strings.Join(c.entries, ","))
+			entries, err := c.list.Parse(strings.Join(c.entries, ","))
+			require.NoError(t, err)
+			_, err = entries.Write(e.ctx, e.syncRepo, state.ID)
 			require.NoError(t, err)
 		}
 	}
@@ -173,9 +175,9 @@ func TestGmailOwnDomain_SyncStoresOwnDomainMailAsTheUsers(t *testing.T) {
 	inToMsg := e.message(account, factory.GmailAddresses{From: bare(inToAddr), To: bares(alias)})
 	inCcMsg := e.message(account, factory.GmailAddresses{From: bare(inCcAddr), To: bares(stranger), Cc: bares(alias)})
 	inBccMsg := e.message(account, factory.GmailAddresses{From: bare(inBccAddr), To: bares(stranger), Bcc: bares(alias)})
-	outToMsg := e.message(account, factory.GmailAddresses{From: bare(alias), To: bares(outToAddr)})
-	outCcMsg := e.message(account, factory.GmailAddresses{From: bare(alias), To: bares(stranger), Cc: bares(outCcAddr)})
-	outBccMsg := e.message(account, factory.GmailAddresses{From: bare(alias), To: bares(stranger), Bcc: bares(outBccAddr)})
+	outToMsg := e.message(account, factory.GmailAddresses{From: bare(alias), To: bares(outToAddr), Sent: true})
+	outCcMsg := e.message(account, factory.GmailAddresses{From: bare(alias), To: bares(stranger), Cc: bares(outCcAddr), Sent: true})
+	outBccMsg := e.message(account, factory.GmailAddresses{From: bare(alias), To: bares(stranger), Bcc: bares(outBccAddr), Sent: true})
 
 	e.sync(t, e.provider(t, inToMsg, inCcMsg, inBccMsg, outToMsg, outCcMsg, outBccMsg), state)
 
@@ -205,6 +207,61 @@ func TestGmailOwnDomain_SyncStoresOwnDomainMailAsTheUsers(t *testing.T) {
 	})
 }
 
+// TestGmailOwnDomain_BatchReplayTakesDirectionFromExplicitAddresses proves
+// that batch replay drives a synthetic message with explicit address headers
+// in the direction Gmail sync classifies its headers: mail the user sent from
+// an own-domain address to a contact is replayed as the contact's outbound
+// mail, and a contact's mail to an own-domain address as inbound.
+func TestGmailOwnDomain_BatchReplayTakesDirectionFromExplicitAddresses(t *testing.T) {
+	t.Parallel()
+	e := newOwnAddressEnv(t)
+	account := e.prefix + "me@synthetic.example"
+	ownDomain := e.prefix + "own-domain.example"
+	alias := "alias@" + ownDomain
+	e.emailAccount(t, account, []string{ownDomain}, nil)
+
+	recipient, recipientAddr := e.contact(t, "")
+	sender, senderAddr := e.contact(t, "")
+	sentMsg := e.message(account, factory.GmailAddresses{From: bare(alias), To: bares(recipientAddr), Sent: true})
+	receivedMsg := e.message(account, factory.GmailAddresses{From: bare(senderAddr), To: bares(alias)})
+
+	_, err := e.h.ReplayGmailBatch(e.ctx, []replay.GmailBatchItem{
+		{ContactID: recipient.ID, Spec: sentMsg},
+		{ContactID: sender.ID, Spec: receivedMsg},
+	})
+	require.NoError(t, err)
+
+	t.Run("mail the user sent from an own-domain address to a contact is outbound", func(t *testing.T) {
+		e.requireStored(t, recipient.ID, sentMsg, repository.InteractionDirectionOutbound)
+	})
+	t.Run("a contact's mail received at an own-domain address is inbound", func(t *testing.T) {
+		e.requireStored(t, sender.ID, receivedMsg, repository.InteractionDirectionInbound)
+	})
+}
+
+// TestGmailOwnDomain_BatchReplayClassifiesAsSyncDoes proves that batch
+// replay takes a message's direction from Gmail sync's own decision, its From
+// address against the user's addresses, rather than from its label: mail from
+// an own-domain address to a contact, built without GmailAddresses.Sent and so
+// labelled INBOX, is replayed as the contact's outbound mail, as Gmail sync
+// stores it. A review caught batch replay reading the label and rejecting
+// this message.
+func TestGmailOwnDomain_BatchReplayClassifiesAsSyncDoes(t *testing.T) {
+	t.Parallel()
+	e := newOwnAddressEnv(t)
+	account := e.prefix + "me@synthetic.example"
+	ownDomain := e.prefix + "own-domain.example"
+	e.emailAccount(t, account, []string{ownDomain}, nil)
+
+	recipient, recipientAddr := e.contact(t, "")
+	msg := e.message(account, factory.GmailAddresses{From: bare("alias@" + ownDomain), To: bares(recipientAddr)})
+
+	_, err := e.h.ReplayGmailBatch(e.ctx, []replay.GmailBatchItem{{ContactID: recipient.ID, Spec: msg}})
+	require.NoError(t, err)
+
+	e.requireStored(t, recipient.ID, msg, repository.InteractionDirectionOutbound)
+}
+
 // TestGmailOwnAddress_SyncStoresOwnAddressMailAsTheUsers proves that a
 // configured own address is the user's in both directions, whichever of To,
 // Cc and Bcc holds the user or the contact, while another address at its
@@ -228,10 +285,10 @@ func TestGmailOwnAddress_SyncStoresOwnAddressMailAsTheUsers(t *testing.T) {
 	colleagueRecipient, colleagueRecipientAddr := e.contact(t, "")
 
 	inMsg := e.message(account, factory.GmailAddresses{From: bare(senderAddr), To: bares(ownAddress)})
-	outMsg := e.message(account, factory.GmailAddresses{From: bare(ownAddress), To: bares(recipientAddr)})
-	outCcMsg := e.message(account, factory.GmailAddresses{From: bare(ownAddress), To: bares(stranger), Cc: bares(ccRecipientAddr)})
+	outMsg := e.message(account, factory.GmailAddresses{From: bare(ownAddress), To: bares(recipientAddr), Sent: true})
+	outCcMsg := e.message(account, factory.GmailAddresses{From: bare(ownAddress), To: bares(stranger), Cc: bares(ccRecipientAddr), Sent: true})
 	inBccMsg := e.message(account, factory.GmailAddresses{From: bare(bccSenderAddr), To: bares(stranger), Bcc: bares(ownAddress)})
-	outBccMsg := e.message(account, factory.GmailAddresses{From: bare(ownAddress), To: bares(stranger), Bcc: bares(bccRecipientAddr)})
+	outBccMsg := e.message(account, factory.GmailAddresses{From: bare(ownAddress), To: bares(stranger), Bcc: bares(bccRecipientAddr), Sent: true})
 	colleagueMsg := e.message(account, factory.GmailAddresses{From: bare(colleagueAddr), To: bares(colleagueRecipientAddr), Cc: bares(ownAddress)})
 
 	e.sync(t, e.provider(t, inMsg, outMsg, outCcMsg, inBccMsg, outBccMsg, colleagueMsg), state)
@@ -284,7 +341,7 @@ func TestGmailOwnAddress_QuotedLocalPartSpaceIsSignificant(t *testing.T) {
 	quoted, quotedAddr := e.contact(t, "")
 	quotedOfUnquotedMsg := e.message(account, factory.GmailAddresses{From: bare(" alias@" + sharedDomain), To: bares(quotedOfUnquotedAddr)})
 	unquotedOfQuotedMsg := e.message(account, factory.GmailAddresses{From: bare("other@" + sharedDomain), To: bares(unquotedOfQuotedAddr)})
-	quotedMsg := e.message(account, factory.GmailAddresses{From: bare(quotedOwn), To: bares(quotedAddr)})
+	quotedMsg := e.message(account, factory.GmailAddresses{From: bare(quotedOwn), To: bares(quotedAddr), Sent: true})
 
 	e.sync(t, e.provider(t, quotedOfUnquotedMsg, unquotedOfQuotedMsg, quotedMsg), state)
 
@@ -368,7 +425,7 @@ func TestGmailOwnDomain_ConfigOnOneAccountCountsForAnother(t *testing.T) {
 
 	toDomain, toDomainAddr := e.contact(t, "")
 	fromAddress, fromAddressAddr := e.contact(t, "")
-	outMsg := e.message(accountB, factory.GmailAddresses{From: bare("alias@" + ownDomain), To: bares(toDomainAddr)})
+	outMsg := e.message(accountB, factory.GmailAddresses{From: bare("alias@" + ownDomain), To: bares(toDomainAddr), Sent: true})
 	inMsg := e.message(accountB, factory.GmailAddresses{From: bare(fromAddressAddr), To: bares(ownAddress)})
 
 	e.sync(t, e.provider(t, outMsg, inMsg), stateB)
@@ -400,7 +457,7 @@ func TestGmailOwnDomain_RematchScanClassifiesByTheSameAddresses(t *testing.T) {
 	rematch := func(t *testing.T, own, direction string) {
 		t.Helper()
 		contact, addr := e.contact(t, "")
-		addrs := factory.GmailAddresses{From: bare(own), To: bares(addr)}
+		addrs := factory.GmailAddresses{From: bare(own), To: bares(addr), Sent: true}
 		if direction == repository.InteractionDirectionInbound {
 			addrs = factory.GmailAddresses{From: bare(addr), To: bares(own)}
 		}
@@ -467,8 +524,8 @@ func TestGmailOwnAddress_DiscoveryTreatsOwnAddressesAsTheUser(t *testing.T) {
 		{Name: aliasNamesake.FullName, Email: namedAlias},
 		{Name: addressNamesake.FullName, Email: ownAddress},
 		{Name: strangerNamesake.FullName, Email: namedStranger},
-	}})
-	fromOwnAddress := e.message(accountB, factory.GmailAddresses{From: bare(ownAddress), To: bares(known, guestB, namelessAlias)})
+	}, Sent: true})
+	fromOwnAddress := e.message(accountB, factory.GmailAddresses{From: bare(ownAddress), To: bares(known, guestB, namelessAlias), Sent: true})
 	// The own address's quoted spelling with a leading space is another
 	// mailbox, but discovery would propose it under the own address itself.
 	fromContact := e.message(accountB, factory.GmailAddresses{From: bare(known), To: bares(guestC, namelessAlias, ownAddress, " "+ownAddress)})
@@ -540,7 +597,7 @@ func TestGmailMeSet_ReadsConnectedAccountsFromOAuth(t *testing.T) {
 	meSet, err := google.NewGmailSyncProvider(oauthSvc, e.h.CommsRepo(), e.syncRepo, nil, e.h.Database().Pool).MeSet(e.ctx)
 	require.NoError(t, err)
 	contains := func(addr string) bool {
-		return meSet.Contains(matching.NormalizeEmail(addr), &mail.Address{Address: addr})
+		return meSet.Contains(google.ParseAddress(addr))
 	}
 	require.True(t, contains(accountA), "a connected account's address")
 	require.True(t, contains(accountB), "a connected account with no configuration")

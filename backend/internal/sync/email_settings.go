@@ -20,10 +20,12 @@ import (
 // EmailOwnAddresses are its values. Each list's definition (its metadata key,
 // the grammar that parses operator input for it, and the rules that read it
 // back) is private to this package and fixed at compile time, so every caller
-// that selects a list writes and reads the same key. Set parses and writes in
-// one operation, so no caller can write unparsed input or pair one list's
-// input with another list's key. The values are deployment configuration only:
-// never hardcoded, and never a real domain or address in tests.
+// that selects a list writes and reads the same key. Parse is the one
+// constructor of EmailOwnListEntries, which carry the list that parsed them,
+// and Write writes them under that list's key, so no caller can write
+// unparsed input or pair one list's input with another list's key. The values
+// are deployment configuration only: never hardcoded, and never a real domain
+// or address in tests.
 type EmailOwnList int
 
 const (
@@ -81,7 +83,7 @@ func (l EmailOwnList) def() emailOwnListDef {
 // empty set. Each entry is normalized to the form Gmail sync compares it in:
 // an own domain by matching.NormalizeEmail, an own address by
 // EmailOwnAddressKey. A malformed entry is ignored
-// rather than rejected, so metadata written outside Set degrades silently
+// rather than rejected, so metadata written outside Write degrades silently
 // instead of blocking sync.
 func (l EmailOwnList) Read(metadata map[string]any) map[string]struct{} {
 	def := l.def()
@@ -104,44 +106,62 @@ func (l EmailOwnList) Read(metadata map[string]any) map[string]struct{} {
 	return out
 }
 
-// EmailOwnListWriter is the repository surface Set writes through.
+// EmailOwnListWriter is the repository surface Write writes through.
 // *repository.SyncRepository satisfies it.
 type EmailOwnListWriter interface {
 	SetSyncStateMetadataKey(ctx context.Context, id uuid.UUID, key string, value any) (*repository.SyncState, error)
 	DeleteSyncStateMetadataKey(ctx context.Context, id uuid.UUID, key string) (*repository.SyncState, error)
 }
 
-// Set parses input, operator input from crm-admin, by the list's grammar and
-// writes the entries it yields as the list on the sync state with id. Input
-// that is empty or only whitespace removes the list (the explicit-clear case),
-// and is the only input that does. Malformed input, and input that yields no
-// entry, such as the mail header empty group "undisclosed-recipients:;", errors
-// loudly and writes nothing. The write changes only this list's key, in one
-// statement, so every other key the row holds when it runs is kept, another
-// list's key included. It returns the list the row holds after the write,
-// sorted.
-func (l EmailOwnList) Set(ctx context.Context, w EmailOwnListWriter, id uuid.UUID, input string) ([]string, error) {
+// EmailOwnListEntries is operator input parsed by one list's grammar: the
+// entries to write as that list, or none, which clears it. Parse is its one
+// constructor; the zero value selects no list, so Write panics on it.
+type EmailOwnListEntries struct {
+	list EmailOwnList
+	// entries are the stored form of each entry; nil clears the list.
+	entries []string
+}
+
+// Parse parses input, operator input from crm-admin, by the list's grammar,
+// reading nothing and writing nothing. Input that is empty or only whitespace
+// yields entries that clear the list (the explicit-clear case), and is the only
+// input that does. Malformed input, and input that yields no entry, such as
+// the mail header empty group "undisclosed-recipients:;", is an error.
+func (l EmailOwnList) Parse(input string) (EmailOwnListEntries, error) {
 	def := l.def()
+	if strings.TrimSpace(input) == "" {
+		return EmailOwnListEntries{list: l}, nil
+	}
+	entries, err := def.parse(input)
+	if err != nil {
+		return EmailOwnListEntries{}, err
+	}
+	if len(entries) == 0 {
+		return EmailOwnListEntries{}, fmt.Errorf("%q names no entry for %s; pass an empty string to clear the list", input, def.key)
+	}
+	return EmailOwnListEntries{list: l, entries: entries}, nil
+}
+
+// Write writes the entries as their list on the sync state with id, or removes
+// the list when the entries clear it. The write changes only this list's key,
+// in one statement, so every other key the row holds when it runs is kept,
+// another list's key included. It returns the list the row holds after the
+// write, sorted.
+func (e EmailOwnListEntries) Write(ctx context.Context, w EmailOwnListWriter, id uuid.UUID) ([]string, error) {
+	def := e.list.def()
 	var (
 		updated *repository.SyncState
 		err     error
 	)
-	if strings.TrimSpace(input) == "" {
+	if e.entries == nil {
 		updated, err = w.DeleteSyncStateMetadataKey(ctx, id, def.key)
 	} else {
-		entries, parseErr := def.parse(input)
-		if parseErr != nil {
-			return nil, parseErr
-		}
-		if len(entries) == 0 {
-			return nil, fmt.Errorf("%q names no entry for %s; pass an empty string to clear the list", input, def.key)
-		}
-		updated, err = w.SetSyncStateMetadataKey(ctx, id, def.key, entries)
+		updated, err = w.SetSyncStateMetadataKey(ctx, id, def.key, e.entries)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("write metadata key %s: %w", def.key, err)
 	}
-	return slices.Sorted(maps.Keys(l.Read(updated.Metadata))), nil
+	return slices.Sorted(maps.Keys(e.list.Read(updated.Metadata))), nil
 }
 
 // parseOwnDomains splits input at commas, which no domain contains, and

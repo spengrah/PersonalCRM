@@ -9,7 +9,6 @@ import (
 
 	"personal-crm/backend/internal/accelerated"
 	"personal-crm/backend/internal/logger"
-	"personal-crm/backend/internal/matching"
 	"personal-crm/backend/internal/repository"
 
 	"github.com/google/uuid"
@@ -94,15 +93,6 @@ func NewCorrespondenceDiscoverer(
 	}
 }
 
-// participant is one (display_name, address) pair extracted from a message's
-// From/To/Cc participant lists, with the mailbox net/mail parsed it from (nil
-// when its header did not parse; see parseAddressList).
-type participant struct {
-	name    string
-	address string
-	mailbox *mail.Address
-}
-
 // participantMessageContext carries the per-message trust-anchor facts
 // foldDiscovery computes once (trust anchor, cap eligibility, sender
 // identity, subject, epoch) into aggregateParticipants, which folds them onto
@@ -151,7 +141,7 @@ type correspondenceAggregate struct {
 	lastMessageEpoch int64
 }
 
-// aggregateParticipants folds one message's (name, address) participant pairs
+// aggregateParticipants folds one message's From/To/Cc parsed addresses
 // into the shared per-pass aggregate map, dropping known addresses and every
 // address the me-set holds (the user's addresses must never enter either
 // candidate pool). coOccurIDs is the set of
@@ -162,7 +152,7 @@ type correspondenceAggregate struct {
 // message contributes. The aggregate map is the caller's per-pass local (NOT a
 // shared field), so concurrent account syncs never clobber each other.
 func aggregateParticipants(
-	parts []participant,
+	parts []parsedAddress,
 	known map[string]struct{},
 	me GmailMeSet,
 	coOccurIDs []uuid.UUID,
@@ -175,21 +165,19 @@ func aggregateParticipants(
 	// tally, not a per-occurrence one.
 	seenThisMsg := make(map[string]struct{})
 	for _, p := range parts {
-		normAddr := matching.NormalizeEmail(p.address)
+		normAddr := p.normalized
 		if normAddr == "" {
 			continue
 		}
 		if _, ok := known[normAddr]; ok {
 			continue
 		}
-		if me.Contains(normAddr, p.mailbox) {
-			continue
-		}
-		// A candidate is proposed under normAddr, which drops the spaces a
-		// quoted local part can hold, so a mailbox the me-set does not hold
-		// can still normalize to an own address. Never propose an address
-		// that, as proposed, is the user's (IMP-051.own-participant-never-proposed).
-		if p.mailbox != nil && me.Contains(normAddr, &mail.Address{Address: normAddr}) {
+		// Skip an address the me-set holds. A candidate is proposed under
+		// normAddr, which drops the spaces a quoted local part can hold, so a
+		// mailbox the me-set does not hold can still normalize to an own
+		// address: never propose an address that, as proposed, is the user's
+		// (IMP-051.own-participant-never-proposed).
+		if me.Contains(p) || me.Contains(p.asProposed()) {
 			continue
 		}
 		agg := into[normAddr]
@@ -226,6 +214,16 @@ func aggregateParticipants(
 			agg.namesSeen = appendUnique(agg.namesSeen, name)
 		}
 	}
+}
+
+// asProposed is the address as discovery proposes it: its normalized form as
+// the address, with a mailbox only when a has one.
+func (a parsedAddress) asProposed() parsedAddress {
+	proposed := parsedAddress{raw: a.normalized, normalized: a.normalized, name: a.name}
+	if a.mailbox != nil {
+		proposed.mailbox = &mail.Address{Address: a.normalized}
+	}
+	return proposed
 }
 
 // EvaluateAddresses runs the §4 gate + idempotent upsert over a pre-built

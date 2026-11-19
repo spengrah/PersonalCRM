@@ -8,6 +8,7 @@ import (
 	"slices"
 	"testing"
 
+	"personal-crm/backend/internal/matching"
 	"personal-crm/backend/internal/repository"
 
 	"github.com/google/uuid"
@@ -22,7 +23,7 @@ func (p *GmailSyncProvider) RunDiscoverParticipantsForTest(msg *gmailapi.Message
 	parts := p.collectDiscoveryParticipants(msg)
 	out := make([]DiscoveryParticipantForTest, 0, len(parts))
 	for _, part := range parts {
-		out = append(out, DiscoveryParticipantForTest{Name: part.name, Address: part.address})
+		out = append(out, DiscoveryParticipantForTest{Name: part.name, Address: part.raw})
 	}
 	return out
 }
@@ -155,7 +156,7 @@ func contactMatch(id uuid.UUID, name string, sim float64) repository.ContactMatc
 func runDiscovery(
 	t *testing.T,
 	d *CorrespondenceDiscoverer,
-	parts []participant,
+	parts []parsedAddress,
 	known, own map[string]struct{},
 	coOccurIDs []uuid.UUID,
 ) (int, error) {
@@ -166,6 +167,13 @@ func runDiscovery(
 }
 
 func emptySet() map[string]struct{} { return map[string]struct{}{} }
+
+// participantFor is a discovery participant with a display name and an
+// address but no mailbox, as from a header that did not parse, so the me-set
+// counts it as the user only as a connected account's address.
+func participantFor(name, address string) parsedAddress {
+	return parsedAddress{raw: address, normalized: matching.NormalizeEmail(address), name: name}
+}
 
 // testMeSet builds a me-set through its one builder from connected-account
 // addresses, with no own domain or own address configured.
@@ -192,10 +200,10 @@ func TestDiscovery_MultiPartyMessageYieldsCandidate(t *testing.T) {
 	ext := newFakeExternal()
 	d := NewCorrespondenceDiscoverer(contacts, ext)
 
-	parts := []participant{
-		{name: "Known Alpha", address: "a@example.com"},  // From: known A
-		{name: "Me", address: "me@example.com"},          // To: own
-		{name: "Pat Carter", address: "pat@example.com"}, // Cc: unknown → candidate
+	parts := []parsedAddress{
+		participantFor("Known Alpha", "a@example.com"),  // From: known A
+		participantFor("Me", "me@example.com"),          // To: own
+		participantFor("Pat Carter", "pat@example.com"), // Cc: unknown → candidate
 	}
 	known := map[string]struct{}{"a@example.com": {}}
 	own := map[string]struct{}{"me@example.com": {}}
@@ -240,7 +248,7 @@ func TestDiscovery_GateExactBoundary(t *testing.T) {
 	ext := newFakeExternal()
 	d := NewCorrespondenceDiscoverer(contacts, ext)
 
-	parts := []participant{{name: "Exact Match", address: "unknown@example.com"}}
+	parts := []parsedAddress{participantFor("Exact Match", "unknown@example.com")}
 	n, err := runDiscovery(t, d, parts, emptySet(), emptySet(), nil)
 	require.NoError(t, err)
 	require.Equal(t, 1, n, "exact-0.60 similarity must qualify")
@@ -262,7 +270,7 @@ func TestDiscovery_RejectsBelowThreshold(t *testing.T) {
 	ext := newFakeExternal()
 	d := NewCorrespondenceDiscoverer(contacts, ext)
 
-	parts := []participant{{name: "Weak Match", address: "unknown@example.com"}}
+	parts := []parsedAddress{participantFor("Weak Match", "unknown@example.com")}
 	n, err := runDiscovery(t, d, parts, emptySet(), emptySet(), nil)
 	require.NoError(t, err)
 	require.Equal(t, 0, n, "sub-0.60 must be rejected")
@@ -282,7 +290,7 @@ func TestDiscovery_RejectsSingleTokenNameBeforeQuery(t *testing.T) {
 	ext := newFakeExternal()
 	d := NewCorrespondenceDiscoverer(contacts, ext)
 
-	parts := []participant{{name: "Jane", address: "unknown@example.com"}}
+	parts := []parsedAddress{participantFor("Jane", "unknown@example.com")}
 	n, err := runDiscovery(t, d, parts, emptySet(), emptySet(), nil)
 	require.NoError(t, err)
 	require.Equal(t, 0, n, "bare first name must be rejected by the ≥2-token gate")
@@ -305,9 +313,9 @@ func TestDiscovery_DedupByAddressAcrossMessages(t *testing.T) {
 
 	agg := map[string]*correspondenceAggregate{}
 	// msg1: To = the unknown address.
-	aggregateParticipants([]participant{{name: "Pat Carter", address: "pat@example.com"}}, emptySet(), GmailMeSet{}, nil, participantMessageContext{}, agg)
+	aggregateParticipants([]parsedAddress{participantFor("Pat Carter", "pat@example.com")}, emptySet(), GmailMeSet{}, nil, participantMessageContext{}, agg)
 	// msg2: Cc = the same unknown address.
-	aggregateParticipants([]participant{{name: "Pat Carter", address: "pat@example.com"}}, emptySet(), GmailMeSet{}, nil, participantMessageContext{}, agg)
+	aggregateParticipants([]parsedAddress{participantFor("Pat Carter", "pat@example.com")}, emptySet(), GmailMeSet{}, nil, participantMessageContext{}, agg)
 
 	n, err := d.EvaluateAddresses(t.Context(), sortedAggregates(agg))
 	require.NoError(t, err)
@@ -338,9 +346,9 @@ func TestDiscovery_MessageCountDedupsWithinMessage(t *testing.T) {
 	d := NewCorrespondenceDiscoverer(contacts, ext)
 
 	// Same address listed twice in one message (To + Cc).
-	parts := []participant{
-		{name: "Pat Carter", address: "pat@example.com"},
-		{name: "Pat Carter", address: "pat@example.com"},
+	parts := []parsedAddress{
+		participantFor("Pat Carter", "pat@example.com"),
+		participantFor("Pat Carter", "pat@example.com"),
 	}
 	n, err := runDiscovery(t, d, parts, emptySet(), emptySet(), nil)
 	require.NoError(t, err)
@@ -367,7 +375,7 @@ func TestDiscovery_SkipKnown(t *testing.T) {
 	ext := newFakeExternal()
 	d := NewCorrespondenceDiscoverer(contacts, ext)
 
-	parts := []participant{{name: "Known Person", address: "known@example.com"}}
+	parts := []parsedAddress{participantFor("Known Person", "known@example.com")}
 	known := map[string]struct{}{"known@example.com": {}}
 	n, err := runDiscovery(t, d, parts, known, emptySet(), nil)
 	require.NoError(t, err)
@@ -386,7 +394,7 @@ func TestDiscovery_SkipOwnAccount(t *testing.T) {
 	ext := newFakeExternal()
 	d := NewCorrespondenceDiscoverer(contacts, ext)
 
-	parts := []participant{{name: "Own Two", address: "own2@example.com"}}
+	parts := []parsedAddress{participantFor("Own Two", "own2@example.com")}
 	own := map[string]struct{}{"own2@example.com": {}}
 	n, err := runDiscovery(t, d, parts, emptySet(), own, nil)
 	require.NoError(t, err)
@@ -411,7 +419,7 @@ func TestDiscovery_StickyIgnoreNoClobber(t *testing.T) {
 	})
 	d := NewCorrespondenceDiscoverer(contacts, ext)
 
-	parts := []participant{{name: "Ignored Person", address: "ignored@example.com"}}
+	parts := []parsedAddress{participantFor("Ignored Person", "ignored@example.com")}
 	n, err := runDiscovery(t, d, parts, emptySet(), emptySet(), nil)
 	require.NoError(t, err)
 	require.Equal(t, 0, n)
@@ -464,9 +472,9 @@ func TestDiscovery_BccKnownContactNotEvidence(t *testing.T) {
 			},
 		},
 	}
-	parts := make([]participant, 0)
+	parts := make([]parsedAddress, 0)
 	for _, dp := range p.RunDiscoverParticipantsForTest(msg) {
-		parts = append(parts, participant{name: dp.Name, address: dp.Address})
+		parts = append(parts, participantFor(dp.Name, dp.Address))
 	}
 
 	knownMap := map[string][]uuid.UUID{
@@ -534,8 +542,8 @@ func TestDiscovery_PerAddressErrorAggregated(t *testing.T) {
 	d := NewCorrespondenceDiscoverer(contacts, ext)
 
 	agg := map[string]*correspondenceAggregate{}
-	aggregateParticipants([]participant{{name: "Good Person", address: "good@example.com"}}, emptySet(), GmailMeSet{}, nil, participantMessageContext{}, agg)
-	aggregateParticipants([]participant{{name: "Bad Person", address: "bad@example.com"}}, emptySet(), GmailMeSet{}, nil, participantMessageContext{}, agg)
+	aggregateParticipants([]parsedAddress{participantFor("Good Person", "good@example.com")}, emptySet(), GmailMeSet{}, nil, participantMessageContext{}, agg)
+	aggregateParticipants([]parsedAddress{participantFor("Bad Person", "bad@example.com")}, emptySet(), GmailMeSet{}, nil, participantMessageContext{}, agg)
 
 	n, err := d.EvaluateAddresses(t.Context(), sortedAggregates(agg))
 	require.Error(t, err, "an upsert failure must surface as a non-nil aggregated error")

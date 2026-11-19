@@ -233,28 +233,10 @@ func TestGmailBatchAccountRejectsMixedAccounts(t *testing.T) {
 	require.ErrorIs(t, err, ErrBatchMixedAccounts)
 }
 
-func TestGmailSpecOutboundReadsTheSentLabel(t *testing.T) {
-	require.True(t, gmailSpecOutbound(gmailSpecAt("a", time.Unix(0, 0), true)))
-	require.False(t, gmailSpecOutbound(gmailSpecAt("a", time.Unix(0, 0), false)))
-}
-
-func TestGmailBatchEntriesAddressesThePeerSide(t *testing.T) {
-	// The addressed identifier is the value that decides whether the contact
-	// matches, so it must follow the direction: the sender for an inbound, the
-	// recipient for an outbound.
-	inbound, err := gmailBatchEntries([]GmailBatchItem{{ContactID: uuid.New(), Spec: gmailSpecAt("a", time.Unix(0, 0), false)}})
-	require.NoError(t, err)
-	outbound, err := gmailBatchEntries([]GmailBatchItem{{ContactID: uuid.New(), Spec: gmailSpecAt("b", time.Unix(0, 0), true)}})
-	require.NoError(t, err)
-
-	require.Equal(t, "peer@synthetic.example", inbound[0].addressed)
-	require.Equal(t, "peer@synthetic.example", outbound[0].addressed)
-}
-
 func TestGmailBatchEntriesRejectsNilMessage(t *testing.T) {
 	// A nil message would otherwise panic inside the span check, before any
 	// validation error could name the offending item.
-	_, err := gmailBatchEntries([]GmailBatchItem{{ContactID: uuid.New(), Spec: factory.GmailMessageSpec{Intent: factory.MatchSeeded}}})
+	_, err := gmailBatchEntries([]GmailBatchItem{{ContactID: uuid.New(), Spec: factory.GmailMessageSpec{Intent: factory.MatchSeeded}}}, google.GmailMeSet{})
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "item 0")
 }
