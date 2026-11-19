@@ -729,3 +729,26 @@ behaviors:
         text: the command prints the number of emails it scanned and rewrote, and no message content
     provenance: [EmailQuoteTrimService.TrimStoredBodies, runTrimEmailQuotes]
     notes: The command re-derives each row by the rule ingest uses (storedText) from what the row stores, so it makes no Gmail calls, and writes the body and quoted history together only where the body changes.
+
+  - id: ING-051
+    title: Mail from or to a connected account's address, an own-domain address or an own address is the user's for direction
+    type: business-logic
+    status: current
+    surface: none
+    given: Gmail mail in a connected account's mailbox, with own domains or own addresses configured on any enabled email account
+    when: Gmail sync or the Gmail identifier rematch scan classifies a message for a contact
+    then:
+      - key: outbound-from-own
+        text: a message from an address at an own domain or an own address, with the contact in To, Cc or Bcc, is outbound for that contact
+      - key: inbound-to-own
+        text: a message from the contact with an address at an own domain or an own address in To, Cc or Bcc is inbound for that contact
+      - key: shared-domain-not-own
+        text: another address at an own address's domain is not the user's unless it is a connected account's address, an own address, or at an own domain, so mail such an address sends to a contact is never the user's outbound mail
+      - key: every-account-configuration
+        text: an own domain or own address configured on one enabled email account counts as the user when another account's mailbox is synced
+      - key: rematch-same-rule
+        text: the identifier rematch scan classifies mail from or to an address at an own domain or an own address as sync does
+      - key: unparsed-header-not-own
+        text: a From, To, Cc or Bcc entry that does not parse as one mailbox is never the user's address, whatever domain its text names
+    provenance: [gmail-own-addresses.md, GmailSyncProvider.MeSet, GmailSyncProvider.processMessage]
+    notes: crm-admin --set-email-own-domains and --set-email-own-addresses set the configuration. A message between two contacts with the user only on Cc or Bcc still records nothing for the non-sender. Mail the sync cursor already passed is recorded by crm-admin --reset-gmail-backfill-cursors. Discovery asks the same addresses (IMP-051).

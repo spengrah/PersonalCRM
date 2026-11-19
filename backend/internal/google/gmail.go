@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"html"
+	"maps"
 	"net/mail"
 	"net/url"
 	"regexp"
@@ -220,11 +221,16 @@ type GmailSyncProvider struct {
 	// stored credential.
 	newFetcher func(ctx context.Context, accountID string) (gmailFetcher, error)
 
-	// newMeSet builds the "me" set (the normalized address of every connected
-	// account). Defaulted to an impl that calls oauthService.ListAccounts;
-	// tests override via SetMeSetForTest so the M-set is injected with no OAuth
-	// state — symmetric with newFetcher.
-	newMeSet func(ctx context.Context) (map[string]struct{}, error)
+	// accountAddresses lists the connected accounts' addresses, one input of
+	// the me-set (see MeSet). Defaulted to an impl that calls
+	// oauthService.ListAccounts; tests override via SetAccountAddressesForTest
+	// so the addresses are injected with no OAuth state — symmetric with
+	// newFetcher.
+	accountAddresses func(ctx context.Context) ([]string, error)
+
+	// syncStates lists the enabled email sync states whose own-domain and
+	// own-address configuration is the me-set's other input.
+	syncStates *repository.SyncRepository
 
 	// discoverer runs the in-sync correspondence-discovery hook over each
 	// fetched message's From/To/Cc participants (between fetch and storage),
@@ -244,12 +250,14 @@ type GmailSyncProvider struct {
 func NewGmailSyncProvider(
 	oauthService *OAuthService,
 	commsRepo *repository.CommsMessageRepository,
+	syncStates *repository.SyncRepository,
 	bus *events.Bus,
 	pool *pgxpool.Pool,
 ) *GmailSyncProvider {
 	p := &GmailSyncProvider{
 		oauthService: oauthService,
 		commsRepo:    commsRepo,
+		syncStates:   syncStates,
 		bus:          bus,
 		pool:         pool,
 	}
@@ -264,25 +272,22 @@ func NewGmailSyncProvider(
 		}
 		return &gmailServiceFetcher{svc: svc}, nil
 	}
-	p.newMeSet = func(ctx context.Context) (map[string]struct{}, error) {
+	p.accountAddresses = func(ctx context.Context) ([]string, error) {
 		accounts, err := oauthService.ListAccounts(ctx)
 		if err != nil {
 			return nil, fmt.Errorf("list accounts: %w", err)
 		}
-		meSet := make(map[string]struct{}, len(accounts))
+		addrs := make([]string, 0, len(accounts))
 		for _, a := range accounts {
-			normalized := matching.NormalizeEmail(a.AccountID)
-			if normalized != "" {
-				meSet[normalized] = struct{}{}
-			}
+			addrs = append(addrs, a.AccountID)
 		}
-		return meSet, nil
+		return addrs, nil
 	}
 	return p
 }
 
 // SetCorrespondenceDiscoverer wires the in-sync correspondence-discovery hook.
-// Unlike SetMeSetForTest/SetBusForTest this is PRODUCTION wiring (main.go calls
+// Unlike SetAccountAddressesForTest/SetBusForTest this is PRODUCTION wiring (main.go calls
 // it in cutover mode), not a test seam: the provider has 9 constructor call
 // sites, so a setter avoids a constructor-signature churn while keeping the
 // hook nil-safe (a no-op) for every site that doesn't wire it.
@@ -360,7 +365,7 @@ func (p *GmailSyncProvider) Sync(
 		}
 	}
 
-	meSet, err := p.newMeSet(ctx)
+	meSet, err := p.MeSet(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("build me-set: %w", err)
 	}
@@ -403,11 +408,6 @@ func (p *GmailSyncProvider) Sync(
 	for addr := range knownMap {
 		knownSet[addr] = struct{}{}
 	}
-	// ownDomains anchors trust for participant discovery and drops its own
-	// addresses from BOTH candidate pools (discovery-only; storage's meSet is
-	// untouched — see foldDiscovery).
-	ownDomains := sync.EmailOwnDomains(state.Metadata)
-
 	result := &sync.SyncResult{}
 	windowsScanned := 0
 	fetchedMessages := make(map[string]*gmail.Message)
@@ -427,7 +427,7 @@ func (p *GmailSyncProvider) Sync(
 		}
 		chunks := buildWindowORChunks(addresses, window.StartEpoch, window.EndEpoch)
 
-		scanned, err := p.scanWindowChunks(ctx, fetcher, chunks, accountID, knownMap, meSet, window, fetchedMessages, knownSet, ownDomains, discoveryAgg)
+		scanned, err := p.scanWindowChunks(ctx, fetcher, chunks, accountID, knownMap, meSet, window, fetchedMessages, knownSet, discoveryAgg)
 		if err != nil {
 			// Hard failure: abort the sweep, return the stored cursor unchanged
 			// so no unproven window is skipped on the next tick.
@@ -498,11 +498,10 @@ func (p *GmailSyncProvider) scanWindowChunks(
 	chunks []string,
 	accountID string,
 	knownMap map[string][]uuid.UUID,
-	meSet map[string]struct{},
+	meSet GmailMeSet,
 	window gmailScanWindow,
 	fetchedMessages map[string]*gmail.Message,
 	knownSet map[string]struct{},
-	ownDomains map[string]struct{},
 	discoveryAgg map[string]*correspondenceAggregate,
 ) (gmailWindowScanResult, error) {
 	var result gmailWindowScanResult
@@ -568,7 +567,7 @@ func (p *GmailSyncProvider) scanWindowChunks(
 				// From/To/Cc participants into the per-pass aggregate, regardless
 				// of whether the storage gate qualified it. No-op when no
 				// discoverer is wired.
-				p.foldDiscovery(msg, knownMap, knownSet, meSet, ownDomains, discoveryAgg)
+				p.foldDiscovery(msg, knownMap, knownSet, meSet, discoveryAgg)
 			}
 			pageToken = next
 			if pageToken == "" {
@@ -595,9 +594,8 @@ func (p *GmailSyncProvider) scanChunks(
 	chunks []string,
 	accountID string,
 	knownMap map[string][]uuid.UUID,
-	meSet map[string]struct{},
+	meSet GmailMeSet,
 	knownSet map[string]struct{},
-	ownDomains map[string]struct{},
 	discoveryAgg map[string]*correspondenceAggregate,
 ) (processed, matched int, err error) {
 	seen := make(map[string]struct{})
@@ -638,7 +636,7 @@ func (p *GmailSyncProvider) scanChunks(
 
 				// In-sync correspondence discovery over the rematch backfill seam
 				// (harmless + idempotent). No-op when no discoverer is wired.
-				p.foldDiscovery(msg, knownMap, knownSet, meSet, ownDomains, discoveryAgg)
+				p.foldDiscovery(msg, knownMap, knownSet, meSet, discoveryAgg)
 			}
 			pageToken = next
 			if pageToken == "" {
@@ -661,8 +659,7 @@ func (p *GmailSyncProvider) ScanIdentifier(
 	ctx context.Context,
 	accountID, addrNormalized string,
 	knownMap map[string][]uuid.UUID,
-	meSet map[string]struct{},
-	ownDomains map[string]struct{},
+	meSet GmailMeSet,
 	afterEpoch int64,
 ) (matched int, err error) {
 	if p.bus == nil || p.pool == nil {
@@ -691,7 +688,7 @@ func (p *GmailSyncProvider) ScanIdentifier(
 	}
 
 	// scanChunks creates its own per-account `seen` set; no cursor math here.
-	_, matched, err = p.scanChunks(ctx, fetcher, chunks, accountID, knownMap, meSet, knownSet, ownDomains, discoveryAgg)
+	_, matched, err = p.scanChunks(ctx, fetcher, chunks, accountID, knownMap, meSet, knownSet, discoveryAgg)
 	if err != nil {
 		return matched, fmt.Errorf("scan identifier: %w", err)
 	}
@@ -727,10 +724,10 @@ func (p *GmailSyncProvider) RefetchParticipantNames(ctx context.Context, account
 		return repository.ParticipantNames{}, classifyRefetchError(err)
 	}
 	headers := newHeaderLookup(msg.Payload)
-	_, _, fromName := parseSingleAddress(headers.first("From"))
-	_, _, toNames := parseAddressList(headers.first("To"))
-	_, _, ccNames := parseAddressList(headers.first("Cc"))
-	_, _, bccNames := parseAddressList(headers.first("Bcc"))
+	_, _, fromName, _ := parseSingleAddress(headers.first("From"))
+	_, _, toNames, _ := parseAddressList(headers.first("To"))
+	_, _, ccNames, _ := parseAddressList(headers.first("Cc"))
+	_, _, bccNames, _ := parseAddressList(headers.first("Bcc"))
 	return repository.ParticipantNames{
 		FromName: fromName,
 		ToNames:  toNames,
@@ -757,12 +754,19 @@ func classifyRefetchError(err error) error {
 	return fmt.Errorf("refetch message: %w", err)
 }
 
-// MeSet builds the "me" set (the normalized address of every connected
-// account) via the provider's me-set factory. Exported so the rematch handler
-// can reuse the same seam tests override with SetMeSetForTest, routing an
-// injected me-set through with zero real OAuth.
-func (p *GmailSyncProvider) MeSet(ctx context.Context) (map[string]struct{}, error) {
-	return p.newMeSet(ctx)
+// MeSet builds the me-set from the connected accounts' addresses and the own
+// domains and own addresses configured on every enabled email sync state. It is
+// the one way Gmail sync, the rematch scan and discovery obtain the me-set.
+func (p *GmailSyncProvider) MeSet(ctx context.Context) (GmailMeSet, error) {
+	accounts, err := p.accountAddresses(ctx)
+	if err != nil {
+		return GmailMeSet{}, err
+	}
+	states, err := p.syncStates.ListEnabledSyncStatesBySource(ctx, GmailSourceName)
+	if err != nil {
+		return GmailMeSet{}, fmt.Errorf("list enabled email sync states: %w", err)
+	}
+	return buildGmailMeSet(accounts, states), nil
 }
 
 // foldDiscovery folds one fetched message's From/To/Cc participants into the
@@ -770,17 +774,18 @@ func (p *GmailSyncProvider) MeSet(ctx context.Context) (map[string]struct{}, err
 // case for the many constructor call sites that never call
 // SetCorrespondenceDiscoverer). Headers are parsed ONCE (parseDiscoveryHeaders)
 // to compute the participant list plus this message's trust-anchor facts:
-// trustAnchored = From ∈ knownSet ∪ meSet ∪ an own-domain; recipientCount =
+// trustAnchored = From ∈ knownSet or the me-set; recipientCount =
 // |unique normalized To∪Cc|; createEligible = trustAnchored && recipientCount
 // <= 20 (the cap suppresses the CREATE path only — link discovery, driven by
-// aggregateParticipants' known/own/ownDomains pool filtering plus the
+// aggregateParticipants' known/me-set pool filtering plus the
 // evaluator's separate trigram gate, stays uncapped). The known/own filtering
 // and the BCC-free co-occurrence id set are computed here so
 // aggregateParticipants stays a pure fold.
 func (p *GmailSyncProvider) foldDiscovery(
 	msg *gmail.Message,
 	knownMap map[string][]uuid.UUID,
-	knownSet, meSet, ownDomains map[string]struct{},
+	knownSet map[string]struct{},
+	meSet GmailMeSet,
 	discoveryAgg map[string]*correspondenceAggregate,
 ) {
 	if p.discoverer == nil {
@@ -790,14 +795,8 @@ func (p *GmailSyncProvider) foldDiscovery(
 	coOccurIDs := discoveryCoOccurIDs(h.parts, knownMap)
 
 	_, fromKnown := knownSet[h.fromNorm]
-	_, fromMe := meSet[h.fromNorm]
-	fromOwnDomain := false
-	if h.fromNorm != "" {
-		if _, ok := ownDomains[domainOf(h.fromNorm)]; ok {
-			fromOwnDomain = true
-		}
-	}
-	trustAnchored := fromKnown || fromMe || fromOwnDomain
+	fromMe := meSet.Contains(h.fromMailbox)
+	trustAnchored := fromKnown || fromMe
 
 	recipients := make(map[string]struct{}, len(h.toNorm)+len(h.ccNorm))
 	for _, n := range h.toNorm {
@@ -821,12 +820,12 @@ func (p *GmailSyncProvider) foldDiscovery(
 		createEligible:  createEligible,
 		senderNorm:      h.fromNorm,
 		senderContactID: senderContactID,
-		senderIsSelf:    fromMe || fromOwnDomain,
+		senderIsSelf:    fromMe,
 		subject:         h.subject,
 		epochSeconds:    h.epochSeconds,
 	}
 
-	aggregateParticipants(h.parts, knownSet, meSet, ownDomains, coOccurIDs, msgCtx, discoveryAgg)
+	aggregateParticipants(h.parts, knownSet, meSet, coOccurIDs, msgCtx, discoveryAgg)
 }
 
 // gmailParticipantRecipientCap is the participant-discovery CREATE-path
@@ -900,6 +899,7 @@ func (p *GmailSyncProvider) collectDiscoveryParticipants(msg *gmail.Message) []p
 type discoveryHeaders struct {
 	parts        []participant
 	fromNorm     string
+	fromMailbox  *mail.Address
 	toNorm       []string
 	ccNorm       []string
 	subject      string
@@ -911,21 +911,22 @@ type discoveryHeaders struct {
 // spec scopes discovery to To ∪ Cc).
 func parseDiscoveryHeaders(msg *gmail.Message) discoveryHeaders {
 	headers := newHeaderLookup(msg.Payload)
-	fromRaw, fromNorm, fromName := parseSingleAddress(headers.first("From"))
-	toRaws, toNorm, toNames := parseAddressList(headers.first("To"))
-	ccRaws, ccNorm, ccNames := parseAddressList(headers.first("Cc"))
+	fromRaw, fromNorm, fromName, fromMailbox := parseSingleAddress(headers.first("From"))
+	toRaws, toNorm, toNames, toMailboxes := parseAddressList(headers.first("To"))
+	ccRaws, ccNorm, ccNames, ccMailboxes := parseAddressList(headers.first("Cc"))
 	subject := headers.first("Subject")
 
 	parts := make([]participant, 0, 1+len(toRaws)+len(ccRaws))
 	if fromRaw != "" {
-		parts = append(parts, participant{name: fromName, address: fromRaw})
+		parts = append(parts, participant{name: fromName, address: fromRaw, mailbox: fromMailbox})
 	}
-	parts = appendParticipants(parts, toRaws, toNames)
-	parts = appendParticipants(parts, ccRaws, ccNames)
+	parts = appendParticipants(parts, toRaws, toNames, toMailboxes)
+	parts = appendParticipants(parts, ccRaws, ccNames, ccMailboxes)
 
 	return discoveryHeaders{
 		parts:        parts,
 		fromNorm:     fromNorm,
+		fromMailbox:  fromMailbox,
 		toNorm:       toNorm,
 		ccNorm:       ccNorm,
 		subject:      subject,
@@ -933,19 +934,15 @@ func parseDiscoveryHeaders(msg *gmail.Message) discoveryHeaders {
 	}
 }
 
-// appendParticipants pairs each raw address with its index-aligned name (a
-// missing name becomes ""), skipping empty addresses. The parsers guarantee the
-// raw + name slices are index-aligned.
-func appendParticipants(out []participant, raws, names []string) []participant {
+// appendParticipants pairs each raw address with its index-aligned name and
+// mailbox, skipping empty addresses. The parsers guarantee the raw, name and
+// mailbox slices are index-aligned.
+func appendParticipants(out []participant, raws, names []string, mailboxes []*mail.Address) []participant {
 	for i, addr := range raws {
 		if addr == "" {
 			continue
 		}
-		name := ""
-		if i < len(names) {
-			name = names[i]
-		}
-		out = append(out, participant{name: name, address: addr})
+		out = append(out, participant{name: names[i], address: addr, mailbox: mailboxes[i]})
 	}
 	return out
 }
@@ -1223,7 +1220,7 @@ func (p *GmailSyncProvider) processMessage(
 	msg *gmail.Message,
 	accountID string,
 	knownMap map[string][]uuid.UUID,
-	meSet map[string]struct{},
+	meSet GmailMeSet,
 ) ([]qualifiedRow, error) {
 	plain, htmlBody, attachments, err := extractContent(msg.Payload)
 	if err != nil {
@@ -1233,10 +1230,10 @@ func (p *GmailSyncProvider) processMessage(
 	headers := newHeaderLookup(msg.Payload)
 	subject := headers.first("Subject")
 	text := storedText(plain, htmlBody, mailKindOf(msg.Id, msg.ThreadId, subject))
-	fromRaw, fromNorm, fromName := parseSingleAddress(headers.first("From"))
-	toRaw, toNorm, toNames := parseAddressList(headers.first("To"))
-	ccRaw, ccNorm, ccNames := parseAddressList(headers.first("Cc"))
-	bccRaw, bccNorm, bccNames := parseAddressList(headers.first("Bcc"))
+	fromRaw, fromNorm, fromName, fromMailbox := parseSingleAddress(headers.first("From"))
+	toRaw, toNorm, toNames, toMailboxes := parseAddressList(headers.first("To"))
+	ccRaw, ccNorm, ccNames, ccMailboxes := parseAddressList(headers.first("Cc"))
+	bccRaw, bccNorm, bccNames, bccMailboxes := parseAddressList(headers.first("Bcc"))
 
 	externalID := extractExternalID(headers, accountID, msg.Id)
 	localDay := computeLocalDay(epochMillisToTime(msg.InternalDate), time.Local)
@@ -1245,7 +1242,8 @@ func (p *GmailSyncProvider) processMessage(
 	metadata := buildMetadataJSON(htmlBody, attachments, msg.LabelIds,
 		fromRaw, toRaw, ccRaw, bccRaw, fromName, toNames, ccNames, bccNames)
 
-	// Recipient set R (normalized To ∪ Cc ∪ Bcc), and whether M ∩ R ≠ ∅.
+	// Recipient set R (normalized To ∪ Cc ∪ Bcc), and whether a recipient
+	// mailbox is the user's (M ∩ R ≠ ∅).
 	recipientSet := make(map[string]struct{})
 	for _, n := range toNorm {
 		recipientSet[n] = struct{}{}
@@ -1256,14 +1254,8 @@ func (p *GmailSyncProvider) processMessage(
 	for _, n := range bccNorm {
 		recipientSet[n] = struct{}{}
 	}
-	meInR := false
-	for n := range recipientSet {
-		if _, ok := meSet[n]; ok {
-			meInR = true
-			break
-		}
-	}
-	_, fromIsMe := meSet[fromNorm]
+	meInR := slices.ContainsFunc(slices.Concat(toMailboxes, ccMailboxes, bccMailboxes), meSet.Contains)
+	fromIsMe := meSet.Contains(fromMailbox)
 
 	// Ordered, deduped recipient buckets (raw+normalized aligned) for the
 	// deterministic outbound peer-handle precedence (To, then Cc, then Bcc;
@@ -1436,38 +1428,43 @@ func (h headerLookup) first(name string) string {
 
 // parseSingleAddress parses a single-address header (From). Returns the raw and
 // normalized address plus the parsed display name (empty when the header had no
-// display part or failed to parse). On parse failure it falls back to trimming
-// the raw value. The name return is additive — existing callers ignore it.
-func parseSingleAddress(header string) (raw, normalized, name string) {
+// display part or failed to parse), and the parsed mailbox the me-set compares.
+// On parse failure it falls back to trimming the raw value, which contact
+// matching still compares, and returns a nil mailbox, since the text holds no
+// one address the me-set could compare.
+func parseSingleAddress(header string) (raw, normalized, name string, mailbox *mail.Address) {
 	header = strings.TrimSpace(header)
 	if header == "" {
-		return "", "", ""
+		return "", "", "", nil
 	}
 	if addr, err := mail.ParseAddress(header); err == nil {
-		return addr.Address, matching.NormalizeEmail(addr.Address), strings.TrimSpace(addr.Name)
+		return addr.Address, matching.NormalizeEmail(addr.Address), strings.TrimSpace(addr.Name), addr
 	}
-	return header, matching.NormalizeEmail(header), ""
+	return header, matching.NormalizeEmail(header), "", nil
 }
 
 // parseAddressList parses an address-list header (To/Cc/Bcc) robustly. On a
 // ParseAddressList failure it falls back to a lenient comma-split so a single
-// malformed recipient doesn't drop the whole list. The raw, normalized, and
-// name slices are index-aligned on BOTH paths (a recipient with no display part
-// gets an empty-string name at its index), so the correspondence producer can
-// pair names[i] with the address at the same index. The names return is
-// additive — existing callers ignore it.
-func parseAddressList(header string) (raws, normalized, names []string) {
+// malformed recipient doesn't drop the whole list. The raw, normalized, name
+// and mailbox slices are index-aligned on BOTH paths (a recipient with no
+// display part gets an empty-string name at its index), so the correspondence
+// producer can pair names[i] with the address at the same index. A fallback
+// entry that does not parse as one mailbox keeps its trimmed text as its raw
+// and normalized address, which contact matching still compares, and a nil
+// mailbox, since the text holds no one address the me-set could compare.
+func parseAddressList(header string) (raws, normalized, names []string, mailboxes []*mail.Address) {
 	header = strings.TrimSpace(header)
 	if header == "" {
-		return nil, nil, nil
+		return nil, nil, nil, nil
 	}
 	if addrs, err := mail.ParseAddressList(header); err == nil {
 		for _, a := range addrs {
 			raws = append(raws, a.Address)
 			normalized = append(normalized, matching.NormalizeEmail(a.Address))
 			names = append(names, strings.TrimSpace(a.Name))
+			mailboxes = append(mailboxes, a)
 		}
-		return raws, normalized, names
+		return raws, normalized, names, mailboxes
 	}
 	for _, part := range strings.Split(header, ",") {
 		part = strings.TrimSpace(part)
@@ -1476,15 +1473,18 @@ func parseAddressList(header string) (raws, normalized, names []string) {
 		}
 		raw := part
 		name := ""
+		var mailbox *mail.Address
 		if addr, err := mail.ParseAddress(part); err == nil {
 			raw = addr.Address
 			name = strings.TrimSpace(addr.Name)
+			mailbox = addr
 		}
 		raws = append(raws, raw)
 		normalized = append(normalized, matching.NormalizeEmail(raw))
 		names = append(names, name)
+		mailboxes = append(mailboxes, mailbox)
 	}
-	return raws, normalized, names
+	return raws, normalized, names, mailboxes
 }
 
 // extractExternalID reads the RFC822 Message-ID header (trimming surrounding
@@ -1693,52 +1693,19 @@ func hashGmailMessageID(v string) string {
 
 // --- Test-only shims. Production code must NOT call these. ---
 
-// RunProcessMessageForTest drives the unexported processMessage entry point so
-// cross-package tests can assert participant/direction resolution + content
-// extraction against real *gmail.Message structs without a DB or bus.
-func (p *GmailSyncProvider) RunProcessMessageForTest(
-	ctx context.Context,
-	msg *gmail.Message,
-	accountID string,
-	knownMap map[string][]uuid.UUID,
-	meSet map[string]struct{},
-) ([]qualifiedRow, error) {
-	return p.processMessage(ctx, msg, accountID, knownMap, meSet)
-}
-
-// RunDiscoverParticipantsForTest drives the unexported
-// collectDiscoveryParticipants entry point so cross-package tests can assert
-// participant collection (From/To/Cc, no Bcc) against real *gmail.Message
-// structs. The returned pairs are exposed as DiscoveryParticipantForTest values.
-func (p *GmailSyncProvider) RunDiscoverParticipantsForTest(msg *gmail.Message) []DiscoveryParticipantForTest {
-	parts := p.collectDiscoveryParticipants(msg)
-	out := make([]DiscoveryParticipantForTest, 0, len(parts))
-	for _, part := range parts {
-		out = append(out, DiscoveryParticipantForTest{Name: part.name, Address: part.address})
-	}
-	return out
-}
-
-// DiscoveryParticipantForTest is the exported view of a discovery participant
-// (display_name, address) pair, so cross-package tests can assert
-// collectDiscoveryParticipants output without reaching the unexported
-// participant type. Production code must NOT use this.
-type DiscoveryParticipantForTest struct {
-	Name    string
-	Address string
-}
-
 // SetFetcherFactoryForTest overrides the per-account fetcher factory so tests
 // inject a fake gmailFetcher with no OAuth/token state (the OAuth seam).
 func (p *GmailSyncProvider) SetFetcherFactoryForTest(factory func(ctx context.Context, accountID string) (gmailFetcher, error)) {
 	p.newFetcher = factory
 }
 
-// SetMeSetForTest overrides the me-set factory so tests inject the connected-
-// account address set with no OAuth state.
-func (p *GmailSyncProvider) SetMeSetForTest(meSet map[string]struct{}) {
-	p.newMeSet = func(context.Context) (map[string]struct{}, error) {
-		return meSet, nil
+// SetAccountAddressesForTest overrides the connected accounts' addresses the
+// me-set is built from, so tests inject them with no OAuth state. MeSet still
+// reads the own-domain and own-address configuration from the enabled email
+// sync states.
+func (p *GmailSyncProvider) SetAccountAddressesForTest(addrs map[string]struct{}) {
+	p.accountAddresses = func(context.Context) ([]string, error) {
+		return slices.Collect(maps.Keys(addrs)), nil
 	}
 }
 

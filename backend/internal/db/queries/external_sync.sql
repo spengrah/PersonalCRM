@@ -140,6 +140,24 @@ SET metadata = $2,
 WHERE id = $1
 RETURNING *;
 
+-- name: SetSyncStateMetadataKey :one
+-- Sets one metadata key and keeps every other key the row holds when the
+-- statement runs, so writers of different keys cannot erase each other.
+UPDATE external_sync_state
+SET metadata = COALESCE(metadata, '{}'::jsonb) || jsonb_build_object(@key::text, @value::jsonb),
+    updated_at = NOW()
+WHERE id = @id
+RETURNING *;
+
+-- name: DeleteSyncStateMetadataKey :one
+-- Removes one metadata key and keeps every other key the row holds when the
+-- statement runs.
+UPDATE external_sync_state
+SET metadata = COALESCE(metadata, '{}'::jsonb) - @key::text,
+    updated_at = NOW()
+WHERE id = @id
+RETURNING *;
+
 -- name: MarkSyncStateTerminal :one
 -- Records a manager-driven source's permanent-disconnect decision: the durable
 -- terminal metadata AND the error status, in one statement.

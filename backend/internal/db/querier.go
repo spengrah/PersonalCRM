@@ -611,6 +611,9 @@ type Querier interface {
 	// source. external_sync_log carries its own source column (migration 011).
 	DeleteSyncLogsBySourceForTest(ctx context.Context, source string) (int64, error)
 	DeleteSyncState(ctx context.Context, id uuid.UUID) error
+	// Removes one metadata key and keeps every other key the row holds when the
+	// statement runs.
+	DeleteSyncStateMetadataKey(ctx context.Context, arg DeleteSyncStateMetadataKeyParams) (*ExternalSyncState, error)
 	DeleteSyncStatesByAccountID(ctx context.Context, accountID *string) error
 	// Test teardown only — hard-deletes external_sync_state rows for a given
 	// source. Used by sync-service tests to scope per-source cleanup without
@@ -2325,6 +2328,9 @@ type Querier interface {
 	// sync write path (which always uses NOW()). Production code must never call
 	// this — the scheduler + provider sync are the only legitimate writers.
 	SetSyncStateFreshnessForTest(ctx context.Context, arg SetSyncStateFreshnessForTestParams) error
+	// Sets one metadata key and keeps every other key the row holds when the
+	// statement runs, so writers of different keys cannot erase each other.
+	SetSyncStateMetadataKey(ctx context.Context, arg SetSyncStateMetadataKeyParams) (*ExternalSyncState, error)
 	SetTelegramChannelPts(ctx context.Context, arg SetTelegramChannelPtsParams) error
 	SetTelegramDate(ctx context.Context, arg SetTelegramDateParams) error
 	SetTelegramPts(ctx context.Context, arg SetTelegramPtsParams) error

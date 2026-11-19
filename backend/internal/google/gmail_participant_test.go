@@ -1,6 +1,6 @@
 // Unit coverage for the trust-anchored gmail_participant discovery gate
-// (spec https://github.com/spengrah/PersonalCRM/blob/9efb37ebd2157a2ac58c4b3c9c30703afce34f40/.agents/spec/2026-08-11-gmail-participant-discovery.md, IMP-042..045,
-// IMP-049). Drives the REAL fold: builds real *gmail.Message values (with
+// (spec https://github.com/spengrah/PersonalCRM/blob/9efb37ebd2157a2ac58c4b3c9c30703afce34f40/.agents/spec/2026-08-11-gmail-participant-discovery.md, IMP-042..045).
+// Drives the REAL fold: builds real *gmail.Message values (with
 // Gmail-faithful headers — address-only participants have NO name part, and
 // the no-Subject case OMITS the header entirely), calls the real
 // GmailSyncProvider.foldDiscovery for each message into a shared aggregate,
@@ -28,7 +28,7 @@ import (
 // the production seam (SetCorrespondenceDiscoverer), so foldDiscovery is live
 // rather than a no-op.
 func newParticipantProvider(d *CorrespondenceDiscoverer) *GmailSyncProvider {
-	p := NewGmailSyncProvider(nil, nil, nil, nil)
+	p := NewGmailSyncProvider(nil, nil, nil, nil, nil)
 	p.SetCorrespondenceDiscoverer(d)
 	return p
 }
@@ -41,13 +41,13 @@ func foldAndEvaluate(
 	p *GmailSyncProvider,
 	d *CorrespondenceDiscoverer,
 	knownMap map[string][]uuid.UUID,
-	knownSet, meSet, ownDomains map[string]struct{},
+	knownSet, meSet map[string]struct{},
 	msgs ...*gmail.Message,
 ) (int, error) {
 	t.Helper()
 	agg := map[string]*correspondenceAggregate{}
 	for _, msg := range msgs {
-		p.foldDiscovery(msg, knownMap, knownSet, meSet, ownDomains, agg)
+		p.foldDiscovery(msg, knownMap, knownSet, testMeSet(meSet), agg)
 	}
 	return d.EvaluateAddresses(context.WithoutCancel(t.Context()), sortedAggregates(agg))
 }
@@ -76,7 +76,7 @@ func TestParticipant_TrustedContactSenderCreatesCandidate(t *testing.T) {
 		[]string{"Alex Guest <alex@example.net>", "known2@example.com"}, nil, nil,
 		"Project kickoff", "body", "<m1@example.com>", 1700000000000)
 
-	n, err := foldAndEvaluate(t, p, d, knownMap, knownSet, emptySet(), emptySet(), msg)
+	n, err := foldAndEvaluate(t, p, d, knownMap, knownSet, emptySet(), msg)
 	require.NoError(t, err)
 	require.Equal(t, 1, n)
 	require.Len(t, ext.upserts, 1)
@@ -117,7 +117,7 @@ func TestParticipant_NamelessAddressQualifies(t *testing.T) {
 	msg := buildMessage(t, "g1", "t1", "sender@example.com",
 		[]string{"nameless@example.net"}, nil, nil, "Subj", "body", "<m1@example.com>", 1700000000000)
 
-	n, err := foldAndEvaluate(t, p, d, knownMap, knownSet, emptySet(), emptySet(), msg)
+	n, err := foldAndEvaluate(t, p, d, knownMap, knownSet, emptySet(), msg)
 	require.NoError(t, err)
 	require.Equal(t, 1, n)
 	require.Len(t, ext.upserts, 1)
@@ -144,7 +144,7 @@ func TestParticipant_SelfSenderAnchorsTrust(t *testing.T) {
 	msg := buildMessage(t, "g1", "t1", "me@example.com",
 		nil, []string{"cc-guest@example.net"}, nil, "Subj", "body", "<m1@example.com>", 1700000000000)
 
-	n, err := foldAndEvaluate(t, p, d, nil, emptySet(), meSet, emptySet(), msg)
+	n, err := foldAndEvaluate(t, p, d, nil, emptySet(), meSet, msg)
 	require.NoError(t, err)
 	require.Equal(t, 1, n)
 	require.Len(t, ext.upserts, 1)
@@ -177,17 +177,18 @@ func TestParticipant_UntrustedSenderNeverCreates(t *testing.T) {
 		[]string{"known@example.com", "bystander@example.net"}, nil, nil,
 		"Subj", "body", "<m1@example.com>", 1700000000000)
 
-	n, err := foldAndEvaluate(t, p, d, knownMap, knownSet, emptySet(), emptySet(), msg)
+	n, err := foldAndEvaluate(t, p, d, knownMap, knownSet, emptySet(), msg)
 	require.NoError(t, err)
 	require.Equal(t, 0, n)
 	require.Empty(t, ext.upserts)
 }
 
-// 5. Known, own(meSet), own-domain, and sticky-ignored addresses are never
-// proposed even on a trust-anchored message; a fifth clean address IS
-// upserted (proves the test could fail).
+// 5. Known, own(meSet), and sticky-ignored addresses are never proposed even
+// on a trust-anchored message; a fourth clean address IS upserted (proves the
+// test could fail).
+//
+// spec: IMP-042.excluded-never-proposed
 func TestParticipant_ExclusionsNeverProposed(t *testing.T) {
-	// spec: IMP-042, IMP-049
 	senderID := uuid.New()
 	knownMap := map[string][]uuid.UUID{
 		"sender@example.com":          {senderID},
@@ -198,7 +199,6 @@ func TestParticipant_ExclusionsNeverProposed(t *testing.T) {
 		"known-recipient@example.com": {},
 	}
 	meSet := map[string]struct{}{"me-alt@example.com": {}}
-	ownDomains := map[string]struct{}{"own-domain.example": {}}
 
 	contacts := &fakeCorrespondenceContacts{}
 	ext := newFakeExternal()
@@ -214,12 +214,11 @@ func TestParticipant_ExclusionsNeverProposed(t *testing.T) {
 		[]string{
 			"known-recipient@example.com",
 			"me-alt@example.com",
-			"guest@own-domain.example",
 			"ignored@example.net",
 			"clean@example.net",
 		}, nil, nil, "Subj", "body", "<m1@example.com>", 1700000000000)
 
-	n, err := foldAndEvaluate(t, p, d, knownMap, knownSet, meSet, ownDomains, msg)
+	n, err := foldAndEvaluate(t, p, d, knownMap, knownSet, meSet, msg)
 	require.NoError(t, err)
 	require.Equal(t, 1, n, "only the clean address qualifies (proves the test could fail)")
 	require.Len(t, ext.upserts, 1)
@@ -267,7 +266,7 @@ func TestParticipant_RecipientCapBoundary(t *testing.T) {
 		toOver, []string{"Pat Carter <cap-c@example.net>"}, nil,
 		"Subj", "body", "<m-over@example.com>", 1700000100000)
 
-	_, err := foldAndEvaluate(t, p, d, knownMap, knownSet, emptySet(), emptySet(), msgBoundary, msgOver)
+	_, err := foldAndEvaluate(t, p, d, knownMap, knownSet, emptySet(), msgBoundary, msgOver)
 	require.NoError(t, err)
 
 	bySourceID := map[string]string{}
@@ -301,7 +300,7 @@ func TestParticipant_LinkPrecedenceWins(t *testing.T) {
 	msg := buildMessage(t, "g1", "t1", "sender@example.com",
 		[]string{"Pat Carter <pat@example.net>"}, nil, nil, "Subj", "body", "<m1@example.com>", 1700000000000)
 
-	n, err := foldAndEvaluate(t, p, d, knownMap, knownSet, emptySet(), emptySet(), msg)
+	n, err := foldAndEvaluate(t, p, d, knownMap, knownSet, emptySet(), msg)
 	require.NoError(t, err)
 	require.Equal(t, 1, n)
 	require.Len(t, ext.upserts, 1)
@@ -345,7 +344,7 @@ func TestParticipant_CrossSourceStickyBothDirections(t *testing.T) {
 		[]string{"Pat Carter <sticky-a@example.net>", "sticky-b@example.net"}, nil, nil,
 		"Subj", "body", "<m1@example.com>", 1700000000000)
 
-	n, err := foldAndEvaluate(t, p, d, knownMap, knownSet, emptySet(), emptySet(), msg)
+	n, err := foldAndEvaluate(t, p, d, knownMap, knownSet, emptySet(), msg)
 	require.NoError(t, err)
 	require.Equal(t, 0, n, "both addresses are cross-source sticky — first classification wins")
 	require.Empty(t, ext.upserts)
@@ -353,37 +352,6 @@ func TestParticipant_CrossSourceStickyBothDirections(t *testing.T) {
 		"the opposite-source (participant) lookup must have occurred for the link-gate address")
 	require.True(t, ext.lookedUp(CorrespondenceSource, "sticky-b@example.net"),
 		"the opposite-source (correspondence) lookup must have occurred for the trust-anchor address")
-}
-
-// 9. An own-domain sender (not in meSet) anchors trust; own-domain
-// participants on the same message are never proposed.
-func TestParticipant_OwnDomainSenderAnchors(t *testing.T) {
-	// spec: IMP-049
-	ownDomains := map[string]struct{}{"own-domain.example": {}}
-	contacts := &fakeCorrespondenceContacts{}
-	ext := newFakeExternal()
-	d := NewCorrespondenceDiscoverer(contacts, ext)
-	p := newParticipantProvider(d)
-
-	msg := buildMessage(t, "g1", "t1", "alias@own-domain.example",
-		[]string{"guest@example.net", "other@own-domain.example"}, nil, nil,
-		"Subj", "body", "<m1@example.com>", 1700000000000)
-
-	n, err := foldAndEvaluate(t, p, d, nil, emptySet(), emptySet(), ownDomains, msg)
-	require.NoError(t, err)
-	require.Equal(t, 1, n)
-	require.Len(t, ext.upserts, 1)
-
-	up := ext.upserts[0]
-	require.Equal(t, "guest@example.net", up.SourceID)
-	trustedSender, ok := up.Metadata["trusted_sender"].(map[string]any)
-	require.True(t, ok)
-	require.Equal(t, "alias@own-domain.example", trustedSender["address"])
-	require.Equal(t, true, trustedSender["self"])
-
-	for _, u := range ext.upserts {
-		require.NotEqual(t, "other@own-domain.example", u.SourceID, "own-domain participant must never be proposed")
-	}
 }
 
 // 10. A message with no Subject header at all (never an empty-string Subject)
@@ -405,7 +373,7 @@ func TestParticipant_NoSubjectHeaderOmitsAnchor(t *testing.T) {
 		require.NotEqual(t, "Subject", h.Name, "no-Subject case must OMIT the header, never send an empty string")
 	}
 
-	n, err := foldAndEvaluate(t, p, d, knownMap, knownSet, emptySet(), emptySet(), msg)
+	n, err := foldAndEvaluate(t, p, d, knownMap, knownSet, emptySet(), msg)
 	require.NoError(t, err)
 	require.Equal(t, 1, n)
 	require.Len(t, ext.upserts, 1)
@@ -435,7 +403,7 @@ func TestParticipant_AnchorSubjectMostRecent(t *testing.T) {
 		d := NewCorrespondenceDiscoverer(contacts, ext)
 		p := newParticipantProvider(d)
 
-		n, err := foldAndEvaluate(t, p, d, knownMap, knownSet, emptySet(), emptySet(), order[0], order[1])
+		n, err := foldAndEvaluate(t, p, d, knownMap, knownSet, emptySet(), order[0], order[1])
 		require.NoError(t, err)
 		require.Equal(t, 1, n)
 		require.Len(t, ext.upserts, 1)
@@ -472,7 +440,7 @@ func TestParticipant_CapDoesNotStickAcrossMessages(t *testing.T) {
 	msgUnder := buildMessage(t, "g-under", "t2", "sender@example.com",
 		[]string{"both@example.net"}, nil, nil, "Subj2", "body", "<m-under@example.com>", 1700000100000)
 
-	_, err := foldAndEvaluate(t, p, d, knownMap, knownSet, emptySet(), emptySet(), msgOver, msgUnder)
+	_, err := foldAndEvaluate(t, p, d, knownMap, knownSet, emptySet(), msgOver, msgUnder)
 	require.NoError(t, err)
 
 	bySourceID := map[string]bool{}

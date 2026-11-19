@@ -639,13 +639,14 @@ behaviors:
     type: business-logic
     status: current
     surface: none
-    given: a fetched Gmail message whose sender is an existing contact or one of the user's own accounts
+    given: a fetched Gmail message whose sender is an existing contact or one of the user's addresses, as ING-051 defines them
     when: discovery evaluates the message's To and Cc participants
     then:
       - an unknown participant is upserted as a gmail_participant create candidate on first sighting, with no minimum message count
       - a participant with no display name still qualifies
       - the candidate records the trusted sender's identity and an anchor message subject as evidence, alongside message count
-      - known addresses, the user's own addresses, and sticky-ignored addresses are never proposed
+      - key: excluded-never-proposed
+        text: known addresses, the user's addresses, and sticky-ignored addresses are never proposed
     provenance: ['#789', 2026-08-11-gmail-participant-discovery.md]
 
   - id: IMP-043
@@ -653,7 +654,7 @@ behaviors:
     type: business-logic
     status: current
     surface: none
-    given: a fetched Gmail message whose sender is neither an existing contact nor one of the user's own accounts
+    given: a fetched Gmail message whose sender is neither an existing contact nor one of the user's addresses, as ING-051 defines them
     when: discovery evaluates the message's participants
     then:
       - no gmail_participant candidate is produced, even when known contacts appear among the recipients
@@ -739,7 +740,7 @@ behaviors:
   - id: IMP-049
     title: Own-domain addresses count as the user in discovery only
     type: business-logic
-    status: current
+    status: retired
     surface: none
     given: a Gmail account configured with one or more own domains
     when: discovery evaluates fetched messages
@@ -748,7 +749,7 @@ behaviors:
       - participant addresses at own domains are never proposed as candidates
       - message storage and inbound-outbound classification are unchanged by the own-domain list
     provenance: ['#789', 2026-08-11-gmail-participant-discovery.md]
-    notes: The user operates aliases on a personal domain; the domain list is per-account runtime configuration and is never hardcoded in code, fixtures, or tests (repo PII rule).
+    notes: 'Retired: its then-item that message storage and inbound-outbound classification are unchanged by the own-domain list was reversed. Own-domain and own-address configuration now counts as the user everywhere Gmail asks; discovery is IMP-051 and classification is ING-051.'
 
   - id: IMP-050
     title: Gmail calendar messages feed no discovery
@@ -763,3 +764,18 @@ behaviors:
       - key: no-correspondence-evidence
         text: it adds no message count or co-occurrence evidence to any gmail_correspondence link candidate
     notes: Pairs with ING-046, which drops the same messages from storage.
+
+  - id: IMP-051
+    title: The user's own domains and own addresses count as the user in discovery
+    type: business-logic
+    status: current
+    surface: none
+    given: an enabled email account configured with own domains or own addresses
+    when: discovery evaluates fetched Gmail messages, in any account's mailbox
+    then:
+      - key: own-sender-anchors-trust
+        text: a sender at an own domain, or at an own address, anchors trust like a connected account address
+      - key: own-participant-never-proposed
+        text: a participant at an own domain, or at an own address, is never proposed as a candidate
+    provenance: [gmail-own-addresses.md, GmailSyncProvider.MeSet]
+    notes: Replaces IMP-049. Discovery asks the same me-set as Gmail sync (ING-051). The domain and address lists are runtime configuration set by crm-admin and are never hardcoded in code, fixtures, or tests (repo PII rule).

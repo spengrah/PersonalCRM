@@ -15,6 +15,20 @@ import (
 	"google.golang.org/api/gmail/v1"
 )
 
+// RunProcessMessageForTest drives processMessage with a me-set holding only
+// accountAddrs, the connected accounts' addresses, so tests assert
+// participant/direction resolution + content extraction against real
+// *gmail.Message structs without a DB or bus.
+func (p *GmailSyncProvider) RunProcessMessageForTest(
+	ctx context.Context,
+	msg *gmail.Message,
+	accountID string,
+	knownMap map[string][]uuid.UUID,
+	accountAddrs map[string]struct{},
+) ([]qualifiedRow, error) {
+	return p.processMessage(ctx, msg, accountID, knownMap, testMeSet(accountAddrs))
+}
+
 // --- test helpers ---
 
 // b64url encodes s as a Gmail-style base64url string (with padding).
@@ -111,7 +125,7 @@ func (f *fakeFetcher) GetMessage(_ context.Context, id string) (*gmail.Message, 
 // --- Config ---
 
 func TestGmailSyncProvider_Config(t *testing.T) {
-	p := NewGmailSyncProvider(nil, nil, nil, nil)
+	p := NewGmailSyncProvider(nil, nil, nil, nil, nil)
 	cfg := p.Config()
 	require.Equal(t, GmailSourceName, cfg.Name)
 	require.Equal(t, "email", cfg.Name)
@@ -370,7 +384,7 @@ func buildMessage(t *testing.T, id, threadID, from string, to, cc, bcc []string,
 }
 
 func newProviderForResolution() *GmailSyncProvider {
-	return NewGmailSyncProvider(nil, nil, nil, nil)
+	return NewGmailSyncProvider(nil, nil, nil, nil, nil)
 }
 
 func TestProcessMessage_Inbound(t *testing.T) {
@@ -699,17 +713,17 @@ func TestProcessMessage_MetadataNoDisplayNameStoresEmpty(t *testing.T) {
 }
 
 func TestParseSingleAddress_Name(t *testing.T) {
-	raw, norm, name := parseSingleAddress("\"Contact A\" <Contact.A@Example.com>")
+	raw, norm, name, _ := parseSingleAddress("\"Contact A\" <Contact.A@Example.com>")
 	require.Equal(t, "Contact.A@Example.com", raw)
 	require.Equal(t, "contact.a@example.com", norm)
 	require.Equal(t, "Contact A", name)
 
-	raw, norm, name = parseSingleAddress("bare@example.com")
+	raw, norm, name, _ = parseSingleAddress("bare@example.com")
 	require.Equal(t, "bare@example.com", raw)
 	require.Equal(t, "bare@example.com", norm)
 	require.Equal(t, "", name)
 
-	raw, norm, name = parseSingleAddress("")
+	raw, norm, name, _ = parseSingleAddress("")
 	require.Equal(t, "", raw)
 	require.Equal(t, "", norm)
 	require.Equal(t, "", name)
@@ -717,14 +731,14 @@ func TestParseSingleAddress_Name(t *testing.T) {
 
 func TestParseAddressList_NamesIndexAligned(t *testing.T) {
 	// Happy path: ParseAddressList succeeds; names aligned to addresses.
-	raws, norms, names := parseAddressList("\"First Last\" <first@example.com>, bare@example.com")
+	raws, norms, names, _ := parseAddressList("\"First Last\" <first@example.com>, bare@example.com")
 	require.Equal(t, []string{"first@example.com", "bare@example.com"}, raws)
 	require.Equal(t, []string{"first@example.com", "bare@example.com"}, norms)
 	require.Equal(t, []string{"First Last", ""}, names)
 	require.Len(t, names, len(raws))
 
 	// Empty header → all nil.
-	raws, norms, names = parseAddressList("")
+	raws, norms, names, _ = parseAddressList("")
 	require.Nil(t, raws)
 	require.Nil(t, norms)
 	require.Nil(t, names)
@@ -734,7 +748,7 @@ func TestParseAddressList_CommaSplitFallbackAligned(t *testing.T) {
 	// A malformed entry forces the lenient comma-split fallback. The name/raw
 	// slices must stay the same length so the producer never mis-pairs a name
 	// to the wrong address.
-	raws, _, names := parseAddressList("\"Valid Name\" <ok@example.com>, @@@broken")
+	raws, _, names, _ := parseAddressList("\"Valid Name\" <ok@example.com>, @@@broken")
 	require.Len(t, names, len(raws))
 	require.GreaterOrEqual(t, len(raws), 1)
 }
@@ -846,11 +860,11 @@ func TestScanWindowChunks_FiltersByInternalDateAndStoresBoundaryHashes(t *testin
 	f.messages["boundary"] = &gmail.Message{Id: "boundary", InternalDate: end * 1000}
 	f.messages["future"] = &gmail.Message{Id: "future", InternalDate: (end + 1) * 1000}
 
-	res, err := p.scanWindowChunks(t.Context(), f, []string{query}, "account@example.com", nil, nil, gmailScanWindow{
+	res, err := p.scanWindowChunks(t.Context(), f, []string{query}, "account@example.com", nil, GmailMeSet{}, gmailScanWindow{
 		StartEpoch:          start,
 		EndEpoch:            end,
 		PriorBoundaryHashes: map[string]struct{}{},
-	}, map[string]*gmail.Message{}, nil, nil, nil)
+	}, map[string]*gmail.Message{}, nil, nil)
 	require.NoError(t, err)
 	require.Equal(t, 2, res.Processed)
 	require.Equal(t, 0, res.Matched)
@@ -869,13 +883,13 @@ func TestScanWindowChunks_PriorBoundarySkipsReplayAllowsNewSameSecond(t *testing
 	f.messages["replayed"] = &gmail.Message{Id: "replayed", InternalDate: start * 1000}
 	f.messages["late-indexed"] = &gmail.Message{Id: "late-indexed", InternalDate: start*1000 + 999}
 
-	res, err := p.scanWindowChunks(t.Context(), f, []string{query}, "account@example.com", nil, nil, gmailScanWindow{
+	res, err := p.scanWindowChunks(t.Context(), f, []string{query}, "account@example.com", nil, GmailMeSet{}, gmailScanWindow{
 		StartEpoch: start,
 		EndEpoch:   end,
 		PriorBoundaryHashes: map[string]struct{}{
 			hashGmailMessageID("replayed"): {},
 		},
-	}, map[string]*gmail.Message{}, nil, nil, nil)
+	}, map[string]*gmail.Message{}, nil, nil)
 	require.NoError(t, err)
 	require.Equal(t, 1, res.Processed)
 	require.Equal(t, 0, f.getCalls["replayed"], "known boundary id is skipped by identity hash before refetch")
@@ -892,20 +906,20 @@ func TestScanWindowChunks_ReusesFetchedMessageAcrossOverlappingWindows(t *testin
 	f.messages["overlap"] = &gmail.Message{Id: "overlap", InternalDate: 1150 * 1000}
 
 	fetchedMessages := map[string]*gmail.Message{}
-	first, err := p.scanWindowChunks(t.Context(), f, []string{firstQuery}, "account@example.com", nil, nil, gmailScanWindow{
+	first, err := p.scanWindowChunks(t.Context(), f, []string{firstQuery}, "account@example.com", nil, GmailMeSet{}, gmailScanWindow{
 		StartEpoch:          1000,
 		EndEpoch:            1100,
 		PriorBoundaryHashes: map[string]struct{}{},
-	}, fetchedMessages, nil, nil, nil)
+	}, fetchedMessages, nil, nil)
 	require.NoError(t, err)
 	require.Equal(t, 0, first.Processed, "neighboring overlap fetch is outside the exact first window")
 	require.Equal(t, 1, f.getCalls["overlap"])
 
-	second, err := p.scanWindowChunks(t.Context(), f, []string{secondQuery}, "account@example.com", nil, nil, gmailScanWindow{
+	second, err := p.scanWindowChunks(t.Context(), f, []string{secondQuery}, "account@example.com", nil, GmailMeSet{}, gmailScanWindow{
 		StartEpoch:          1100,
 		EndEpoch:            1200,
 		PriorBoundaryHashes: map[string]struct{}{},
-	}, fetchedMessages, nil, nil, nil)
+	}, fetchedMessages, nil, nil)
 	require.NoError(t, err)
 	require.Equal(t, 1, second.Processed, "cached body is still processed in its exact window")
 	require.Equal(t, 1, f.getCalls["overlap"], "overlap body is fetched once across the run")
@@ -916,11 +930,11 @@ func TestScanWindowChunks_ListFailureReturnsError(t *testing.T) {
 	f := newFakeFetcher()
 	f.listErr = fmt.Errorf("forced list error")
 
-	_, err := p.scanWindowChunks(t.Context(), f, []string{"q"}, "account@example.com", nil, nil, gmailScanWindow{
+	_, err := p.scanWindowChunks(t.Context(), f, []string{"q"}, "account@example.com", nil, GmailMeSet{}, gmailScanWindow{
 		StartEpoch:          1000,
 		EndEpoch:            1100,
 		PriorBoundaryHashes: map[string]struct{}{},
-	}, map[string]*gmail.Message{}, nil, nil, nil)
+	}, map[string]*gmail.Message{}, nil, nil)
 	require.Error(t, err)
 }
 

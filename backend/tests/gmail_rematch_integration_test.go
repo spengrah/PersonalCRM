@@ -105,7 +105,7 @@ func newGmailRematchEnv(t *testing.T, accountIDs []string) *gmailRematchEnv {
 	// email.* events are turned into interactions (not just logged).
 	bus, _ := setupTestEventBusForEmail(t, ctx, database, contactService)
 
-	provider := google.NewGmailSyncProvider(nil, commsRepo, bus, database.Pool)
+	provider := google.NewGmailSyncProvider(nil, commsRepo, syncRepo, bus, database.Pool)
 	handler := google.NewGmailRematchHandler(provider, syncRepo, commsRepo)
 
 	gen, _ := migrationGenerator(t)
@@ -190,10 +190,11 @@ func (e *gmailRematchEnv) cleanupEvents(t *testing.T, externalID string) {
 	})
 }
 
-// inject wires the fake store as the provider's fetcher + sets the me-set.
+// inject wires the fake store as the provider's fetcher + sets the connected
+// accounts' addresses the me-set is built from.
 func (e *gmailRematchEnv) inject(store *recordingMessageStore, meSet map[string]struct{}) {
 	e.provider.SetFetcherFactoryForTest(google.NewFakeGmailFetcherFactoryForTest(store.fetcherFuncs()))
-	e.provider.SetMeSetForTest(meSet)
+	e.provider.SetAccountAddressesForTest(meSet)
 }
 
 // recordingMessageStore is a query-agnostic gmailFetcher that (a) returns all
@@ -617,7 +618,7 @@ func TestGmailRematch_PartialFailure_ReturnsError(t *testing.T) {
 		}
 		return yStore.fetcherFuncs()
 	}))
-	e.provider.SetMeSetForTest(map[string]struct{}{accountX: {}, accountY: {}})
+	e.provider.SetAccountAddressesForTest(map[string]struct{}{accountX: {}, accountY: {}})
 
 	matched, err := e.handler.Rematch(e.ctx, contactA.ID, addrA)
 	require.Error(t, err, "any enabled-account scan failure must surface an error so River retries")

@@ -473,6 +473,47 @@ func (r *SyncRepository) UpdateSyncStateMetadata(ctx context.Context, id uuid.UU
 	return &state, nil
 }
 
+// SetSyncStateMetadataKey sets metadata[key] to value in one statement, keeping
+// every other key the row holds when the statement runs. Unlike
+// UpdateSyncStateMetadata, two writers of different keys cannot erase each
+// other's key.
+func (r *SyncRepository) SetSyncStateMetadataKey(ctx context.Context, id uuid.UUID, key string, value any) (*SyncState, error) {
+	valueBytes, err := json.Marshal(value)
+	if err != nil {
+		return nil, err
+	}
+	dbState, err := r.queries.SetSyncStateMetadataKey(ctx, db.SetSyncStateMetadataKeyParams{
+		ID:    id,
+		Key:   key,
+		Value: valueBytes,
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, db.ErrNotFound
+		}
+		return nil, err
+	}
+	state := convertDbSyncState(dbState)
+	return &state, nil
+}
+
+// DeleteSyncStateMetadataKey removes metadata[key] in one statement, keeping
+// every other key the row holds when the statement runs.
+func (r *SyncRepository) DeleteSyncStateMetadataKey(ctx context.Context, id uuid.UUID, key string) (*SyncState, error) {
+	dbState, err := r.queries.DeleteSyncStateMetadataKey(ctx, db.DeleteSyncStateMetadataKeyParams{
+		ID:  id,
+		Key: key,
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, db.ErrNotFound
+		}
+		return nil, err
+	}
+	state := convertDbSyncState(dbState)
+	return &state, nil
+}
+
 // MarkSyncStateTerminal records a manager-driven source's permanent-disconnect
 // decision — the durable terminal metadata and the error status the staleness
 // watchdog reads — as a single write.

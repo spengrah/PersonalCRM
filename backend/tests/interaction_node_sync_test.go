@@ -373,7 +373,7 @@ func newNodeMailEnv(t *testing.T) *nodeMailEnv {
 	e := newEmailEnv(t, t.Context())
 	return &nodeMailEnv{
 		emailEnv: e,
-		provider: google.NewGmailSyncProvider(nil, e.commsRepo, e.bus, e.database.Pool),
+		provider: google.NewGmailSyncProvider(nil, e.commsRepo, repository.NewSyncRepository(e.database.Queries), e.bus, e.database.Pool),
 		nodes:    repository.NewNodeRepository(e.database.Queries),
 		me:       e.gen.Prefix() + "me@synthetic.example",
 	}
@@ -397,7 +397,7 @@ func (e *nodeMailEnv) newMailContact(t *testing.T) (*repository.Contact, string)
 func (e *nodeMailEnv) sync(t *testing.T, messages ...*gmailapi.Message) {
 	t.Helper()
 	e.provider.SetFetcherFactoryForTest(google.NewFakeGmailFetcherFactoryForTest(newFakeMessageStore(messages).fetcherFuncs()))
-	e.provider.SetMeSetForTest(map[string]struct{}{e.me: {}})
+	e.provider.SetAccountAddressesForTest(map[string]struct{}{e.me: {}})
 	_, err := e.provider.Sync(e.ctx, syncState(e.me, ""), nil)
 	require.NoError(t, err)
 }

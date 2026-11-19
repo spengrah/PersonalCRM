@@ -283,6 +283,44 @@ func (q *Queries) DeleteSyncState(ctx context.Context, id uuid.UUID) error {
 	return err
 }
 
+const DeleteSyncStateMetadataKey = `-- name: DeleteSyncStateMetadataKey :one
+UPDATE external_sync_state
+SET metadata = COALESCE(metadata, '{}'::jsonb) - $1::text,
+    updated_at = NOW()
+WHERE id = $2
+RETURNING id, source, account_id, enabled, status, strategy, last_sync_at, last_successful_sync_at, next_sync_at, sync_cursor, error_message, error_count, metadata, created_at, updated_at
+`
+
+type DeleteSyncStateMetadataKeyParams struct {
+	Key string    `json:"key"`
+	ID  uuid.UUID `json:"id"`
+}
+
+// Removes one metadata key and keeps every other key the row holds when the
+// statement runs.
+func (q *Queries) DeleteSyncStateMetadataKey(ctx context.Context, arg DeleteSyncStateMetadataKeyParams) (*ExternalSyncState, error) {
+	row := q.db.QueryRow(ctx, DeleteSyncStateMetadataKey, arg.Key, arg.ID)
+	var i ExternalSyncState
+	err := row.Scan(
+		&i.ID,
+		&i.Source,
+		&i.AccountID,
+		&i.Enabled,
+		&i.Status,
+		&i.Strategy,
+		&i.LastSyncAt,
+		&i.LastSuccessfulSyncAt,
+		&i.NextSyncAt,
+		&i.SyncCursor,
+		&i.ErrorMessage,
+		&i.ErrorCount,
+		&i.Metadata,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return &i, err
+}
+
 const DeleteSyncStatesByAccountID = `-- name: DeleteSyncStatesByAccountID :exec
 DELETE FROM external_sync_state
 WHERE account_id IS NOT NULL AND account_id = $1
@@ -869,6 +907,45 @@ func (q *Queries) SetSyncStateFreshnessForTest(ctx context.Context, arg SetSyncS
 		arg.ID,
 	)
 	return err
+}
+
+const SetSyncStateMetadataKey = `-- name: SetSyncStateMetadataKey :one
+UPDATE external_sync_state
+SET metadata = COALESCE(metadata, '{}'::jsonb) || jsonb_build_object($1::text, $2::jsonb),
+    updated_at = NOW()
+WHERE id = $3
+RETURNING id, source, account_id, enabled, status, strategy, last_sync_at, last_successful_sync_at, next_sync_at, sync_cursor, error_message, error_count, metadata, created_at, updated_at
+`
+
+type SetSyncStateMetadataKeyParams struct {
+	Key   string    `json:"key"`
+	Value []byte    `json:"value"`
+	ID    uuid.UUID `json:"id"`
+}
+
+// Sets one metadata key and keeps every other key the row holds when the
+// statement runs, so writers of different keys cannot erase each other.
+func (q *Queries) SetSyncStateMetadataKey(ctx context.Context, arg SetSyncStateMetadataKeyParams) (*ExternalSyncState, error) {
+	row := q.db.QueryRow(ctx, SetSyncStateMetadataKey, arg.Key, arg.Value, arg.ID)
+	var i ExternalSyncState
+	err := row.Scan(
+		&i.ID,
+		&i.Source,
+		&i.AccountID,
+		&i.Enabled,
+		&i.Status,
+		&i.Strategy,
+		&i.LastSyncAt,
+		&i.LastSuccessfulSyncAt,
+		&i.NextSyncAt,
+		&i.SyncCursor,
+		&i.ErrorMessage,
+		&i.ErrorCount,
+		&i.Metadata,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return &i, err
 }
 
 const UpdateMacHostSyncCursor = `-- name: UpdateMacHostSyncCursor :one
