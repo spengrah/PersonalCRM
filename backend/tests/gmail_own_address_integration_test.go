@@ -247,6 +247,44 @@ func TestGmailOwnDomain_BatchReplayTakesDirectionFromExplicitAddresses(t *testin
 	})
 }
 
+// TestGmailOwnDomain_BatchReplayRejectsUnmatchableMail proves that batch
+// replay refuses, before sync runs, mail Gmail sync would store for no
+// contact: sent mail whose recipients name no mailbox, and sent mail that
+// reaches the item's contact only through a non-email contact method, which
+// Gmail sync never matches.
+func TestGmailOwnDomain_BatchReplayRejectsUnmatchableMail(t *testing.T) {
+	t.Parallel()
+	e := newOwnAddressEnv(t)
+	account := e.prefix + "me@synthetic.example"
+	ownDomain := e.prefix + "own-domain.example"
+	alias := "alias@" + ownDomain
+	e.emailAccount(t, account, []string{ownDomain}, nil)
+
+	t.Run("sent mail whose recipients name no mailbox", func(t *testing.T) {
+		recipient, recipientAddr := e.contact(t, "")
+		msg := e.message(account, factory.GmailAddresses{From: bare(alias), To: bares(recipientAddr), Sent: true})
+		for _, h := range msg.Message.Payload.Headers {
+			if h.Name == "To" {
+				h.Value = "Undisclosed-recipients:;"
+			}
+		}
+		_, err := e.h.ReplayGmailBatch(e.ctx, []replay.GmailBatchItem{{ContactID: recipient.ID, Spec: msg}})
+		require.ErrorIs(t, err, replay.ErrBatchIdentifierNotOwned)
+		e.requireNothingStored(t, recipient.ID)
+	})
+	t.Run("sent mail reaching the contact only through a Google Chat method", func(t *testing.T) {
+		gchatAddr := e.prefix + "chat-only@synthetic.example"
+		spec := e.gen.Contact(factory.WithNoMethods())
+		spec.Methods = []factory.MethodSpec{{Type: "gchat", Value: gchatAddr, IsPrimary: true}}
+		chatOnly, err := e.h.SeedContact(e.ctx, spec)
+		require.NoError(t, err)
+		msg := e.message(account, factory.GmailAddresses{From: bare(alias), To: bares(e.prefix + "stranger@synthetic.example"), Cc: bares(gchatAddr), Sent: true})
+		_, err = e.h.ReplayGmailBatch(e.ctx, []replay.GmailBatchItem{{ContactID: chatOnly.ID, Spec: msg}})
+		require.ErrorIs(t, err, replay.ErrBatchIdentifierNotOwned)
+		e.requireNothingStored(t, chatOnly.ID)
+	})
+}
+
 // TestGmailOwnAddress_SyncStoresOwnAddressMailAsTheUsers proves that a
 // configured own address is the user's in both directions, whichever of To,
 // Cc and Bcc holds the user or the contact, while another address at its

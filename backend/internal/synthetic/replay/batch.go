@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"time"
 
@@ -236,6 +237,10 @@ type batchEntry struct {
 	// contact among several recipients. Empty means the source has no per-item
 	// peer identifier to check.
 	addressed []string
+	// matchMethodTypes are the contact-method types the source's provider
+	// matches addressed against, such as email alone for Gmail; nil accepts a
+	// method of any type.
+	matchMethodTypes []repository.ContactMethodType
 	// addressedType is how to normalize addressed for comparison against the
 	// contact's methods.
 	addressedType identity.IdentifierType
@@ -303,22 +308,25 @@ func validatePairKeys(source string, entries []batchEntry) error {
 // timeout, so refusing it up front turns a silent 30-second wait into an
 // immediate, self-describing failure.
 func (h *Harness) validateBatchOwnership(ctx context.Context, source string, entries []batchEntry) error {
-	owned := map[uuid.UUID]map[string]struct{}{}
+	owned := map[uuid.UUID][]repository.ContactMethod{}
 	for i, e := range entries {
 		if len(e.addressed) == 0 {
 			continue
 		}
-		set, ok := owned[e.contactID]
+		methods, ok := owned[e.contactID]
 		if !ok {
-			methods, err := h.methodRepo.ListContactMethodsByContact(ctx, e.contactID)
+			var err error
+			methods, err = h.methodRepo.ListContactMethodsByContact(ctx, e.contactID)
 			if err != nil {
 				return fmt.Errorf("%s: list methods for contact %s: %w", source, e.contactID, err)
 			}
-			set = make(map[string]struct{}, len(methods))
-			for _, m := range methods {
+			owned[e.contactID] = methods
+		}
+		set := make(map[string]struct{}, len(methods))
+		for _, m := range methods {
+			if e.matchMethodTypes == nil || slices.Contains(e.matchMethodTypes, repository.ContactMethodType(m.Type)) {
 				set[identity.Normalize(m.Value, identifierTypeForMethod(m.Type))] = struct{}{}
 			}
-			owned[e.contactID] = set
 		}
 		if !ownsAny(set, e.addressed, e.addressedType) {
 			return fmt.Errorf("%s: item %d (%s) addresses %q, none of which contact %s owns: %w",

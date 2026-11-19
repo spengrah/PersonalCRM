@@ -262,14 +262,19 @@ func gmailBatchEntries(items []GmailBatchItem) ([]batchEntry, error) {
 			return nil, fmt.Errorf("gmail: item %d has a nil message", i)
 		}
 		outbound := gmailSpecOutbound(it.Spec)
+		peers := google.GmailPeerAddresses(it.Spec.Message, outbound)
+		if len(peers) == 0 {
+			return nil, fmt.Errorf("gmail: item %d (%s) addresses no peer mailbox: %w", i, it.Spec.ExternalID, ErrBatchIdentifierNotOwned)
+		}
 		out = append(out, batchEntry{
-			contactID:     it.ContactID,
-			identifier:    it.Spec.ExternalID,
-			seeded:        it.Spec.Intent == factory.MatchSeeded,
-			outbound:      outbound,
-			pairKey:       it.PairKey,
-			addressed:     google.GmailPeerAddresses(it.Spec.Message, outbound),
-			addressedType: identity.IdentifierTypeEmail,
+			contactID:        it.ContactID,
+			identifier:       it.Spec.ExternalID,
+			seeded:           it.Spec.Intent == factory.MatchSeeded,
+			outbound:         outbound,
+			pairKey:          it.PairKey,
+			addressed:        peers,
+			matchMethodTypes: []repository.ContactMethodType{repository.ContactMethodEmail},
+			addressedType:    identity.IdentifierTypeEmail,
 		})
 	}
 	return out, nil
