@@ -24,12 +24,13 @@ type fakeRederiveComms struct {
 	rows       []repository.MissingParticipantNamesRow
 	done       map[uuid.UUID]bool
 	backfills  []uuid.UUID
+	names      map[uuid.UUID]repository.ParticipantNames
 	pageCalls  int
 	maxPerCall int32
 }
 
 func newFakeRederiveComms(rows []repository.MissingParticipantNamesRow) *fakeRederiveComms {
-	return &fakeRederiveComms{rows: rows, done: map[uuid.UUID]bool{}}
+	return &fakeRederiveComms{rows: rows, done: map[uuid.UUID]bool{}, names: map[uuid.UUID]repository.ParticipantNames{}}
 }
 
 func (f *fakeRederiveComms) ListMissingParticipantNames(_ context.Context, _ time.Time, afterID uuid.UUID, batchSize int32) ([]repository.MissingParticipantNamesRow, error) {
@@ -55,8 +56,9 @@ func (f *fakeRederiveComms) ListMissingParticipantNames(_ context.Context, _ tim
 	return out, nil
 }
 
-func (f *fakeRederiveComms) BackfillParticipantNames(_ context.Context, id uuid.UUID, _ repository.ParticipantNames) (int64, error) {
+func (f *fakeRederiveComms) BackfillParticipantNames(_ context.Context, id uuid.UUID, names repository.ParticipantNames) (int64, error) {
 	f.backfills = append(f.backfills, id)
+	f.names[id] = names
 	f.done[id] = true
 	return 1, nil
 }
@@ -78,7 +80,7 @@ func newFakeRederiveFetcher() *fakeRederiveFetcher {
 	}
 }
 
-func (f *fakeRederiveFetcher) RefetchParticipantNames(_ context.Context, _, gmailID string) (repository.ParticipantNames, error) {
+func (f *fakeRederiveFetcher) RefetchParticipantNames(_ context.Context, _, gmailID string, _ emailMetadata) (repository.ParticipantNames, error) {
 	f.calls[gmailID]++
 	if n, ok := f.transient[gmailID]; ok && n > 0 {
 		f.transient[gmailID] = n - 1
@@ -255,4 +257,61 @@ func TestRederive_IdempotentSecondRun(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 0, res2.Scanned)
 	require.Equal(t, 0, res2.Rederived)
+}
+
+// TestRederive_NamesAlignWithStoredAddresses is the regression for names
+// written by index onto stored addresses that the re-parse splits differently:
+// a To header whose malformed entry sends it to the fallback, beside a display
+// name holding a comma. Each stored address gets the name the re-fetched header
+// gives that address, whether the earlier comma split stored the header's
+// fragments or the current parser stored its mailboxes, and a fragment gets no
+// name.
+func TestRederive_NamesAlignWithStoredAddresses(t *testing.T) {
+	const account = "me@example.com"
+	msg := buildMessage(t, "gmail-1", "t1", `"Sender Name" <sender@example.com>`,
+		[]string{`"Doe, Jane" <jane@example.com>`, `"Bob Roe" <bob@example.com>`, "bad<<"},
+		nil, nil, "Subj", "body", "<m1@example.com>", 1700000000000)
+	f := newFakeFetcher()
+	f.messages["gmail-1"] = msg
+	provider := newProviderForResolution()
+	provider.SetFetcherFactoryForTest(func(context.Context, string) (gmailFetcher, error) { return f, nil })
+
+	row := func(t *testing.T, id uuid.UUID, to []string) repository.MissingParticipantNamesRow {
+		t.Helper()
+		b, err := json.Marshal(map[string]any{
+			"from":              "sender@example.com",
+			"to":                to,
+			"account_gmail_ids": map[string]string{account: "gmail-1"},
+		})
+		require.NoError(t, err)
+		acct := account
+		return repository.MissingParticipantNamesRow{ID: id, AccountID: &acct, SourceMetadata: b}
+	}
+	legacy := orderedID(1)
+	current := orderedID(2)
+	comms := newFakeRederiveComms([]repository.MissingParticipantNamesRow{
+		row(t, legacy, []string{`"Doe`, `Jane" <jane@example.com>`, "bob@example.com", "bad<<"}),
+		row(t, current, []string{"jane@example.com", "bob@example.com", "bad<<"}),
+	})
+
+	res, err := newRederiveService(comms, provider).RederiveNames(t.Context(), accelerated.GetCurrentTime().Add(-time.Hour))
+	require.NoError(t, err)
+	require.Equal(t, 2, res.Rederived)
+
+	t.Run("names follow the addresses an earlier comma split stored", func(t *testing.T) {
+		require.Equal(t, repository.ParticipantNames{
+			FromName: "Sender Name",
+			ToNames:  []string{"", "", "Bob Roe", ""},
+			CcNames:  []string{},
+			BccNames: []string{},
+		}, comms.names[legacy])
+	})
+	t.Run("names follow the mailboxes the current parser stored", func(t *testing.T) {
+		require.Equal(t, repository.ParticipantNames{
+			FromName: "Sender Name",
+			ToNames:  []string{"Doe, Jane", "Bob Roe", ""},
+			CcNames:  []string{},
+			BccNames: []string{},
+		}, comms.names[current])
+	})
 }

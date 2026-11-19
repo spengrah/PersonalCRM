@@ -15,8 +15,15 @@ import (
 // constructor and GmailSyncProvider.MeSet the one way Gmail code obtains it;
 // the zero value holds no address.
 type GmailMeSet struct {
-	addresses map[string]struct{}
-	domains   map[string]struct{}
+	// accounts holds the connected accounts' addresses, normalized by
+	// matching.NormalizeEmail, the form a header mailbox has always been
+	// compared to them in.
+	accounts map[string]struct{}
+	// ownAddresses holds the own addresses by sync.EmailOwnAddressKey, so
+	// only the configured mailbox, every character of its local part
+	// included, is the user.
+	ownAddresses map[string]struct{}
+	domains      map[string]struct{}
 }
 
 // Contains reports whether mailbox, one mailbox net/mail parsed from a header,
@@ -31,7 +38,10 @@ func (m GmailMeSet) Contains(mailbox *mail.Address) bool {
 	if normAddr == "" {
 		return false
 	}
-	if _, ok := m.addresses[normAddr]; ok {
+	if _, ok := m.accounts[normAddr]; ok {
+		return true
+	}
+	if _, ok := m.ownAddresses[sync.EmailOwnAddressKey(mailbox.Address)]; ok {
 		return true
 	}
 	domain := domainOf(normAddr)
@@ -48,12 +58,13 @@ func (m GmailMeSet) Contains(mailbox *mail.Address) bool {
 // another account's mailbox is synced.
 func buildGmailMeSet(accountAddrs []string, states []repository.SyncState) GmailMeSet {
 	m := GmailMeSet{
-		addresses: make(map[string]struct{}, len(accountAddrs)),
-		domains:   make(map[string]struct{}),
+		accounts:     make(map[string]struct{}, len(accountAddrs)),
+		ownAddresses: make(map[string]struct{}),
+		domains:      make(map[string]struct{}),
 	}
 	for _, a := range accountAddrs {
 		if n := matching.NormalizeEmail(a); n != "" {
-			m.addresses[n] = struct{}{}
+			m.accounts[n] = struct{}{}
 		}
 	}
 	for _, st := range states {
@@ -61,7 +72,7 @@ func buildGmailMeSet(accountAddrs []string, states []repository.SyncState) Gmail
 			m.domains[d] = struct{}{}
 		}
 		for a := range sync.EmailOwnAddresses.Read(st.Metadata) {
-			m.addresses[a] = struct{}{}
+			m.ownAddresses[a] = struct{}{}
 		}
 	}
 	return m

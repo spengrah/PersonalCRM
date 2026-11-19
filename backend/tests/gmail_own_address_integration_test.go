@@ -264,6 +264,44 @@ func TestGmailOwnAddress_SyncStoresOwnAddressMailAsTheUsers(t *testing.T) {
 	})
 }
 
+// TestGmailOwnAddress_QuotedLocalPartSpaceIsSignificant is the regression for
+// an own address compared without the space a quoted local part holds: each
+// spelling, unquoted and quoted with a leading space, is the user only as
+// configured, and the other spelling is another address at the shared domain.
+func TestGmailOwnAddress_QuotedLocalPartSpaceIsSignificant(t *testing.T) {
+	t.Parallel()
+	e := newOwnAddressEnv(t)
+	account := e.prefix + "me@synthetic.example"
+	sharedDomain := e.prefix + "shared-domain.example"
+	// The factory renders an address whose local part starts with a space
+	// quoted, as `" other"@shared-domain.example`.
+	unquotedOwn := "alias@" + sharedDomain
+	quotedOwn := " other@" + sharedDomain
+	state := e.emailAccount(t, account, nil, []string{unquotedOwn, `" other"@` + sharedDomain})
+
+	quotedOfUnquoted, quotedOfUnquotedAddr := e.contact(t, "")
+	unquotedOfQuoted, unquotedOfQuotedAddr := e.contact(t, "")
+	quoted, quotedAddr := e.contact(t, "")
+	quotedOfUnquotedMsg := e.message(account, factory.GmailAddresses{From: bare(" alias@" + sharedDomain), To: bares(quotedOfUnquotedAddr)})
+	unquotedOfQuotedMsg := e.message(account, factory.GmailAddresses{From: bare("other@" + sharedDomain), To: bares(unquotedOfQuotedAddr)})
+	quotedMsg := e.message(account, factory.GmailAddresses{From: bare(quotedOwn), To: bares(quotedAddr)})
+
+	e.sync(t, e.provider(t, quotedOfUnquotedMsg, unquotedOfQuotedMsg, quotedMsg), state)
+
+	t.Run("the quoted spelling of an unquoted own address is not the user", func(t *testing.T) {
+		// spec: ING-051.shared-domain-not-own
+		e.requireNothingStored(t, quotedOfUnquoted.ID)
+	})
+	t.Run("the unquoted spelling of a quoted own address is not the user", func(t *testing.T) {
+		// spec: ING-051.shared-domain-not-own
+		e.requireNothingStored(t, unquotedOfQuoted.ID)
+	})
+	t.Run("an own address whose quoted local part starts with a space is the user", func(t *testing.T) {
+		// spec: ING-051.outbound-from-own
+		e.requireStored(t, quoted.ID, quotedMsg, repository.InteractionDirectionOutbound)
+	})
+}
+
 // TestGmailOwnAddress_MalformedRecipientKeepsMailboxBoundaries is the
 // regression for a recipient header holding one malformed entry, which
 // net/mail cannot parse as an address list: sync still parses each other
@@ -295,11 +333,13 @@ func TestGmailOwnAddress_MalformedRecipientKeepsMailboxBoundaries(t *testing.T) 
 	quotedSender, quotedSenderAddr := e.contact(t, "")
 	namedSender, namedSenderAddr := e.contact(t, "")
 	embeddedSender, embeddedSenderAddr := e.contact(t, "")
+	unterminatedSender, unterminatedSenderAddr := e.contact(t, "")
 	quotedMsg := toRaw(quotedSenderAddr, quotedOwnAddress+", "+malformed)
 	namedMsg := toRaw(namedSenderAddr, `"Alias, Own" <alias@`+ownDomain+">, "+malformed)
 	embeddedMsg := toRaw(embeddedSenderAddr, `"a,alias@`+ownDomain+`,b"@`+sharedDomain+", "+malformed)
+	unterminatedMsg := toRaw(unterminatedSenderAddr, `"broken, `+account)
 
-	e.sync(t, e.provider(t, quotedMsg, namedMsg, embeddedMsg), state)
+	e.sync(t, e.provider(t, quotedMsg, namedMsg, embeddedMsg, unterminatedMsg), state)
 
 	t.Run("an own address with a comma in its quoted local part, beside a malformed entry, is the user", func(t *testing.T) {
 		// spec: ING-051.inbound-to-own
@@ -312,6 +352,12 @@ func TestGmailOwnAddress_MalformedRecipientKeepsMailboxBoundaries(t *testing.T) 
 	t.Run("an own-domain address inside another address's quoted local part, beside a malformed entry, is not the user", func(t *testing.T) {
 		// spec: ING-051.unparsed-header-not-own
 		e.requireNothingStored(t, embeddedSender.ID)
+	})
+	t.Run("a connected account's address after an unterminated quoted string is the user", func(t *testing.T) {
+		// The comma split the fallback has always made recovers the
+		// connected account's address, so mail at it is classified as before
+		// (ING-051's connected-account case, which no then-item keys).
+		e.requireStored(t, unterminatedSender.ID, unterminatedMsg, repository.InteractionDirectionInbound)
 	})
 }
 

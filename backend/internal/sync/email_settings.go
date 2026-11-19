@@ -45,8 +45,10 @@ type emailOwnListDef struct {
 	// parse validates non-empty operator input and returns the stored form
 	// of each entry.
 	parse func(input string) ([]string, error)
-	// keepStored reports whether a stored entry, normalized by
-	// matching.NormalizeEmail, is well formed.
+	// normalize maps a stored entry to the form Gmail sync compares it in.
+	normalize func(stored string) string
+	// keepStored reports whether a stored entry, normalized by normalize, is
+	// well formed.
 	keepStored func(normalized string) bool
 }
 
@@ -59,12 +61,14 @@ func (l EmailOwnList) def() emailOwnListDef {
 		return emailOwnListDef{
 			key:        "own_domains",
 			parse:      parseOwnDomains,
+			normalize:  matching.NormalizeEmail,
 			keepStored: func(s string) bool { return !strings.Contains(s, "@") },
 		}
 	case EmailOwnAddresses:
 		return emailOwnListDef{
 			key:        "own_addresses",
 			parse:      parseOwnAddresses,
+			normalize:  EmailOwnAddressKey,
 			keepStored: func(s string) bool { return strings.Contains(s, "@") },
 		}
 	default:
@@ -74,8 +78,9 @@ func (l EmailOwnList) def() emailOwnListDef {
 
 // Read parses the list from an email sync state's metadata. Nil-safe: nil or
 // absent metadata, a missing key, or a value that isn't a JSON array yields an
-// empty set. Each entry is normalized by matching.NormalizeEmail, the
-// normalization Gmail sync compares addresses in; a malformed entry is ignored
+// empty set. Each entry is normalized to the form Gmail sync compares it in:
+// an own domain by matching.NormalizeEmail, an own address by
+// EmailOwnAddressKey. A malformed entry is ignored
 // rather than rejected, so metadata written outside Set degrades silently
 // instead of blocking sync.
 func (l EmailOwnList) Read(metadata map[string]any) map[string]struct{} {
@@ -90,7 +95,7 @@ func (l EmailOwnList) Read(metadata map[string]any) map[string]struct{} {
 		if !ok {
 			continue
 		}
-		s = matching.NormalizeEmail(s)
+		s = def.normalize(s)
 		if s == "" || !def.keepStored(s) {
 			continue
 		}
@@ -175,19 +180,31 @@ func normalizeOwnDomain(raw string) (string, error) {
 
 // parseOwnAddresses parses input as a mail header address list (net/mail), the
 // grammar Gmail sync parses a To header by, so a comma inside a quoted local
-// part stays within its address. It returns each address the list yields,
-// normalized by matching.NormalizeEmail as sync normalizes a header address. An
-// entry such as "<me@shared-domain.example>" is therefore stored as the
-// address a header carrying it would be compared in. Input net/mail cannot
-// parse as an address list is rejected.
+// part stays within its address. It returns the EmailOwnAddressKey of each
+// address the list yields, the form Gmail sync compares a parsed header
+// mailbox in. An entry such as "<me@shared-domain.example>" is therefore
+// stored as the address a header carrying it would be compared in, and an
+// entry whose quoted local part holds a space keeps that space. Input net/mail
+// cannot parse as an address list is rejected.
 func parseOwnAddresses(input string) ([]string, error) {
 	addrs, err := mail.ParseAddressList(input)
 	if err != nil {
 		return nil, fmt.Errorf("own addresses %q must be a list of email addresses: %w", input, err)
 	}
-	normalized := make([]string, 0, len(addrs))
+	keys := make([]string, 0, len(addrs))
 	for _, addr := range addrs {
-		normalized = append(normalized, matching.NormalizeEmail(addr.Address))
+		keys = append(keys, EmailOwnAddressKey(addr.Address))
 	}
-	return normalized, nil
+	return keys, nil
+}
+
+// EmailOwnAddressKey is the one form an own address is stored and compared in:
+// the address net/mail parsed, its quoting removed, lowercased and otherwise
+// unchanged. Every character of a quoted local part is significant (RFC 5321
+// section 4.1.2), so the key keeps a space a quoted local part holds, where
+// matching.NormalizeEmail would trim it: " alias"@shared-domain.example and
+// alias@shared-domain.example are different mailboxes, and only the configured
+// one is the user.
+func EmailOwnAddressKey(address string) string {
+	return strings.ToLower(address)
 }

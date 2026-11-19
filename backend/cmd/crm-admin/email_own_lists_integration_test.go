@@ -122,6 +122,15 @@ func TestSetEmailOwnAddresses_Integration_SetsNormalizesAndClears(t *testing.T) 
 		require.Contains(t, out, "addresses=user,alias@shared-domain.example")
 	})
 
+	t.Run("an address whose quoted local part starts with a space keeps the space", func(t *testing.T) {
+		// The space is part of the mailbox, so the stored address is not the
+		// unquoted alias@shared-domain.example.
+		out, err := e.runVerb(t, nil, "--set-email-own-addresses", `" Alias"@Shared-Domain.Example`)
+		require.NoError(t, err)
+		require.Equal(t, []any{" alias@shared-domain.example"}, e.metadata(t, id)["own_addresses"])
+		require.Contains(t, out, "addresses= alias@shared-domain.example")
+	})
+
 	t.Run("an empty string clears only the own addresses", func(t *testing.T) {
 		_, err := e.runVerb(t, nil, "--set-email-own-addresses=")
 		require.NoError(t, err)

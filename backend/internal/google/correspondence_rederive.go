@@ -58,10 +58,11 @@ type rederiveCommsRepo interface {
 }
 
 // rederiveFetcher is the narrow provider surface the runner needs. Concrete:
-// *GmailSyncProvider.RefetchParticipantNames. An interface so the runner unit
+// *GmailSyncProvider.RefetchParticipantNames, which returns names index-aligned
+// with stored, the row's stored addresses. An interface so the runner unit
 // test injects a fake with no OAuth.
 type rederiveFetcher interface {
-	RefetchParticipantNames(ctx context.Context, accountID, gmailMessageID string) (repository.ParticipantNames, error)
+	RefetchParticipantNames(ctx context.Context, accountID, gmailMessageID string, stored emailMetadata) (repository.ParticipantNames, error)
 }
 
 // CorrespondenceNameRederiveService performs the one-time historical
@@ -132,7 +133,7 @@ func (s *CorrespondenceNameRederiveService) RederiveNames(ctx context.Context, s
 // processRow re-derives one row's names, updating the result counts. It never
 // returns an error: each outcome maps to a counter (continue-on-error).
 func (s *CorrespondenceNameRederiveService) processRow(ctx context.Context, row repository.MissingParticipantNamesRow, result *CorrespondenceRederiveResult) {
-	accountID, gmailID, ok := resolveRefetchTarget(row)
+	accountID, gmailID, stored, ok := resolveRefetchTarget(row)
 	if !ok {
 		// No Gmail call made — no pacing needed (and we must not slow a backlog
 		// that is mostly account-less rows).
@@ -145,7 +146,7 @@ func (s *CorrespondenceNameRederiveService) processRow(ctx context.Context, row 
 	// Gmail back-to-back. Defer keeps the single sleep on all return paths.
 	defer func() { _ = s.sleep(ctx, rederiveInterCallDelay) }()
 
-	names, err := s.refetchWithRetry(ctx, accountID, gmailID)
+	names, err := s.refetchWithRetry(ctx, accountID, gmailID, stored)
 	if err != nil {
 		switch {
 		case errors.Is(err, errCorrespondenceUnavailable):
@@ -179,11 +180,11 @@ func (s *CorrespondenceNameRederiveService) processRow(ctx context.Context, row 
 // refetchWithRetry calls the provider re-fetch, retrying transient (429/5xx)
 // failures with bounded exponential backoff. A permanent unavailability or a
 // hard error returns immediately.
-func (s *CorrespondenceNameRederiveService) refetchWithRetry(ctx context.Context, accountID, gmailID string) (repository.ParticipantNames, error) {
+func (s *CorrespondenceNameRederiveService) refetchWithRetry(ctx context.Context, accountID, gmailID string, stored emailMetadata) (repository.ParticipantNames, error) {
 	backoff := rederiveBackoffBase
 	var lastErr error
 	for attempt := 0; attempt <= rederiveMaxTransientRetries; attempt++ {
-		names, err := s.fetcher.RefetchParticipantNames(ctx, accountID, gmailID)
+		names, err := s.fetcher.RefetchParticipantNames(ctx, accountID, gmailID, stored)
 		if err == nil {
 			return names, nil
 		}
@@ -202,31 +203,33 @@ func (s *CorrespondenceNameRederiveService) refetchWithRetry(ctx context.Context
 }
 
 // resolveRefetchTarget extracts the (accountID, gmailID) re-fetch target from a
-// row. A re-fetch needs BOTH a real connected account_id (newFetcher calls
-// GetClientForAccount) AND that account's per-mailbox gmail id under
+// row, and the row's stored From/To/Cc/Bcc addresses the re-derived names are
+// aligned with. A re-fetch needs BOTH a real connected account_id (newFetcher
+// calls GetClientForAccount) AND that account's per-mailbox gmail id under
 // source_metadata.account_gmail_ids.<account_id>. The __unknown__ key holds a
 // gmail id but no account to fetch with, so it is never a valid target. Returns
 // ok=false (→ SkippedNoGmailID) when either is missing.
-func resolveRefetchTarget(row repository.MissingParticipantNamesRow) (accountID, gmailID string, ok bool) {
+func resolveRefetchTarget(row repository.MissingParticipantNamesRow) (accountID, gmailID string, stored emailMetadata, ok bool) {
 	if row.AccountID == nil || *row.AccountID == "" {
-		return "", "", false
+		return "", "", emailMetadata{}, false
 	}
 	account := *row.AccountID
 	if account == correspondenceUnknownAccountKey {
-		return "", "", false
+		return "", "", emailMetadata{}, false
 	}
 	var meta struct {
+		emailMetadata
 		AccountGmailIDs map[string]string `json:"account_gmail_ids"`
 	}
 	if len(row.SourceMetadata) == 0 {
-		return "", "", false
+		return "", "", emailMetadata{}, false
 	}
 	if err := json.Unmarshal(row.SourceMetadata, &meta); err != nil {
-		return "", "", false
+		return "", "", emailMetadata{}, false
 	}
 	gid, present := meta.AccountGmailIDs[account]
 	if !present || gid == "" {
-		return "", "", false
+		return "", "", emailMetadata{}, false
 	}
-	return account, gid, true
+	return account, gid, meta.emailMetadata, true
 }
