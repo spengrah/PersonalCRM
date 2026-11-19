@@ -239,27 +239,38 @@ func TestGmailOwnDomain_BatchReplayTakesDirectionFromExplicitAddresses(t *testin
 	})
 }
 
-// TestGmailOwnDomain_BatchReplayClassifiesAsSyncDoes proves that batch
-// replay takes a message's direction from Gmail sync's own decision, its From
-// address against the user's addresses, rather than from its label: mail from
-// an own-domain address to a contact, built without GmailAddresses.Sent and so
-// labelled INBOX, is replayed as the contact's outbound mail, as Gmail sync
-// stores it. A review caught batch replay reading the label and rejecting
-// this message.
-func TestGmailOwnDomain_BatchReplayClassifiesAsSyncDoes(t *testing.T) {
+// TestGmailOwnDomain_BatchReplayRecordsOwnDomainMail proves that batch
+// replay records mail with explicit own-domain addresses in the direction its
+// shape states: mail the user sent from an own-domain address, stated with
+// GmailAddresses.Sent, is the contact's outbound mail, and mail a contact sent
+// to an own-domain address is the contact's inbound mail.
+func TestGmailOwnDomain_BatchReplayRecordsOwnDomainMail(t *testing.T) {
 	t.Parallel()
 	e := newOwnAddressEnv(t)
 	account := e.prefix + "me@synthetic.example"
 	ownDomain := e.prefix + "own-domain.example"
+	alias := "alias@" + ownDomain
 	e.emailAccount(t, account, []string{ownDomain}, nil)
 
 	recipient, recipientAddr := e.contact(t, "")
-	msg := e.message(account, factory.GmailAddresses{From: bare("alias@" + ownDomain), To: bares(recipientAddr)})
+	sender, senderAddr := e.contact(t, "")
+	sentMsg := e.message(account, factory.GmailAddresses{From: bare(alias), To: bares(recipientAddr), Sent: true})
+	receivedMsg := e.message(account, factory.GmailAddresses{From: bare(senderAddr), To: bares(alias)})
 
-	_, err := e.h.ReplayGmailBatch(e.ctx, []replay.GmailBatchItem{{ContactID: recipient.ID, Spec: msg}})
+	_, err := e.h.ReplayGmailBatch(e.ctx, []replay.GmailBatchItem{
+		{ContactID: recipient.ID, Spec: sentMsg},
+		{ContactID: sender.ID, Spec: receivedMsg},
+	})
 	require.NoError(t, err)
 
-	e.requireStored(t, recipient.ID, msg, repository.InteractionDirectionOutbound)
+	t.Run("mail the user sent from an own-domain address is outbound", func(t *testing.T) {
+		// spec: ING-051.outbound-from-own
+		e.requireStored(t, recipient.ID, sentMsg, repository.InteractionDirectionOutbound)
+	})
+	t.Run("mail a contact sent to an own-domain address is inbound", func(t *testing.T) {
+		// spec: ING-051.inbound-to-own
+		e.requireStored(t, sender.ID, receivedMsg, repository.InteractionDirectionInbound)
+	})
 }
 
 // TestGmailOwnAddress_SyncStoresOwnAddressMailAsTheUsers proves that a

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/mail"
 	"time"
 
 	"personal-crm/backend/internal/google"
@@ -107,22 +108,15 @@ type GmailBatchItem struct {
 func (h *Harness) ReplayGmailBatch(ctx context.Context, items []GmailBatchItem) (BatchResult, error) {
 	const source = "gmail"
 
-	// Each message's direction is Gmail sync's own decision against the
-	// account's me-set, which the provider reads from the database, so the
-	// account and its me-set come before the entries.
-	accountID, err := gmailBatchAccount(items)
-	if err != nil {
-		return BatchResult{}, err
-	}
-	meSet, err := h.gmailProvider(accountID, nil).MeSet(ctx)
-	if err != nil {
-		return BatchResult{}, fmt.Errorf("gmail: me-set: %w", err)
-	}
-	entries, err := gmailBatchEntries(items, meSet)
+	entries, err := gmailBatchEntries(items)
 	if err != nil {
 		return BatchResult{}, err
 	}
 	if err := validateBatchStructure(source, entries); err != nil {
+		return BatchResult{}, err
+	}
+	accountID, err := gmailBatchAccount(items)
+	if err != nil {
 		return BatchResult{}, err
 	}
 
@@ -257,22 +251,17 @@ func gmailFetcherFuncs(specs []factory.GmailMessageSpec) google.FakeGmailFetcher
 }
 
 // gmailBatchEntries projects the typed items into the source-neutral view the
-// shared preflight and partition helpers work over. Direction is Gmail sync's
-// own decision: a message is outbound when meSet counts its From address as
-// the user's (GmailMeSet.SentByUser), so batch replay drives every message in
-// the direction sync stores it. The addressed identifier is the peer side of
-// the message — the value that decides whether the contact matches at all:
-// the From header of an inbound message, the To header of an outbound one,
-// each read as one address (google.GmailHeaderAddress). A To header of several
-// addresses does not read as one address, so its whole text is the addressed
-// identifier, which no contact owns.
-func gmailBatchEntries(items []GmailBatchItem, meSet google.GmailMeSet) ([]batchEntry, error) {
+// shared preflight and partition helpers work over. Direction comes from the
+// SENT label (what the provider itself reads), and the addressed identifier is
+// the peer side of the message — the value that decides whether the contact
+// matches at all.
+func gmailBatchEntries(items []GmailBatchItem) ([]batchEntry, error) {
 	out := make([]batchEntry, 0, len(items))
 	for i, it := range items {
 		if it.Spec.Message == nil {
 			return nil, fmt.Errorf("gmail: item %d has a nil message", i)
 		}
-		outbound := meSet.SentByUser(it.Spec.Message)
+		outbound := gmailSpecOutbound(it.Spec)
 		peerHeader := "From"
 		if outbound {
 			peerHeader = "To"
@@ -283,11 +272,52 @@ func gmailBatchEntries(items []GmailBatchItem, meSet google.GmailMeSet) ([]batch
 			seeded:        it.Spec.Intent == factory.MatchSeeded,
 			outbound:      outbound,
 			pairKey:       it.PairKey,
-			addressed:     google.GmailHeaderAddress(it.Spec.Message, peerHeader),
+			addressed:     gmailAddressedIdentifier(gmailSpecHeader(it.Spec, peerHeader)),
 			addressedType: identity.IdentifierTypeEmail,
 		})
 	}
 	return out, nil
+}
+
+// gmailSpecOutbound reports whether the provider will derive OUTBOUND from this
+// payload. The provider decides on From ∈ meSet; the factory keeps the SENT
+// label in lockstep with that swap, and the label is the cheap read.
+func gmailSpecOutbound(spec factory.GmailMessageSpec) bool {
+	if spec.Message == nil {
+		return false
+	}
+	for _, label := range spec.Message.LabelIds {
+		if label == "SENT" {
+			return true
+		}
+	}
+	return false
+}
+
+// gmailAddressedIdentifier returns the first address an address header names,
+// so a header the factory renders with a display name or angle brackets, as
+// explicit GmailMessageShape.Addresses are, compares by its address. A header
+// that does not parse as an address list is returned as it is.
+func gmailAddressedIdentifier(header string) string {
+	addrs, err := mail.ParseAddressList(header)
+	// best-effort: an unparseable header compares as its raw text, as replay always compared it.
+	if err != nil || len(addrs) == 0 {
+		return header
+	}
+	return addrs[0].Address
+}
+
+// gmailSpecHeader returns a header value from a Gmail payload ("" if absent).
+func gmailSpecHeader(spec factory.GmailMessageSpec, name string) string {
+	if spec.Message == nil || spec.Message.Payload == nil {
+		return ""
+	}
+	for _, hdr := range spec.Message.Payload.Headers {
+		if hdr.Name == name {
+			return hdr.Value
+		}
+	}
+	return ""
 }
 
 // gmailBatchInstants returns each item's send instant (the wire epoch the
@@ -331,15 +361,11 @@ func gmailBatchSpanWithinReach(items []GmailBatchItem) error {
 
 // gmailBatchAccount returns the single connected account the batch is driven
 // under. The me-set and sync state are per account, so a mixed-account batch
-// would silently drop every payload belonging to the other account. An empty
-// batch is on no account; validateBatchStructure rejects it.
+// would silently drop every payload belonging to the other account.
 func gmailBatchAccount(items []GmailBatchItem) (string, error) {
-	var account string
+	account := items[0].Spec.AccountID
 	for i, it := range items {
-		switch {
-		case i == 0:
-			account = it.Spec.AccountID
-		case it.Spec.AccountID != account:
+		if it.Spec.AccountID != account {
 			return "", fmt.Errorf("gmail: item %d is on account %q but the batch is on %q: %w",
 				i, it.Spec.AccountID, account, ErrBatchMixedAccounts)
 		}

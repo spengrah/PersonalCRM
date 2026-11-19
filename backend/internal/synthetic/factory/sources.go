@@ -138,9 +138,10 @@ type GmailAddresses struct {
 	Bcc  []GmailAddress
 	// Sent states that the mailbox's owner sent the message, which gives it
 	// the SENT label in place of INBOX. Set it for mail the user sent, such
-	// as mail From an own-domain address. Gmail sync and batch replay take the
-	// message's direction from its From address against the user's addresses
-	// (google.GmailMeSet.SentByUser), never from the label.
+	// as mail From an own-domain address. Batch replay takes the message's
+	// direction from the label; Gmail sync takes it from the addresses against
+	// the configured own domains and own addresses, which the factory cannot
+	// see, so Sent states the author's intent.
 	Sent bool
 }
 

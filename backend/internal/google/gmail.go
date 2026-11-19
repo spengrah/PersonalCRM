@@ -1226,7 +1226,7 @@ func (p *GmailSyncProvider) processMessage(
 			meInR = true
 		}
 	}
-	fromIsMe := meSet.SentByUser(msg)
+	fromIsMe := meSet.Contains(from)
 
 	// Ordered, deduped recipients for the deterministic outbound peer-handle
 	// precedence (To, then Cc, then Bcc; header order within a bucket).
@@ -1403,22 +1403,6 @@ type parsedAddress struct {
 // a parsed address, such as one to ask GmailMeSet.Contains about.
 func ParseAddress(header string) parsedAddress {
 	return parseSingleAddress(header)
-}
-
-// headerAddress is msg's header name, found as Gmail sync finds a header (the
-// first of that name, in any case), read as one address as Gmail sync reads a
-// From header.
-func headerAddress(msg *gmail.Message, name string) parsedAddress {
-	return parseSingleAddress(newHeaderLookup(msg.Payload).first(name))
-}
-
-// GmailHeaderAddress is the address of msg's header name read as one address,
-// as Gmail sync reads a From header (headerAddress): the address net/mail
-// parses from it, or the header's trimmed text when it does not parse as one
-// address, such as a list of several. It is "" for an absent header or one of
-// only spaces.
-func GmailHeaderAddress(msg *gmail.Message, name string) string {
-	return headerAddress(msg, name).raw
 }
 
 // parsedMailbox is the parsedAddress of a mailbox net/mail parsed.

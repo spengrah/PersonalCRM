@@ -4,8 +4,6 @@ import (
 	"personal-crm/backend/internal/matching"
 	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/sync"
-
-	"google.golang.org/api/gmail/v1"
 )
 
 // GmailMeSet answers "is this address the user" for Gmail sync, the Gmail
@@ -50,14 +48,6 @@ func (m GmailMeSet) Contains(a parsedAddress) bool {
 	}
 	_, ok := m.domains[domain]
 	return ok
-}
-
-// SentByUser reports whether Gmail sync counts msg as mail the user sent:
-// whether its From address is the user's (Contains). Gmail sync stores mail
-// the user sent as outbound mail for each contact among its recipients, and
-// synthetic batch replay takes a message's direction from this same test.
-func (m GmailMeSet) SentByUser(msg *gmail.Message) bool {
-	return m.Contains(headerAddress(msg, "From"))
 }
 
 // buildGmailMeSet builds the me-set from the connected accounts' addresses and
