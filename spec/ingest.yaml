@@ -749,6 +749,6 @@ behaviors:
       - key: rematch-same-rule
         text: the identifier rematch scan classifies mail from or to an address at an own domain or an own address as sync does
       - key: unparsed-header-not-own
-        text: in a From header that does not parse as one mailbox, or a To, Cc or Bcc header that does not parse as an address list, no entry is the user's address by an own domain or an own address, whatever domain its text names; a connected account's address among the header's comma-separated entries is the user's
+        text: in a From header that does not parse as one mailbox, or a To, Cc or Bcc header that does not parse as an address list, no text is the user's address by an own domain or an own address, whatever domain it names; a malformed From is the user's only when its whole trimmed text is a connected account's address, and in a malformed To, Cc or Bcc header a connected account's address among its comma-separated entries is the user's
     provenance: [gmail-own-addresses.md, GmailSyncProvider.MeSet, GmailSyncProvider.processMessage]
     notes: crm-admin --set-email-own-domains and --set-email-own-addresses set the configuration. A message between two contacts with the user only on Cc or Bcc still records nothing for the non-sender. Mail the sync cursor already passed is recorded by crm-admin --reset-gmail-backfill-cursors. Discovery asks the same addresses (IMP-051).

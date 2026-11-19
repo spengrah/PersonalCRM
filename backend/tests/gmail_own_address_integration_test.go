@@ -307,14 +307,16 @@ func TestGmailOwnAddress_QuotedLocalPartSpaceIsSignificant(t *testing.T) {
 // net/mail cannot parse as an address list: sync recovers its entries by the
 // comma split it has always made, and among them only a connected account's
 // address is the user, so a fragment of another recipient's quoted local part
-// never counts by an own domain.
+// never counts by an own domain, and an own address recovered from it never
+// counts either.
 func TestGmailOwnAddress_MalformedRecipientCountsOnlyConnectedAccounts(t *testing.T) {
 	t.Parallel()
 	e := newOwnAddressEnv(t)
 	account := e.prefix + "me@synthetic.example"
 	ownDomain := e.prefix + "own-domain.example"
 	sharedDomain := e.prefix + "shared-domain.example"
-	state := e.emailAccount(t, account, []string{ownDomain}, nil)
+	exactOwn := "exact@" + sharedDomain
+	state := e.emailAccount(t, account, []string{ownDomain}, []string{exactOwn})
 
 	// toRaw builds a message from sender whose To header is exactly raw,
 	// text the factory's well-formed rendering cannot carry.
@@ -332,8 +334,10 @@ func TestGmailOwnAddress_MalformedRecipientCountsOnlyConnectedAccounts(t *testin
 	unterminatedSender, unterminatedSenderAddr := e.contact(t, "")
 	embeddedMsg := toRaw(embeddedSenderAddr, `"a,alias@`+ownDomain+`,b"@`+sharedDomain+" trailing")
 	unterminatedMsg := toRaw(unterminatedSenderAddr, `"broken, `+account)
+	exactSender, exactSenderAddr := e.contact(t, "")
+	exactMsg := toRaw(exactSenderAddr, exactOwn+", @@broken")
 
-	e.sync(t, e.provider(t, embeddedMsg, unterminatedMsg), state)
+	e.sync(t, e.provider(t, embeddedMsg, unterminatedMsg, exactMsg), state)
 
 	t.Run("an own-domain address inside a quoted local part, followed by a malformed entry, is not the user", func(t *testing.T) {
 		// spec: ING-051.unparsed-header-not-own
@@ -342,6 +346,10 @@ func TestGmailOwnAddress_MalformedRecipientCountsOnlyConnectedAccounts(t *testin
 	t.Run("a connected account's address after an unterminated quoted string is the user", func(t *testing.T) {
 		// spec: ING-051.unparsed-header-not-own
 		e.requireStored(t, unterminatedSender.ID, unterminatedMsg, repository.InteractionDirectionInbound)
+	})
+	t.Run("an own address beside a malformed entry is not the user", func(t *testing.T) {
+		// spec: ING-051.unparsed-header-not-own
+		e.requireNothingStored(t, exactSender.ID)
 	})
 }
 
@@ -461,7 +469,9 @@ func TestGmailOwnAddress_DiscoveryTreatsOwnAddressesAsTheUser(t *testing.T) {
 		{Name: strangerNamesake.FullName, Email: namedStranger},
 	}})
 	fromOwnAddress := e.message(accountB, factory.GmailAddresses{From: bare(ownAddress), To: bares(known, guestB, namelessAlias)})
-	fromContact := e.message(accountB, factory.GmailAddresses{From: bare(known), To: bares(guestC, namelessAlias, ownAddress)})
+	// The own address's quoted spelling with a leading space is another
+	// mailbox, but discovery would propose it under the own address itself.
+	fromContact := e.message(accountB, factory.GmailAddresses{From: bare(known), To: bares(guestC, namelessAlias, ownAddress, " "+ownAddress)})
 
 	p := e.provider(t, fromOwnDomain, fromOwnAddress, fromContact)
 	externalRepo := repository.NewExternalContactRepository(e.h.Database().Queries)

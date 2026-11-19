@@ -185,6 +185,13 @@ func aggregateParticipants(
 		if me.Contains(normAddr, p.mailbox) {
 			continue
 		}
+		// A candidate is proposed under normAddr, which drops the spaces a
+		// quoted local part can hold, so a mailbox the me-set does not hold
+		// can still normalize to an own address. Never propose an address
+		// that, as proposed, is the user's (IMP-051.own-participant-never-proposed).
+		if p.mailbox != nil && me.Contains(normAddr, &mail.Address{Address: normAddr}) {
+			continue
+		}
 		agg := into[normAddr]
 		if agg == nil {
 			agg = &correspondenceAggregate{
