@@ -28,7 +28,7 @@ type GmailMeSet struct {
 // connected account's address counts by the address's normalized form whether
 // or not its header parsed, as Gmail sync has always compared it. An own
 // address or an address at an own domain counts only for an address with a
-// mailbox, one whose header parsed cleanly (see parseSingleAddress and
+// mailbox, one whose header parsed cleanly (see ParseAddress and
 // parseAddressList): text recovered from a malformed header has no mailbox
 // boundaries, so a fragment of it never counts by an own domain or own address
 // (ING-051.unparsed-header-not-own).

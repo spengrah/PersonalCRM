@@ -314,7 +314,7 @@ func gchatBatchEntries(items []GChatBatchItem) ([]batchEntry, error) {
 			seeded:        it.Spec.Intent == factory.MatchSeeded,
 			outbound:      outbound,
 			pairKey:       it.PairKey,
-			addressed:     peer,
+			addressed:     addressedOne(peer),
 			addressedType: identity.IdentifierTypeGChat,
 		})
 	}

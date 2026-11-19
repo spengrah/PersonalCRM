@@ -201,7 +201,7 @@ func telegramBatchEntries(items []TelegramBatchItem) []batchEntry {
 			seeded:        it.Spec.Intent == factory.MatchSeeded,
 			outbound:      it.Spec.Out,
 			pairKey:       it.PairKey,
-			addressed:     it.Spec.MatchHandle,
+			addressed:     addressedOne(it.Spec.MatchHandle),
 			addressedType: identity.IdentifierTypeTelegram,
 		})
 	}

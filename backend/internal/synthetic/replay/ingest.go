@@ -281,7 +281,7 @@ func (h *Harness) imessageBatchEntries(items []IMessageBatchItem) ([]batchEntry,
 			seeded:        it.Spec.Intent == factory.MatchSeeded,
 			outbound:      it.Spec.Envelope.Kind == events.KindRawMessageSent,
 			pairKey:       it.PairKey,
-			addressed:     handle,
+			addressed:     addressedOne(handle),
 			addressedType: identity.DetectIdentifierType(handle),
 		})
 	}

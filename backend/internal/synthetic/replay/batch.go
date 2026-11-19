@@ -231,10 +231,11 @@ type batchEntry struct {
 	outbound bool
 	// pairKey marks the two items of a promotion pair (0 = not part of one).
 	pairKey int
-	// addressed is the identifier the payload addresses on the peer side — the
-	// value that decides whether the contact actually matches. Empty means the
-	// source has no per-item peer identifier to check.
-	addressed string
+	// addressed are the identifiers the payload addresses on the peer side; the
+	// contact matches when it owns any one of them, as the provider matches a
+	// contact among several recipients. Empty means the source has no per-item
+	// peer identifier to check.
+	addressed []string
 	// addressedType is how to normalize addressed for comparison against the
 	// contact's methods.
 	addressedType identity.IdentifierType
@@ -304,7 +305,7 @@ func validatePairKeys(source string, entries []batchEntry) error {
 func (h *Harness) validateBatchOwnership(ctx context.Context, source string, entries []batchEntry) error {
 	owned := map[uuid.UUID]map[string]struct{}{}
 	for i, e := range entries {
-		if e.addressed == "" {
+		if len(e.addressed) == 0 {
 			continue
 		}
 		set, ok := owned[e.contactID]
@@ -319,12 +320,31 @@ func (h *Harness) validateBatchOwnership(ctx context.Context, source string, ent
 			}
 			owned[e.contactID] = set
 		}
-		if _, ok := set[identity.Normalize(e.addressed, e.addressedType)]; !ok {
-			return fmt.Errorf("%s: item %d (%s) addresses %q which contact %s does not own: %w",
+		if !ownsAny(set, e.addressed, e.addressedType) {
+			return fmt.Errorf("%s: item %d (%s) addresses %q, none of which contact %s owns: %w",
 				source, i, e.identifier, e.addressed, e.contactID, ErrBatchIdentifierNotOwned)
 		}
 	}
 	return nil
+}
+
+// ownsAny reports whether set holds any of addressed, each normalized as typ.
+func ownsAny(set map[string]struct{}, addressed []string, typ identity.IdentifierType) bool {
+	for _, a := range addressed {
+		if _, ok := set[identity.Normalize(a, typ)]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+// addressedOne is the addressed list of a source with one peer identifier per
+// item: none when the identifier is empty.
+func addressedOne(identifier string) []string {
+	if identifier == "" {
+		return nil
+	}
+	return []string{identifier}
 }
 
 // identifierTypeForMethod maps a contact_method type to the identifier type that

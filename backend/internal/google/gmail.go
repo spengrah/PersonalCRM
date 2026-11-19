@@ -725,7 +725,7 @@ func (p *GmailSyncProvider) RefetchParticipantNames(ctx context.Context, account
 	}
 	headers := newHeaderLookup(msg.Payload)
 	return repository.ParticipantNames{
-		FromName: parseSingleAddress(headers.first("From")).name,
+		FromName: ParseAddress(headers.first("From")).name,
 		ToNames:  addressNames(parseAddressList(headers.first("To"))),
 		CcNames:  addressNames(parseAddressList(headers.first("Cc"))),
 		BccNames: addressNames(parseAddressList(headers.first("Bcc"))),
@@ -901,7 +901,7 @@ type discoveryHeaders struct {
 // spec scopes discovery to To ∪ Cc).
 func parseDiscoveryHeaders(msg *gmail.Message) discoveryHeaders {
 	headers := newHeaderLookup(msg.Payload)
-	from := parseSingleAddress(headers.first("From"))
+	from := ParseAddress(headers.first("From"))
 	to := parseAddressList(headers.first("To"))
 	cc := parseAddressList(headers.first("Cc"))
 
@@ -1204,7 +1204,7 @@ func (p *GmailSyncProvider) processMessage(
 	headers := newHeaderLookup(msg.Payload)
 	subject := headers.first("Subject")
 	text := storedText(plain, htmlBody, mailKindOf(msg.Id, msg.ThreadId, subject))
-	from := parseSingleAddress(headers.first("From"))
+	from := ParseAddress(headers.first("From"))
 	to := parseAddressList(headers.first("To"))
 	cc := parseAddressList(headers.first("Cc"))
 	bcc := parseAddressList(headers.first("Bcc"))
@@ -1398,13 +1398,6 @@ type parsedAddress struct {
 	mailbox    *mail.Address
 }
 
-// ParseAddress parses a single-address header as Gmail sync parses a From
-// header (parseSingleAddress). It is how code outside package google obtains
-// a parsed address, such as one to ask GmailMeSet.Contains about.
-func ParseAddress(header string) parsedAddress {
-	return parseSingleAddress(header)
-}
-
 // parsedMailbox is the parsedAddress of a mailbox net/mail parsed.
 func parsedMailbox(addr *mail.Address) parsedAddress {
 	return parsedAddress{
@@ -1436,12 +1429,37 @@ func projectAddresses(addrs []parsedAddress, field func(parsedAddress) string) [
 	return out
 }
 
-// parseSingleAddress parses a single-address header (From). The display name
+// GmailPeerAddresses returns msg's peer addresses as Gmail sync parses them:
+// for mail the user sent, every To, Cc and Bcc address, among which sync
+// matches each contact; for received mail, the From address. Synthetic batch
+// replay checks a contact's ownership against them.
+func GmailPeerAddresses(msg *gmail.Message, sent bool) []string {
+	if msg == nil || msg.Payload == nil {
+		return nil
+	}
+	headers := newHeaderLookup(msg.Payload)
+	if !sent {
+		if from := ParseAddress(headers.first("From")); from.raw != "" {
+			return []string{from.raw}
+		}
+		return nil
+	}
+	recipients := slices.Concat(
+		parseAddressList(headers.first("To")),
+		parseAddressList(headers.first("Cc")),
+		parseAddressList(headers.first("Bcc")),
+	)
+	return addressRaws(recipients)
+}
+
+// ParseAddress parses a single-address header, such as From, as Gmail sync
+// parses it; code outside package google obtains a parsed address, such as one
+// to ask GmailMeSet.Contains about, only from it. The display name
 // is empty when the header had no display part or failed to parse. On parse
 // failure it falls back to trimming the raw value with no mailbox, so the text
 // counts as the user only as a connected account's address (ING-051). An empty
 // header yields the zero parsedAddress.
-func parseSingleAddress(header string) parsedAddress {
+func ParseAddress(header string) parsedAddress {
 	header = strings.TrimSpace(header)
 	if header == "" {
 		return parsedAddress{}

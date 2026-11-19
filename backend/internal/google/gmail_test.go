@@ -713,17 +713,17 @@ func TestProcessMessage_MetadataNoDisplayNameStoresEmpty(t *testing.T) {
 }
 
 func TestParseSingleAddress_Name(t *testing.T) {
-	a := parseSingleAddress("\"Contact A\" <Contact.A@Example.com>")
+	a := ParseAddress("\"Contact A\" <Contact.A@Example.com>")
 	require.Equal(t, "Contact.A@Example.com", a.raw)
 	require.Equal(t, "contact.a@example.com", a.normalized)
 	require.Equal(t, "Contact A", a.name)
 
-	a = parseSingleAddress("bare@example.com")
+	a = ParseAddress("bare@example.com")
 	require.Equal(t, "bare@example.com", a.raw)
 	require.Equal(t, "bare@example.com", a.normalized)
 	require.Equal(t, "", a.name)
 
-	a = parseSingleAddress("")
+	a = ParseAddress("")
 	require.Equal(t, "", a.raw)
 	require.Equal(t, "", a.normalized)
 	require.Equal(t, "", a.name)
