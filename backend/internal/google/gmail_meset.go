@@ -26,25 +26,26 @@ type GmailMeSet struct {
 	domains      map[string]struct{}
 }
 
-// Contains reports whether mailbox, one mailbox net/mail parsed from a header,
-// is the user's. A header entry that does not parse as one mailbox has no
-// address to compare, so its text never counts as the user: a nil mailbox is
-// never the user's (RFC 5322 section 3.4).
-func (m GmailMeSet) Contains(mailbox *mail.Address) bool {
+// Contains reports whether one address a header yields is the user's.
+// normalized is the address by matching.NormalizeEmail, as the parsers return
+// it, and mailbox is the mailbox net/mail parsed from a well-formed header, or
+// nil when the header did not parse (see parseSingleAddress and
+// parseAddressList). A connected account's address counts by normalized either
+// way, as Gmail sync has always compared it. An own address or an address at
+// an own domain counts only for a non-nil mailbox: text recovered from a
+// malformed header has no mailbox boundaries, so a fragment of it never counts
+// by an own domain or own address (ING-051.unparsed-header-not-own).
+func (m GmailMeSet) Contains(normalized string, mailbox *mail.Address) bool {
+	if _, ok := m.accounts[normalized]; ok {
+		return true
+	}
 	if mailbox == nil {
 		return false
-	}
-	normAddr := matching.NormalizeEmail(mailbox.Address)
-	if normAddr == "" {
-		return false
-	}
-	if _, ok := m.accounts[normAddr]; ok {
-		return true
 	}
 	if _, ok := m.ownAddresses[sync.EmailOwnAddressKey(mailbox.Address)]; ok {
 		return true
 	}
-	domain := domainOf(normAddr)
+	domain := domainOf(matching.NormalizeEmail(mailbox.Address))
 	if domain == "" {
 		return false
 	}

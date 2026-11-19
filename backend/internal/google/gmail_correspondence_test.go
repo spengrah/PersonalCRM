@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"maps"
-	"net/mail"
 	"slices"
 	"testing"
 
@@ -194,9 +193,9 @@ func TestDiscovery_MultiPartyMessageYieldsCandidate(t *testing.T) {
 	d := NewCorrespondenceDiscoverer(contacts, ext)
 
 	parts := []participant{
-		{name: "Known Alpha", address: "a@example.com"},                                                        // From: known A
-		{name: "Me", address: "me@example.com", mailbox: &mail.Address{Name: "Me", Address: "me@example.com"}}, // To: own
-		{name: "Pat Carter", address: "pat@example.com"},                                                       // Cc: unknown → candidate
+		{name: "Known Alpha", address: "a@example.com"},  // From: known A
+		{name: "Me", address: "me@example.com"},          // To: own
+		{name: "Pat Carter", address: "pat@example.com"}, // Cc: unknown → candidate
 	}
 	known := map[string]struct{}{"a@example.com": {}}
 	own := map[string]struct{}{"me@example.com": {}}
@@ -387,7 +386,7 @@ func TestDiscovery_SkipOwnAccount(t *testing.T) {
 	ext := newFakeExternal()
 	d := NewCorrespondenceDiscoverer(contacts, ext)
 
-	parts := []participant{{name: "Own Two", address: "own2@example.com", mailbox: &mail.Address{Name: "Own Two", Address: "own2@example.com"}}}
+	parts := []participant{{name: "Own Two", address: "own2@example.com"}}
 	own := map[string]struct{}{"own2@example.com": {}}
 	n, err := runDiscovery(t, d, parts, emptySet(), own, nil)
 	require.NoError(t, err)

@@ -709,18 +709,12 @@ func (p *GmailSyncProvider) ScanIdentifier(
 // the original headers. Reuses the existing fetcher + name-returning parsers;
 // tests inject a fake fetcher via SetFetcherFactoryForTest (no OAuth).
 //
-// The names it returns are index-aligned with stored, the row's stored
-// From/To/Cc/Bcc addresses, whichever parser version wrote them: each stored
-// address gets the name the re-parsed header gives that address, and a stored
-// address the re-parse does not yield, such as a fragment an earlier fallback
-// split stored, gets "" (see alignNames).
-//
 // Error classification (so the runner can distinguish a since-deleted message
 // from a retryable failure): a Gmail 404 → errCorrespondenceUnavailable
 // (PERMANENT — count SkippedUnavailable, never a non-zero exit); a 429/5xx →
 // errCorrespondenceTransient (retryable). Other errors propagate as-is and the
 // runner counts them Failed.
-func (p *GmailSyncProvider) RefetchParticipantNames(ctx context.Context, accountID, gmailMessageID string, stored emailMetadata) (repository.ParticipantNames, error) {
+func (p *GmailSyncProvider) RefetchParticipantNames(ctx context.Context, accountID, gmailMessageID string) (repository.ParticipantNames, error) {
 	fetcher, err := p.newFetcher(ctx, accountID)
 	if err != nil {
 		return repository.ParticipantNames{}, fmt.Errorf("build gmail fetcher: %w", err)
@@ -730,37 +724,16 @@ func (p *GmailSyncProvider) RefetchParticipantNames(ctx context.Context, account
 		return repository.ParticipantNames{}, classifyRefetchError(err)
 	}
 	headers := newHeaderLookup(msg.Payload)
-	fromRaw, _, fromName, _ := parseSingleAddress(headers.first("From"))
-	toRaws, _, toNames, _ := parseAddressList(headers.first("To"))
-	ccRaws, _, ccNames, _ := parseAddressList(headers.first("Cc"))
-	bccRaws, _, bccNames, _ := parseAddressList(headers.first("Bcc"))
+	_, _, fromName, _ := parseSingleAddress(headers.first("From"))
+	_, _, toNames, _ := parseAddressList(headers.first("To"))
+	_, _, ccNames, _ := parseAddressList(headers.first("Cc"))
+	_, _, bccNames, _ := parseAddressList(headers.first("Bcc"))
 	return repository.ParticipantNames{
-		FromName: alignNames([]string{stored.From}, []string{fromRaw}, []string{fromName})[0],
-		ToNames:  alignNames(stored.To, toRaws, toNames),
-		CcNames:  alignNames(stored.Cc, ccRaws, ccNames),
-		BccNames: alignNames(stored.Bcc, bccRaws, bccNames),
+		FromName: fromName,
+		ToNames:  toNames,
+		CcNames:  ccNames,
+		BccNames: bccNames,
 	}, nil
-}
-
-// alignNames returns one name per stored address: the name at the index of the
-// first unclaimed raw address equal to it, or "" when no raw address is. raws
-// and names are one parsed header's index-aligned addresses and names. Pairing
-// by address rather than by index keeps a name on its own address when the
-// stored list and the re-parse split the header differently, and claiming each
-// raw address once keeps a repeated address's names in header order.
-func alignNames(stored, raws, names []string) []string {
-	out := make([]string, len(stored))
-	claimed := make([]bool, len(raws))
-	for i, addr := range stored {
-		for j, raw := range raws {
-			if !claimed[j] && raw == addr {
-				claimed[j] = true
-				out[i] = names[j]
-				break
-			}
-		}
-	}
-	return out
 }
 
 // classifyRefetchError maps a GetMessage error to a permanent
@@ -822,7 +795,7 @@ func (p *GmailSyncProvider) foldDiscovery(
 	coOccurIDs := discoveryCoOccurIDs(h.parts, knownMap)
 
 	_, fromKnown := knownSet[h.fromNorm]
-	fromMe := meSet.Contains(h.fromMailbox)
+	fromMe := meSet.Contains(h.fromNorm, h.fromMailbox)
 	trustAnchored := fromKnown || fromMe
 
 	recipients := make(map[string]struct{}, len(h.toNorm)+len(h.ccNorm))
@@ -1281,8 +1254,15 @@ func (p *GmailSyncProvider) processMessage(
 	for _, n := range bccNorm {
 		recipientSet[n] = struct{}{}
 	}
-	meInR := slices.ContainsFunc(slices.Concat(toMailboxes, ccMailboxes, bccMailboxes), meSet.Contains)
-	fromIsMe := meSet.Contains(fromMailbox)
+	recipientMailboxes := slices.Concat(toMailboxes, ccMailboxes, bccMailboxes)
+	meInR := false
+	for i, n := range slices.Concat(toNorm, ccNorm, bccNorm) {
+		if meSet.Contains(n, recipientMailboxes[i]) {
+			meInR = true
+			break
+		}
+	}
+	fromIsMe := meSet.Contains(fromNorm, fromMailbox)
 
 	// Ordered, deduped recipient buckets (raw+normalized aligned) for the
 	// deterministic outbound peer-handle precedence (To, then Cc, then Bcc;
@@ -1455,10 +1435,9 @@ func (h headerLookup) first(name string) string {
 
 // parseSingleAddress parses a single-address header (From). Returns the raw and
 // normalized address plus the parsed display name (empty when the header had no
-// display part or failed to parse), and the parsed mailbox the me-set compares.
-// On parse failure it falls back to trimming the raw value, which contact
-// matching still compares, and returns a nil mailbox, since the text holds no
-// one address the me-set could compare.
+// display part or failed to parse), and the parsed mailbox. On parse failure it
+// falls back to trimming the raw value and returns a nil mailbox, so the text
+// counts as the user only as a connected account's address (ING-051).
 func parseSingleAddress(header string) (raw, normalized, name string, mailbox *mail.Address) {
 	header = strings.TrimSpace(header)
 	if header == "" {
@@ -1471,106 +1450,45 @@ func parseSingleAddress(header string) (raw, normalized, name string, mailbox *m
 }
 
 // parseAddressList parses an address-list header (To/Cc/Bcc) robustly. On a
-// ParseAddressList failure it falls back to parsing each entry
-// splitAddressList yields, so a single malformed recipient doesn't drop the
-// whole list, and an entry that parses as one mailbox is kept whole: a comma
-// inside its display name or quoted local part never splits it. An entry that
-// does not parse as one mailbox is split at every comma and each part parsed
-// alone, as the fallback has always split the header, so a mailbox the
-// header-wide comma split recovers is still recovered when a malformed entry,
-// such as an unterminated quoted string, runs over it. The raw, normalized,
-// name and mailbox slices are index-aligned on BOTH paths (a recipient with no
+// ParseAddressList failure it falls back to a lenient comma-split so a single
+// malformed recipient doesn't drop the whole list. The raw, normalized, name
+// and mailbox slices are index-aligned on BOTH paths (a recipient with no
 // display part gets an empty-string name at its index), so the correspondence
-// producer can pair names[i] with the address at the same index. A part that
-// does not parse as one mailbox keeps its trimmed text as its raw and
-// normalized address, which contact matching still compares, and a nil
-// mailbox, since the text holds no one address the me-set could compare.
+// producer can pair names[i] with the address at the same index. A mailbox is
+// set only when the whole header parses as an address list: the comma split
+// can cut a quoted string or a display name, so an entry it yields is nil and
+// counts as the user only as a connected account's address (ING-051).
 func parseAddressList(header string) (raws, normalized, names []string, mailboxes []*mail.Address) {
 	header = strings.TrimSpace(header)
 	if header == "" {
 		return nil, nil, nil, nil
 	}
-	add := func(raw, name string, mailbox *mail.Address) {
-		raws = append(raws, raw)
-		normalized = append(normalized, matching.NormalizeEmail(raw))
-		names = append(names, name)
-		mailboxes = append(mailboxes, mailbox)
-	}
 	if addrs, err := mail.ParseAddressList(header); err == nil {
 		for _, a := range addrs {
-			add(a.Address, strings.TrimSpace(a.Name), a)
+			raws = append(raws, a.Address)
+			normalized = append(normalized, matching.NormalizeEmail(a.Address))
+			names = append(names, strings.TrimSpace(a.Name))
+			mailboxes = append(mailboxes, a)
 		}
 		return raws, normalized, names, mailboxes
 	}
-	for _, entry := range splitAddressList(header) {
-		if addr, err := mail.ParseAddress(strings.TrimSpace(entry)); err == nil {
-			add(addr.Address, strings.TrimSpace(addr.Name), addr)
+	for _, part := range strings.Split(header, ",") {
+		part = strings.TrimSpace(part)
+		if part == "" {
 			continue
 		}
-		for _, part := range strings.Split(entry, ",") {
-			part = strings.TrimSpace(part)
-			if part == "" {
-				continue
-			}
-			if addr, err := mail.ParseAddress(part); err == nil {
-				add(addr.Address, strings.TrimSpace(addr.Name), addr)
-			} else {
-				add(part, "", nil)
-			}
+		raw := part
+		name := ""
+		if addr, err := mail.ParseAddress(part); err == nil {
+			raw = addr.Address
+			name = strings.TrimSpace(addr.Name)
 		}
+		raws = append(raws, raw)
+		normalized = append(normalized, matching.NormalizeEmail(raw))
+		names = append(names, name)
+		mailboxes = append(mailboxes, nil)
 	}
 	return raws, normalized, names, mailboxes
-}
-
-// splitAddressList splits an address-list header into its entries at the
-// commas that separate mailboxes: those outside a quoted string, a comment and
-// an angle-addr (RFC 5322 section 3.4). A comma inside a display name, a quoted
-// local part or a comment belongs to its mailbox, so a malformed entry beside
-// a valid mailbox neither splits that mailbox nor yields a fragment of its
-// text as a mailbox of its own. An unterminated quoted string, comment or
-// angle-addr runs to the end of the header; parseAddressList splits that
-// entry, which does not parse, at every comma.
-func splitAddressList(header string) []string {
-	var (
-		entries []string
-		start   int
-		quoted  bool
-		escaped bool
-		comment int
-		angle   bool
-	)
-	// Every delimiter is ASCII, and no byte of a multi-byte UTF-8 rune is, so
-	// a byte scan finds the same delimiters a rune scan would.
-	for i := 0; i < len(header); i++ {
-		c := header[i]
-		switch {
-		case escaped:
-			escaped = false
-		case c == '\\' && (quoted || comment > 0):
-			escaped = true
-		case quoted:
-			quoted = c != '"'
-		case comment > 0:
-			switch c {
-			case '(':
-				comment++
-			case ')':
-				comment--
-			}
-		case c == '"':
-			quoted = true
-		case c == '(':
-			comment++
-		case c == '<':
-			angle = true
-		case c == '>':
-			angle = false
-		case c == ',' && !angle:
-			entries = append(entries, header[start:i])
-			start = i + 1
-		}
-	}
-	return append(entries, header[start:])
 }
 
 // extractExternalID reads the RFC822 Message-ID header (trimming surrounding

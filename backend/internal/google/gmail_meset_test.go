@@ -10,8 +10,8 @@ import (
 )
 
 // TestGmailMeSet_UnparsedHeaderIsNeverTheUser is the regression for a header
-// entry that does not parse as one mailbox but whose text ends in "@" and an
-// own domain: it is never the user's address, so it neither makes a message
+// that does not parse but whose text ends in "@" and an own domain: its text
+// is never the user's address by an own domain, so it neither makes a message
 // the user's for direction nor anchors discovery trust. Each case's control
 // sends the same message with a parsed own-domain address, which does count.
 func TestGmailMeSet_UnparsedHeaderIsNeverTheUser(t *testing.T) {

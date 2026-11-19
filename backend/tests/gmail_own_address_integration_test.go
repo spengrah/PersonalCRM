@@ -302,21 +302,19 @@ func TestGmailOwnAddress_QuotedLocalPartSpaceIsSignificant(t *testing.T) {
 	})
 }
 
-// TestGmailOwnAddress_MalformedRecipientKeepsMailboxBoundaries is the
+// TestGmailOwnAddress_MalformedRecipientCountsOnlyConnectedAccounts is the
 // regression for a recipient header holding one malformed entry, which
-// net/mail cannot parse as an address list: sync still parses each other
-// entry as one mailbox, so a comma inside a quoted local part or a display
-// name neither hides an own recipient nor makes an own address of text inside
-// another recipient's mailbox.
-func TestGmailOwnAddress_MalformedRecipientKeepsMailboxBoundaries(t *testing.T) {
+// net/mail cannot parse as an address list: sync recovers its entries by the
+// comma split it has always made, and among them only a connected account's
+// address is the user, so a fragment of another recipient's quoted local part
+// never counts by an own domain.
+func TestGmailOwnAddress_MalformedRecipientCountsOnlyConnectedAccounts(t *testing.T) {
 	t.Parallel()
 	e := newOwnAddressEnv(t)
 	account := e.prefix + "me@synthetic.example"
 	ownDomain := e.prefix + "own-domain.example"
 	sharedDomain := e.prefix + "shared-domain.example"
-	quotedOwnAddress := `"user,alias"@` + sharedDomain
-	state := e.emailAccount(t, account, []string{ownDomain}, []string{quotedOwnAddress})
-	const malformed = "@@broken"
+	state := e.emailAccount(t, account, []string{ownDomain}, nil)
 
 	// toRaw builds a message from sender whose To header is exactly raw,
 	// text the factory's well-formed rendering cannot carry.
@@ -330,33 +328,19 @@ func TestGmailOwnAddress_MalformedRecipientKeepsMailboxBoundaries(t *testing.T) 
 		return msg
 	}
 
-	quotedSender, quotedSenderAddr := e.contact(t, "")
-	namedSender, namedSenderAddr := e.contact(t, "")
 	embeddedSender, embeddedSenderAddr := e.contact(t, "")
 	unterminatedSender, unterminatedSenderAddr := e.contact(t, "")
-	quotedMsg := toRaw(quotedSenderAddr, quotedOwnAddress+", "+malformed)
-	namedMsg := toRaw(namedSenderAddr, `"Alias, Own" <alias@`+ownDomain+">, "+malformed)
-	embeddedMsg := toRaw(embeddedSenderAddr, `"a,alias@`+ownDomain+`,b"@`+sharedDomain+", "+malformed)
+	embeddedMsg := toRaw(embeddedSenderAddr, `"a,alias@`+ownDomain+`,b"@`+sharedDomain+" trailing")
 	unterminatedMsg := toRaw(unterminatedSenderAddr, `"broken, `+account)
 
-	e.sync(t, e.provider(t, quotedMsg, namedMsg, embeddedMsg, unterminatedMsg), state)
+	e.sync(t, e.provider(t, embeddedMsg, unterminatedMsg), state)
 
-	t.Run("an own address with a comma in its quoted local part, beside a malformed entry, is the user", func(t *testing.T) {
-		// spec: ING-051.inbound-to-own
-		e.requireStored(t, quotedSender.ID, quotedMsg, repository.InteractionDirectionInbound)
-	})
-	t.Run("an own-domain address with a comma in its display name, beside a malformed entry, is the user", func(t *testing.T) {
-		// spec: ING-051.inbound-to-own
-		e.requireStored(t, namedSender.ID, namedMsg, repository.InteractionDirectionInbound)
-	})
-	t.Run("an own-domain address inside another address's quoted local part, beside a malformed entry, is not the user", func(t *testing.T) {
+	t.Run("an own-domain address inside a quoted local part, followed by a malformed entry, is not the user", func(t *testing.T) {
 		// spec: ING-051.unparsed-header-not-own
 		e.requireNothingStored(t, embeddedSender.ID)
 	})
 	t.Run("a connected account's address after an unterminated quoted string is the user", func(t *testing.T) {
-		// The comma split the fallback has always made recovers the
-		// connected account's address, so mail at it is classified as before
-		// (ING-051's connected-account case, which no then-item keys).
+		// spec: ING-051.unparsed-header-not-own
 		e.requireStored(t, unterminatedSender.ID, unterminatedMsg, repository.InteractionDirectionInbound)
 	})
 }
@@ -545,8 +529,11 @@ func TestGmailMeSet_ReadsConnectedAccountsFromOAuth(t *testing.T) {
 
 	meSet, err := google.NewGmailSyncProvider(oauthSvc, e.h.CommsRepo(), e.syncRepo, nil, e.h.Database().Pool).MeSet(e.ctx)
 	require.NoError(t, err)
-	require.True(t, meSet.Contains(&mail.Address{Address: accountA}), "a connected account's address")
-	require.True(t, meSet.Contains(&mail.Address{Address: accountB}), "a connected account with no configuration")
-	require.True(t, meSet.Contains(&mail.Address{Address: "alias@" + ownDomain}), "an address at a configured own domain")
-	require.False(t, meSet.Contains(&mail.Address{Address: e.prefix + "stranger@synthetic.example"}), "a stranger")
+	contains := func(addr string) bool {
+		return meSet.Contains(matching.NormalizeEmail(addr), &mail.Address{Address: addr})
+	}
+	require.True(t, contains(accountA), "a connected account's address")
+	require.True(t, contains(accountB), "a connected account with no configuration")
+	require.True(t, contains("alias@"+ownDomain), "an address at a configured own domain")
+	require.False(t, contains(e.prefix+"stranger@synthetic.example"), "a stranger")
 }

@@ -96,7 +96,7 @@ func NewCorrespondenceDiscoverer(
 
 // participant is one (display_name, address) pair extracted from a message's
 // From/To/Cc participant lists, with the mailbox net/mail parsed it from (nil
-// when the header entry did not parse as one mailbox).
+// when its header did not parse; see parseAddressList).
 type participant struct {
 	name    string
 	address string
@@ -182,7 +182,7 @@ func aggregateParticipants(
 		if _, ok := known[normAddr]; ok {
 			continue
 		}
-		if me.Contains(p.mailbox) {
+		if me.Contains(normAddr, p.mailbox) {
 			continue
 		}
 		agg := into[normAddr]
