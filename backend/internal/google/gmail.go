@@ -1444,14 +1444,16 @@ func parseSingleAddress(header string) (raw, normalized, name string, mailbox *m
 }
 
 // parseAddressList parses an address-list header (To/Cc/Bcc) robustly. On a
-// ParseAddressList failure it falls back to a lenient comma-split so a single
-// malformed recipient doesn't drop the whole list. The raw, normalized, name
-// and mailbox slices are index-aligned on BOTH paths (a recipient with no
-// display part gets an empty-string name at its index), so the correspondence
-// producer can pair names[i] with the address at the same index. A fallback
-// entry that does not parse as one mailbox keeps its trimmed text as its raw
-// and normalized address, which contact matching still compares, and a nil
-// mailbox, since the text holds no one address the me-set could compare.
+// ParseAddressList failure it falls back to parsing each entry
+// splitAddressList yields, so a single malformed recipient doesn't drop the
+// whole list and never splits or joins another recipient's mailbox. The raw,
+// normalized, name and mailbox slices are index-aligned on BOTH paths (a
+// recipient with no display part gets an empty-string name at its index), so
+// the correspondence producer can pair names[i] with the address at the same
+// index. A fallback entry that does not parse as one mailbox keeps its trimmed
+// text as its raw and normalized address, which contact matching still
+// compares, and a nil mailbox, since the text holds no one address the me-set
+// could compare.
 func parseAddressList(header string) (raws, normalized, names []string, mailboxes []*mail.Address) {
 	header = strings.TrimSpace(header)
 	if header == "" {
@@ -1466,7 +1468,7 @@ func parseAddressList(header string) (raws, normalized, names []string, mailboxe
 		}
 		return raws, normalized, names, mailboxes
 	}
-	for _, part := range strings.Split(header, ",") {
+	for _, part := range splitAddressList(header) {
 		part = strings.TrimSpace(part)
 		if part == "" {
 			continue
@@ -1485,6 +1487,57 @@ func parseAddressList(header string) (raws, normalized, names []string, mailboxe
 		mailboxes = append(mailboxes, mailbox)
 	}
 	return raws, normalized, names, mailboxes
+}
+
+// splitAddressList splits an address-list header into its entries at the
+// commas that separate mailboxes: those outside a quoted string, a comment and
+// an angle-addr (RFC 5322 section 3.4). A comma inside a display name, a quoted
+// local part or a comment belongs to its mailbox, so a malformed entry beside
+// a valid mailbox neither splits that mailbox nor yields a fragment of its
+// text as a mailbox of its own. An unterminated quoted string, comment or
+// angle-addr runs to the end of the header, which no longer marks where its
+// mailbox ends.
+func splitAddressList(header string) []string {
+	var (
+		entries []string
+		start   int
+		quoted  bool
+		escaped bool
+		comment int
+		angle   bool
+	)
+	// Every delimiter is ASCII, and no byte of a multi-byte UTF-8 rune is, so
+	// a byte scan finds the same delimiters a rune scan would.
+	for i := 0; i < len(header); i++ {
+		c := header[i]
+		switch {
+		case escaped:
+			escaped = false
+		case c == '\\' && (quoted || comment > 0):
+			escaped = true
+		case quoted:
+			quoted = c != '"'
+		case comment > 0:
+			switch c {
+			case '(':
+				comment++
+			case ')':
+				comment--
+			}
+		case c == '"':
+			quoted = true
+		case c == '(':
+			comment++
+		case c == '<':
+			angle = true
+		case c == '>':
+			angle = false
+		case c == ',' && !angle:
+			entries = append(entries, header[start:i])
+			start = i + 1
+		}
+	}
+	return append(entries, header[start:])
 }
 
 // extractExternalID reads the RFC822 Message-ID header (trimming surrounding
@@ -1747,6 +1800,20 @@ func (f *fakeGmailFetcher) GetMessage(ctx context.Context, id string) (*gmail.Me
 func NewFakeGmailFetcherFactoryForTest(funcs FakeGmailFetcherFuncs) func(ctx context.Context, accountID string) (gmailFetcher, error) {
 	fetcher := &fakeGmailFetcher{funcs: funcs}
 	return func(context.Context, string) (gmailFetcher, error) {
+		return fetcher, nil
+	}
+}
+
+// NewFakeGmailMailboxFactoryForTest returns a fetcher factory that serves funcs
+// as accountID's mailbox and fails a fetcher request for any other account, so
+// a test's stored rows prove which mailbox sync read. Production code must NOT
+// call this.
+func NewFakeGmailMailboxFactoryForTest(accountID string, funcs FakeGmailFetcherFuncs) func(ctx context.Context, accountID string) (gmailFetcher, error) {
+	fetcher := &fakeGmailFetcher{funcs: funcs}
+	return func(_ context.Context, requested string) (gmailFetcher, error) {
+		if requested != accountID {
+			return nil, fmt.Errorf("fake gmail mailbox serves account %q, not %q", accountID, requested)
+		}
 		return fetcher, nil
 	}
 }

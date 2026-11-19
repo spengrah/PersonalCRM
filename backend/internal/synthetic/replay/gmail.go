@@ -213,11 +213,12 @@ func (h *Harness) GmailProvider(specs ...factory.GmailMessageSpec) (*google.Gmai
 }
 
 // gmailProvider is the one construction of a provider over synthetic payloads:
-// the harness's repositories and bus, a fake fetcher serving specs, and the
+// the harness's repositories and bus, a fake fetcher serving specs as the
+// account's mailbox and failing a request for any other account's, and the
 // account as the one connected account.
 func (h *Harness) gmailProvider(accountID string, specs []factory.GmailMessageSpec) *google.GmailSyncProvider {
 	provider := google.NewGmailSyncProvider(nil, h.commsRepo, repository.NewSyncRepository(h.database.Queries), h.bus, h.database.Pool)
-	provider.SetFetcherFactoryForTest(google.NewFakeGmailFetcherFactoryForTest(gmailFetcherFuncs(specs)))
+	provider.SetFetcherFactoryForTest(google.NewFakeGmailMailboxFactoryForTest(accountID, gmailFetcherFuncs(specs)))
 	provider.SetAccountAddressesForTest(map[string]struct{}{accountID: {}})
 	return provider
 }

@@ -107,6 +107,14 @@ func TestSetEmailOwnAddresses_Integration_SetsNormalizesAndClears(t *testing.T) 
 		require.Equal(t, []any{"me@shared-domain.example", "other@second.example"}, e.metadata(t, id)["own_addresses"])
 	})
 
+	t.Run("nonempty input that names no address is rejected and nothing is written", func(t *testing.T) {
+		// An empty group parses as an address list holding no address; only an
+		// empty argument clears the list.
+		_, err := e.runVerb(t, nil, "--set-email-own-addresses", "undisclosed-recipients:;")
+		require.Error(t, err)
+		require.Equal(t, []any{"me@shared-domain.example", "other@second.example"}, e.metadata(t, id)["own_addresses"])
+	})
+
 	t.Run("an address whose quoted local part holds a comma is one address", func(t *testing.T) {
 		out, err := e.runVerb(t, nil, "--set-email-own-addresses", `"user,alias"@shared-domain.example`)
 		require.NoError(t, err)

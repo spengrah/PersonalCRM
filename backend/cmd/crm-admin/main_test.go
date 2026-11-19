@@ -1893,8 +1893,8 @@ func TestCrmAdmin_ParseArgsBindsTheWhatsAppHistoryFlags(t *testing.T) {
 }
 
 // TestSetEmailOwnDomains_HelpWarnsAgainstSharedDomain proves crm-admin -h
-// warns, in --set-email-own-domains' help, that a domain shared with other
-// people must not be listed, and points at --set-email-own-addresses.
+// prohibits, in --set-email-own-domains' help, listing a domain shared with
+// other people, and points at --set-email-own-addresses.
 func TestSetEmailOwnDomains_HelpWarnsAgainstSharedDomain(t *testing.T) {
 	// flag writes help to os.Stderr. A file takes the whole help without a
 	// reader running beside the writer, as a pipe would need.
@@ -1927,8 +1927,11 @@ func TestSetEmailOwnDomains_HelpWarnsAgainstSharedDomain(t *testing.T) {
 		section = section[:next[0]]
 	}
 	section = strings.ToLower(strings.Join(strings.Fields(section), " "))
-	if !strings.Contains(section, "shar") || !strings.Contains(section, "set-email-own-addresses") {
-		t.Fatalf("--set-email-own-domains help names no shared-domain warning and exact-address alternative:\n%s", section)
+	if !strings.Contains(section, "never list a domain shared with other people") {
+		t.Fatalf("--set-email-own-domains help does not prohibit listing a shared domain:\n%s", section)
+	}
+	if !strings.Contains(section, "--set-email-own-addresses") {
+		t.Fatalf("--set-email-own-domains help names no exact-address alternative:\n%s", section)
 	}
 }
 

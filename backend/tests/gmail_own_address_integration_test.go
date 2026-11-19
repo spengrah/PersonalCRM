@@ -264,6 +264,57 @@ func TestGmailOwnAddress_SyncStoresOwnAddressMailAsTheUsers(t *testing.T) {
 	})
 }
 
+// TestGmailOwnAddress_MalformedRecipientKeepsMailboxBoundaries is the
+// regression for a recipient header holding one malformed entry, which
+// net/mail cannot parse as an address list: sync still parses each other
+// entry as one mailbox, so a comma inside a quoted local part or a display
+// name neither hides an own recipient nor makes an own address of text inside
+// another recipient's mailbox.
+func TestGmailOwnAddress_MalformedRecipientKeepsMailboxBoundaries(t *testing.T) {
+	t.Parallel()
+	e := newOwnAddressEnv(t)
+	account := e.prefix + "me@synthetic.example"
+	ownDomain := e.prefix + "own-domain.example"
+	sharedDomain := e.prefix + "shared-domain.example"
+	quotedOwnAddress := `"user,alias"@` + sharedDomain
+	state := e.emailAccount(t, account, []string{ownDomain}, []string{quotedOwnAddress})
+	const malformed = "@@broken"
+
+	// toRaw builds a message from sender whose To header is exactly raw,
+	// text the factory's well-formed rendering cannot carry.
+	toRaw := func(sender, raw string) factory.GmailMessageSpec {
+		msg := e.message(account, factory.GmailAddresses{From: bare(sender), To: bares(e.prefix + "stranger@synthetic.example")})
+		for _, h := range msg.Message.Payload.Headers {
+			if h.Name == "To" {
+				h.Value = raw
+			}
+		}
+		return msg
+	}
+
+	quotedSender, quotedSenderAddr := e.contact(t, "")
+	namedSender, namedSenderAddr := e.contact(t, "")
+	embeddedSender, embeddedSenderAddr := e.contact(t, "")
+	quotedMsg := toRaw(quotedSenderAddr, quotedOwnAddress+", "+malformed)
+	namedMsg := toRaw(namedSenderAddr, `"Alias, Own" <alias@`+ownDomain+">, "+malformed)
+	embeddedMsg := toRaw(embeddedSenderAddr, `"a,alias@`+ownDomain+`,b"@`+sharedDomain+", "+malformed)
+
+	e.sync(t, e.provider(t, quotedMsg, namedMsg, embeddedMsg), state)
+
+	t.Run("an own address with a comma in its quoted local part, beside a malformed entry, is the user", func(t *testing.T) {
+		// spec: ING-051.inbound-to-own
+		e.requireStored(t, quotedSender.ID, quotedMsg, repository.InteractionDirectionInbound)
+	})
+	t.Run("an own-domain address with a comma in its display name, beside a malformed entry, is the user", func(t *testing.T) {
+		// spec: ING-051.inbound-to-own
+		e.requireStored(t, namedSender.ID, namedMsg, repository.InteractionDirectionInbound)
+	})
+	t.Run("an own-domain address inside another address's quoted local part, beside a malformed entry, is not the user", func(t *testing.T) {
+		// spec: ING-051.unparsed-header-not-own
+		e.requireNothingStored(t, embeddedSender.ID)
+	})
+}
+
 // TestGmailOwnDomain_ConfigOnOneAccountCountsForAnother proves that the
 // configuration of every enabled email account makes up the me-set, whichever
 // account's mailbox is synced.
