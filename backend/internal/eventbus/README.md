@@ -123,5 +123,4 @@ Local `contact_task` inserts and the `contact.last_contacted` /
 `item_add` for a new follow-up is enqueued as a river job (async). The
 Todoist `item_update` (refresh) and `item_close` (complete) calls run
 in a post-commit closure that falls back to a river-retried job on
-failure. See the "Event Bus and Consumers" section of
-`.agents/guides/architecture.md` for the full table.
+failure.

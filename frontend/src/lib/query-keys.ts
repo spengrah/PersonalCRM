@@ -5,8 +5,6 @@
  * 1. Avoid circular dependencies between hooks
  * 2. Provide a single source of truth for cache invalidation
  * 3. Enable type-safe query key references
- *
- * @see docs/FRONTEND_STATE.md for full documentation
  */
 
 import type { ContactListParams } from '@/types/contact'

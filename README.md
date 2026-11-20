@@ -655,8 +655,6 @@ The application uses PostgreSQL with the pgvector extension for vector similarit
 - **Phase 2**: AI Agent v0 (Embeddings, RAG, Chat UI)
 - **Phase 3**: AI Agent v1 (Advanced features, Graph view, Export)
 
-See `.agents/guides/architecture.md` for architecture and `.agents/guides/feature-development.md` for the current development process.
-
 ## Contributing
 
 This is a personal project, but issues and suggestions are welcome.

@@ -11,7 +11,7 @@ relative to the repository root. Essential rules remain in [frontend/AGENTS.md](
 | Building multi-step wizard modals | Use single-view scrollable modals (like ImportLinkModal) - all steps visible in one view |
 | E2E test waiting for page load | Use `domcontentloaded` + `getByRole` with explicit timeout, not `networkidle` |
 | Hand-rolling contact-list URL params (sort/order/search/filters) | All list URL state goes through `frontend/src/lib/contact-list-params.ts` (canonical types, defaults, `parseListContext`, `buildContactListUrl`/`buildContactDetailUrl`). Never build a `URLSearchParams` for list context inline — a param dropped by one builder silently breaks list↔detail round-tripping |
-| E2E `getByText` in strict mode with non-unique values | Use `.first()` or scope to specific row when DB may contain multiple matches from previous runs. See `.agents/patterns/e2e-parallelism.md` for the scoping conventions that avoid this class of flake. |
+| E2E `getByText` in strict mode with non-unique values | Use `.first()` or scope to specific row when DB may contain multiple matches from previous runs. |
 | `make test-e2e-local GREP="..."` ignored | Use `PLAYWRIGHT_GREP="..." make test-e2e-local` (Makefile expects environment variable, not Make variable) |
 | `bunx playwright test` directly fails with 401 | Use `make test-e2e-local` or `make test-e2e`, which set up API keys and environment |
 | Local E2E tests using accumulated database state | `test-e2e` and `test-e2e-local` depend on `e2e-db`, so explicit local runs start with a clean database. E2E does not run in pre-push. |

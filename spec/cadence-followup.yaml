@@ -30,7 +30,7 @@ behaviors:
       - the base date is last_contacted when set, else created_at
       - the interval is fixed-length per cadence (7, 14, 30, 90, 180, 365 days in production)
       - in production the result is a date (day precision, timezone-safe)
-    provenance: [cadence.CalculateContactBy, cadence.GetCadenceDuration, .agents/guides/architecture.md]
+    provenance: [cadence.CalculateContactBy, cadence.GetCadenceDuration]
 
   - id: CAD-003
     title: Cadence intervals scale with the environment for accelerated testing
@@ -63,7 +63,7 @@ behaviors:
     status: current
     surface: none
     statement: outside contact creation (which seeds last_contacted and contact_by, CON-001), last_contacted, last_interaction_at, last_outreach_at, last_response_at, and contact_by are written only by the cadence engine's apply paths (interaction consumer, merge bulk-apply, cadence override, and delete rollback); contact_by is kept in sync on every write path that changes the cadence or the base timestamps.
-    provenance: [CadenceUpdater, .agents/guides/architecture.md sole-writer map, scripts/ci sole-writer guard, reject_unauthorized_derived_contact_write trigger (migration 079)]
+    provenance: [CadenceUpdater, scripts/ci sole-writer guard, reject_unauthorized_derived_contact_write trigger (migration 079)]
 
   # --- Direction and write semantics ---
 
