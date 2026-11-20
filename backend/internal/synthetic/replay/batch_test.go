@@ -247,8 +247,8 @@ func TestGmailBatchEntriesAddressesThePeerSide(t *testing.T) {
 	outbound, err := gmailBatchEntries([]GmailBatchItem{{ContactID: uuid.New(), Spec: gmailSpecAt("b", time.Unix(0, 0), true)}})
 	require.NoError(t, err)
 
-	require.Equal(t, "peer@synthetic.example", inbound[0].addressed)
-	require.Equal(t, "peer@synthetic.example", outbound[0].addressed)
+	require.Equal(t, []string{"peer@synthetic.example"}, inbound[0].addressed)
+	require.Equal(t, []string{"peer@synthetic.example"}, outbound[0].addressed)
 }
 
 func TestGmailBatchEntriesRejectsNilMessage(t *testing.T) {
@@ -499,7 +499,7 @@ func TestIMessageBatchEntriesReadsDirectionFromTheKind(t *testing.T) {
 
 	require.False(t, entries[0].outbound)
 	require.True(t, entries[1].outbound)
-	require.Equal(t, "+15550001111", entries[0].addressed)
+	require.Equal(t, []string{"+15550001111"}, entries[0].addressed)
 	require.Equal(t, identity.IdentifierTypePhone, entries[0].addressedType)
 }
 

@@ -724,15 +724,11 @@ func (p *GmailSyncProvider) RefetchParticipantNames(ctx context.Context, account
 		return repository.ParticipantNames{}, classifyRefetchError(err)
 	}
 	headers := newHeaderLookup(msg.Payload)
-	_, _, fromName, _ := parseSingleAddress(headers.first("From"))
-	_, _, toNames, _ := parseAddressList(headers.first("To"))
-	_, _, ccNames, _ := parseAddressList(headers.first("Cc"))
-	_, _, bccNames, _ := parseAddressList(headers.first("Bcc"))
 	return repository.ParticipantNames{
-		FromName: fromName,
-		ToNames:  toNames,
-		CcNames:  ccNames,
-		BccNames: bccNames,
+		FromName: ParseAddress(headers.first("From")).name,
+		ToNames:  addressNames(parseAddressList(headers.first("To"))),
+		CcNames:  addressNames(parseAddressList(headers.first("Cc"))),
+		BccNames: addressNames(parseAddressList(headers.first("Bcc"))),
 	}, nil
 }
 
@@ -794,31 +790,26 @@ func (p *GmailSyncProvider) foldDiscovery(
 	h := parseDiscoveryHeaders(msg)
 	coOccurIDs := discoveryCoOccurIDs(h.parts, knownMap)
 
-	_, fromKnown := knownSet[h.fromNorm]
-	fromMe := meSet.Contains(h.fromNorm, h.fromMailbox)
+	_, fromKnown := knownSet[h.from.normalized]
+	fromMe := meSet.Contains(h.from)
 	trustAnchored := fromKnown || fromMe
 
-	recipients := make(map[string]struct{}, len(h.toNorm)+len(h.ccNorm))
-	for _, n := range h.toNorm {
-		if n != "" {
-			recipients[n] = struct{}{}
-		}
-	}
-	for _, n := range h.ccNorm {
-		if n != "" {
-			recipients[n] = struct{}{}
+	recipients := make(map[string]struct{}, len(h.to)+len(h.cc))
+	for _, a := range slices.Concat(h.to, h.cc) {
+		if a.normalized != "" {
+			recipients[a.normalized] = struct{}{}
 		}
 	}
 	createEligible := trustAnchored && len(recipients) <= gmailParticipantRecipientCap
 
 	var senderContactID uuid.UUID
-	if ids := knownMap[h.fromNorm]; len(ids) > 0 {
+	if ids := knownMap[h.from.normalized]; len(ids) > 0 {
 		senderContactID = smallestUUID(ids)
 	}
 
 	msgCtx := participantMessageContext{
 		createEligible:  createEligible,
-		senderNorm:      h.fromNorm,
+		senderNorm:      h.from.normalized,
 		senderContactID: senderContactID,
 		senderIsSelf:    fromMe,
 		subject:         h.subject,
@@ -882,26 +873,25 @@ func (p *GmailSyncProvider) runDiscovery(ctx context.Context, accountID string, 
 	}
 }
 
-// collectDiscoveryParticipants extracts the (display_name, address) pairs from a
-// fetched message's From, To, and Cc headers using the SAME parsers
+// collectDiscoveryParticipants extracts the parsed addresses of a fetched
+// message's From, To, and Cc headers using the SAME parsers
 // processMessage uses. Bcc is intentionally omitted from discovery per spec;
 // Gmail strips it from sent copies and it is out of scope. A thin wrapper over
 // parseDiscoveryHeaders (the single per-message header parse foldDiscovery
 // also uses), kept as its own entry point for RunDiscoverParticipantsForTest.
-func (p *GmailSyncProvider) collectDiscoveryParticipants(msg *gmail.Message) []participant {
+func (p *GmailSyncProvider) collectDiscoveryParticipants(msg *gmail.Message) []parsedAddress {
 	return parseDiscoveryHeaders(msg).parts
 }
 
 // discoveryHeaders is the result of parsing a fetched message's From/To/Cc/
 // Subject headers ONCE for discovery: the participant list plus the facts
 // foldDiscovery needs to compute this message's trust-anchor context
-// (fromNorm/toNorm/ccNorm/subject/epochSeconds).
+// (from/to/cc/subject/epochSeconds).
 type discoveryHeaders struct {
-	parts        []participant
-	fromNorm     string
-	fromMailbox  *mail.Address
-	toNorm       []string
-	ccNorm       []string
+	parts        []parsedAddress
+	from         parsedAddress
+	to           []parsedAddress
+	cc           []parsedAddress
 	subject      string
 	epochSeconds int64
 }
@@ -911,40 +901,25 @@ type discoveryHeaders struct {
 // spec scopes discovery to To ∪ Cc).
 func parseDiscoveryHeaders(msg *gmail.Message) discoveryHeaders {
 	headers := newHeaderLookup(msg.Payload)
-	fromRaw, fromNorm, fromName, fromMailbox := parseSingleAddress(headers.first("From"))
-	toRaws, toNorm, toNames, toMailboxes := parseAddressList(headers.first("To"))
-	ccRaws, ccNorm, ccNames, ccMailboxes := parseAddressList(headers.first("Cc"))
-	subject := headers.first("Subject")
+	from := ParseAddress(headers.first("From"))
+	to := parseAddressList(headers.first("To"))
+	cc := parseAddressList(headers.first("Cc"))
 
-	parts := make([]participant, 0, 1+len(toRaws)+len(ccRaws))
-	if fromRaw != "" {
-		parts = append(parts, participant{name: fromName, address: fromRaw, mailbox: fromMailbox})
+	parts := make([]parsedAddress, 0, 1+len(to)+len(cc))
+	for _, a := range slices.Concat([]parsedAddress{from}, to, cc) {
+		if a.raw != "" {
+			parts = append(parts, a)
+		}
 	}
-	parts = appendParticipants(parts, toRaws, toNames, toMailboxes)
-	parts = appendParticipants(parts, ccRaws, ccNames, ccMailboxes)
 
 	return discoveryHeaders{
 		parts:        parts,
-		fromNorm:     fromNorm,
-		fromMailbox:  fromMailbox,
-		toNorm:       toNorm,
-		ccNorm:       ccNorm,
-		subject:      subject,
+		from:         from,
+		to:           to,
+		cc:           cc,
+		subject:      headers.first("Subject"),
 		epochSeconds: msg.InternalDate / 1000,
 	}
-}
-
-// appendParticipants pairs each raw address with its index-aligned name and
-// mailbox, skipping empty addresses. The parsers guarantee the raw, name and
-// mailbox slices are index-aligned.
-func appendParticipants(out []participant, raws, names []string, mailboxes []*mail.Address) []participant {
-	for i, addr := range raws {
-		if addr == "" {
-			continue
-		}
-		out = append(out, participant{name: names[i], address: addr, mailbox: mailboxes[i]})
-	}
-	return out
 }
 
 // discoveryCoOccurIDs returns the set of known contact ids present on a
@@ -954,15 +929,14 @@ func appendParticipants(out []participant, raws, names []string, mailboxes []*ma
 // suggested match. It deliberately does NOT reuse processMessage's
 // candidateContacts set (which is built over To ∪ Cc ∪ Bcc), so a Bcc'd known
 // contact can never leak into discovery evidence.
-func discoveryCoOccurIDs(parts []participant, knownMap map[string][]uuid.UUID) []uuid.UUID {
+func discoveryCoOccurIDs(parts []parsedAddress, knownMap map[string][]uuid.UUID) []uuid.UUID {
 	seen := make(map[uuid.UUID]struct{})
 	var out []uuid.UUID
 	for _, part := range parts {
-		norm := matching.NormalizeEmail(part.address)
-		if norm == "" {
+		if part.normalized == "" {
 			continue
 		}
-		for _, id := range knownMap[norm] {
+		for _, id := range knownMap[part.normalized] {
 			if _, dup := seen[id]; dup {
 				continue
 			}
@@ -1230,44 +1204,33 @@ func (p *GmailSyncProvider) processMessage(
 	headers := newHeaderLookup(msg.Payload)
 	subject := headers.first("Subject")
 	text := storedText(plain, htmlBody, mailKindOf(msg.Id, msg.ThreadId, subject))
-	fromRaw, fromNorm, fromName, fromMailbox := parseSingleAddress(headers.first("From"))
-	toRaw, toNorm, toNames, toMailboxes := parseAddressList(headers.first("To"))
-	ccRaw, ccNorm, ccNames, ccMailboxes := parseAddressList(headers.first("Cc"))
-	bccRaw, bccNorm, bccNames, bccMailboxes := parseAddressList(headers.first("Bcc"))
+	from := ParseAddress(headers.first("From"))
+	to := parseAddressList(headers.first("To"))
+	cc := parseAddressList(headers.first("Cc"))
+	bcc := parseAddressList(headers.first("Bcc"))
 
 	externalID := extractExternalID(headers, accountID, msg.Id)
 	localDay := computeLocalDay(epochMillisToTime(msg.InternalDate), time.Local)
 	sentAt := epochMillisToTime(msg.InternalDate)
 
-	metadata := buildMetadataJSON(htmlBody, attachments, msg.LabelIds,
-		fromRaw, toRaw, ccRaw, bccRaw, fromName, toNames, ccNames, bccNames)
+	metadata := buildMetadataJSON(htmlBody, attachments, msg.LabelIds, from, to, cc, bcc)
 
 	// Recipient set R (normalized To ∪ Cc ∪ Bcc), and whether a recipient
 	// mailbox is the user's (M ∩ R ≠ ∅).
+	recipients := slices.Concat(to, cc, bcc)
 	recipientSet := make(map[string]struct{})
-	for _, n := range toNorm {
-		recipientSet[n] = struct{}{}
-	}
-	for _, n := range ccNorm {
-		recipientSet[n] = struct{}{}
-	}
-	for _, n := range bccNorm {
-		recipientSet[n] = struct{}{}
-	}
-	recipientMailboxes := slices.Concat(toMailboxes, ccMailboxes, bccMailboxes)
 	meInR := false
-	for i, n := range slices.Concat(toNorm, ccNorm, bccNorm) {
-		if meSet.Contains(n, recipientMailboxes[i]) {
+	for _, r := range recipients {
+		recipientSet[r.normalized] = struct{}{}
+		if meSet.Contains(r) {
 			meInR = true
-			break
 		}
 	}
-	fromIsMe := meSet.Contains(fromNorm, fromMailbox)
+	fromIsMe := meSet.Contains(from)
 
-	// Ordered, deduped recipient buckets (raw+normalized aligned) for the
-	// deterministic outbound peer-handle precedence (To, then Cc, then Bcc;
-	// header order within a bucket).
-	orderedRecipients := buildOrderedRecipients(toRaw, toNorm, ccRaw, ccNorm, bccRaw, bccNorm)
+	// Ordered, deduped recipients for the deterministic outbound peer-handle
+	// precedence (To, then Cc, then Bcc; header order within a bucket).
+	orderedRecipients := buildOrderedRecipients(recipients)
 
 	contentSubject := strPtrIfNotEmpty(subject)
 	contentBody := strPtrIfNotEmpty(text.body)
@@ -1276,7 +1239,7 @@ func (p *GmailSyncProvider) processMessage(
 
 	// Candidate contacts: every contact sharing a matched address in {f} ∪ R.
 	candidateContacts := make(map[uuid.UUID]struct{})
-	if cs, ok := knownMap[fromNorm]; ok {
+	if cs, ok := knownMap[from.normalized]; ok {
 		for _, c := range cs {
 			candidateContacts[c] = struct{}{}
 		}
@@ -1294,7 +1257,7 @@ func (p *GmailSyncProvider) processMessage(
 		addrSet := contactAddressSet(knownMap, contactID)
 
 		// Inbound for C iff f ∈ A_C AND M ∩ R ≠ ∅.
-		if _, fromIsContact := addrSet[fromNorm]; fromIsContact && meInR {
+		if _, fromIsContact := addrSet[from.normalized]; fromIsContact && meInR {
 			rows = append(rows, qualifiedRow{
 				ContactID:      contactID,
 				Direction:      "inbound",
@@ -1304,8 +1267,8 @@ func (p *GmailSyncProvider) processMessage(
 				Body:           contentBody,
 				QuotedHistory:  quotedHistory,
 				Snippet:        contentSnippet,
-				PeerHandle:     fromRaw,
-				PeerNormalized: fromNorm,
+				PeerHandle:     from.raw,
+				PeerNormalized: from.normalized,
 				LocalDay:       localDay,
 				SentAt:         sentAt,
 				AccountID:      accountID,
@@ -1317,7 +1280,7 @@ func (p *GmailSyncProvider) processMessage(
 
 		// Outbound for C iff f ∈ M AND A_C ∩ R ≠ ∅.
 		if fromIsMe {
-			if rawPeer, normPeer, ok := firstContactRecipient(orderedRecipients, addrSet); ok {
+			if peer, ok := firstContactRecipient(orderedRecipients, addrSet); ok {
 				rows = append(rows, qualifiedRow{
 					ContactID:      contactID,
 					Direction:      "outbound",
@@ -1327,8 +1290,8 @@ func (p *GmailSyncProvider) processMessage(
 					Body:           contentBody,
 					QuotedHistory:  quotedHistory,
 					Snippet:        contentSnippet,
-					PeerHandle:     rawPeer,
-					PeerNormalized: normPeer,
+					PeerHandle:     peer.raw,
+					PeerNormalized: peer.normalized,
 					LocalDay:       localDay,
 					SentAt:         sentAt,
 					AccountID:      accountID,
@@ -1351,35 +1314,23 @@ func (p *GmailSyncProvider) processMessage(
 	return rows, nil
 }
 
-// orderedRecipient is one recipient address with its raw + normalized forms,
-// preserving header order across the To → Cc → Bcc buckets.
-type orderedRecipient struct {
-	raw        string
-	normalized string
-}
-
-// buildOrderedRecipients concatenates the recipient buckets in fixed order (To,
-// Cc, Bcc), each in header-listed order, deduping by normalized address so a
-// repeated address keeps its first (highest-precedence) position.
-func buildOrderedRecipients(toRaw, toNorm, ccRaw, ccNorm, bccRaw, bccNorm []string) []orderedRecipient {
-	var out []orderedRecipient
+// buildOrderedRecipients keeps the recipients, given in fixed bucket order (To,
+// Cc, Bcc), each in header-listed order, that have a normalized address,
+// deduping by normalized address so a repeated address keeps its first
+// (highest-precedence) position.
+func buildOrderedRecipients(recipients []parsedAddress) []parsedAddress {
+	var out []parsedAddress
 	seen := make(map[string]struct{})
-	add := func(raws, norms []string) {
-		for i := range norms {
-			n := norms[i]
-			if n == "" {
-				continue
-			}
-			if _, dup := seen[n]; dup {
-				continue
-			}
-			seen[n] = struct{}{}
-			out = append(out, orderedRecipient{raw: raws[i], normalized: n})
+	for _, r := range recipients {
+		if r.normalized == "" {
+			continue
 		}
+		if _, dup := seen[r.normalized]; dup {
+			continue
+		}
+		seen[r.normalized] = struct{}{}
+		out = append(out, r)
 	}
-	add(toRaw, toNorm)
-	add(ccRaw, ccNorm)
-	add(bccRaw, bccNorm)
 	return out
 }
 
@@ -1387,13 +1338,13 @@ func buildOrderedRecipients(toRaw, toNorm, ccRaw, ccNorm, bccRaw, bccNorm []stri
 // address is in the contact's address set, giving the deterministic outbound
 // peer-handle (To wins over Cc wins over Bcc; first-listed wins within a
 // bucket).
-func firstContactRecipient(recipients []orderedRecipient, addrSet map[string]struct{}) (raw, normalized string, ok bool) {
+func firstContactRecipient(recipients []parsedAddress, addrSet map[string]struct{}) (parsedAddress, bool) {
 	for _, r := range recipients {
 		if _, in := addrSet[r.normalized]; in {
-			return r.raw, r.normalized, true
+			return r, true
 		}
 	}
-	return "", "", false
+	return parsedAddress{}, false
 }
 
 // contactAddressSet returns the normalized address set A_C for a contact (the
@@ -1433,44 +1384,110 @@ func (h headerLookup) first(name string) string {
 	return ""
 }
 
-// parseSingleAddress parses a single-address header (From). Returns the raw and
-// normalized address plus the parsed display name (empty when the header had no
-// display part or failed to parse), and the parsed mailbox. On parse failure it
-// falls back to trimming the raw value and returns a nil mailbox, so the text
-// counts as the user only as a connected account's address (ING-051).
-func parseSingleAddress(header string) (raw, normalized, name string, mailbox *mail.Address) {
-	header = strings.TrimSpace(header)
-	if header == "" {
-		return "", "", "", nil
-	}
-	if addr, err := mail.ParseAddress(header); err == nil {
-		return addr.Address, matching.NormalizeEmail(addr.Address), strings.TrimSpace(addr.Name), addr
-	}
-	return header, matching.NormalizeEmail(header), "", nil
+// parsedAddress is one address a Gmail address header yields: the address as
+// the header carries it (the parsed address, or the trimmed text a header that
+// did not parse holds), its matching.NormalizeEmail form, its display name, and
+// the mailbox net/mail parsed, present only when the header parsed cleanly.
+// The type is unexported, so code outside package google can neither name nor
+// construct one: it obtains a value only from ParseAddress, and no caller can
+// pair one address's normalized text with another address's mailbox.
+type parsedAddress struct {
+	raw        string
+	normalized string
+	name       string
+	mailbox    *mail.Address
 }
 
-// parseAddressList parses an address-list header (To/Cc/Bcc) robustly. On a
-// ParseAddressList failure it falls back to a lenient comma-split so a single
-// malformed recipient doesn't drop the whole list. The raw, normalized, name
-// and mailbox slices are index-aligned on BOTH paths (a recipient with no
-// display part gets an empty-string name at its index), so the correspondence
-// producer can pair names[i] with the address at the same index. A mailbox is
-// set only when the whole header parses as an address list: the comma split
-// can cut a quoted string or a display name, so an entry it yields is nil and
-// counts as the user only as a connected account's address (ING-051).
-func parseAddressList(header string) (raws, normalized, names []string, mailboxes []*mail.Address) {
+// parsedMailbox is the parsedAddress of a mailbox net/mail parsed.
+func parsedMailbox(addr *mail.Address) parsedAddress {
+	return parsedAddress{
+		raw:        addr.Address,
+		normalized: matching.NormalizeEmail(addr.Address),
+		name:       strings.TrimSpace(addr.Name),
+		mailbox:    addr,
+	}
+}
+
+// addressRaws projects each address's raw form, nil for no address.
+func addressRaws(addrs []parsedAddress) []string {
+	return projectAddresses(addrs, func(a parsedAddress) string { return a.raw })
+}
+
+// addressNames projects each address's display name, nil for no address.
+func addressNames(addrs []parsedAddress) []string {
+	return projectAddresses(addrs, func(a parsedAddress) string { return a.name })
+}
+
+func projectAddresses(addrs []parsedAddress, field func(parsedAddress) string) []string {
+	if len(addrs) == 0 {
+		return nil
+	}
+	out := make([]string, len(addrs))
+	for i, a := range addrs {
+		out[i] = field(a)
+	}
+	return out
+}
+
+// GmailPeerAddresses returns msg's peer addresses as Gmail sync parses them:
+// for mail the user sent, every To, Cc and Bcc address, among which sync
+// matches each contact; for received mail, the From address. Synthetic batch
+// replay checks a contact's ownership against them.
+func GmailPeerAddresses(msg *gmail.Message, sent bool) []string {
+	if msg == nil || msg.Payload == nil {
+		return nil
+	}
+	headers := newHeaderLookup(msg.Payload)
+	if !sent {
+		if from := ParseAddress(headers.first("From")); from.raw != "" {
+			return []string{from.raw}
+		}
+		return nil
+	}
+	recipients := slices.Concat(
+		parseAddressList(headers.first("To")),
+		parseAddressList(headers.first("Cc")),
+		parseAddressList(headers.first("Bcc")),
+	)
+	return addressRaws(recipients)
+}
+
+// ParseAddress parses a single-address header, such as From, as Gmail sync
+// parses it; code outside package google obtains a parsed address, such as one
+// to ask GmailMeSet.Contains about, only from it. The display name
+// is empty when the header had no display part or failed to parse. On parse
+// failure it falls back to trimming the raw value with no mailbox, so the text
+// counts as the user only as a connected account's address (ING-051). An empty
+// header yields the zero parsedAddress.
+func ParseAddress(header string) parsedAddress {
 	header = strings.TrimSpace(header)
 	if header == "" {
-		return nil, nil, nil, nil
+		return parsedAddress{}
 	}
+	if addr, err := mail.ParseAddress(header); err == nil {
+		return parsedMailbox(addr)
+	}
+	return parsedAddress{raw: header, normalized: matching.NormalizeEmail(header)}
+}
+
+// parseAddressList parses an address-list header (To/Cc/Bcc) robustly, one
+// parsedAddress per address. On a ParseAddressList failure it falls back to a
+// lenient comma-split so a single malformed recipient doesn't drop the whole
+// list; an entry with no display part gets an empty name. A mailbox is set
+// only when the whole header parses as an address list: the comma split can
+// cut a quoted string or a display name, so an entry it yields has none and
+// counts as the user only as a connected account's address (ING-051).
+func parseAddressList(header string) []parsedAddress {
+	header = strings.TrimSpace(header)
+	if header == "" {
+		return nil
+	}
+	var out []parsedAddress
 	if addrs, err := mail.ParseAddressList(header); err == nil {
 		for _, a := range addrs {
-			raws = append(raws, a.Address)
-			normalized = append(normalized, matching.NormalizeEmail(a.Address))
-			names = append(names, strings.TrimSpace(a.Name))
-			mailboxes = append(mailboxes, a)
+			out = append(out, parsedMailbox(a))
 		}
-		return raws, normalized, names, mailboxes
+		return out
 	}
 	for _, part := range strings.Split(header, ",") {
 		part = strings.TrimSpace(part)
@@ -1483,12 +1500,9 @@ func parseAddressList(header string) (raws, normalized, names []string, mailboxe
 			raw = addr.Address
 			name = strings.TrimSpace(addr.Name)
 		}
-		raws = append(raws, raw)
-		normalized = append(normalized, matching.NormalizeEmail(raw))
-		names = append(names, name)
-		mailboxes = append(mailboxes, nil)
+		out = append(out, parsedAddress{raw: raw, normalized: matching.NormalizeEmail(raw), name: name})
 	}
-	return raws, normalized, names, mailboxes
+	return out
 }
 
 // extractExternalID reads the RFC822 Message-ID header (trimming surrounding
@@ -1627,30 +1641,28 @@ func stripHTML(s string) string {
 // buildMetadataJSON assembles the non-provenance source_metadata JSON the
 // provider owns (html, attachments, labels, from/to/cc/bcc + their index-aligned
 // display names). The provenance keys (observed_accounts, account_gmail_ids) are
-// added by the UpsertCommsMessage query, not here. The *Name(s) slices stay
-// index-aligned with their address siblings (the parsers guarantee this on both
-// the happy path and the lenient comma-split fallback).
+// added by the UpsertCommsMessage query, not here. Each *Name(s) slice and its
+// address sibling are projected from the same parsed addresses, so they stay
+// index-aligned.
 func buildMetadataJSON(
 	htmlBody string,
 	attachments []attachmentMeta,
 	labels []string,
-	fromRaw string,
-	toRaw, ccRaw, bccRaw []string,
-	fromName string,
-	toNames, ccNames, bccNames []string,
+	from parsedAddress,
+	to, cc, bcc []parsedAddress,
 ) []byte {
 	meta := emailMetadata{
 		HTML:        htmlBody,
 		Attachments: attachments,
 		Labels:      labels,
-		From:        fromRaw,
-		To:          toRaw,
-		Cc:          ccRaw,
-		Bcc:         bccRaw,
-		FromName:    fromName,
-		ToNames:     toNames,
-		CcNames:     ccNames,
-		BccNames:    bccNames,
+		From:        from.raw,
+		To:          addressRaws(to),
+		Cc:          addressRaws(cc),
+		Bcc:         addressRaws(bcc),
+		FromName:    from.name,
+		ToNames:     addressNames(to),
+		CcNames:     addressNames(cc),
+		BccNames:    addressNames(bcc),
 	}
 	b, err := json.Marshal(meta)
 	if err != nil {

@@ -251,7 +251,7 @@ var droppedErrorBaseline = map[string]int{
 	"internal/google/gmail.go:buildMetadataJSON":                                                                          1,
 	"internal/google/gmail.go:decodePartBody":                                                                             1,
 	"internal/google/gmail.go:parseAddressList":                                                                           2,
-	"internal/google/gmail.go:parseSingleAddress":                                                                         1,
+	"internal/google/gmail.go:ParseAddress":                                                                               1,
 	"internal/matching/handle_normalize.go:NormalizeForExactHandleMatch":                                                  1,
 	"internal/matching/handle_normalize.go:NormalizeHandleForNameMatch":                                                   1,
 	"internal/messaging/aggregation/engine.go:Engine.tryExplicitReplyBridge":                                              2,

@@ -215,6 +215,49 @@ func TestSetEmailOwnList_Integration_AccountSelection(t *testing.T) {
 	}
 }
 
+// TestSetEmailOwnList_Integration_MalformedInputReportedFirst proves that both
+// verbs reject malformed input with the input's error, and write nothing,
+// whatever email accounts exist: the input is parsed before an account is
+// selected, so no account problem hides the input error.
+func TestSetEmailOwnList_Integration_MalformedInputReportedFirst(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct{ flag, malformed, inputErr string }{
+		{"--set-email-own-domains", "own-domain", "must contain a dot"},
+		{"--set-email-own-addresses", "shared-domain.example", "must be a list of email addresses"},
+	} {
+		t.Run(c.flag, func(t *testing.T) {
+			t.Parallel()
+			e := newOwnListEnv(t)
+			untouched := map[string]any{"backfill_since": "2026-01-01"}
+
+			t.Run("no email sync state", func(t *testing.T) {
+				_, err := e.runVerb(t, nil, c.flag, c.malformed)
+				require.ErrorContains(t, err, c.inputErr)
+				states, err := e.syncRepo.ListSyncStates(e.ctx)
+				require.NoError(t, err)
+				for _, st := range states {
+					require.NotEqual(t, google.GmailSourceName, st.Source, "nothing is written")
+				}
+			})
+
+			idA := e.emailState(t, "acct-a@own-domain.example", untouched)
+			t.Run("one email sync state", func(t *testing.T) {
+				_, err := e.runVerb(t, nil, c.flag, c.malformed)
+				require.ErrorContains(t, err, c.inputErr)
+				require.Equal(t, untouched, e.metadata(t, idA), "nothing is written")
+			})
+
+			idB := e.emailState(t, "acct-b@own-domain.example", untouched)
+			t.Run("two email sync states with no --account", func(t *testing.T) {
+				_, err := e.runVerb(t, nil, c.flag, c.malformed)
+				require.ErrorContains(t, err, c.inputErr)
+				require.Equal(t, untouched, e.metadata(t, idA), "nothing is written")
+				require.Equal(t, untouched, e.metadata(t, idB), "nothing is written")
+			})
+		})
+	}
+}
+
 // listThenRun runs between the verb's read of the sync states and its write.
 type listThenRun struct {
 	emailOwnListRepo

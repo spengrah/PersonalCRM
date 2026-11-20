@@ -1362,15 +1362,20 @@ func withEmailOwnListRequest(requests []emailOwnListRequest, req emailOwnListReq
 	return append(requests, req)
 }
 
-// runSetEmailOwnList resolves the target email (source="email")
-// external_sync_state row, then has the list parse the request's input and
-// write its metadata key. The write changes only that key, so every other key
-// (backfill_since, terminal_reason, the other own list, ...) is preserved even
-// when another write lands between the row's read and this write. An explicit
-// empty input clears the key rather than adding nothing and leaving the
-// existing list untouched.
+// runSetEmailOwnList has the list parse the request's input, so malformed
+// input is reported whatever email accounts exist, then resolves the target
+// email (source="email") external_sync_state row and writes the parsed entries
+// under the list's metadata key. The write changes only that key, so every
+// other key (backfill_since, terminal_reason, the other own list, ...) is
+// preserved even when another write lands between the row's read and this
+// write. An explicit empty input clears the key rather than adding nothing and
+// leaving the existing list untouched.
 func runSetEmailOwnList(ctx context.Context, req emailOwnListRequest, account string, deps adminDeps) error {
 	verb := req.verb
+	entries, err := verb.list.Parse(req.input)
+	if err != nil {
+		return fmt.Errorf("--%s: %w", verb.flag, err)
+	}
 	states, err := deps.emailOwnLists.ListSyncStates(ctx)
 	if err != nil {
 		return fmt.Errorf("list sync states: %w", err)
@@ -1405,7 +1410,7 @@ func runSetEmailOwnList(ctx context.Context, req emailOwnListRequest, account st
 			verb.flag, emailAccountList(emailStates))
 	}
 
-	stored, err := verb.list.Set(ctx, deps.emailOwnLists, target.ID, req.input)
+	stored, err := entries.Write(ctx, deps.emailOwnLists, target.ID)
 	if err != nil {
 		return fmt.Errorf("--%s: %w", verb.flag, err)
 	}

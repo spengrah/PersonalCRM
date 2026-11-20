@@ -713,44 +713,37 @@ func TestProcessMessage_MetadataNoDisplayNameStoresEmpty(t *testing.T) {
 }
 
 func TestParseSingleAddress_Name(t *testing.T) {
-	raw, norm, name, _ := parseSingleAddress("\"Contact A\" <Contact.A@Example.com>")
-	require.Equal(t, "Contact.A@Example.com", raw)
-	require.Equal(t, "contact.a@example.com", norm)
-	require.Equal(t, "Contact A", name)
+	a := ParseAddress("\"Contact A\" <Contact.A@Example.com>")
+	require.Equal(t, "Contact.A@Example.com", a.raw)
+	require.Equal(t, "contact.a@example.com", a.normalized)
+	require.Equal(t, "Contact A", a.name)
 
-	raw, norm, name, _ = parseSingleAddress("bare@example.com")
-	require.Equal(t, "bare@example.com", raw)
-	require.Equal(t, "bare@example.com", norm)
-	require.Equal(t, "", name)
+	a = ParseAddress("bare@example.com")
+	require.Equal(t, "bare@example.com", a.raw)
+	require.Equal(t, "bare@example.com", a.normalized)
+	require.Equal(t, "", a.name)
 
-	raw, norm, name, _ = parseSingleAddress("")
-	require.Equal(t, "", raw)
-	require.Equal(t, "", norm)
-	require.Equal(t, "", name)
+	a = ParseAddress("")
+	require.Equal(t, "", a.raw)
+	require.Equal(t, "", a.normalized)
+	require.Equal(t, "", a.name)
 }
 
-func TestParseAddressList_NamesIndexAligned(t *testing.T) {
-	// Happy path: ParseAddressList succeeds; names aligned to addresses.
-	raws, norms, names, _ := parseAddressList("\"First Last\" <first@example.com>, bare@example.com")
-	require.Equal(t, []string{"first@example.com", "bare@example.com"}, raws)
-	require.Equal(t, []string{"first@example.com", "bare@example.com"}, norms)
-	require.Equal(t, []string{"First Last", ""}, names)
-	require.Len(t, names, len(raws))
+func TestParseAddressList_Names(t *testing.T) {
+	// Happy path: ParseAddressList succeeds; each address carries its name.
+	addrs := parseAddressList("\"First Last\" <first@example.com>, bare@example.com")
+	require.Equal(t, []string{"first@example.com", "bare@example.com"}, addressRaws(addrs))
+	require.Equal(t, []string{"first@example.com", "bare@example.com"}, projectAddresses(addrs, func(a parsedAddress) string { return a.normalized }))
+	require.Equal(t, []string{"First Last", ""}, addressNames(addrs))
 
-	// Empty header → all nil.
-	raws, norms, names, _ = parseAddressList("")
-	require.Nil(t, raws)
-	require.Nil(t, norms)
-	require.Nil(t, names)
+	// Empty header → no addresses.
+	require.Nil(t, parseAddressList(""))
 }
 
-func TestParseAddressList_CommaSplitFallbackAligned(t *testing.T) {
-	// A malformed entry forces the lenient comma-split fallback. The name/raw
-	// slices must stay the same length so the producer never mis-pairs a name
-	// to the wrong address.
-	raws, _, names, _ := parseAddressList("\"Valid Name\" <ok@example.com>, @@@broken")
-	require.Len(t, names, len(raws))
-	require.GreaterOrEqual(t, len(raws), 1)
+func TestParseAddressList_CommaSplitFallback(t *testing.T) {
+	// A malformed entry forces the lenient comma-split fallback, which still
+	// yields the header's addresses.
+	require.GreaterOrEqual(t, len(parseAddressList("\"Valid Name\" <ok@example.com>, @@@broken")), 1)
 }
 
 // --- local_day boundary in time.Local (incl. DST) ---

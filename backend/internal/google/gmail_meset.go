@@ -1,8 +1,6 @@
 package google
 
 import (
-	"net/mail"
-
 	"personal-crm/backend/internal/matching"
 	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/sync"
@@ -26,26 +24,25 @@ type GmailMeSet struct {
 	domains      map[string]struct{}
 }
 
-// Contains reports whether one address a header yields is the user's.
-// normalized is the address by matching.NormalizeEmail, as the parsers return
-// it, and mailbox is the mailbox net/mail parsed from a well-formed header, or
-// nil when the header did not parse (see parseSingleAddress and
-// parseAddressList). A connected account's address counts by normalized either
-// way, as Gmail sync has always compared it. An own address or an address at
-// an own domain counts only for a non-nil mailbox: text recovered from a
-// malformed header has no mailbox boundaries, so a fragment of it never counts
-// by an own domain or own address (ING-051.unparsed-header-not-own).
-func (m GmailMeSet) Contains(normalized string, mailbox *mail.Address) bool {
-	if _, ok := m.accounts[normalized]; ok {
+// Contains reports whether one address a header yields is the user's. A
+// connected account's address counts by the address's normalized form whether
+// or not its header parsed, as Gmail sync has always compared it. An own
+// address or an address at an own domain counts only for an address with a
+// mailbox, one whose header parsed cleanly (see ParseAddress and
+// parseAddressList): text recovered from a malformed header has no mailbox
+// boundaries, so a fragment of it never counts by an own domain or own address
+// (ING-051.unparsed-header-not-own).
+func (m GmailMeSet) Contains(a parsedAddress) bool {
+	if _, ok := m.accounts[a.normalized]; ok {
 		return true
 	}
-	if mailbox == nil {
+	if a.mailbox == nil {
 		return false
 	}
-	if _, ok := m.ownAddresses[sync.EmailOwnAddressKey(mailbox.Address)]; ok {
+	if _, ok := m.ownAddresses[sync.EmailOwnAddressKey(a.mailbox.Address)]; ok {
 		return true
 	}
-	domain := domainOf(matching.NormalizeEmail(mailbox.Address))
+	domain := domainOf(matching.NormalizeEmail(a.mailbox.Address))
 	if domain == "" {
 		return false
 	}

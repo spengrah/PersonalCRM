@@ -403,7 +403,7 @@ func gcalBatchEntries(items []GCalBatchItem) ([]batchEntry, error) {
 			contactID:     it.ContactID,
 			identifier:    it.Spec.GcalEventID,
 			seeded:        it.Spec.Intent == factory.MatchSeeded,
-			addressed:     gcalSpecPeerAttendee(it.Spec),
+			addressed:     addressedOne(gcalSpecPeerAttendee(it.Spec)),
 			addressedType: identity.IdentifierTypeEmail,
 		})
 	}

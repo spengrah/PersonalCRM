@@ -251,9 +251,10 @@ func gmailFetcherFuncs(specs []factory.GmailMessageSpec) google.FakeGmailFetcher
 
 // gmailBatchEntries projects the typed items into the source-neutral view the
 // shared preflight and partition helpers work over. Direction comes from the
-// SENT label (what the provider itself reads), and the addressed identifier is
-// the peer side of the message — the value that decides whether the contact
-// matches at all.
+// SENT label, which the factory sets from the shape's stated direction. The
+// addressed identifiers are the message's peer addresses as Gmail sync parses
+// them (google.GmailPeerAddresses): the sender of inbound mail, every
+// recipient of outbound mail.
 func gmailBatchEntries(items []GmailBatchItem) ([]batchEntry, error) {
 	out := make([]batchEntry, 0, len(items))
 	for i, it := range items {
@@ -261,26 +262,28 @@ func gmailBatchEntries(items []GmailBatchItem) ([]batchEntry, error) {
 			return nil, fmt.Errorf("gmail: item %d has a nil message", i)
 		}
 		outbound := gmailSpecOutbound(it.Spec)
-		peerHeader := "From"
-		if outbound {
-			peerHeader = "To"
+		peers := google.GmailPeerAddresses(it.Spec.Message, outbound)
+		if len(peers) == 0 {
+			return nil, fmt.Errorf("gmail: item %d (%s) addresses no peer mailbox: %w", i, it.Spec.ExternalID, ErrBatchIdentifierNotOwned)
 		}
 		out = append(out, batchEntry{
-			contactID:     it.ContactID,
-			identifier:    it.Spec.ExternalID,
-			seeded:        it.Spec.Intent == factory.MatchSeeded,
-			outbound:      outbound,
-			pairKey:       it.PairKey,
-			addressed:     gmailSpecHeader(it.Spec, peerHeader),
-			addressedType: identity.IdentifierTypeEmail,
+			contactID:        it.ContactID,
+			identifier:       it.Spec.ExternalID,
+			seeded:           it.Spec.Intent == factory.MatchSeeded,
+			outbound:         outbound,
+			pairKey:          it.PairKey,
+			addressed:        peers,
+			matchMethodTypes: []repository.ContactMethodType{repository.ContactMethodEmail},
+			addressedType:    identity.IdentifierTypeEmail,
 		})
 	}
 	return out, nil
 }
 
-// gmailSpecOutbound reports whether the provider will derive OUTBOUND from this
-// payload. The provider decides on From ∈ meSet; the factory keeps the SENT
-// label in lockstep with that swap, and the label is the cheap read.
+// gmailSpecOutbound reports whether the message carries the SENT label, which
+// the factory sets from the shape's stated direction: WithOutbound for the
+// default headers, GmailAddresses.Sent for explicit ones. Gmail sync instead
+// classifies the headers against its me-set.
 func gmailSpecOutbound(spec factory.GmailMessageSpec) bool {
 	if spec.Message == nil {
 		return false
@@ -291,19 +294,6 @@ func gmailSpecOutbound(spec factory.GmailMessageSpec) bool {
 		}
 	}
 	return false
-}
-
-// gmailSpecHeader returns a header value from a Gmail payload ("" if absent).
-func gmailSpecHeader(spec factory.GmailMessageSpec, name string) string {
-	if spec.Message == nil || spec.Message.Payload == nil {
-		return ""
-	}
-	for _, hdr := range spec.Message.Payload.Headers {
-		if hdr.Name == name {
-			return hdr.Value
-		}
-	}
-	return ""
 }
 
 // gmailBatchInstants returns each item's send instant (the wire epoch the
