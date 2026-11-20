@@ -5,8 +5,6 @@
  * that should be invalidated when those events occur. This ensures that
  * cross-domain side effects (e.g., merging contacts updates overdue lists)
  * are properly reflected in the UI.
- *
- * @see docs/FRONTEND_STATE.md for full documentation
  */
 
 import { queryClient } from './query-client'

@@ -15,9 +15,6 @@ Run `make help` from project root for the full command reference.
 
 Load as needed, not upfront:
 
-- Architecture decisions: `.agents/guides/architecture.md`
-- Feature development: `.agents/guides/feature-development.md`
-- Code patterns: `.agents/patterns/`
 - Code review standards: `.agents/rules/code-review.md`
 - Behavior specs (intended-behavior SSOT): `spec/README.md`
 - Cross-layer change checklist and troubleshooting: `.agents/guides/change-checklist.md`

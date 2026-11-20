@@ -68,6 +68,3 @@ RESULT=FAIL
 ## Convention Reference
 
 - `.agents/rules/core.md` - Critical rules and patterns, including testing requirements
-- `.agents/guides/feature-development.md` - Feature development guide
-- `.agents/guides/architecture.md` - Architecture context
-- `.agents/patterns/` - Common code patterns

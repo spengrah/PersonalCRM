@@ -57,7 +57,7 @@ behaviors:
       - the node canonical label equals the contact full name
       - key: fk-enforced
         text: the node/contact identity equation is enforced by a database foreign key, not just application code
-    provenance: [ContactRepository.CreateContact, contact_id_node_fk, .agents/guides/architecture.md]
+    provenance: [ContactRepository.CreateContact, contact_id_node_fk]
 
   - id: CON-004
     title: Contact writes never set location, birthday, or how-met directly
@@ -65,7 +65,7 @@ behaviors:
     status: current
     surface: none
     statement: contact create, update, and merge never write the location, birthday, or how_met columns directly — those fields are routed through the knowledge domain, and the contact returned from a write already reflects the routed values.
-    provenance: [knowledgeWriter.assertCreate, contact.sql, .agents/guides/architecture.md, reject_unauthorized_derived_contact_write trigger (migration 079)]
+    provenance: [knowledgeWriter.assertCreate, contact.sql, reject_unauthorized_derived_contact_write trigger (migration 079)]
     notes: Enforced both by code wiring (services hard-error if the knowledge writer is unset) and, from migration 079, by a database trigger that rejects any UPDATE changing location, birthday, or how_met without crm.derived_writer='knowledge_cache'. How the knowledge domain derives and refreshes these cache columns is knowledge-domain scope.
 
   - id: CON-005

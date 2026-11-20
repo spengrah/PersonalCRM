@@ -723,7 +723,7 @@ func TestConfig_Sync_LogRetentionDays_Default(t *testing.T) {
 	}
 
 	// Literal 30, not the constant: the default is a documented contract
-	// (.env.example, architecture.md), so a changed constant must fail here.
+	// (.env.example), so a changed constant must fail here.
 	if cfg.Sync.LogRetentionDays != 30 {
 		t.Errorf("Expected default LogRetentionDays=30, got %d", cfg.Sync.LogRetentionDays)
 	}
